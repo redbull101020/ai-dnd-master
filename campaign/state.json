@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.0.0",
+
+  "campaign": {
+    "id": "campaign_001",
+    "name": "Название кампании",
+    "system": "dnd5e",
+    "ruleset_id": "dnd_5e_2024",
+    "status": "active",
+    "current_session_id": "session_001",
+    "current_turn": 1
+  },
+
+  "runtime": {
+    "mode": "exploration",
+    "phase": "player_action",
+    "awaiting_input": true,
+    "active_scene_id": null,
+    "active_combat_id": null,
+    "current_actor_id": null
+  },
+
+  "time": {
+    "calendar_id": "default",
+    "year": 1,
+    "month": 1,
+    "day": 1,
+    "hour": 12,
+    "minute": 0,
+    "time_of_day": "day"
+  },
+
+  "world": {
+    "current_location_id": null,
+    "weather_id": null,
+
+    "world_flags": {}
+  },
+
+  "party": {
+    "character_ids": [],
+    "leader_id": null,
+    "current_location_id": null,
+    "formation": [],
+    "shared_inventory_ids": [],
+
+    "shared_currency": {
+      "cp": 0,
+      "sp": 0,
+      "ep": 0,
+      "gp": 0,
+      "pp": 0
+    }
+  },
+
+  "combat": {
+    "active": false,
+    "combat_id": null,
+    "round": 0,
+    "turn_index": 0,
+    "current_actor_id": null,
+    "initiative_order": [],
+    "combatant_ids": [],
+    "location_id": null,
+
+    "environment": {
+      "lighting": null,
+      "visibility": null,
+      "terrain": [],
+      "hazards": []
+    }
+  },
+
+  "quests": {
+    "active_ids": [],
+    "completed_ids": [],
+    "failed_ids": [],
+    "primary_quest_id": null
+  },
+
+  "story": {
+    "current_arc_id": null,
+    "current_scene_id": null,
+    "active_thread_ids": [],
+    "important_recent_event_ids": []
+  },
+
+  "knowledge": {
+    "known_fact_ids": [],
+    "known_secret_ids": [],
+    "known_location_ids": [],
+    "known_npc_ids": []
+  },
+
+  "integrity": {
+    "last_event_sequence": 0,
+    "last_event_id": null,
+    "last_checkpoint_id": null,
+    "state_version": 0,
+    "last_saved_at": null
+  }
+}
