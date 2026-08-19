@@ -1,1651 +1,2228 @@
-Ниже — готовый `README.md`, который можно сразу положить в корень репозитория. Я сделал его не как рекламное описание, а как **архитектурный README проекта**, чтобы новый разработчик сразу понимал назначение системы, границы модулей и поток данных.
+# AI D&D Engine
 
-````markdown
-# AI-D&D
+> Машиночитаемый игровой движок для веб-версии Dungeons & Dragons с AI Dungeon Master.
 
-> Persistent AI Dungeon Master system for D&D campaigns.
+**AI D&D Engine** — проект игрового движка, который отделяет **правила D&D, состояние игры, события и искусственный интеллект** друг от друга.
 
-AI-D&D — это система для проведения длительных D&D-кампаний с использованием LLM в роли Dungeon Master.
+Главный принцип проекта:
 
-Главная архитектурная задача проекта — отделить **AI-контекст** от **состояния самой игры**.
+> **AI интерпретирует намерения и ведёт повествование. Engine определяет истину игрового мира.**
 
-LLM не должна хранить всю кампанию в контекстном окне одного чата. Кампания существует независимо от конкретного чата и может быть продолжена в новом контексте.
+ИИ не должен самостоятельно решать, попал ли персонаж, сколько нанесено урона или можно ли совершить действие. Эти решения принимает детерминированный Rule Engine.
 
 ---
 
 ## Содержание
 
-- [Концепция](#концепция)
-- [Архитектурный принцип](#архитектурный-принцип)
-- [Основные компоненты](#основные-компоненты)
-- [Структура проекта](#структура-проекта)
-- [Источники истины](#источники-истины)
-- [Поток игрового действия](#поток-игрового-действия)
-- [Жизненный цикл хода](#жизненный-цикл-хода)
-- [Система памяти](#система-памяти)
-- [Смена AI-чата](#смена-ai-чата)
-- [Data Model](#data-model)
-- [Engine](#engine)
-- [AI-DM](#ai-dm)
-- [Events](#events)
-- [Validation](#validation)
-- [Git и внешние инструменты](#git-и-внешние-инструменты)
-- [MVP](#mvp)
-- [Roadmap](#roadmap)
-- [Основные архитектурные правила](#основные-архитектурные-правила)
+* [Основная идея](#основная-идея)
+* [Архитектурные принципы](#архитектурные-принципы)
+* [Архитектура](#архитектура)
+* [Модель данных](#модель-данных)
+* [Definitions](#definitions)
+* [Runtime State](#runtime-state)
+* [Commands](#commands)
+* [Events](#events)
+* [Rule Engine](#rule-engine)
+* [AI Dungeon Master](#ai-dungeon-master)
+* [Поток игрового действия](#поток-игрового-действия)
+* [Структура проекта](#структура-проекта)
+* [Структура кампании](#структура-кампании)
+* [Пример](#пример)
+* [Технологический стек](#технологический-стек)
+* [Roadmap](#roadmap)
+* [Принципы разработки](#принципы-разработки)
+* [Статус](#статус)
 
 ---
 
-# Концепция
+# Основная идея
 
-Обычная игра с AI-DM сталкивается с фундаментальной проблемой:
-
-```text
-Длинная кампания
-       │
-       ▼
-Длинный чат
-       │
-       ▼
-Контекстное окно переполняется
-       │
-       ▼
-Старые сообщения теряются / сжимаются
-       │
-       ▼
-AI начинает забывать состояние игры
-````
-
-AI-D&D решает проблему иначе:
+Проект представляет D&D как систему:
 
 ```text
-                    CAMPAIGN
-                       │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-       STATE        ENTITIES       EVENTS
-          │            │            │
-          └────────────┼────────────┘
-                       │
-                       ▼
-                 AI CONTEXT
-                       │
-                       ▼
-                    AI-DM
+                  ┌─────────────────────┐
+                  │      AI DM          │
+                  │                     │
+                  │ Intent              │
+                  │ NPC behavior        │
+                  │ Narration           │
+                  │ Story generation    │
+                  └──────────┬──────────┘
+                             │
+                     Commands / Context
+                             │
+                             ▼
+                  ┌─────────────────────┐
+                  │    D&D ENGINE       │
+                  │                     │
+                  │ Validation          │
+                  │ Rules               │
+                  │ Dice                │
+                  │ Resolution          │
+                  │ State mutation      │
+                  └──────────┬──────────┘
+                             │
+                           Events
+                             │
+                             ▼
+                  ┌─────────────────────┐
+                  │     GAME STATE      │
+                  │                     │
+                  │ Characters          │
+                  │ World               │
+                  │ Combat              │
+                  │ Quests              │
+                  │ Inventory           │
+                  └─────────────────────┘
 ```
 
-Чат является **интерфейсом**, а не хранилищем игры.
+Игрок взаимодействует с игрой естественным языком:
 
----
+> «Подкрадываюсь к стражнику и пытаюсь нанести ему удар.»
 
-# Архитектурный принцип
-
-Система разделена на три основных слоя:
-
-```text
-┌──────────────────────────────────────────┐
-│                  PLAYER                  │
-│                                          │
-│  "Я атакую гоблина мечом"                │
-└────────────────────┬─────────────────────┘
-                     │
-                     ▼
-┌──────────────────────────────────────────┐
-│                 AI-DM                    │
-│                                          │
-│  • понимает намерение игрока             │
-│  • ведёт повествование                   │
-│  • играет NPC                            │
-│  • принимает DM-решения                  │
-│  • формирует запросы к Engine            │
-└────────────────────┬─────────────────────┘
-                     │
-                  intent
-                     │
-                     ▼
-┌──────────────────────────────────────────┐
-│                  ENGINE                  │
-│                                          │
-│  • dice                                  │
-│  • checks                                │
-│  • combat                                │
-│  • damage                                │
-│  • effects                               │
-│  • inventory                             │
-│  • state mutations                       │
-│  • validation                            │
-└────────────────────┬─────────────────────┘
-                     │
-                     ▼
-┌──────────────────────────────────────────┐
-│                PERSISTENCE               │
-│                                          │
-│  characters/                             │
-│  world/                                  │
-│  quests/                                 │
-│  items/                                  │
-│  campaign/state.json                     │
-│  events/                                 │
-│  sessions/                               │
-└──────────────────────────────────────────┘
-```
-
-### Ключевое правило
-
-**AI не является источником истины для игровой механики.**
-
-AI может сказать:
-
-> «Я хочу атаковать гоблина».
-
-Но окончательный результат:
-
-> Hit / Miss / Damage / Conditions / HP
-
-определяет Engine.
-
----
-
-# Основные компоненты
-
-| Компонент             | Ответственность                        |
-| --------------------- | -------------------------------------- |
-| `AI-DM`               | Интерпретация, narration, NPC, DM      |
-| `Engine`              | Игровая механика и расчёты             |
-| `campaign/state.json` | Текущее глобальное состояние           |
-| `characters/`         | Состояние персонажей                   |
-| `world/`              | Мир, NPC, локации, фракции             |
-| `quests/`             | Квесты и их состояние                  |
-| `items/`              | Предметы                               |
-| `rules/`              | Машиночитаемые правила                 |
-| `rules.md`            | House Rules и договорённости           |
-| `schemas/`            | Валидация структуры данных             |
-| `events/`             | История изменений                      |
-| `sessions/`           | История AI-сессий                      |
-| `handoff`             | Передача кампании между AI-контекстами |
-
----
-
-# Структура проекта
-
-Текущая целевая структура:
-
-```text
-AI-DND/
-│
-├── campaign/
-│   ├── state.json
-│   ├── config.json
-│   └── rules.md
-│
-├── characters/
-│   ├── pc_001.json
-│   ├── pc_002.json
-│   └── ...
-│
-├── world/
-│   ├── locations/
-│   │   ├── loc_001.json
-│   │   └── ...
-│   │
-│   ├── npcs/
-│   │   ├── npc_001.json
-│   │   └── ...
-│   │
-│   ├── factions/
-│   └── knowledge/
-│
-├── quests/
-│   ├── quest_001.json
-│   └── ...
-│
-├── items/
-│   ├── definitions/
-│   │   ├── longsword.json
-│   │   └── ...
-│   │
-│   └── instances/
-│       ├── item_001.json
-│       └── ...
-│
-├── rules/
-│   ├── abilities.json
-│   ├── skills.json
-│   ├── conditions.json
-│   ├── weapons.json
-│   ├── armor.json
-│   ├── spells.json
-│   ├── classes.json
-│   └── ...
-│
-├── schemas/
-│   ├── state.schema.json
-│   ├── character.schema.json
-│   ├── npc.schema.json
-│   ├── location.schema.json
-│   ├── quest.schema.json
-│   ├── item.schema.json
-│   └── event.schema.json
-│
-├── events/
-│   └── events.jsonl
-│
-├── sessions/
-│   ├── session_001/
-│   │   ├── transcript.md
-│   │   ├── recap.md
-│   │   └── handoff.json
-│   │
-│   └── ...
-│
-└── engine/
-    ├── dice.py
-    ├── checks.py
-    ├── combat.py
-    ├── damage.py
-    ├── movement.py
-    ├── inventory.py
-    ├── quests.py
-    ├── effects.py
-    ├── state.py
-    ├── events.py
-    └── validation.py
-```
-
-> Структура является целевой архитектурой. Некоторые директории и модули появляются по мере развития MVP.
-
----
-
-# Источники истины
-
-Одна из главных архитектурных целей — не допустить дублирования состояния.
-
-Каждая сущность должна иметь один основной источник истины.
-
-```text
-Rules
-   │
-   └── rules/
-
-Campaign configuration
-   │
-   └── campaign/config.json
-
-Campaign runtime state
-   │
-   └── campaign/state.json
-
-Player Character
-   │
-   └── characters/pc_XXX.json
-
-NPC
-   │
-   └── world/npcs/npc_XXX.json
-
-Location
-   │
-   └── world/locations/loc_XXX.json
-
-Quest
-   │
-   └── quests/quest_XXX.json
-
-Item definition
-   │
-   └── items/definitions/
-
-Item instance
-   │
-   └── items/instances/
-
-History
-   │
-   └── events/
-
-AI conversation
-   │
-   └── sessions/
-```
-
-### Пример
-
-HP персонажа хранится:
-
-```text
-characters/pc_001.json
-```
-
-а не одновременно в:
-
-```text
-state.json
-combat.json
-session.json
-character.json
-```
-
-`state.json` может содержать ссылку:
+AI преобразует намерение в игровую команду:
 
 ```json
 {
-  "party": {
-    "character_ids": [
-      "pc_001"
-    ]
-  }
+  "type": "AttackCommand",
+  "actorId": "player_001",
+  "targetId": "guard_001",
+  "weaponId": "longsword_001"
 }
 ```
 
-Но не копию всего character sheet.
+Engine проверяет возможность действия, выполняет правила, бросает кубики, изменяет состояние и создаёт события.
+
+Только после этого AI получает результат и описывает его игроку.
 
 ---
 
-# `campaign/`
+# Архитектурные принципы
 
-## `config.json`
+## 1. AI не является источником истины
 
-Конфигурация кампании.
+AI может:
 
-Отвечает на вопрос:
+* интерпретировать естественный язык;
+* принимать решения за NPC;
+* генерировать описания;
+* создавать сюжетные ситуации;
+* выбирать возможные действия;
+* управлять повествованием.
 
-> **Как мы играем?**
+AI не должен самостоятельно:
+
+* рассчитывать урон;
+* изменять HP;
+* игнорировать условия;
+* определять AC;
+* создавать предметы из ничего;
+* изменять правила;
+* объявлять успешным действие, которое Engine отклонил.
+
+---
+
+## 2. Engine является источником игровой истины
+
+Для Engine:
+
+```text
+Rules + State + Command
+          │
+          ▼
+       Resolution
+          │
+          ▼
+         Events
+          │
+          ▼
+      New State
+```
+
+---
+
+## 3. Definitions ≠ State
+
+Например:
+
+```text
+LongswordDefinition
+```
+
+описывает свойства длинного меча.
+
+Но:
+
+```text
+longsword_instance_001
+```
+
+является конкретным экземпляром меча персонажа.
+
+Аналогично:
+
+```text
+GoblinDefinition
+        │
+        ├── goblin_001
+        ├── goblin_002
+        └── goblin_003
+```
+
+Каждый экземпляр имеет собственное состояние.
+
+---
+
+## 4. Events являются историей изменений
+
+Событие:
+
+```text
+DamageApplied
+```
+
+описывает факт:
+
+> Цели был нанесён урон.
+
+Состояние:
+
+```text
+hp = 14
+```
+
+описывает результат этого события.
+
+---
+
+# Архитектура
+
+## Общая схема
+
+```mermaid
+flowchart TD
+
+    Player[Player]
+
+    AI[AI Dungeon Master]
+
+    Command[Command]
+
+    Validation[Validation]
+
+    Engine[Rule Engine]
+
+    Dice[Dice Engine]
+
+    Events[Event Store]
+
+    State[Game State]
+
+    Projection[AI Projection]
+
+    Narration[Narration]
+
+    Player --> AI
+    AI --> Command
+    Command --> Validation
+    Validation --> Engine
+
+    Engine --> Dice
+    Dice --> Engine
+
+    Engine --> Events
+    Events --> State
+
+    State --> Projection
+    Events --> Projection
+
+    Projection --> AI
+    AI --> Narration
+    Narration --> Player
+```
+
+---
+
+# Модель данных
+
+Проект разделяет данные на четыре основных слоя:
+
+| Слой            | Назначение                      | Примеры                 |
+| --------------- | ------------------------------- | ----------------------- |
+| **Definitions** | Что существует по правилам      | Spell, Weapon, Class    |
+| **State**       | Текущее состояние игры          | HP, Position, Inventory |
+| **Commands**    | Намерение совершить действие    | AttackCommand           |
+| **Events**      | Фактически произошедшие события | DamageApplied           |
+
+Главный цикл:
+
+```text
+Definition
+     │
+     ▼
+   State
+     │
+     ▼
+ Command
+     │
+     ▼
+Validation
+     │
+     ▼
+Resolution
+     │
+     ▼
+ Events
+     │
+     ▼
+New State
+```
+
+---
+
+# ER-модель
+
+```mermaid
+erDiagram
+
+    CAMPAIGN ||--|| RULESET : uses
+    CAMPAIGN ||--|| WORLD_STATE : contains
+    CAMPAIGN ||--o{ CHARACTER_STATE : contains
+    CAMPAIGN ||--o{ NPC_STATE : contains
+    CAMPAIGN ||--o{ QUEST_STATE : contains
+    CAMPAIGN ||--o{ EVENT : records
+
+    RULESET ||--o{ CLASS_DEFINITION : contains
+    RULESET ||--o{ SPELL_DEFINITION : contains
+    RULESET ||--o{ ITEM_DEFINITION : contains
+    RULESET ||--o{ MONSTER_DEFINITION : contains
+    RULESET ||--o{ FEATURE_DEFINITION : contains
+    RULESET ||--o{ CONDITION_DEFINITION : contains
+    RULESET ||--o{ EFFECT_DEFINITION : contains
+
+    CLASS_DEFINITION ||--o{ SUBCLASS_DEFINITION : has
+    CLASS_DEFINITION }o--o{ SPELL_DEFINITION : grants
+    CLASS_DEFINITION }o--o{ FEATURE_DEFINITION : grants
+
+    CHARACTER_STATE }o--|| SPECIES_DEFINITION : uses
+    CHARACTER_STATE }o--|| CLASS_DEFINITION : uses
+    CHARACTER_STATE }o--|| BACKGROUND_DEFINITION : uses
+
+    CHARACTER_STATE ||--|| INVENTORY_STATE : owns
+    CHARACTER_STATE ||--|| EQUIPMENT_STATE : has
+    CHARACTER_STATE ||--o{ EFFECT_STATE : has
+    CHARACTER_STATE ||--o{ CONDITION_STATE : has
+
+    INVENTORY_STATE ||--o{ ITEM_INSTANCE_STATE : contains
+    ITEM_INSTANCE_STATE }o--|| ITEM_DEFINITION : instance_of
+
+    NPC_STATE }o--|| MONSTER_DEFINITION : based_on
+    NPC_STATE }o--o{ FACTION_STATE : member_of
+
+    QUEST_STATE ||--o{ QUEST_OBJECTIVE_STATE : contains
+
+    COMBAT_STATE ||--o{ COMBATANT_STATE : contains
+    COMBATANT_STATE }o--|| CREATURE_STATE : references
+
+    EFFECT_STATE }o--|| EFFECT_DEFINITION : instance_of
+    CONDITION_STATE }o--|| CONDITION_DEFINITION : instance_of
+
+    SPELL_DEFINITION ||--o{ EFFECT_DEFINITION : produces
+
+    EVENT }o--o| CREATURE_STATE : affects
+    EVENT }o--o| QUEST_STATE : affects
+    EVENT }o--o| COMBAT_STATE : affects
+```
+
+---
+
+# Definitions
+
+Definitions — это статические данные правил.
+
+Они не должны изменяться во время обычной игровой сессии.
+
+```text
+rules/
+└── dnd_5e/
+    ├── ruleset.json
+    ├── classes/
+    ├── subclasses/
+    ├── species/
+    ├── backgrounds/
+    ├── feats/
+    ├── spells/
+    ├── items/
+    ├── monsters/
+    ├── features/
+    ├── conditions/
+    └── effects/
+```
+
+Основные Definition-сущности:
+
+```text
+RulesetDefinition
+
+ClassDefinition
+SubclassDefinition
+SpeciesDefinition
+BackgroundDefinition
+FeatDefinition
+
+SpellDefinition
+
+ItemDefinition
+WeaponDefinition
+ArmorDefinition
+MagicItemDefinition
+
+MonsterDefinition
+
+FeatureDefinition
+ConditionDefinition
+EffectDefinition
+ActionDefinition
+```
+
+---
+
+## Пример WeaponDefinition
+
+```json
+{
+  "id": "longsword",
+  "name": "Longsword",
+  "type": "weapon",
+  "damage": {
+    "dice": "1d8",
+    "type": "slashing"
+  },
+  "properties": [
+    "versatile"
+  ]
+}
+```
+
+Это описание оружия.
+
+Оно не содержит:
+
+```text
+кто им владеет
+где лежит
+надето ли оно
+прочность
+текущее состояние
+```
+
+Эти данные относятся к Runtime State.
+
+---
+
+# Runtime State
+
+Runtime State — конкретное состояние кампании.
+
+Например:
+
+```text
+character_001
+```
+
+может иметь:
+
+```text
+HP = 31
+position = (10, 15)
+condition = Poisoned
+weapon = longsword_001
+spell_slot_3 = 1
+```
+
+Основные State-сущности:
+
+```text
+CampaignState
+
+WorldState
+
+CreatureState
+CharacterState
+NPCState
+MonsterState
+
+InventoryState
+ItemInstanceState
+EquipmentState
+
+EffectState
+ConditionState
+ResourceState
+
+CombatState
+CombatantState
+TurnState
+
+QuestState
+QuestObjectiveState
+
+RelationshipState
+FactionState
+```
+
+---
+
+# Creature State
+
+`CreatureState` — центральная сущность Runtime Model.
+
+```mermaid
+flowchart TD
+
+    Creature[CreatureState]
+
+    Abilities[Abilities]
+    Skills[Skills]
+    Saves[Saving Throws]
+    Resources[Resources]
+    Defenses[Defenses]
+    Movement[Movement]
+    Senses[Senses]
+    Inventory[Inventory]
+    Equipment[Equipment]
+    Conditions[Conditions]
+    Effects[Effects]
+    Position[Position]
+
+    Creature --> Abilities
+    Creature --> Skills
+    Creature --> Saves
+    Creature --> Resources
+    Creature --> Defenses
+    Creature --> Movement
+    Creature --> Senses
+    Creature --> Inventory
+    Creature --> Equipment
+    Creature --> Conditions
+    Creature --> Effects
+    Creature --> Position
+```
+
+Персонаж игрока, NPC и монстр используют общую модель существа.
+
+```text
+CharacterState ─┐
+NPCState ────────┼──► CreatureState
+MonsterState ────┘
+```
+
+Это позволяет одной системой реализовать:
+
+* HP;
+* AC;
+* movement;
+* attacks;
+* conditions;
+* effects;
+* saves;
+* skills;
+* spells;
+* resources.
+
+---
+
+# Commands
+
+Command — это намерение выполнить действие.
+
+Команда ещё не означает, что действие произошло.
+
+Примеры:
+
+```text
+MoveCommand
+AttackCommand
+CastSpellCommand
+UseItemCommand
+EquipItemCommand
+RestCommand
+InteractCommand
+TalkCommand
+SearchCommand
+HideCommand
+HelpCommand
+```
 
 Пример:
 
 ```json
 {
-  "schema_version": "1.0.0",
-
-  "campaign": {
-    "name": "Example Campaign",
-    "setting": "homebrew",
-    "difficulty": "normal"
-  },
-
-  "rules": {
-    "system": "dnd5e",
-    "ruleset": "dnd_2024",
-    "leveling": "milestone",
-    "use_feats": true,
-    "use_multiclassing": true,
-    "encumbrance": false,
-    "flanking": false
-  },
-
-  "house_rules": {},
-
-  "dm": {
-    "style": "cinematic",
-    "verbosity": "medium",
-    "rules_strictness": "strict",
-    "hidden_rolls": true,
-    "announce_dc": false,
-    "allow_retcon": false
-  }
-}
-```
-
-`config.json` изменяется редко.
-
----
-
-## `state.json`
-
-Текущее runtime-состояние кампании.
-
-Отвечает на вопрос:
-
-> **Что происходит прямо сейчас?**
-
-Основные разделы:
-
-```text
-campaign
-runtime
-time
-world
-party
-combat
-quests
-story
-knowledge
-integrity
-```
-
-Принцип:
-
-```text
-state.json
-   │
-   ├── current scene
-   ├── current location
-   ├── current time
-   ├── active combat
-   ├── party
-   ├── active quests
-   └── runtime flags
-```
-
-`state.json` обновляется во время игры.
-
----
-
-## `rules.md`
-
-Человеческое описание правил кампании.
-
-Используется для:
-
-* house rules;
-* договорённостей;
-* трактовки неоднозначных правил;
-* поведения DM;
-* особых правил конкретной кампании.
-
-Разница:
-
-```text
-rules/*.json
-    ↓
-машиночитаемые правила
-
-config.json
-    ↓
-какие правила включены
-
-rules.md
-    ↓
-как мы договорились их трактовать
-```
-
----
-
-# Characters
-
-Каждый PC — отдельная сущность.
-
-```text
-characters/
-├── pc_001.json
-├── pc_002.json
-└── ...
-```
-
-Пример структуры:
-
-```text
-pc_001
-│
-├── identity
-├── abilities
-├── proficiencies
-├── skills
-├── combat
-├── resources
-├── inventory
-├── currency
-├── spells
-├── features
-├── conditions
-├── effects
-├── death
-├── progression
-└── relationships
-```
-
-Персонаж содержит **текущее состояние** PC.
-
-Биография и большие текстовые описания могут храниться отдельно, чтобы не загружать их Engine без необходимости.
-
----
-
-# World
-
-## Locations
-
-```text
-world/locations/
-```
-
-Локация содержит:
-
-* идентификатор;
-* название;
-* тип;
-* описание;
-* соединения с другими локациями;
-* локальные объекты;
-* связанные NPC;
-* свойства местности.
-
-Но текущая позиция партии находится в:
-
-```text
-campaign/state.json
-```
-
----
-
-## NPCs
-
-```text
-world/npcs/
-```
-
-NPC может содержать:
-
-```text
-identity
-stats
-combat
-personality
-knowledge
-inventory
-relationships
-state
-```
-
-NPC является самостоятельной сущностью.
-
----
-
-## Factions
-
-```text
-world/factions/
-```
-
-Фракции описывают:
-
-* цели;
-* ресурсы;
-* территории;
-* участников;
-* отношения;
-* отношение к партии.
-
----
-
-## Knowledge
-
-```text
-world/knowledge/
-```
-
-Содержит:
-
-* facts;
-* secrets;
-* rumors;
-* discoveries.
-
-Это позволяет разделять:
-
-```text
-Что знает DM
-```
-
-и
-
-```text
-Что знает игрок
-```
-
----
-
-# Quests
-
-Квесты находятся в:
-
-```text
-quests/
-```
-
-Квест содержит:
-
-```text
-identity
-description
-objectives
-state
-requirements
-rewards
-related NPCs
-related locations
-```
-
-`state.json` хранит ссылки на активные квесты:
-
-```json
-{
-  "quests": {
-    "active_ids": [
-      "quest_001"
-    ],
-    "completed_ids": [],
-    "failed_ids": []
-  }
+  "type": "AttackCommand",
+  "actorId": "fighter_001",
+  "targetId": "goblin_001",
+  "weaponId": "longsword_001"
 }
 ```
 
 ---
 
-# Items
+# Command Pipeline
 
-Предметы разделены на два уровня.
+```mermaid
+flowchart LR
 
-```text
-items/
-├── definitions/
-└── instances/
+    Text[Player Text]
+
+    AI[AI Parser]
+
+    Command[Command]
+
+    Validator[Validator]
+
+    Resolver[Resolver]
+
+    Events[Events]
+
+    Text --> AI
+    AI --> Command
+    Command --> Validator
+    Validator --> Resolver
+    Resolver --> Events
 ```
 
-## Definition
-
-Определяет, что такое предмет по правилам:
+Важно:
 
 ```text
-Longsword
-1d8
-Slashing
-Versatile
-Martial
-```
-
-## Instance
-
-Конкретный предмет:
-
-```text
-item_001
+Command = намерение
+Event = факт
 ```
 
 Например:
 
 ```text
-"Меч старого барона"
+AttackCommand
 ```
 
-Это позволяет иметь несколько экземпляров одного типа с разными свойствами.
-
----
-
-# Rules
+может закончиться:
 
 ```text
-rules/
+AttackHit
 ```
 
-Машиночитаемая база игровых правил.
-
-Например:
+или:
 
 ```text
-abilities.json
-skills.json
-weapons.json
-armor.json
-spells.json
-conditions.json
-classes.json
-```
-
-Engine использует эти данные для расчётов.
-
----
-
-# Schemas
-
-```text
-schemas/
-```
-
-JSON Schema определяет допустимую структуру игровых данных.
-
-Например:
-
-```text
-character.schema.json
-```
-
-может гарантировать:
-
-```text
-HP.current → integer
-HP.maximum → integer
-level → integer
-abilities.str → integer
-```
-
-Это защищает игру от повреждённого состояния.
-
----
-
-# Engine
-
-Engine — программная часть проекта, которая отвечает за игровую механику.
-
-```text
-engine/
-├── dice.py
-├── checks.py
-├── combat.py
-├── damage.py
-├── movement.py
-├── inventory.py
-├── quests.py
-├── effects.py
-├── state.py
-├── events.py
-└── validation.py
-```
-
----
-
-## `dice.py`
-
-Броски:
-
-```text
-1d20
-2d6+3
-1d8
-```
-
----
-
-## `checks.py`
-
-Разрешение:
-
-* ability checks;
-* skill checks;
-* saving throws;
-* attack rolls;
-* contested checks;
-* advantage/disadvantage.
-
----
-
-## `combat.py`
-
-Управление боем:
-
-```text
-start combat
-initiative
-turn order
-actions
-bonus actions
-reactions
-movement
-end turn
-end combat
-```
-
----
-
-## `damage.py`
-
-Обработка:
-
-* damage;
-* damage types;
-* resistance;
-* vulnerability;
-* immunity;
-* temporary HP;
-* critical damage.
-
----
-
-## `effects.py`
-
-Временные эффекты:
-
-```text
-Bless
-Poisoned
-Stunned
-Invisible
-Cursed
-Burning
-```
-
-Управляется жизненный цикл:
-
-```text
-apply
-update
-expire
-remove
-```
-
----
-
-## `inventory.py`
-
-Операции:
-
-```text
-add
-remove
-equip
-unequip
-consume
-transfer
-attune
-```
-
----
-
-## `state.py`
-
-Слой доступа к persistent state:
-
-```text
-load
-save
-update
-```
-
-Он не должен содержать правила боя.
-
----
-
-## `events.py`
-
-Создание и запись событий.
-
----
-
-## `validation.py`
-
-Проверка целостности данных.
-
----
-
-# Игровой цикл
-
-Рассмотрим:
-
-> «Я атакую гоблина мечом».
-
-## 1. Player
-
-```text
-Я атакую гоблина мечом.
-```
-
-↓
-
-## 2. AI-DM
-
-AI определяет намерение:
-
-```json
-{
-  "action": "attack",
-  "actor_id": "pc_001",
-  "target_id": "npc_001",
-  "weapon_id": "item_001"
-}
-```
-
-↓
-
-## 3. Engine
-
-Engine загружает:
-
-```text
-PC
-NPC
-Weapon
-Rules
-State
-```
-
-↓
-
-## 4. Attack resolution
-
-```text
-d20
-+
-attack modifier
-+
-advantage/disadvantage
-```
-
-↓
-
-## 5. Damage resolution
-
-```text
-weapon damage
-+
-modifiers
--
-resistance
-```
-
-↓
-
-## 6. State mutation
-
-Например:
-
-```text
-Goblin HP
-12 → 4
-```
-
-↓
-
-## 7. Event
-
-Записывается:
-
-```text
-attack_resolved
-damage_applied
-```
-
-↓
-
-## 8. Validation
-
-Проверяется новое состояние.
-
-↓
-
-## 9. AI-DM
-
-Engine возвращает:
-
-```text
-HIT
-8 damage
-target HP = 4
-```
-
-AI превращает результат в повествование:
-
-> Клинок пробивает защиту гоблина...
-
----
-
-# Полный поток данных
-
-```text
-                       PLAYER
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │    AI-DM    │
-                   └──────┬──────┘
-                          │
-                       Intent
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │   ENGINE    │
-                   └──────┬──────┘
-                          │
-              ┌───────────┼───────────┐
-              ▼           ▼           ▼
-         Characters      World       Rules
-              │           │           │
-              └───────────┼───────────┘
-                          ▼
-                    Resolution
-                          │
-                          ▼
-                   State Mutation
-                          │
-              ┌───────────┴───────────┐
-              ▼                       ▼
-           Entities                 Events
-              │                       │
-              └───────────┬───────────┘
-                          ▼
-                       State
-                          │
-                          ▼
-                        AI-DM
-                          │
-                          ▼
-                      Narration
-                          │
-                          ▼
-                        PLAYER
+AttackMissed
 ```
 
 ---
 
 # Events
 
-Events являются историческим журналом.
+Events — неизменяемая история произошедшего.
+
+Основные группы:
+
+## Character Events
+
+```text
+CharacterCreated
+CharacterLeveledUp
+AbilityChanged
+ExperienceGranted
+```
+
+## Combat Events
+
+```text
+CombatStarted
+CombatEnded
+TurnStarted
+TurnEnded
+InitiativeRolled
+
+AttackResolved
+AttackHit
+AttackMissed
+CriticalHit
+
+DamageApplied
+HealingApplied
+
+CreatureDroppedToZeroHP
+CreatureDefeated
+```
+
+## Spell Events
+
+```text
+SpellCast
+SpellFailed
+SpellSlotConsumed
+ConcentrationStarted
+ConcentrationBroken
+```
+
+## Effect Events
+
+```text
+EffectApplied
+EffectExpired
+EffectRemoved
+
+ConditionApplied
+ConditionRemoved
+```
+
+## Inventory Events
+
+```text
+ItemAdded
+ItemRemoved
+ItemEquipped
+ItemUnequipped
+ItemConsumed
+```
+
+## World Events
+
+```text
+LocationDiscovered
+DoorOpened
+DoorClosed
+WorldTimeAdvanced
+NPCRelationshipChanged
+FactionRelationshipChanged
+```
+
+## Quest Events
+
+```text
+QuestStarted
+QuestObjectiveUpdated
+QuestCompleted
+QuestFailed
+RewardGranted
+```
+
+---
+
+# Event Chain
+
+Одно игровое действие может породить целую цепочку событий:
+
+```mermaid
+flowchart TD
+
+    Attack[AttackCommand]
+
+    Resolve[AttackResolved]
+
+    Damage[DamageApplied]
+
+    ZeroHP[CreatureDroppedToZeroHP]
+
+    Death[CreatureDefeated]
+
+    Quest[QuestObjectiveUpdated]
+
+    Loot[LootGenerated]
+
+    Faction[FactionRelationshipChanged]
+
+    Memory[NPCMemoryUpdated]
+
+    Attack --> Resolve
+    Resolve --> Damage
+    Damage --> ZeroHP
+    ZeroHP --> Death
+
+    Death --> Quest
+    Death --> Loot
+    Death --> Faction
+    Death --> Memory
+```
+
+Resolver не должен напрямую знать обо всех этих системах.
+
+Он создаёт факт:
+
+```text
+CreatureDefeated
+```
+
+а другие системы реагируют на него.
+
+---
+
+# Rule Engine
+
+Rule Engine — детерминированный слой, который реализует игровые правила.
+
+```text
+engine/
+├── rules/
+│   ├── checks.py
+│   ├── saves.py
+│   ├── attacks.py
+│   ├── damage.py
+│   ├── healing.py
+│   ├── movement.py
+│   ├── targeting.py
+│   ├── visibility.py
+│   ├── modifiers.py
+│   ├── conditions.py
+│   ├── effects.py
+│   ├── resources.py
+│   ├── spells.py
+│   ├── concentration.py
+│   ├── resting.py
+│   └── death.py
+```
+
+---
+
+## Основные Resolver'ы
+
+### CheckResolver
+
+```text
+d20
++
+ability modifier
++
+proficiency
++
+modifiers
+```
+
+### SaveResolver
+
+```text
+d20
++
+ability modifier
++
+proficiency (если есть)
++
+modifiers
+```
+
+### AttackResolver
+
+```text
+AttackCommand
+        │
+        ▼
+Validation
+        │
+        ▼
+Attack Roll
+        │
+        ▼
+Target AC
+        │
+        ├── Miss
+        │
+        └── Hit
+             │
+             ▼
+        DamageResolver
+```
+
+### DamageResolver
+
+```text
+Raw Damage
+    │
+    ▼
+Resistance
+    │
+    ▼
+Vulnerability
+    │
+    ▼
+Immunity
+    │
+    ▼
+Final Damage
+```
+
+---
+
+# Dice Engine
+
+Для всех случайных операций используется отдельный Dice Engine.
+
+Поддерживаемые выражения:
+
+```text
+1d20
+1d20+5
+2d20kh1
+2d20kl1
+8d6
+4d8+3
+```
+
+Пример результата:
+
+```json
+{
+  "expression": "1d20+5",
+  "rolls": [14],
+  "modifier": 5,
+  "total": 19,
+  "critical": false
+}
+```
+
+Dice Engine должен возвращать подробный результат броска.
+
+Это необходимо для:
+
+* UI;
+* replay;
+* debugging;
+* AI narration;
+* истории событий.
+
+---
+
+# Modifier Engine
+
+Многие игровые правила сводятся к модификаторам:
+
+```text
+base
++
+bonus
+-
+penalty
+× multiplier
+```
+
+Источником модификатора может быть:
+
+```text
+Ability
+Proficiency
+Item
+Feature
+Spell
+Condition
+Effect
+Environment
+Cover
+Equipment
+```
+
+Например:
+
+```json
+{
+  "sourceId": "bless_001",
+  "target": "attack_roll",
+  "operation": "add",
+  "value": 1
+}
+```
+
+---
+
+# Effects и Conditions
+
+Effect описывает изменение поведения.
+
+Condition — стандартизированное состояние.
+
+```text
+Spell / Feature / Item
+          │
+          ▼
+        Effect
+          │
+          ▼
+ Creature State
+```
+
+Пример:
+
+```text
+Bless
+   │
+   ▼
+EffectState
+   │
+   ├── sourceId
+   ├── targetId
+   ├── duration
+   └── modifiers
+```
+
+---
+
+# Combat Engine
+
+Combat является отдельным агрегатом.
+
+```mermaid
+flowchart TD
+
+    Combat[CombatState]
+
+    Initiative[Initiative]
+    Combatants[Combatants]
+    Turn[Turn]
+    Position[Positions]
+
+    Combat --> Initiative
+    Combat --> Combatants
+    Combat --> Turn
+    Combat --> Position
+
+    Combatants --> Creature[CreatureState]
+```
+
+Combat хранит:
+
+```text
+round
+initiative order
+active combatant
+combatants
+positions
+turn resources
+```
+
+---
+
+# Turn State
 
 Пример:
 
 ```json
 {
-  "event_id": "evt_145",
-  "sequence": 145,
-  "type": "damage_applied",
+  "combatantId": "fighter_001",
 
-  "actor_id": "pc_001",
-  "target_id": "npc_001",
+  "action": {
+    "available": true,
+    "used": false
+  },
 
-  "amount": 8,
+  "bonusAction": {
+    "available": true,
+    "used": false
+  },
 
-  "timestamp": "2026-08-18T10:00:00Z"
+  "reaction": {
+    "available": true,
+    "used": false
+  },
+
+  "movement": {
+    "maximum": 30,
+    "remaining": 18
+  }
 }
 ```
 
-Главное различие:
-
-```text
-STATE
-=
-что есть сейчас
-
-EVENT
-=
-как мы к этому пришли
-```
-
-Например:
-
-```text
-HP = 12
-```
-
-находится в character state.
-
-А:
-
-```text
-Goblin attacked PC
-PC dealt 8 damage
-```
-
-находится в event history.
-
 ---
 
-# Sessions
+# World Engine
 
-Сессия является историей общения AI и игрока.
-
-```text
-sessions/
-└── session_001/
-    ├── transcript.md
-    ├── recap.md
-    └── handoff.json
-```
-
-### transcript.md
-
-Полный диалог.
-
-### recap.md
-
-Сжатое резюме.
-
-### handoff.json
-
-Машиночитаемый пакет для продолжения игры в другом AI-контексте.
-
----
-
-# Решение проблемы Context Window
-
-Контекст чата не является долговременной памятью.
-
-Поэтому новый AI-контекст получает не весь старый чат, а необходимый набор данных.
+World Engine отвечает за:
 
 ```text
-OLD CHAT
-   │
-   ├── transcript
-   ├── events
-   └── current state
-          │
-          ▼
-      HANDOFF
-          │
-          ▼
-      NEW CHAT
-          │
-          ├── state.json
-          ├── relevant characters
-          ├── relevant NPCs
-          ├── current location
-          ├── active quests
-          ├── rules.md
-          ├── recent events
-          └── handoff.json
-```
-
-Таким образом:
-
-> **Чат является disposable context, а campaign является persistent state.**
-
----
-
-# Модель памяти
-
-Система использует несколько уровней памяти:
-
-```text
-┌─────────────────────────────────┐
-│        WORLD / ENTITIES         │
-│                                 │
-│ characters / NPC / locations    │
-│ quests / items / factions       │
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│          CURRENT STATE          │
-│                                 │
-│ campaign/state.json             │
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│          EVENT HISTORY          │
-│                                 │
-│ events/events.jsonl             │
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│         SESSION MEMORY          │
-│                                 │
-│ transcript / recap / handoff    │
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│        AI CONTEXT WINDOW        │
-│                                 │
-│ only relevant information       │
-└─────────────────────────────────┘
+locations
+movement between locations
+world time
+NPCs
+factions
+relationships
+quests
+environment
+visibility
 ```
 
 ---
 
-# AI-DM Responsibilities
+# Quest Engine
 
-AI отвечает за то, что плохо формализуется обычным кодом.
+Quest состоит из машиночитаемых objectives.
 
-### AI может:
+Пример:
 
-* понимать естественный язык;
-* интерпретировать намерения игрока;
-* вести диалоги;
-* отыгрывать NPC;
-* описывать мир;
-* создавать повествование;
-* предлагать варианты действий;
-* управлять pacing;
-* принимать DM-решения;
-* выбирать подходящие правила;
-* определять, какие игровые сущности необходимо загрузить.
+```json
+{
+  "id": "quest_goblin_01",
+  "title": "Goblin Threat",
+  "objectives": [
+    {
+      "id": "objective_1",
+      "type": "kill",
+      "targetId": "goblin_chief",
+      "required": 1,
+      "current": 0
+    }
+  ]
+}
+```
 
-### AI не должен самостоятельно:
+Quest Engine слушает Events:
 
-* считать урон;
-* менять HP без Engine;
-* менять inventory;
-* менять XP;
-* определять случайный результат броска;
-* самостоятельно изменять state;
-* переписывать event history.
+```text
+CreatureDefeated
+        │
+        ▼
+QuestObjectiveResolver
+        │
+        ▼
+QuestObjectiveUpdated
+        │
+        ▼
+QuestCompleted
+```
 
 ---
 
-# Engine Responsibilities
+# AI Dungeon Master
 
-Engine отвечает за то, что должно быть воспроизводимым и проверяемым.
+AI DM находится над Engine.
 
-```text
-AI:
-"Я атакую."
-
-Engine:
-d20 = 17
-attack bonus = +5
-target AC = 15
-
-17 + 5 = 22
-
-HIT
-
-damage = 8
-```
-
-Engine является источником истины для механики.
-
----
-
-# GitHub
-
-GitHub используется как система контроля версий проекта.
-
-Репозиторий может содержать:
+Его задача:
 
 ```text
-source code
-JSON data
-schemas
-rules
-tests
-documentation
-campaign data
-```
-
-Git позволяет:
-
-* отслеживать изменения;
-* откатывать состояние;
-* сравнивать версии;
-* создавать branches;
-* проводить code review;
-* восстанавливать предыдущие состояния кампании.
-
----
-
-# Внешние AI coding tools
-
-Инструменты вроде Claude Code, Codex и других coding agents могут использоваться для разработки самого проекта.
-
-Например:
-
-```text
-Developer
-    │
-    ▼
-Coding Agent
-    │
-    ├── Engine
-    ├── Tests
-    ├── Schemas
-    ├── Refactoring
-    └── Git
-```
-
-Однако coding agent не является частью игрового runtime.
-
-Во время игры основной поток:
-
-```text
-Player
-   ↓
-AI-DM
-   ↓
+Natural Language
+       │
+       ▼
+Intent Recognition
+       │
+       ▼
+Command
+       │
+       ▼
 Engine
-   ↓
-Persistent State
+       │
+       ▼
+Game Result
+       │
+       ▼
+AI Context
+       │
+       ▼
+Narration
 ```
 
 ---
 
-# MVP
+## AI имеет доступ не ко всему State
 
-Первая рабочая версия не должна пытаться реализовать всю D&D.
+Полный `state.json` не должен бездумно отправляться в LLM.
 
-Минимальная вертикальная версия должна поддерживать:
-
-```text
-Campaign
-   │
-   ├── 2 Player Characters
-   │
-   ├── Location
-   │
-   ├── NPC
-   │
-   ├── Quest
-   │
-   ├── Item
-   │
-   └── Combat
-```
-
-Игровой сценарий:
+Используется специальная проекция:
 
 ```text
-Create campaign
-      ↓
-Create characters
-      ↓
-Enter location
-      ↓
-Talk to NPC
-      ↓
-Receive quest
-      ↓
-Move to another location
-      ↓
-Skill check
-      ↓
-Start combat
-      ↓
-Attack
-      ↓
-Damage
-      ↓
-End combat
-      ↓
-Save state
-      ↓
-Write events
-      ↓
-Create session handoff
+AIProjection
 ```
 
-Если этот сценарий работает корректно, архитектура доказала свою жизнеспособность.
+Она собирает только необходимую информацию:
+
+```json
+{
+  "scene": {
+    "location": "Ruined Gate",
+    "time": "18:42",
+    "weather": "rain"
+  },
+
+  "visibleCharacters": [],
+
+  "combat": {},
+
+  "relevantQuests": [],
+
+  "recentEvents": [],
+
+  "knownFacts": [],
+
+  "possibleActions": []
+}
+```
+
+Это позволяет контролировать:
+
+* стоимость контекста;
+* скрытую информацию;
+* знания NPC;
+* туман войны;
+* мета-информацию;
+* секреты мастера.
+
+---
+
+# NPC Knowledge
+
+NPC не должен автоматически знать весь мир.
+
+```mermaid
+flowchart LR
+
+    World[World State]
+
+    NPC[NPC Knowledge]
+
+    Facts[Known Facts]
+
+    Memories[Memories]
+
+    Goals[Goals]
+
+    World --> NPC
+
+    NPC --> Facts
+    NPC --> Memories
+    NPC --> Goals
+```
+
+Например:
+
+```json
+{
+  "subject": "dragon_001",
+  "fact": "dragon_is_in_the_mountains",
+  "confidence": 0.7,
+  "source": "merchant_001"
+}
+```
+
+Это позволяет реализовать NPC с ограниченной информацией.
+
+---
+
+# State и Event Store
+
+Проект использует модель:
+
+```text
+Event Log
+    +
+Materialized State
+```
+
+То есть:
+
+```text
+events/
+    000001.json
+    000002.json
+    000003.json
+           │
+           ▼
+    State Projection
+           │
+           ▼
+      state.json
+```
+
+`state.json` является быстрым snapshot текущего состояния.
+
+`events/` хранит историю.
+
+---
+
+# Структура проекта
+
+```text
+dnd-engine/
+│
+├── README.md
+├── pyproject.toml
+│
+├── src/
+│   └── dnd_engine/
+│
+│       ├── domain/
+│       │   ├── definitions/
+│       │   ├── state/
+│       │   └── value_objects/
+│       │
+│       ├── engine/
+│       │   ├── rules/
+│       │   ├── combat/
+│       │   ├── world/
+│       │   └── services/
+│       │
+│       ├── commands/
+│       │
+│       ├── events/
+│       │
+│       ├── projections/
+│       │
+│       └── api/
+│
+├── rules/
+│   └── dnd_5e/
+│       ├── ruleset.json
+│       ├── classes/
+│       ├── subclasses/
+│       ├── species/
+│       ├── backgrounds/
+│       ├── feats/
+│       ├── spells/
+│       ├── monsters/
+│       ├── items/
+│       ├── features/
+│       ├── conditions/
+│       └── effects/
+│
+├── campaigns/
+│   └── example/
+│       ├── config.json
+│       ├── state.json
+│       ├── world/
+│       ├── characters/
+│       ├── npcs/
+│       ├── quests/
+│       ├── encounters/
+│       ├── ai/
+│       └── events/
+│
+└── tests/
+    ├── rules/
+    ├── combat/
+    ├── spells/
+    ├── movement/
+    └── scenarios/
+```
+
+---
+
+# Структура кампании
+
+```text
+campaigns/
+└── campaign_001/
+    │
+    ├── config.json
+    ├── state.json
+    │
+    ├── world/
+    │   ├── world.json
+    │   ├── locations.json
+    │   ├── factions.json
+    │   └── environment.json
+    │
+    ├── characters/
+    │   ├── player_001.json
+    │   └── player_002.json
+    │
+    ├── npcs/
+    │   ├── npc_001.json
+    │   └── npc_002.json
+    │
+    ├── quests/
+    │   ├── quest_001.json
+    │   └── quest_002.json
+    │
+    ├── encounters/
+    │   └── encounter_001.json
+    │
+    ├── ai/
+    │   ├── dm_memory.json
+    │   ├── npc_memory.json
+    │   └── narrative_state.json
+    │
+    └── events/
+        ├── 000001.json
+        ├── 000002.json
+        └── 000003.json
+```
+
+---
+
+# `state.json`
+
+Snapshot текущего состояния:
+
+```json
+{
+  "campaignId": "campaign_001",
+
+  "time": {
+    "day": 14,
+    "hour": 18,
+    "minute": 42
+  },
+
+  "locationId": "ancient_ruins",
+
+  "activeEncounterId": "encounter_007",
+
+  "combat": {
+    "active": true,
+    "combatId": "combat_031"
+  },
+
+  "party": [
+    "player_001",
+    "player_002"
+  ],
+
+  "worldFlags": {
+    "ruins_door_open": true,
+    "goblin_chief_dead": true
+  }
+}
+```
+
+---
+
+# `config.json`
+
+Конфигурация кампании:
+
+```json
+{
+  "id": "campaign_001",
+  "name": "Ashes of Aerona",
+
+  "ruleset": {
+    "id": "dnd_5e",
+    "version": "5.2.1"
+  },
+
+  "game": {
+    "grid": "square",
+    "gridSize": 5
+  }
+}
+```
+
+---
+
+# Пример: атака
+
+Игрок пишет:
+
+> Я атакую гоблина мечом.
+
+## 1. AI
+
+```text
+Natural Language
+       │
+       ▼
+AttackCommand
+```
+
+```json
+{
+  "type": "AttackCommand",
+  "actorId": "fighter_001",
+  "targetId": "goblin_001",
+  "weaponId": "longsword_001"
+}
+```
+
+## 2. Validation
+
+Engine проверяет:
+
+```text
+✓ actor exists
+✓ target exists
+✓ current turn belongs to actor
+✓ action available
+✓ weapon exists
+✓ weapon equipped
+✓ target is valid
+✓ target is in range
+✓ target can be attacked
+```
+
+## 3. Attack Roll
+
+```text
+1d20 + attack modifier
+```
+
+Например:
+
+```text
+14 + 7 = 21
+```
+
+Target:
+
+```text
+AC = 16
+```
+
+Результат:
+
+```text
+HIT
+```
+
+## 4. Damage
+
+```text
+1d8 + STR modifier
+```
+
+Например:
+
+```text
+6 + 4 = 10 slashing
+```
+
+## 5. Events
+
+```text
+AttackResolved
+        ↓
+AttackHit
+        ↓
+DamageApplied
+        ↓
+TurnResourceSpent
+```
+
+Если HP стало 0:
+
+```text
+CreatureDroppedToZeroHP
+        ↓
+CreatureDefeated
+```
+
+## 6. State
+
+```text
+Goblin HP: 20 → 10
+```
+
+## 7. AI
+
+AI получает:
+
+```text
+AttackHit
+DamageApplied
+```
+
+и создаёт повествование:
+
+> Меч прорезает кольчугу гоблина. Тот отшатывается, прижимая руку к кровоточащему боку.
+
+---
+
+# Python-модель
+
+Минимальный пример:
+
+```python
+from dataclasses import dataclass, field
+
+
+@dataclass
+class AbilityScores:
+    strength: int
+    dexterity: int
+    constitution: int
+    intelligence: int
+    wisdom: int
+    charisma: int
+
+
+@dataclass
+class Position:
+    x: int
+    y: int
+    z: int = 0
+
+
+@dataclass
+class CreatureState:
+    id: str
+    name: str
+    definition_id: str
+
+    abilities: AbilityScores
+
+    hp: int
+    max_hp: int
+    temp_hp: int = 0
+
+    position: Position | None = None
+
+    conditions: list[str] = field(default_factory=list)
+    effects: list[str] = field(default_factory=list)
+
+    inventory_id: str | None = None
+    equipment_id: str | None = None
+```
+
+Definition:
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class WeaponDefinition:
+    id: str
+    name: str
+    damage_dice: str
+    damage_type: str
+    properties: list[str]
+```
+
+Command:
+
+```python
+@dataclass
+class AttackCommand:
+    actor_id: str
+    target_id: str
+    weapon_id: str
+```
+
+Result:
+
+```python
+@dataclass
+class AttackResult:
+    attack_roll: int
+    attack_bonus: int
+    target_ac: int
+    hit: bool
+    critical: bool
+    damage: int | None
+```
+
+Event:
+
+```python
+@dataclass
+class GameEvent:
+    event_id: str
+    type: str
+    campaign_id: str
+    actor_id: str | None
+    payload: dict
+    caused_by: str | None = None
+```
+
+---
+
+# Engine API
+
+Главный интерфейс Engine должен быть простым:
+
+```python
+result = game_engine.execute(command)
+```
+
+Например:
+
+```python
+command = AttackCommand(
+    actor_id="fighter_001",
+    target_id="goblin_001",
+    weapon_id="longsword_001",
+)
+
+result = engine.execute(command)
+```
+
+Результат содержит:
+
+```text
+validation
+resolution
+dice rolls
+events
+state changes
+```
+
+---
+
+# Внутренняя архитектура Engine
+
+```mermaid
+flowchart TD
+
+    Command[Command]
+
+    Context[GameContext]
+
+    Validator[Validator]
+    Resolver[Resolver]
+    Dice[DiceEngine]
+    Modifiers[ModifierEngine]
+    Definitions[DefinitionRegistry]
+
+    EventBus[EventBus]
+    Store[StateStore]
+
+    Command --> Validator
+
+    Validator --> Context
+    Context --> Definitions
+
+    Validator --> Resolver
+
+    Resolver --> Dice
+    Resolver --> Modifiers
+    Resolver --> Definitions
+
+    Resolver --> EventBus
+    EventBus --> Store
+```
+
+---
+
+# Основные компоненты
+
+## `GameEngine`
+
+Оркестрирует выполнение команд.
+
+```python
+class GameEngine:
+
+    def execute(self, command):
+        ...
+```
+
+---
+
+## `DefinitionRegistry`
+
+Доступ к Definitions:
+
+```python
+class DefinitionRegistry:
+
+    def get_spell(self, id: str):
+        ...
+
+    def get_item(self, id: str):
+        ...
+
+    def get_monster(self, id: str):
+        ...
+
+    def get_feature(self, id: str):
+        ...
+```
+
+---
+
+## `StateStore`
+
+Отвечает только за состояние:
+
+```python
+class StateStore:
+
+    def load(self):
+        ...
+
+    def save(self, state):
+        ...
+
+    def snapshot(self):
+        ...
+```
+
+---
+
+## `DiceEngine`
+
+```python
+class DiceEngine:
+
+    def roll(self, expression: str):
+        ...
+```
+
+---
+
+## `EventBus`
+
+```python
+class EventBus:
+
+    def publish(self, event):
+        ...
+
+    def subscribe(self, event_type, handler):
+        ...
+```
+
+---
+
+# Тестируемость
+
+Большая часть Rule Engine должна быть детерминированной и тестируемой без LLM.
+
+Например:
+
+```python
+def test_attack_hits():
+    ...
+```
+
+```python
+def test_fire_resistance_halves_damage():
+    ...
+```
+
+```python
+def test_advantage_uses_highest_roll():
+    ...
+```
+
+```python
+def test_spell_breaks_on_failed_concentration_save():
+    ...
+```
+
+Для тестов Dice Engine должен позволять использовать контролируемый RNG.
+
+---
+
+# Почему Event-driven архитектура
+
+Event-driven модель позволяет нескольким подсистемам реагировать на один факт.
+
+Например:
+
+```text
+CreatureDefeated
+      │
+      ├── QuestEngine
+      │
+      ├── LootEngine
+      │
+      ├── FactionEngine
+      │
+      ├── NPCMemory
+      │
+      ├── AchievementSystem
+      │
+      └── AIContext
+```
+
+При этом `CombatEngine` не должен напрямую импортировать все эти системы.
+
+---
+
+# Версионирование Ruleset
+
+Правила должны иметь собственную версию.
+
+```json
+{
+  "id": "dnd_5e",
+  "version": "5.2.1"
+}
+```
+
+Это необходимо, потому что разные версии D&D не являются полностью совместимыми.
+
+Кампания должна всегда знать:
+
+```text
+какой Ruleset использовался
+```
+
+чтобы старые сохранения оставались воспроизводимыми.
+
+---
+
+# Determinism
+
+Одна из целей проекта:
+
+```text
+same state
++
+same command
++
+same ruleset
++
+same dice seed
+=
+same result
+```
+
+Это позволяет:
+
+* воспроизводить ошибки;
+* делать replay;
+* отлаживать кампании;
+* тестировать правила;
+* сравнивать версии Engine;
+* восстанавливать состояние.
+
+---
+
+# Security Boundary
+
+AI никогда не должен иметь прямого доступа к:
+
+```text
+state.hp = ...
+state.inventory = ...
+state.quest.completed = ...
+```
+
+AI должен отправлять Commands:
+
+```text
+AttackCommand
+CastSpellCommand
+MoveCommand
+InteractCommand
+```
+
+Engine уже решает, что произошло.
 
 ---
 
 # Roadmap
 
-## Phase 1 — Data Model
+## Phase 1 — Core
 
-* [x] Campaign structure
-* [x] `state.json`
-* [x] `config.json`
-* [x] `rules.md`
-* [x] Character structure
-* [ ] Location
-* [ ] NPC
-* [ ] Quest
-* [ ] Item
-* [ ] Event
-* [ ] Session
-* [ ] Handoff
+* [ ] `CampaignState`
+* [ ] `CreatureState`
+* [ ] `AbilityScores`
+* [ ] `ItemDefinition`
+* [ ] `WeaponDefinition`
+* [ ] `MonsterDefinition`
+* [ ] Dice Engine
+* [ ] Event model
+* [ ] State Store
 
----
+## Phase 2 — Basic Rules
 
-## Phase 2 — Schemas
-
-* [ ] JSON Schema для Campaign
-* [ ] JSON Schema для Character
-* [ ] JSON Schema для Location
-* [ ] JSON Schema для NPC
-* [ ] JSON Schema для Quest
-* [ ] JSON Schema для Item
-* [ ] JSON Schema для Event
-
----
-
-## Phase 3 — Engine
-
-* [ ] State manager
-* [ ] Dice
-* [ ] Checks
-* [ ] Modifiers
-* [ ] Advantage / Disadvantage
-* [ ] Combat
+* [ ] Ability checks
+* [ ] Saving throws
+* [ ] Skills
+* [ ] Proficiency
+* [ ] Attack rolls
 * [ ] Damage
+* [ ] Healing
+* [ ] AC
+* [ ] HP
 * [ ] Conditions
+
+## Phase 3 — Combat
+
+* [ ] Initiative
+* [ ] Turns
+* [ ] Movement
+* [ ] Reactions
+* [ ] Opportunity attacks
+* [ ] Targeting
+* [ ] Cover
+* [ ] Visibility
+
+## Phase 4 — Magic
+
+* [ ] Spell definitions
+* [ ] Spell slots
+* [ ] Spell targeting
+* [ ] AoE
+* [ ] Saving throw spells
+* [ ] Spell attacks
 * [ ] Effects
-* [ ] Inventory
-* [ ] Quest state
-* [ ] Event log
-* [ ] Validation
+* [ ] Concentration
+
+## Phase 5 — World
+
+* [ ] Locations
+* [ ] Maps
+* [ ] NPCs
+* [ ] Factions
+* [ ] Relationships
+* [ ] Quests
+* [ ] World time
+* [ ] Knowledge system
+
+## Phase 6 — AI DM
+
+* [ ] Natural language → Commands
+* [ ] AI Context Projection
+* [ ] NPC AI
+* [ ] Memory
+* [ ] Scene narration
+* [ ] World generation
+* [ ] Encounter generation
+* [ ] AI tool calling
+
+## Phase 7 — Web Application
+
+* [ ] Backend API
+* [ ] Authentication
+* [ ] Campaign management
+* [ ] Character sheet
+* [ ] Combat UI
+* [ ] Tactical map
+* [ ] Inventory UI
+* [ ] Quest UI
+* [ ] AI chat
+* [ ] Multiplayer
 
 ---
 
-## Phase 4 — AI-DM Integration
+# Принципы разработки
 
-* [ ] Intent parser
-* [ ] Context builder
-* [ ] Entity retrieval
-* [ ] Engine command interface
-* [ ] Result formatter
-* [ ] Narration layer
-* [ ] NPC roleplay
-* [ ] Memory management
-* [ ] Handoff generation
+### Rules are code/data, not prompts
 
----
+Правила игры должны находиться в Engine/Definitions, а не в системном промпте LLM.
 
-## Phase 5 — Long Campaign Support
+### State is authoritative
 
-* [ ] Session summaries
-* [ ] Automatic checkpoints
-* [ ] Event compaction
-* [ ] Context retrieval
-* [ ] Relevant entity loading
-* [ ] Long-term memory
-* [ ] Campaign migration
-* [ ] State rollback
+UI и AI только отображают/запрашивают состояние.
 
----
+### Commands are intentions
 
-# Основные архитектурные правила
+Команда не означает успех.
 
-## 1. Один источник истины
+### Events are facts
 
-Не дублировать mutable state.
+Event описывает то, что уже произошло.
 
-Плохо:
+### Definitions are immutable
+
+Definition не должен изменяться в рамках игровой сессии.
+
+### Calculated values should be calculated
+
+Не хранить производные значения без необходимости.
+
+Например вместо:
 
 ```text
-state.json → HP = 20
-pc_001.json → HP = 17
-combat.json → HP = 15
+attackBonus = 7
 ```
 
-Хорошо:
+предпочтительно:
 
 ```text
-pc_001.json → HP = 17
+ability
++
+proficiency
++
+equipment
++
+effects
 ```
 
-Остальные системы используют ссылку на `pc_001`.
+и вычислять итог через Rule Engine.
+
+### AI should be replaceable
+
+Замена одной LLM на другую не должна менять игровую механику.
 
 ---
 
-## 2. State ≠ History
+# Целевая архитектура
 
-```text
-state.json
-```
+В конечном виде система должна выглядеть так:
 
-хранит настоящее.
+```mermaid
+flowchart TB
 
-```text
-events.jsonl
-```
+    subgraph CONTENT["RULESET / CONTENT"]
+        Definitions[Definitions]
+    end
 
-хранит прошлое.
+    subgraph GAME["GAME ENGINE"]
+        Commands[Commands]
+        Validation[Validation]
+        Rules[Rule Engine]
+        Dice[Dice Engine]
+        Events[Event System]
+        State[State Store]
+        Projections[Projections]
+    end
 
----
+    subgraph WORLD["GAME WORLD"]
+        Characters[Characters]
+        NPCs[NPCs]
+        Combat[Combat]
+        Quests[Quests]
+        Locations[Locations]
+    end
 
-## 3. Definition ≠ Instance
+    subgraph AI["AI DM"]
+        Parser[Intent Parser]
+        Director[NPC / World Director]
+        Memory[AI Memory]
+        Narrator[Narrator]
+    end
 
-```text
-Longsword definition
-```
+    Definitions --> Rules
 
-не является конкретным мечом персонажа.
+    Parser --> Commands
 
-```text
-item_001
-```
+    Commands --> Validation
+    Validation --> Rules
 
-является экземпляром.
+    Rules --> Dice
+    Rules --> Events
 
----
+    Events --> State
+    State --> Characters
+    State --> NPCs
+    State --> Combat
+    State --> Quests
+    State --> Locations
 
-## 4. Rules ≠ State
+    State --> Projections
+    Events --> Projections
 
-Правила:
+    Projections --> Memory
+    Projections --> Director
 
-```text
-rules/
-```
+    Memory --> Narrator
+    Director --> Commands
 
-Состояние:
-
-```text
-campaign/state.json
-```
-
----
-
-## 5. AI ≠ Engine
-
-AI может интерпретировать действие.
-
-Engine определяет механический результат.
-
----
-
-## 6. Chat ≠ Campaign
-
-Чат — временный контекст.
-
-Кампания — persistent data.
-
-```text
-CHAT
-  ↓
-temporary context
-
-CAMPAIGN
-  ↓
-persistent world
-```
-
----
-
-## 7. Любое значимое изменение должно быть проверяемым
-
-Изменение состояния должно проходить через Engine и, где необходимо, создавать Event.
-
-```text
-Action
-   ↓
-Engine
-   ↓
-Validation
-   ↓
-State mutation
-   ↓
-Event
+    Narrator --> Player[Player]
+    Player --> Parser
 ```
 
 ---
 
-# Итоговая архитектура
+# Философия проекта
+
+Проект строится вокруг простой модели:
+
+> **AI рассказывает историю. Engine решает, что в этой истории действительно произошло.**
+
+Игрок может сказать:
+
+> «Прыгаю через пропасть.»
+
+AI может понять намерение.
+
+Engine решит:
 
 ```text
-                              ┌───────────────┐
-                              │    PLAYER     │
-                              └───────┬───────┘
-                                      │
-                                      ▼
-                              ┌───────────────┐
-                              │     AI-DM     │
-                              │               │
-                              │ Intent        │
-                              │ Narration     │
-                              │ NPC           │
-                              │ DM Logic      │
-                              └───────┬───────┘
-                                      │
-                                      ▼
-                              ┌───────────────┐
-                              │    ENGINE     │
-                              │               │
-                              │ Rules         │
-                              │ Dice          │
-                              │ Checks        │
-                              │ Combat        │
-                              │ Damage        │
-                              │ Effects       │
-                              │ State         │
-                              │ Validation    │
-                              └───────┬───────┘
-                                      │
-                 ┌────────────────────┼────────────────────┐
-                 │                    │                    │
-                 ▼                    ▼                    ▼
-          ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-          │  CHARACTERS │      │    WORLD    │      │    RULES    │
-          │             │      │             │      │             │
-          │ PC state    │      │ NPC         │      │ D&D rules  │
-          │ Inventory   │      │ Locations   │      │ Spells     │
-          │ Effects     │      │ Factions    │      │ Conditions │
-          └──────┬──────┘      └──────┬──────┘      └─────────────┘
-                 │                    │
-                 └──────────┬─────────┘
-                            │
-                            ▼
-                     ┌─────────────┐
-                     │    STATE    │
-                     │             │
-                     │ Current     │
-                     │ Runtime     │
-                     └──────┬──────┘
-                            │
-                 ┌──────────┴──────────┐
-                 ▼                     ▼
-          ┌─────────────┐       ┌─────────────┐
-          │   EVENTS    │       │  SESSIONS   │
-          │             │       │             │
-          │ History     │       │ Transcript  │
-          │ Audit       │       │ Recap       │
-          │ Recovery    │       │ Handoff     │
-          └─────────────┘       └──────┬──────┘
-                                       │
-                                       ▼
-                                  NEW AI CHAT
+есть ли возможность прыжка
+↓
+какое расстояние
+↓
+какая проверка
+↓
+какой DC
+↓
+результат броска
+↓
+успех / провал
+↓
+урон / падение / изменение позиции
+```
+
+И только затем AI расскажет:
+
+> «Ты разбегаешься и прыгаешь в темноту...»
+
+---
+
+# License
+
+Проект находится на стадии разработки.
+
+Лицензия, используемые игровые данные и источники контента должны быть определены отдельно перед публикацией полноценного набора правил/контента.
+
+---
+
+# Status
+
+🚧 **Early Development**
+
+Проект находится на стадии проектирования архитектуры и создания базового Rule Engine.
+
+Текущий приоритет:
+
+```text
+Data Model
+    ↓
+State Model
+    ↓
+Command Model
+    ↓
+Event Model
+    ↓
+Core Engine
+    ↓
+Combat
+    ↓
+Magic
+    ↓
+World
+    ↓
+AI DM
+    ↓
+Web UI
 ```
 
 ---
 
-# Core Philosophy
+## Конечная цель
 
-AI-D&D is built around one central principle:
+Создать веб-платформу, в которой AI Dungeon Master способен вести полноценную длительную D&D-кампанию, сохраняя при этом:
 
-> **The AI does not need to remember the entire game. It only needs to reconstruct the current game state from persistent, structured data.**
+* детерминированные игровые правила;
+* постоянное состояние мира;
+* историю всех значимых событий;
+* память NPC;
+* квесты и последствия действий;
+* тактические бои;
+* расширяемую систему контента;
+* возможность заменить AI без переписывания игрового движка.
 
-The campaign survives:
-
-* context-window limits;
-* chat changes;
-* model changes;
-* session interruptions;
-* AI memory degradation;
-* long campaign histories.
-
-The AI is replaceable.
-
-The chat is replaceable.
-
-The persistent campaign state is not.
-
----
-
-## Status
-
-**Current stage:** Architecture / MVP data model
-
-**Primary goal:** Build a minimal, reliable vertical slice before expanding into the complete D&D ruleset.
-
-**Next implementation step:** Define `Location` entity and its JSON schema, then `NPC`, `Quest`, `Item`, `Event`, and only after that begin implementation of the Engine.
-
+```text
+                 PLAYER
+                   │
+                   ▼
+             Natural Language
+                   │
+                   ▼
+                AI DM
+                   │
+                Command
+                   │
+                   ▼
+              D&D ENGINE
+                   │
+          Rules + Dice + State
+                   │
+                   ▼
+                Events
+                   │
+                   ▼
+              WORLD STATE
+                   │
+                   ▼
+                AI DM
+                   │
+                   ▼
+               Narration
+                   │
+                   ▼
+                 PLAYER
 ```
-```
-# ai-dnd-master
+
+**The AI is the Dungeon Master.
+The Engine is the Rules.
+The State is the World.
+The Events are its History.**
