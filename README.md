@@ -1,6 +1,8 @@
 ````markdown
 # AI-D&D
 
+Test code changes
+
 > Persistent AI Dungeon Master system for D&D campaigns.
 
 AI-D&D — это система для проведения длительных D&D-кампаний с использованием LLM в роли Dungeon Master.
