@@ -10,6 +10,8 @@
 
 ИИ не должен самостоятельно решать, попал ли персонаж, сколько нанесено урона или можно ли совершить действие. Эти решения принимает детерминированный Rule Engine.
 
+> **Этот файл — обзорный документ**: он описывает идею, архитектуру верхнего уровня и модель данных проекта. Детальная спецификация контрактов (Command/Event Envelope, ID System, слои приложения, правила сериализации) зафиксирована в `aboutREADME.md` и является источником истины при расхождениях.
+
 ---
 
 ## Содержание
@@ -84,12 +86,18 @@ AI преобразует намерение в игровую команду:
 
 ```json
 {
+  "commandId": "command_000001",
   "type": "AttackCommand",
+  "campaignId": "campaign_001",
   "actorId": "player_001",
-  "targetId": "guard_001",
-  "weaponId": "longsword_001"
+  "payload": {
+    "targetId": "guard_001",
+    "weaponId": "item_001"
+  }
 }
 ```
+
+> Полная каноническая схема Command Envelope (`commandId`, `campaignId`, `payload` и т.д.) описана в `aboutREADME.md`, раздел «Command Envelope».
 
 Engine проверяет возможность действия, выполняет правила, бросает кубики, изменяет состояние и создаёт события.
 
@@ -392,6 +400,7 @@ ActionDefinition
 ```json
 {
   "id": "longsword",
+  "version": 1,
   "name": "Longsword",
   "type": "weapon",
   "damage": {
@@ -403,6 +412,8 @@ ActionDefinition
   ]
 }
 ```
+
+> Каждый Definition обязан иметь поле `version` (см. `aboutREADME.md`, раздел «Definition Contract»). Это версия конкретного Definition, а не версия Ruleset.
 
 Это описание оружия.
 
@@ -436,9 +447,11 @@ character_001
 HP = 31
 position = (10, 15)
 condition = Poisoned
-weapon = longsword_001
+weapon = item_001
 spell_slot_3 = 1
 ```
+
+> Здесь `item_001` — Runtime ID конкретного экземпляра оружия, ссылающийся на Definition через `definitionId: "longsword"`. Экземпляр не должен называться так же, как Definition (`longsword_001`). Полная конвенция ID — в `aboutREADME.md`, раздел «ID System».
 
 Основные State-сущности:
 
@@ -558,10 +571,14 @@ HelpCommand
 
 ```json
 {
+  "commandId": "command_000042",
   "type": "AttackCommand",
+  "campaignId": "campaign_001",
   "actorId": "fighter_001",
-  "targetId": "goblin_001",
-  "weaponId": "longsword_001"
+  "payload": {
+    "targetId": "goblin_001",
+    "weaponId": "item_001"
+  }
 }
 ```
 
@@ -761,24 +778,24 @@ CreatureDefeated
 Rule Engine — детерминированный слой, который реализует игровые правила.
 
 ```text
-engine/
-├── rules/
-│   ├── checks.py
-│   ├── saves.py
-│   ├── attacks.py
-│   ├── damage.py
-│   ├── healing.py
-│   ├── movement.py
-│   ├── targeting.py
-│   ├── visibility.py
-│   ├── modifiers.py
-│   ├── conditions.py
-│   ├── effects.py
-│   ├── resources.py
-│   ├── spells.py
-│   ├── concentration.py
-│   ├── resting.py
-│   └── death.py
+domain/
+└── rules/
+    ├── checks.py
+    ├── saves.py
+    ├── attacks.py
+    ├── damage.py
+    ├── healing.py
+    ├── movement.py
+    ├── targeting.py
+    ├── visibility.py
+    ├── modifiers.py
+    ├── conditions.py
+    ├── effects.py
+    ├── resources.py
+    ├── spells.py
+    ├── concentration.py
+    ├── resting.py
+    └── death.py
 ```
 
 ---
@@ -1230,9 +1247,13 @@ events/
 
 `events/` хранит историю.
 
+Отдельные файлы на событие (`000001.json`, ...) допускаются как MVP-вариант. Каноническим потоковым форматом является единый `events/events.jsonl` (см. `aboutREADME.md`, раздел «Event Serialization»).
+
 ---
 
 # Структура проекта
+
+Проект построен на четырёх слоях: **Presentation → Application → Domain ← Infrastructure**. Domain — центральный слой и ни от чего не зависит; Presentation и Infrastructure зависят от него, а не наоборот. Подробный разбор каждого слоя и правила зависимостей — в `aboutREADME.md`, раздел «Слои приложения».
 
 ```text
 dnd-engine/
@@ -1242,25 +1263,29 @@ dnd-engine/
 │
 ├── src/
 │   └── dnd_engine/
-│
-│       ├── domain/
-│       │   ├── definitions/
-│       │   ├── state/
-│       │   └── value_objects/
 │       │
-│       ├── engine/
-│       │   ├── rules/
-│       │   ├── combat/
-│       │   ├── world/
+│       ├── api/                 # Presentation: HTTP, WebSocket, DTO
+│       │   ├── routes.py
+│       │   ├── schemas.py
+│       │   └── websocket.py
+│       │
+│       ├── application/         # Application: use cases, оркестрация
+│       │   ├── commands/
+│       │   ├── handlers/
 │       │   └── services/
 │       │
-│       ├── commands/
+│       ├── domain/              # Domain: правила, состояние, события
+│       │   ├── definitions/
+│       │   ├── state/
+│       │   ├── commands/
+│       │   ├── events/
+│       │   ├── rules/
+│       │   └── value_objects/
 │       │
-│       ├── events/
-│       │
-│       ├── projections/
-│       │
-│       └── api/
+│       └── infrastructure/      # Infrastructure: хранение, LLM, RNG
+│           ├── persistence/
+│           ├── llm/
+│           └── random/
 │
 ├── rules/
 │   └── dnd_5e/
@@ -1278,7 +1303,7 @@ dnd-engine/
 │       └── effects/
 │
 ├── campaigns/
-│   └── example/
+│   └── campaign_001/
 │       ├── config.json
 │       ├── state.json
 │       ├── world/
@@ -1296,6 +1321,8 @@ dnd-engine/
     ├── movement/
     └── scenarios/
 ```
+
+> Это обзорная схема верхнего уровня. Полное описание слоёв, запрещённых зависимостей и содержимого каждого модуля — в `aboutREADME.md`.
 
 ---
 
@@ -1419,10 +1446,14 @@ AttackCommand
 
 ```json
 {
+  "commandId": "command_000123",
   "type": "AttackCommand",
+  "campaignId": "campaign_001",
   "actorId": "fighter_001",
-  "targetId": "goblin_001",
-  "weaponId": "longsword_001"
+  "payload": {
+    "targetId": "goblin_001",
+    "weaponId": "item_001"
+  }
 }
 ```
 
@@ -1574,17 +1605,20 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class WeaponDefinition:
     id: str
+    version: int
     name: str
     damage_dice: str
     damage_type: str
     properties: list[str]
 ```
 
-Command:
+Command (упрощённая доменная модель; канонический транспортный формат — Command Envelope, см. `aboutREADME.md`):
 
 ```python
 @dataclass
 class AttackCommand:
+    command_id: str
+    campaign_id: str
     actor_id: str
     target_id: str
     weapon_id: str
@@ -1610,7 +1644,9 @@ Event:
 class GameEvent:
     event_id: str
     type: str
+    version: int
     campaign_id: str
+    timestamp: str
     actor_id: str | None
     payload: dict
     caused_by: str | None = None
@@ -1630,9 +1666,11 @@ result = game_engine.execute(command)
 
 ```python
 command = AttackCommand(
+    command_id="command_000123",
+    campaign_id="campaign_001",
     actor_id="fighter_001",
     target_id="goblin_001",
-    weapon_id="longsword_001",
+    weapon_id="item_001",
 )
 
 result = engine.execute(command)
@@ -1892,6 +1930,26 @@ InteractCommand
 ```
 
 Engine уже решает, что произошло.
+
+---
+
+# Технологический стек
+
+Кратко:
+
+```text
+Python 3.12+
+FastAPI          — HTTP + WebSocket API
+Pydantic v2      — валидация на границах системы
+pytest           — тесты Rule Engine
+JSON / JSONL     — хранилище на этапе MVP
+```
+
+Storage на этапе MVP — файлы (JSON/JSONL), в перспективе — замена на SQLite/PostgreSQL за интерфейсом Repository, без изменения Domain-слоя.
+
+LLM-провайдер (OpenAI / Anthropic / локальная модель) подключается через абстрактный `LLMProvider`, чтобы Engine не зависел от конкретного поставщика.
+
+> Это краткий обзор. Полное обоснование выбора стека, разбор слоёв приложения, границы зависимостей и правила сериализации — в `aboutREADME.md`.
 
 ---
 
