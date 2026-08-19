@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.0.0",
+
+  "identity": {
+    "id": "pc_002",
+    "name": "Олег",
+    "player_id": "player_002",
+
+    "race_id": "human",
+    "class_id": "fighter",
+    "background_id": "soldier",
+
+    "level": 1
+  },
+
+  "abilities": {
+    "str": 16,
+    "dex": 12,
+    "con": 14,
+    "int": 10,
+    "wis": 10,
+    "cha": 8
+  },
+
+  "proficiencies": {
+    "armor": [],
+    "weapons": [],
+    "tools": [],
+    "saving_throws": [],
+    "skills": []
+  },
+
+  "combat": {
+    "hp": {
+      "current": 12,
+      "maximum": 12,
+      "temporary": 0
+    },
+
+    "base": {
+      "speed": 30
+    },
+
+    "derived": {
+      "ac": 16,
+      "initiative_bonus": 1,
+      "passive_perception": 10
+    }
+  },
+
+  "skills": {},
+
+  "resources": {
+    "inspiration": false,
+    "class": {},
+    "custom": {}
+  },
+
+  "inventory": {
+    "item_instance_ids": [],
+
+    "equipped": {
+      "main_hand": null,
+      "off_hand": null,
+      "armor": null,
+      "helmet": null,
+      "cloak": null
+    },
+
+    "attuned_item_ids": []
+  },
+
+  "currency": {
+    "cp": 0,
+    "sp": 0,
+    "ep": 0,
+    "gp": 0,
+    "pp": 0
+  },
+
+  "spells": {
+    "known_ids": [],
+    "prepared_ids": [],
+
+    "spell_slots": {},
+
+    "concentration_spell_id": null
+  },
+
+  "features": {
+    "feature_ids": []
+  },
+
+  "conditions": [],
+
+  "effects": [],
+
+  "death": {
+    "state": "alive",
+    "stabilized": false
+  },
+
+  "relationships": {},
+
+  "progression": {
+    "xp": 0,
+    "milestones": []
+  },
+
+  "metadata": {
+    "created_at": null,
+    "updated_at": null
+  }
+}
