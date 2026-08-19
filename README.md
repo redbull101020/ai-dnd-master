@@ -1899,7 +1899,7 @@ Engine уже решает, что произошло.
 
 ## Phase 1 — Core
 
-* [ ] `CampaignState`
+* [V] `CampaignState`
 * [ ] `CreatureState`
 * [ ] `AbilityScores`
 * [ ] `ItemDefinition`
