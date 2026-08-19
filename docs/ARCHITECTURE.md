@@ -1,14 +1,171 @@
 # Architecture Foundation
 
-Этот раздел фиксирует фундаментальные технические решения проекта.
+> **Источник истины проекта.** При расхождении с любым другим документом приоритет у этого файла.
+
+Этот документ фиксирует фундаментальные технические решения проекта.
 
 Все дальнейшие модули, классы, JSON-схемы и API должны соответствовать этим правилам. Изменение этих решений считается **архитектурным изменением проекта** и должно быть осознанным, а не происходить случайно по мере разработки.
 
+Другие документы: [`../README.md`](../README.md) — обзор проекта · [`ROADMAP.md`](ROADMAP.md) — фазы разработки · [`../CLAUDE.md`](../CLAUDE.md) — выжимка правил для AI-агента.
+
 ---
 
-# 1. Технологический стек
+## Навигация
 
-## 1.1. Backend
+Разделы пронумерованы сквозным образом. Ссылайся на них по номеру:
+в issue, PR или коммите пиши «см. §8.2», и раздел находится одним поиском.
+
+### Быстрый поиск / Quick lookup
+
+| Нужно найти | Раздел |
+| --- | --- |
+| Обязательные поля Definition | §3.1 |
+| Схема Command Envelope | §9.1 |
+| Поля Command Envelope | §9.2 |
+| Схема Event Envelope | §8.1 |
+| Поля Event Envelope | §8.2 |
+| Формат ID любой сущности | §4.13 |
+| Почему `item_001`, а не `longsword_001` | §4.3 |
+| Кто имеет право менять State | §10.13 |
+| Что запрещено импортировать в Domain | §2.5 |
+| Где разрешена сериализация | §12.1 |
+| Формат лога событий (JSONL) | §12.10 |
+| Правила именования событий | §8.13 |
+| Разница Command и Event | §9.8 |
+| Порядок применения событий | §12.11 |
+| Коды ошибок | §3.9 |
+| Версионирование схем | §12.13 |
+
+### Оглавление / Table of contents
+
+<details>
+<summary>Развернуть полное оглавление</summary>
+
+* [1. Технологический стек / Technology Stack](#1-технологический-стек--technology-stack)
+  * [1.1. Backend](#11-backend)
+  * [1.2. Domain Model](#12-domain-model)
+  * [1.3. API](#13-api)
+  * [1.4. Storage](#14-storage)
+  * [1.5. Tests](#15-tests)
+  * [1.6. AI Layer](#16-ai-layer)
+  * [1.7. Random Number Generation](#17-random-number-generation)
+* [2. Слои приложения / Application Layers](#2-слои-приложения--application-layers)
+  * [2.1. Presentation Layer](#21-presentation-layer)
+  * [2.2. Application Layer](#22-application-layer)
+  * [2.3. Domain Layer](#23-domain-layer)
+  * [2.4. Infrastructure Layer](#24-infrastructure-layer)
+  * [2.5. Запрещённые зависимости / Forbidden Dependencies](#25-запрещённые-зависимости--forbidden-dependencies)
+  * [2.6. Полная схема / Full Layer Diagram](#26-полная-схема--full-layer-diagram)
+* [3. Контракты / Contracts](#3-контракты--contracts)
+  * [3.1. Definition Contract](#31-definition-contract)
+  * [3.2. State Contract](#32-state-contract)
+  * [3.3. Command Contract](#33-command-contract)
+  * [3.4. Event Contract](#34-event-contract)
+  * [3.5. ResolutionResult Contract](#35-resolutionresult-contract)
+  * [3.6. GameContext Contract](#36-gamecontext-contract)
+  * [3.7. Общий жизненный цикл игрового действия / Action Lifecycle](#37-общий-жизненный-цикл-игрового-действия--action-lifecycle)
+  * [3.8. Atomicity](#38-atomicity)
+  * [3.9. Error Contract](#39-error-contract)
+* [4. ID System](#4-id-system)
+  * [4.1. Definition IDs](#41-definition-ids)
+  * [4.2. Instance / State IDs](#42-instance--state-ids)
+  * [4.3. Почему State ID не должен повторять Definition ID / State ID vs Definition ID](#43-почему-state-id-не-должен-повторять-definition-id--state-id-vs-definition-id)
+  * [4.4. Event IDs](#44-event-ids)
+  * [4.5. Command IDs](#45-command-ids)
+  * [4.6. Ruleset ID](#46-ruleset-id)
+  * [4.7. Version IDs](#47-version-ids)
+  * [4.8. ID никогда не переиспользуется / ID Reuse](#48-id-никогда-не-переиспользуется--id-reuse)
+  * [4.9. ID не изменяется / ID Immutability](#49-id-не-изменяется--id-immutability)
+  * [4.10. Scope](#410-scope)
+  * [4.11. Политика генерации новых ID / ID Generation Policy](#411-политика-генерации-новых-id--id-generation-policy)
+  * [4.12. Canonical ID registry](#412-canonical-id-registry)
+  * [4.13. Сводная таблица ID / ID Reference Table](#413-сводная-таблица-id--id-reference-table)
+* [5. Контроль архитектуры / Architecture Control](#5-контроль-архитектуры--architecture-control)
+* [6. Канонический жизненный цикл / Canonical Lifecycle](#6-канонический-жизненный-цикл--canonical-lifecycle)
+* [7. Архитектурная формула / Architecture Formula](#7-архитектурная-формула--architecture-formula)
+* [8. Event Envelope](#8-event-envelope)
+  * [8.1. Каноническая схема Event / Canonical Event Schema](#81-каноническая-схема-event--canonical-event-schema)
+  * [8.2. Поля Event Envelope / Event Envelope Fields](#82-поля-event-envelope--event-envelope-fields)
+  * [8.3. `eventId`](#83-eventid)
+  * [8.4. `type`](#84-type)
+  * [8.5. `version`](#85-version)
+  * [8.6. `campaignId`](#86-campaignid)
+  * [8.7. `timestamp`](#87-timestamp)
+  * [8.8. `actorId`](#88-actorid)
+  * [8.9. `causedBy`](#89-causedby)
+  * [8.10. `payload`](#810-payload)
+  * [8.11. Event lifecycle](#811-event-lifecycle)
+  * [8.12. Immutable Event Rule](#812-immutable-event-rule)
+  * [8.13. Event naming convention](#813-event-naming-convention)
+  * [8.14. Event должен быть domain fact / Domain Fact Rule](#814-event-должен-быть-domain-fact--domain-fact-rule)
+* [9. Command Envelope](#9-command-envelope)
+  * [9.1. Каноническая схема Command / Canonical Command Schema](#91-каноническая-схема-command--canonical-command-schema)
+  * [9.2. Поля Command Envelope / Command Envelope Fields](#92-поля-command-envelope--command-envelope-fields)
+  * [9.3. `commandId`](#93-commandid)
+  * [9.4. `type`](#94-type)
+  * [9.5. `actorId`](#95-actorid)
+  * [9.6. `payload`](#96-payload)
+  * [9.7. Command lifecycle](#97-command-lifecycle)
+  * [9.8. Command ≠ Event](#98-command--event)
+  * [9.9. Command не изменяет State напрямую / No Direct State Mutation](#99-command-не-изменяет-state-напрямую--no-direct-state-mutation)
+  * [9.10. Idempotency](#910-idempotency)
+  * [9.11. Command → Event correlation](#911-command--event-correlation)
+  * [9.12. Full Command/Event chain](#912-full-commandevent-chain)
+* [10. State Ownership](#10-state-ownership)
+  * [10.1. Почему нужен State Ownership / Why State Ownership](#101-почему-нужен-state-ownership--why-state-ownership)
+  * [10.2. Ownership Model](#102-ownership-model)
+  * [10.3. Campaign State Owner](#103-campaign-state-owner)
+  * [10.4. Creature State Owner](#104-creature-state-owner)
+  * [10.5. Inventory State Owner](#105-inventory-state-owner)
+  * [10.6. Equipment State Owner](#106-equipment-state-owner)
+  * [10.7. Combat State Owner](#107-combat-state-owner)
+  * [10.8. Quest State Owner](#108-quest-state-owner)
+  * [10.9. World State Owner](#109-world-state-owner)
+  * [10.10. Faction State Owner](#1010-faction-state-owner)
+  * [10.11. Relationship State Owner](#1011-relationship-state-owner)
+  * [10.12. AI State Owner](#1012-ai-state-owner)
+  * [10.13. Owner Matrix](#1013-owner-matrix)
+  * [10.14. Read vs Write](#1014-read-vs-write)
+  * [10.15. Example: Damage](#1015-example-damage)
+  * [10.16. Example: Quest Update](#1016-example-quest-update)
+  * [10.17. Example: NPC Relationship](#1017-example-npc-relationship)
+  * [10.18. State Ownership Rule](#1018-state-ownership-rule)
+  * [10.19. Полная схема Ownership](#1019-полная-схема-ownership)
+  * [10.20. Главный принцип Ownership / Core Ownership Principle](#1020-главный-принцип-ownership--core-ownership-principle)
+* [11. Канонический Command → Event → State цикл / Canonical Cycle](#11-канонический-command--event--state-цикл--canonical-cycle)
+* [12. Serialization Rules](#12-serialization-rules)
+  * [12.1. Где разрешена сериализация / Where Serialization Is Allowed](#121-где-разрешена-сериализация--where-serialization-is-allowed)
+  * [12.2. Канонические форматы / Canonical Formats](#122-канонические-форматы--canonical-formats)
+  * [12.3. YAML](#123-yaml)
+  * [12.4. Canonical JSON](#124-canonical-json)
+  * [12.5. Имена полей / Field Naming](#125-имена-полей--field-naming)
+  * [12.6. Python ↔ JSON](#126-python--json)
+  * [12.7. Pydantic как boundary validation](#127-pydantic-как-boundary-validation)
+  * [12.8. Definition Serialization](#128-definition-serialization)
+  * [12.9. State Serialization](#129-state-serialization)
+  * [12.10. Event Serialization](#1210-event-serialization)
+  * [12.11. Event Ordering](#1211-event-ordering)
+  * [12.12. State Snapshot Version](#1212-state-snapshot-version)
+  * [12.13. Принцип версионирования / Versioning Principle](#1213-принцип-версионирования--versioning-principle)
+  * [12.14. Optional Fields](#1214-optional-fields)
+  * [12.15. Default Values](#1215-default-values)
+  * [12.16. Enum Serialization](#1216-enum-serialization)
+  * [12.17. Datetime Serialization](#1217-datetime-serialization)
+  * [12.18. Decimal / Floating Point](#1218-decimal--floating-point)
+  * [12.19. Random State](#1219-random-state)
+  * [12.20. Serialization Boundary](#1220-serialization-boundary)
+  * [12.21. Запрещённые практики / Forbidden Practices](#1221-запрещённые-практики--forbidden-practices)
+  * [12.22. Serialization Responsibility Matrix](#1222-serialization-responsibility-matrix)
+  * [12.23. Канонический Serialization Pipeline](#1223-канонический-serialization-pipeline)
+  * [12.24. Главный принцип сериализации / Core Serialization Principle](#1224-главный-принцип-сериализации--core-serialization-principle)
+
+</details>
+
+---
+
+## 1. Технологический стек / Technology Stack
+
+### 1.1. Backend
 
 Основной backend:
 
@@ -18,7 +175,7 @@ FastAPI
 Pydantic v2
 ```
 
-### Почему Python
+#### Почему Python
 
 Python используется как основной язык Engine благодаря:
 
@@ -32,7 +189,7 @@ Python используется как основной язык Engine благ
 
 ---
 
-## 1.2. Domain Model
+### 1.2. Domain Model
 
 Для Domain Model используются:
 
@@ -61,7 +218,7 @@ result = engine.execute(command)
 
 ---
 
-## 1.3. API
+### 1.3. API
 
 Внешний API:
 
@@ -93,9 +250,9 @@ WebSocket используется для:
 
 ---
 
-## 1.4. Storage
+### 1.4. Storage
 
-### MVP
+#### MVP
 
 На первом этапе используется:
 
@@ -120,7 +277,7 @@ campaign/
     └── 000003.json
 ```
 
-### Production
+#### Production
 
 После стабилизации Domain Model Storage может быть заменён на:
 
@@ -145,7 +302,7 @@ Repository Interface
 
 ---
 
-## 1.5. Tests
+### 1.5. Tests
 
 Основной framework:
 
@@ -168,7 +325,7 @@ LLM не используется в тестах игрового ядра.
 
 ---
 
-## 1.6. AI Layer
+### 1.6. AI Layer
 
 AI подключается через абстрактный интерфейс.
 
@@ -207,7 +364,7 @@ LLMProvider
 
 ---
 
-## 1.7. Random Number Generation
+### 1.7. Random Number Generation
 
 Все игровые случайности проходят через:
 
@@ -237,7 +394,7 @@ dice.roll("1d20")
 
 ---
 
-# 2. Слои приложения
+## 2. Слои приложения / Application Layers
 
 Приложение разделено на четыре архитектурных слоя.
 
@@ -259,7 +416,7 @@ flowchart TB
 
 ---
 
-# 2.1. Presentation Layer
+### 2.1. Presentation Layer
 
 Отвечает за внешний интерфейс.
 
@@ -300,7 +457,7 @@ result = game_service.execute(command)
 
 ---
 
-# 2.2. Application Layer
+### 2.2. Application Layer
 
 Application Layer оркестрирует use cases.
 
@@ -340,7 +497,7 @@ Domain отвечает:
 
 ---
 
-# 2.3. Domain Layer
+### 2.3. Domain Layer
 
 Главный слой проекта.
 
@@ -380,7 +537,7 @@ LLM APIs
 
 ---
 
-# 2.4. Infrastructure Layer
+### 2.4. Infrastructure Layer
 
 ```text
 src/dnd_engine/infrastructure/
@@ -404,7 +561,7 @@ Infrastructure предоставляет технические реализа�
 
 ---
 
-# 2.5. Запрещённые зависимости
+### 2.5. Запрещённые зависимости / Forbidden Dependencies
 
 Правило зависимостей:
 
@@ -431,7 +588,7 @@ Infrastructure может импортировать Domain interfaces.
 
 ---
 
-# 2.6. Полная схема
+### 2.6. Полная схема / Full Layer Diagram
 
 ```mermaid
 flowchart LR
@@ -487,7 +644,7 @@ flowchart LR
 
 ---
 
-# 3. Контракты
+## 3. Контракты / Contracts
 
 В проекте существуют пять основных контрактов:
 
@@ -509,7 +666,7 @@ GameContext
 
 ---
 
-# 3.1. Definition Contract
+### 3.1. Definition Contract
 
 Definition описывает объект правил.
 
@@ -546,7 +703,7 @@ class WeaponDefinition:
 
 ---
 
-## Правила Definition
+#### Правила Definition
 
 Definition:
 
@@ -578,7 +735,7 @@ Definition = immutable
 
 ---
 
-## Definition lifecycle
+#### Definition lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -606,7 +763,7 @@ old definition → mutation
 
 ---
 
-# 3.2. State Contract
+### 3.2. State Contract
 
 State описывает конкретный экземпляр в конкретной кампании.
 
@@ -639,7 +796,7 @@ State      → mutable
 
 ---
 
-## State lifecycle
+#### State lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -686,7 +843,7 @@ State mutation
 
 ---
 
-# 3.3. Command Contract
+### 3.3. Command Contract
 
 Command — намерение выполнить игровое действие.
 
@@ -719,7 +876,7 @@ JSON:
 
 ---
 
-## Command lifecycle
+#### Command lifecycle
 
 ```mermaid
 flowchart LR
@@ -766,7 +923,7 @@ AttackHit
 
 ---
 
-# 3.4. Event Contract
+### 3.4. Event Contract
 
 Event описывает уже произошедший факт.
 
@@ -811,7 +968,7 @@ class GameEvent:
 
 ---
 
-## Event lifecycle
+#### Event lifecycle
 
 Event нельзя редактировать после публикации.
 
@@ -852,7 +1009,7 @@ DamageCorrected(-3)
 
 ---
 
-# 3.5. ResolutionResult Contract
+### 3.5. ResolutionResult Contract
 
 ResolutionResult — результат одной операции Engine.
 
@@ -912,7 +1069,7 @@ class ResolutionResult:
 
 ---
 
-# 3.6. GameContext Contract
+### 3.6. GameContext Contract
 
 GameContext передаёт Engine всё необходимое для resolution.
 
@@ -932,7 +1089,7 @@ GameContext не является глобальным State.
 
 ---
 
-# 3.7. Общий жизненный цикл игрового действия
+### 3.7. Общий жизненный цикл игрового действия / Action Lifecycle
 
 Все игровые действия должны проходить через один базовый pipeline:
 
@@ -974,7 +1131,7 @@ flowchart TD
 
 ---
 
-# 3.8. Atomicity
+### 3.8. Atomicity
 
 Одна Command является одной логической транзакцией.
 
@@ -1014,7 +1171,7 @@ Command
 
 ---
 
-# 3.9. Error Contract
+### 3.9. Error Contract
 
 Ошибки Engine также должны быть структурированными.
 
@@ -1048,7 +1205,7 @@ AI должен получать `code`, а не пытаться парсить
 
 ---
 
-# 4. ID System
+## 4. ID System
 
 ID являются частью архитектурного контракта.
 
@@ -1068,7 +1225,7 @@ status
 
 ---
 
-# 4.1. Definition IDs
+### 4.1. Definition IDs
 
 Definition ID — постоянный, семантический, читаемый человеком.
 
@@ -1112,7 +1269,7 @@ fireball
 
 ---
 
-# 4.2. Instance / State IDs
+### 4.2. Instance / State IDs
 
 Runtime ID используется для конкретного экземпляра.
 
@@ -1145,7 +1302,7 @@ player_002
 
 ---
 
-# 4.3. Почему State ID не должен повторять Definition ID
+### 4.3. Почему State ID не должен повторять Definition ID / State ID vs Definition ID
 
 Нельзя:
 
@@ -1178,7 +1335,7 @@ character_001
 
 ---
 
-# 4.4. Event IDs
+### 4.4. Event IDs
 
 Формат:
 
@@ -1200,7 +1357,7 @@ Event ID никогда не переиспользуется.
 
 ---
 
-# 4.5. Command IDs
+### 4.5. Command IDs
 
 Формат:
 
@@ -1225,7 +1382,7 @@ Command ID используется для:
 
 ---
 
-# 4.6. Ruleset ID
+### 4.6. Ruleset ID
 
 Ruleset использует:
 
@@ -1250,7 +1407,7 @@ dnd_5e
 
 ---
 
-# 4.7. Version IDs
+### 4.7. Version IDs
 
 Версия не кодируется в обычный Definition ID.
 
@@ -1282,7 +1439,7 @@ fireball_5_2_1
 
 ---
 
-# 4.8. ID никогда не переиспользуется
+### 4.8. ID никогда не переиспользуется / ID Reuse
 
 Если:
 
@@ -1306,7 +1463,7 @@ npc_002
 
 ---
 
-# 4.9. ID не изменяется
+### 4.9. ID не изменяется / ID Immutability
 
 Запрещено:
 
@@ -1327,11 +1484,11 @@ name = "Aragorn"
 
 ---
 
-# 4.10. Scope
+### 4.10. Scope
 
 ID имеют область уникальности.
 
-### Definition
+#### Definition
 
 Уникален внутри Ruleset:
 
@@ -1339,7 +1496,7 @@ ID имеют область уникальности.
 ruleset + definition_id
 ```
 
-### State
+#### State
 
 Уникален внутри Campaign:
 
@@ -1347,7 +1504,7 @@ ruleset + definition_id
 campaign + state_id
 ```
 
-### Event
+#### Event
 
 Уникален внутри Campaign Event Store:
 
@@ -1355,13 +1512,13 @@ campaign + state_id
 campaign + event_id
 ```
 
-### Command
+#### Command
 
 Уникален в рамках Campaign/session command stream.
 
 ---
 
-# 4.11. Политика генерации новых ID
+### 4.11. Политика генерации новых ID / ID Generation Policy
 
 Новые ID генерируются только соответствующим сервисом.
 
@@ -1395,17 +1552,17 @@ AI выбирает существующий ID из предоставленн�
 
 ---
 
-# 4.12. Canonical ID registry
+### 4.12. Canonical ID registry
 
 На текущем этапе проекта зафиксированы следующие ID.
 
-## Ruleset
+#### Ruleset
 
 ```text
 dnd_5e
 ```
 
-## Definition IDs
+#### Definition IDs
 
 ```text
 fighter
@@ -1427,7 +1584,7 @@ extra_attack
 
 ---
 
-## Campaign IDs
+#### Campaign IDs
 
 ```text
 campaign_001
@@ -1435,7 +1592,7 @@ campaign_001
 
 ---
 
-## Character / Player IDs
+#### Character / Player IDs
 
 ```text
 player_001
@@ -1470,7 +1627,7 @@ character_001
 
 ---
 
-## NPC IDs
+#### NPC IDs
 
 ```text
 npc_001
@@ -1479,7 +1636,7 @@ npc_002
 
 ---
 
-## Monster IDs
+#### Monster IDs
 
 ```text
 goblin_001
@@ -1489,7 +1646,7 @@ goblin_003
 
 ---
 
-## Item Instance IDs
+#### Item Instance IDs
 
 ```text
 longsword_001
@@ -1512,7 +1669,7 @@ item_002
 
 ---
 
-## Combat IDs
+#### Combat IDs
 
 ```text
 combat_001
@@ -1520,7 +1677,7 @@ combat_001
 
 ---
 
-## Quest IDs
+#### Quest IDs
 
 ```text
 quest_001
@@ -1537,7 +1694,7 @@ quest_001
 
 ---
 
-## Quest Objective IDs
+#### Quest Objective IDs
 
 ```text
 objective_001
@@ -1545,7 +1702,7 @@ objective_001
 
 ---
 
-## Location IDs
+#### Location IDs
 
 ```text
 location_001
@@ -1569,7 +1726,7 @@ location_002
 
 ---
 
-## Effect IDs
+#### Effect IDs
 
 ```text
 effect_001
@@ -1589,7 +1746,7 @@ effect_001
 
 ---
 
-## Condition IDs
+#### Condition IDs
 
 Definition:
 
@@ -1608,7 +1765,7 @@ condition_002
 
 ---
 
-## Event IDs
+#### Event IDs
 
 ```text
 event_000001
@@ -1618,7 +1775,7 @@ event_000003
 
 ---
 
-## Command IDs
+#### Command IDs
 
 ```text
 command_000001
@@ -1628,7 +1785,7 @@ command_000003
 
 ---
 
-# 4.13. Сводная таблица ID
+### 4.13. Сводная таблица ID / ID Reference Table
 
 | Сущность          | Формат           | Пример           |
 | ----------------- | ---------------- | ---------------- |
@@ -1650,7 +1807,7 @@ command_000003
 
 ---
 
-# 5. Контроль архитектуры
+## 5. Контроль архитектуры / Architecture Control
 
 До добавления новой сущности в проект необходимо определить:
 
@@ -1669,7 +1826,7 @@ command_000003
 
 ---
 
-# 6. Канонический жизненный цикл
+## 6. Канонический жизненный цикл / Canonical Lifecycle
 
 Вся игра должна в конечном итоге сводиться к:
 
@@ -1715,7 +1872,7 @@ flowchart TD
 
 ---
 
-# 7. Архитектурная формула
+## 7. Архитектурная формула / Architecture Formula
 
 Фундамент проекта:
 
@@ -1762,7 +1919,7 @@ flowchart TD
 
 Все последующие модули — Combat, Magic, World, Quest, NPC AI и Web UI — должны встраиваться в этот pipeline, а не создавать альтернативный путь изменения игрового состояния.
 
-# 8. Event Envelope
+## 8. Event Envelope
 
 Event Envelope — единый транспортный формат для **всех фактов**, произошедших в игре.
 
@@ -1789,7 +1946,7 @@ DamageApplied
 
 ---
 
-## 8.1. Каноническая схема Event
+### 8.1. Каноническая схема Event / Canonical Event Schema
 
 ```json
 {
@@ -1815,7 +1972,7 @@ DamageApplied
 
 ---
 
-## 8.2. Поля Event Envelope
+### 8.2. Поля Event Envelope / Event Envelope Fields
 
 | Поле         | Тип              | Обязательное | Назначение                            |
 | ------------ | ---------------- | -----------: | ------------------------------------- |
@@ -1830,7 +1987,7 @@ DamageApplied
 
 ---
 
-## 8.3. `eventId`
+### 8.3. `eventId`
 
 Формат:
 
@@ -1850,7 +2007,7 @@ event_000003
 
 ---
 
-## 8.4. `type`
+### 8.4. `type`
 
 `type` определяет конкретный тип Event.
 
@@ -1893,7 +2050,7 @@ DamageApplied
 
 ---
 
-## 8.5. `version`
+### 8.5. `version`
 
 `version` относится к **схеме конкретного Event**, а не к Ruleset.
 
@@ -1925,7 +2082,7 @@ DamageApplied v2
 
 ---
 
-## 8.6. `campaignId`
+### 8.6. `campaignId`
 
 Каждый Event принадлежит ровно одной кампании.
 
@@ -1940,7 +2097,7 @@ Event из другой кампании не может изменить State 
 
 ---
 
-## 8.7. `timestamp`
+### 8.7. `timestamp`
 
 `timestamp` описывает момент создания Event в системе.
 
@@ -1977,7 +2134,7 @@ ISO 8601 / UTC
 
 ---
 
-## 8.8. `actorId`
+### 8.8. `actorId`
 
 `actorId` — сущность, непосредственно инициировавшая действие.
 
@@ -2002,7 +2159,7 @@ system
 
 ---
 
-## 8.9. `causedBy`
+### 8.9. `causedBy`
 
 `causedBy` хранит причинную связь между событиями.
 
@@ -2048,7 +2205,7 @@ event_104 CreatureDefeated
 
 ---
 
-## 8.10. `payload`
+### 8.10. `payload`
 
 `payload` содержит только данные, специфичные для конкретного Event.
 
@@ -2080,7 +2237,7 @@ actorId
 
 ---
 
-# 8.11. Event lifecycle
+### 8.11. Event lifecycle
 
 ```mermaid
 flowchart LR
@@ -2117,7 +2274,7 @@ Project
 
 ---
 
-# 8.12. Immutable Event Rule
+### 8.12. Immutable Event Rule
 
 После публикации запрещено:
 
@@ -2144,7 +2301,7 @@ amount = -2
 
 ---
 
-# 8.13. Event naming convention
+### 8.13. Event naming convention
 
 Используется:
 
@@ -2179,7 +2336,7 @@ playerDidSomething
 
 ---
 
-# 8.14. Event должен быть domain fact
+### 8.14. Event должен быть domain fact / Domain Fact Rule
 
 Event:
 
@@ -2203,7 +2360,7 @@ ApplyDamage
 
 ---
 
-# 9. Command Envelope
+## 9. Command Envelope
 
 Command Envelope — единый формат для всех **намерений выполнить действие**.
 
@@ -2213,7 +2370,7 @@ Command ещё не означает, что действие произойдё
 
 ---
 
-# 9.1. Каноническая схема Command
+### 9.1. Каноническая схема Command / Canonical Command Schema
 
 ```json
 {
@@ -2233,7 +2390,7 @@ Command ещё не означает, что действие произойдё
 
 ---
 
-# 9.2. Поля Command Envelope
+### 9.2. Поля Command Envelope / Command Envelope Fields
 
 | Поле         | Тип      | Обязательное | Назначение                |
 | ------------ | -------- | -----------: | ------------------------- |
@@ -2245,7 +2402,7 @@ Command ещё не означает, что действие произойдё
 
 ---
 
-# 9.3. `commandId`
+### 9.3. `commandId`
 
 Формат:
 
@@ -2266,7 +2423,7 @@ command_000003
 
 ---
 
-# 9.4. `type`
+### 9.4. `type`
 
 Примеры:
 
@@ -2295,7 +2452,7 @@ DodgeCommand
 
 ---
 
-# 9.5. `actorId`
+### 9.5. `actorId`
 
 `actorId` определяет, кто пытается совершить действие.
 
@@ -2325,7 +2482,7 @@ CreatureState
 
 ---
 
-# 9.6. `payload`
+### 9.6. `payload`
 
 `payload` содержит только параметры конкретной команды.
 
@@ -2359,7 +2516,7 @@ CreatureState
 
 ---
 
-# 9.7. Command lifecycle
+### 9.7. Command lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -2383,11 +2540,11 @@ stateDiagram-v2
 
 Смысл состояний:
 
-### `Created`
+#### `Created`
 
 Команда сформирована AI, UI или другой системой.
 
-### `Validating`
+#### `Validating`
 
 Engine проверяет:
 
@@ -2397,7 +2554,7 @@ Engine проверяет:
 * находится ли actor в правильном состоянии;
 * соблюдаются ли prerequisites.
 
-### `Rejected`
+#### `Rejected`
 
 Команда не может быть выполнена.
 
@@ -2411,25 +2568,25 @@ NOT_VISIBLE
 RESOURCE_NOT_AVAILABLE
 ```
 
-### `Accepted`
+#### `Accepted`
 
 Команда прошла initial validation.
 
-### `Resolving`
+#### `Resolving`
 
 Engine вычисляет результат.
 
-### `Completed`
+#### `Completed`
 
 Команда успешно завершена и породила Events.
 
-### `Failed`
+#### `Failed`
 
 Команда была принята, но resolution завершился ошибкой доменного уровня.
 
 ---
 
-# 9.8. Command ≠ Event
+### 9.8. Command ≠ Event
 
 Это фундаментальное правило.
 
@@ -2471,7 +2628,7 @@ Events.
 
 ---
 
-# 9.9. Command не изменяет State напрямую
+### 9.9. Command не изменяет State напрямую / No Direct State Mutation
 
 Запрещено:
 
@@ -2499,7 +2656,7 @@ State projection
 
 ---
 
-# 9.10. Idempotency
+### 9.10. Idempotency
 
 `commandId` используется как idempotency key.
 
@@ -2529,7 +2686,7 @@ command_000123 already processed
 
 ---
 
-# 9.11. Command → Event correlation
+### 9.11. Command → Event correlation
 
 Все Events, созданные одной Command, должны быть связаны с ней.
 
@@ -2567,7 +2724,7 @@ Command
 
 ---
 
-# 9.12. Full Command/Event chain
+### 9.12. Full Command/Event chain
 
 ```mermaid
 flowchart TD
@@ -2605,7 +2762,7 @@ flowchart TD
 
 ---
 
-# 10. State Ownership
+## 10. State Ownership
 
 State Ownership определяет, **какая подсистема является владельцем конкретного состояния и кто имеет право его изменять**.
 
@@ -2617,7 +2774,7 @@ State Ownership определяет, **какая подсистема явля
 
 ---
 
-# 10.1. Почему нужен State Ownership
+### 10.1. Почему нужен State Ownership / Why State Ownership
 
 Без ownership быстро возникает:
 
@@ -2653,7 +2810,7 @@ HP updated
 
 ---
 
-# 10.2. Ownership Model
+### 10.2. Ownership Model
 
 ```mermaid
 flowchart TD
@@ -2685,7 +2842,7 @@ flowchart TD
 
 ---
 
-# 10.3. Campaign State Owner
+### 10.3. Campaign State Owner
 
 **Owner: `CampaignEngine / CampaignStateManager`**
 
@@ -2704,7 +2861,7 @@ campaign lifecycle
 
 ---
 
-# 10.4. Creature State Owner
+### 10.4. Creature State Owner
 
 **Owner: `Creature / CreatureDomain`**
 
@@ -2754,7 +2911,7 @@ CreatureState.hp
 
 ---
 
-# 10.5. Inventory State Owner
+### 10.5. Inventory State Owner
 
 **Owner: `InventoryEngine`**
 
@@ -2790,7 +2947,7 @@ ItemConsumed
 
 ---
 
-# 10.6. Equipment State Owner
+### 10.6. Equipment State Owner
 
 **Owner: `EquipmentEngine`**
 
@@ -2819,7 +2976,7 @@ Inventory Engine не должен самостоятельно решать, н
 
 ---
 
-# 10.7. Combat State Owner
+### 10.7. Combat State Owner
 
 **Owner: `CombatEngine`**
 
@@ -2856,7 +3013,7 @@ CreatureState
 
 ---
 
-# 10.8. Quest State Owner
+### 10.8. Quest State Owner
 
 **Owner: `QuestEngine`**
 
@@ -2888,7 +3045,7 @@ QuestCompleted
 
 ---
 
-# 10.9. World State Owner
+### 10.9. World State Owner
 
 **Owner: `WorldEngine`**
 
@@ -2915,7 +3072,7 @@ WorldTimeAdvanced
 
 ---
 
-# 10.10. Faction State Owner
+### 10.10. Faction State Owner
 
 **Owner: `FactionEngine`**
 
@@ -2941,7 +3098,7 @@ FactionMemberRemoved
 
 ---
 
-# 10.11. Relationship State Owner
+### 10.11. Relationship State Owner
 
 **Owner: `RelationshipEngine`**
 
@@ -2974,7 +3131,7 @@ NPCRelationshipChanged
 
 ---
 
-# 10.12. AI State Owner
+### 10.12. AI State Owner
 
 **Owner: `AI / Memory subsystem`**
 
@@ -3005,7 +3162,7 @@ AI State может быть перестроен из игровых Events и 
 
 ---
 
-# 10.13. Owner Matrix
+### 10.13. Owner Matrix
 
 | State               | Owner               | Другие системы           |
 | ------------------- | ------------------- | ------------------------ |
@@ -3023,7 +3180,7 @@ AI State может быть перестроен из игровых Events и 
 
 ---
 
-# 10.14. Read vs Write
+### 10.14. Read vs Write
 
 Главное правило:
 
@@ -3054,7 +3211,7 @@ Owner
 
 ---
 
-# 10.15. Example: Damage
+### 10.15. Example: Damage
 
 Неправильно:
 
@@ -3101,7 +3258,7 @@ Creature State Owner
 
 ---
 
-# 10.16. Example: Quest Update
+### 10.16. Example: Quest Update
 
 Неправильно:
 
@@ -3132,7 +3289,7 @@ Combat не знает, какие именно квесты существую�
 
 ---
 
-# 10.17. Example: NPC Relationship
+### 10.17. Example: NPC Relationship
 
 Неправильно:
 
@@ -3160,7 +3317,7 @@ AI может **предложить** действие или интерпре�
 
 ---
 
-# 10.18. State Ownership Rule
+### 10.18. State Ownership Rule
 
 Каждый State-объект должен отвечать на три вопроса:
 
@@ -3193,7 +3350,7 @@ CreatureState
 
 ---
 
-# 10.19. Полная схема Ownership
+### 10.19. Полная схема Ownership
 
 ```mermaid
 flowchart TB
@@ -3260,7 +3417,7 @@ flowchart TB
 
 ---
 
-# 10.20. Главный принцип Ownership
+### 10.20. Главный принцип Ownership / Core Ownership Principle
 
 В системе запрещён прямой cross-domain mutation:
 
@@ -3301,7 +3458,7 @@ AI
 
 ---
 
-# 11. Канонический Command → Event → State цикл
+## 11. Канонический Command → Event → State цикл / Canonical Cycle
 
 Все предыдущие контракты объединяются в единый pipeline:
 
@@ -3367,7 +3524,7 @@ AI / UI
 
 **Ни AI, ни UI, ни случайная подсистема не могут обходить этот цикл и напрямую изменять игровой State.**
 
-# 12. Serialization Rules
+## 12. Serialization Rules
 
 Serialization Rules определяют, как Domain Model превращается в JSON/JSONL и обратно.
 
@@ -3404,7 +3561,7 @@ Validated Domain Object
 
 ---
 
-# 12.1. Где разрешена сериализация
+### 12.1. Где разрешена сериализация / Where Serialization Is Allowed
 
 Сериализация не должна находиться внутри Rule Engine.
 
@@ -3459,11 +3616,11 @@ flowchart LR
 
 ---
 
-# 12.2. Канонические форматы
+### 12.2. Канонические форматы / Canonical Formats
 
 В проекте используются три основных формата.
 
-## JSON
+#### JSON
 
 Используется для:
 
@@ -3485,7 +3642,7 @@ campaigns/campaign_001/config.json
 
 ---
 
-## JSONL
+#### JSONL
 
 Используется для:
 
@@ -3519,7 +3676,7 @@ events/events.jsonl
 
 ---
 
-# 12.3. YAML
+### 12.3. YAML
 
 YAML не является каноническим форматом Domain State.
 
@@ -3536,7 +3693,7 @@ Definitions
 
 ---
 
-# 12.4. Canonical JSON
+### 12.4. Canonical JSON
 
 JSON-файлы должны использовать UTF-8.
 
@@ -3582,7 +3739,7 @@ maxHp
 
 ---
 
-# 12.5. Имена полей
+### 12.5. Имена полей / Field Naming
 
 Используется:
 
@@ -3604,7 +3761,7 @@ characterID
 
 ---
 
-# 12.6. Python ↔ JSON
+### 12.6. Python ↔ JSON
 
 Domain Model:
 
@@ -3644,7 +3801,7 @@ camelCase
 
 ---
 
-# 12.7. Pydantic как boundary validation
+### 12.7. Pydantic как boundary validation
 
 Pydantic используется на границах системы:
 
@@ -3681,7 +3838,7 @@ Domain Engine не должен зависеть от HTTP request model.
 
 ---
 
-# 12.8. Definition Serialization
+### 12.8. Definition Serialization
 
 Definition должен полностью восстанавливаться из JSON.
 
@@ -3716,7 +3873,7 @@ Definition Object
 
 ---
 
-# 12.9. State Serialization
+### 12.9. State Serialization
 
 State snapshot должен быть достаточным для восстановления текущего состояния кампании без необходимости читать UI/API историю.
 
@@ -3753,7 +3910,7 @@ debug logs
 
 ---
 
-# 12.10. Event Serialization
+### 12.10. Event Serialization
 
 Event Log является append-only.
 
@@ -3798,7 +3955,7 @@ events/events.jsonl
 
 ---
 
-# 12.11. Event Ordering
+### 12.11. Event Ordering
 
 События в одной Campaign имеют строгий порядок.
 
@@ -3839,7 +3996,7 @@ Sequence > Timestamp
 
 ---
 
-# 12.12. State Snapshot Version
+### 12.12. State Snapshot Version
 
 Каждый State snapshot должен содержать свою версию schema.
 
@@ -3880,7 +4037,7 @@ Command Schema Version
 
 ---
 
-# 12.13. Принцип версионирования
+### 12.13. Принцип версионирования / Versioning Principle
 
 Нельзя:
 
@@ -3910,7 +4067,7 @@ State v2
 
 ---
 
-# 12.14. Optional Fields
+### 12.14. Optional Fields
 
 Поле считается optional только тогда, когда оно действительно может отсутствовать.
 
@@ -3942,7 +4099,7 @@ null
 
 ---
 
-# 12.15. Default Values
+### 12.15. Default Values
 
 Default значения применяются только Domain Model / Schema Layer.
 
@@ -3972,7 +4129,7 @@ ValidationError
 
 ---
 
-# 12.16. Enum Serialization
+### 12.16. Enum Serialization
 
 Enums сериализуются строками.
 
@@ -4005,7 +4162,7 @@ JSON:
 
 ---
 
-# 12.17. Datetime Serialization
+### 12.17. Datetime Serialization
 
 Все системные timestamps:
 
@@ -4035,7 +4192,7 @@ UTC
 
 ---
 
-# 12.18. Decimal / Floating Point
+### 12.18. Decimal / Floating Point
 
 Для игровых расчётов нельзя использовать floating point там, где требуется точность.
 
@@ -4068,7 +4225,7 @@ experience
 
 ---
 
-# 12.19. Random State
+### 12.19. Random State
 
 Состояние RNG не является обычным Domain State.
 
@@ -4088,7 +4245,7 @@ replay metadata
 
 ---
 
-# 12.20. Serialization Boundary
+### 12.20. Serialization Boundary
 
 Каноническая архитектура:
 
@@ -4126,9 +4283,9 @@ flowchart TD
 
 ---
 
-# 12.21. Запрещённые практики
+### 12.21. Запрещённые практики / Forbidden Practices
 
-### Direct JSON manipulation inside rules
+#### Direct JSON manipulation inside rules
 
 Нельзя:
 
@@ -4146,7 +4303,7 @@ CreatureState
 
 ---
 
-### Arbitrary JSON fields
+#### Arbitrary JSON fields
 
 Нельзя:
 
@@ -4161,7 +4318,7 @@ CreatureState
 
 ---
 
-### Silent schema conversion
+#### Silent schema conversion
 
 Нельзя незаметно преобразовывать неправильные данные:
 
@@ -4177,7 +4334,7 @@ ValidationError
 
 ---
 
-### Missing required data
+#### Missing required data
 
 Не допускается автоматически создавать игровые данные:
 
@@ -4191,7 +4348,7 @@ assume armor = none
 
 ---
 
-# 12.22. Serialization Responsibility Matrix
+### 12.22. Serialization Responsibility Matrix
 
 | Объект     | Формат       | Serializer             |
 | ---------- | ------------ | ---------------------- |
@@ -4205,7 +4362,7 @@ assume armor = none
 
 ---
 
-# 12.23. Канонический Serialization Pipeline
+### 12.23. Канонический Serialization Pipeline
 
 Для входящих данных:
 
@@ -4247,7 +4404,7 @@ Append to Event Store
 
 ---
 
-# 12.24. Главный принцип сериализации
+### 12.24. Главный принцип сериализации / Core Serialization Principle
 
 ```text
               EXTERNAL WORLD
