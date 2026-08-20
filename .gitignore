@@ -3,3 +3,16 @@
 ################################################################################
 
 /.vs
+
+# Virtual environments
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Packaging artifacts
+*.egg-info/
+
+# Pytest cache
+.pytest_cache/
