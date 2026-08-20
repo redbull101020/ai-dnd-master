@@ -2,7 +2,7 @@
 
 Правила проекта **AI D&D Engine**. Соблюдай их во всём коде, который пишешь или ревьюишь.
 
-Источник истины — [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Этот файл — выжимка. При конфликте выигрывает `docs/ARCHITECTURE.md`; если в задаче встретился случай, не покрытый здесь, сверься с ним, а не додумывай.
+`ARCHITECTURE.md = current canonical contract`; [`docs/DECISIONS.md`](docs/DECISIONS.md) = append-only rationale/history. Этот файл — выжимка. При конфликте выигрывает `docs/ARCHITECTURE.md`; если в задаче встретился случай, не покрытый здесь, сверься с ним, а не додумывай.
 
 В архитектуре сквозная нумерация разделов — ссылайся на них по номеру (`§8.2`). В шапке документа есть таблица быстрого поиска и полное оглавление.
 
@@ -70,9 +70,9 @@ Definition:
 | Ruleset | `snake_case` | `dnd_5e` |
 | Definition | `snake_case` | `longsword` |
 | Character | `character_NNN` | `character_001` |
-| Player Character | `player_NNN` | `player_001` |
+| Player Identity | `player_NNN` | `player_001` |
 | NPC | `npc_NNN` | `npc_001` |
-| Monster Instance | `<type>_NNN` | `goblin_001` |
+| Monster Instance | `monster_NNN` | `monster_001` |
 | Item Instance | `item_NNN` | `item_001` |
 | Combat | `combat_NNN` | `combat_001` |
 | Quest State | `quest_NNN` | `quest_001` |
@@ -99,9 +99,9 @@ Definition:
   "commandId": "command_000001",
   "type": "AttackCommand",
   "campaignId": "campaign_001",
-  "actorId": "fighter_001",
+  "actorId": "character_001",
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "weaponId": "item_001"
   }
 }
@@ -122,14 +122,15 @@ Command — намерение, а не результат. Команда не 
 ```json
 {
   "eventId": "event_000124",
+  "commandId": "command_000001",
   "type": "DamageApplied",
   "version": 1,
   "campaignId": "campaign_001",
-  "timestamp": "2026-08-19T16:42:10Z",
-  "actorId": "fighter_001",
+  "timestamp": "2026-08-20T18:42:10Z",
+  "actorId": "character_001",
   "causedBy": "event_000123",
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "amount": 10,
     "damageType": "slashing"
   }
@@ -138,7 +139,7 @@ Command — намерение, а не результат. Команда не 
 
 | Поле | Обязательное |
 | --- | --- |
-| `eventId`, `type`, `version`, `campaignId`, `timestamp`, `payload` | да |
+| `eventId`, `commandId`, `type`, `version`, `campaignId`, `timestamp`, `payload` | да |
 | `actorId`, `causedBy` | нет (nullable) |
 
 Правила:
@@ -226,7 +227,7 @@ random.randint(1, 20)    # запрещено внутри Rule Engine
 
 ## Работа с документацией
 
-* Меняешь контракт (поле Envelope, формат ID, владельца State) → сначала обнови `docs/ARCHITECTURE.md`, потом код.
+* Меняешь контракт (поле Envelope, формат ID, владельца State) → сначала обнови `docs/ARCHITECTURE.md`, затем добавь новую запись в `docs/DECISIONS.md`; старые accepted записи не переписывай.
 * `README.md` — обзорный документ. Не добавляй в него JSON-схемы, датаклассы и списки полей: они дублируются и разъезжаются. Вместо этого — ссылка на нужный раздел архитектуры.
 * Новую сущность документируй в `docs/ARCHITECTURE.md` в момент добавления, а не «потом».
 

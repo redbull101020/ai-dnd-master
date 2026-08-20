@@ -20,10 +20,11 @@
 | --- | --- |
 | `README.md` | Идея, принципы, архитектура верхнего уровня, быстрый старт |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Источник истины.** Контракты, Envelope-схемы, ID System, слои, State Ownership, правила сериализации |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Append-only журнал мотивации и истории архитектурных решений |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Фазы разработки и текущий статус |
 | `CLAUDE.md` | Выжимка правил проекта для AI-агента |
 
-При любом расхождении между документами приоритет у `docs/ARCHITECTURE.md`.
+`ARCHITECTURE.md = current canonical contract`; `DECISIONS.md = append-only rationale/history`. При любом расхождении приоритет у `docs/ARCHITECTURE.md`.
 
 ---
 
@@ -96,7 +97,7 @@ LLM отвечает за понимание намерения, поведен�
 
 **Definition** — неизменяемое описание из правил (`longsword`, `fireball`, `goblin`). Загружается один раз и не меняется во время сессии.
 
-**State** — изменяемый экземпляр в конкретной кампании (`item_001`, `goblin_001`), ссылающийся на Definition.
+**State** — изменяемый экземпляр в конкретной кампании (`item_001`, `monster_001`), ссылающийся на Definition отдельным полем, например `monster_001` → `definitionId: goblin`.
 
 Экземпляр никогда не называется так же, как Definition — почему, разобрано в [§4.3](docs/ARCHITECTURE.md#43-почему-state-id-не-должен-повторять-definition-id--state-id-vs-definition-id). Форматы всех ID — в [§4.13](docs/ARCHITECTURE.md#413-сводная-таблица-id--id-reference-table).
 
@@ -212,15 +213,25 @@ Event Log  +  Materialized State
 
 ## Технологический стек
 
+### Current Foundation stack
+
 ```text
 Python 3.12+
-FastAPI          — HTTP + WebSocket API
-Pydantic v2      — валидация на границах системы
-pytest           — тесты Rule Engine
-JSON / JSONL     — хранилище на этапе MVP
+JSON / JSONL
+pytest
+setuptools / pyproject.toml
 ```
 
-LLM-провайдер (OpenAI / Anthropic / локальная модель) подключается через абстрактный интерфейс — Engine не зависит от конкретного поставщика. В тестах игрового ядра LLM не используется.
+### Planned application/boundary stack
+
+```text
+FastAPI
+WebSocket
+Pydantic v2
+LLM provider adapters
+```
+
+Планируемые зависимости добавляются только на соответствующей фазе Roadmap. FastAPI application пока не реализован. В тестах игрового ядра LLM не используется.
 
 ---
 
@@ -228,20 +239,16 @@ LLM-провайдер (OpenAI / Anthropic / локальная модель) п
 
 ```bash
 git clone <repo-url>
-cd dnd-engine
+cd ai-dnd-master
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-pip install -e ".[dev]"
-pytest
+python -m pip install -e ".[dev]"
+python -m pytest
 ```
 
-Запуск API:
-
-```bash
-uvicorn dnd_engine.api.main:app --reload
-```
+Runnable API появится на соответствующей фазе Roadmap; текущая Foundation-итерация проверяется установкой пакета и pytest.
 
 ---
 
@@ -305,7 +312,7 @@ AI понимает намерение. Engine решает:
 
 ## Status
 
-🚧 **Early Development** — стадия проектирования архитектуры и создания базового Rule Engine.
+✅ **Phase 0 — Foundation** подготовлена к завершению. Следующий этап: **Phase 1 — Core**.
 
 Текущие фазы и приоритеты — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

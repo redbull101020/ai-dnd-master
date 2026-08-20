@@ -1,5 +1,7 @@
 # Architecture Foundation
 
+> `ARCHITECTURE.md = current canonical contract`; [`DECISIONS.md`](DECISIONS.md) = append-only rationale/history.
+
 > **Источник истины проекта.** При расхождении с любым другим документом приоритет у этого файла.
 
 Этот документ фиксирует фундаментальные технические решения проекта.
@@ -195,10 +197,14 @@ Python используется как основной язык Engine благ
 
 ```text
 Python dataclasses
-Pydantic models
+frozen dataclasses for Definitions and immutable Value Objects
 Enums
 Value Objects
 ```
+
+Pydantic is used only at system boundaries (API, storage I/O validation,
+configuration, external JSON, and LLM structured output). Domain rule
+resolution uses dataclasses, Enums, Value Objects, and type hints only.
 
 Правила не должны зависеть от:
 
@@ -866,10 +872,10 @@ JSON:
   "commandId": "command_000001",
   "type": "AttackCommand",
   "campaignId": "campaign_001",
-  "actorId": "player_001",
+  "actorId": "character_001",
   "payload": {
-    "targetId": "goblin_001",
-    "weaponId": "longsword_001"
+    "targetId": "monster_001",
+    "weaponId": "item_001"
   }
 }
 ```
@@ -933,6 +939,7 @@ Event описывает уже произошедший факт.
 @dataclass(frozen=True)
 class GameEvent:
     event_id: str
+    command_id: str
     type: str
     version: int
 
@@ -952,14 +959,15 @@ class GameEvent:
 ```json
 {
   "eventId": "event_000124",
+  "commandId": "command_000001",
   "type": "DamageApplied",
   "version": 1,
   "campaignId": "campaign_001",
-  "timestamp": "2026-08-19T16:42:10Z",
-  "actorId": "fighter_001",
+  "timestamp": "2026-08-20T18:42:10Z",
+  "actorId": "character_001",
   "causedBy": "event_000123",
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "amount": 10,
     "damageType": "slashing"
   }
@@ -1056,7 +1064,7 @@ class ResolutionResult:
 
   "stateChanges": [
     {
-      "entityId": "goblin_001",
+      "entityId": "monster_001",
       "field": "hp",
       "from": 20,
       "to": 10
@@ -1181,7 +1189,7 @@ Command
 {
   "code": "ACTION_NOT_AVAILABLE",
   "message": "Creature has already used its action.",
-  "entityId": "fighter_001",
+  "entityId": "character_001",
   "field": null
 }
 ```
@@ -1542,7 +1550,7 @@ UI и AI не должны самостоятельно генерировать
 
 ```json
 {
-  "targetId": "goblin_777"
+  "targetId": "monster_777"
 }
 ```
 
@@ -1592,7 +1600,7 @@ campaign_001
 
 ---
 
-#### Character / Player IDs
+#### Player Identity / Character State IDs
 
 ```text
 player_001
@@ -1602,25 +1610,16 @@ character_001
 character_002
 ```
 
-`player_*` используется для игровых персонажей в UI/API-контексте.
+`player_*` используется только для `PlayerIdentity` — идентичности игрока в UI/API-контексте.
 
-`character_*` — общий ID сущности персонажа.
+`character_*` используется для `CharacterState` — runtime-состояния игрового персонажа.
 
-В дальнейшем рекомендуется не смешивать эти понятия:
-
-```text
-User
-   ↓
-PlayerIdentity
-   ↓
-CharacterState
-```
-
-Поэтому:
+Эти понятия не смешиваются:
 
 ```text
-user_001
-character_001
+PlayerIdentity (player_001)
+   ↓
+CharacterState (character_001)
 ```
 
 являются различными сущностями.
@@ -1639,24 +1638,24 @@ npc_002
 #### Monster IDs
 
 ```text
-goblin_001
-goblin_002
-goblin_003
+monster_001
+monster_002
+monster_003
 ```
+
+Each runtime monster keeps its Definition separately: `monster_001` has
+`definitionId: goblin`.
 
 ---
 
 #### Item Instance IDs
 
 ```text
-longsword_001
-longsword_002
-
 item_001
 item_002
 ```
 
-В runtime рекомендуется:
+В runtime используется:
 
 ```json
 {
@@ -1665,7 +1664,8 @@ item_002
 }
 ```
 
-а не считать `longsword_001` Definition ID.
+Не используйте `longsword_001` как runtime ID; `longsword` остаётся
+semantic Definition ID.
 
 ---
 
@@ -1792,9 +1792,9 @@ command_000003
 | Ruleset           | `snake_case`     | `dnd_5e`         |
 | Definition        | `snake_case`     | `longsword`      |
 | Character         | `character_NNN`  | `character_001`  |
-| Player Character  | `player_NNN`     | `player_001`     |
+| Player Identity   | `player_NNN`     | `player_001`     |
 | NPC               | `npc_NNN`        | `npc_001`        |
-| Monster Instance  | `<type>_NNN`     | `goblin_001`     |
+| Monster Instance  | `monster_NNN`    | `monster_001`    |
 | Item Instance     | `item_NNN`       | `item_001`       |
 | Combat            | `combat_NNN`     | `combat_001`     |
 | Quest State       | `quest_NNN`      | `quest_001`      |
@@ -1951,19 +1951,20 @@ DamageApplied
 ```json
 {
   "eventId": "event_000124",
+  "commandId": "command_000001",
   "type": "DamageApplied",
   "version": 1,
 
   "campaignId": "campaign_001",
 
-  "timestamp": "2026-08-19T16:42:10Z",
+  "timestamp": "2026-08-20T18:42:10Z",
 
-  "actorId": "fighter_001",
+  "actorId": "character_001",
 
   "causedBy": "event_000123",
 
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "amount": 10,
     "damageType": "slashing"
   }
@@ -1977,6 +1978,7 @@ DamageApplied
 | Поле         | Тип              | Обязательное | Назначение                            |
 | ------------ | ---------------- | -----------: | ------------------------------------- |
 | `eventId`    | `string`         |           Да | Уникальный ID события                 |
+| `commandId`  | `string`         |           Да | ID Command, породившей событие        |
 | `type`       | `string`         |           Да | Тип события                           |
 | `version`    | `integer`        |           Да | Версия схемы конкретного типа Event   |
 | `campaignId` | `string`         |           Да | Кампания, в которой произошло событие |
@@ -2141,9 +2143,9 @@ ISO 8601 / UTC
 Например:
 
 ```text
-fighter_001
+character_001
 npc_003
-goblin_002
+monster_002
 system
 ```
 
@@ -2217,7 +2219,7 @@ event_104 CreatureDefeated
   "version": 1,
 
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "amount": 10,
     "damageType": "slashing"
   }
@@ -2228,6 +2230,7 @@ event_104 CreatureDefeated
 
 ```text
 eventId
+commandId
 campaignId
 timestamp
 actorId
@@ -2379,10 +2382,10 @@ Command ещё не означает, что действие произойдё
 
   "campaignId": "campaign_001",
 
-  "actorId": "fighter_001",
+  "actorId": "character_001",
 
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "weaponId": "item_001"
   }
 }
@@ -2460,7 +2463,7 @@ DodgeCommand
 
 ```json
 {
-  "actorId": "fighter_001"
+  "actorId": "character_001"
 }
 ```
 
@@ -2491,7 +2494,7 @@ CreatureState
 ```json
 {
   "type": "MoveCommand",
-  "actorId": "fighter_001",
+  "actorId": "character_001",
   "payload": {
     "destination": {
       "x": 10,
@@ -2506,9 +2509,9 @@ CreatureState
 ```json
 {
   "type": "AttackCommand",
-  "actorId": "fighter_001",
+  "actorId": "character_001",
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "weaponId": "item_001"
   }
 }
@@ -2690,18 +2693,26 @@ command_000123 already processed
 
 Все Events, созданные одной Command, должны быть связаны с ней.
 
-Для этого в Event Envelope рекомендуется добавить:
+`commandId` — обязательное поле Event Envelope: оно сохраняется для всех
+cascading Events, связывает их с одной logical Command transaction и
+используется для tracing, replay и audit. Системные действия входят в тот же
+authoritative pipeline через system/internal Command; бесхозные Events вне
+Command lifecycle запрещены.
+
+Канонический Event example:
 
 ```json
 {
   "eventId": "event_000124",
-  "type": "DamageApplied",
   "commandId": "command_000001",
+  "type": "DamageApplied",
+  "version": 1,
   "campaignId": "campaign_001",
-  "actorId": "fighter_001",
+  "timestamp": "2026-08-20T18:42:10Z",
+  "actorId": "character_001",
   "causedBy": "event_000123",
   "payload": {
-    "targetId": "goblin_001",
+    "targetId": "monster_001",
     "amount": 10,
     "damageType": "slashing"
   }
@@ -2720,7 +2731,8 @@ Command
 
 можно восстановить напрямую.
 
-> `commandId` становится обязательным полем Event Envelope.
+Все Events одной Command имеют одинаковый `commandId`. `causedBy` сохраняет
+отдельную Event → Event causality и не заменяется `commandId`.
 
 ---
 
@@ -2853,7 +2865,6 @@ campaign identity
 ruleset reference
 global campaign metadata
 session state
-global game time
 campaign lifecycle
 ```
 
@@ -3056,7 +3067,7 @@ locations
 location state
 doors
 world flags
-game time
+world/game time (the sole authoritative owner)
 environment
 discovery
 world transitions
@@ -3116,7 +3127,7 @@ Faction → Character
 ```json
 {
   "sourceId": "npc_001",
-  "targetId": "player_001",
+  "targetId": "character_001",
   "trust": 70,
   "fear": 10,
   "respect": 50
@@ -3661,10 +3672,10 @@ events/events.jsonl
 ```
 
 ```json
-{"eventId":"event_000001","type":"CombatStarted",...}
-{"eventId":"event_000002","type":"TurnStarted",...}
-{"eventId":"event_000003","type":"AttackResolved",...}
-{"eventId":"event_000004","type":"DamageApplied",...}
+{"eventId":"event_000001","commandId":"command_000001","type":"CombatStarted",...}
+{"eventId":"event_000002","commandId":"command_000001","type":"TurnStarted",...}
+{"eventId":"event_000003","commandId":"command_000002","type":"AttackResolved",...}
+{"eventId":"event_000004","commandId":"command_000002","type":"DamageApplied",...}
 ```
 
 Преимущество JSONL:
@@ -3778,7 +3789,7 @@ JSON:
 
 ```json
 {
-  "id": "goblin_001",
+  "id": "monster_001",
   "definitionId": "goblin",
   "currentHp": 12,
   "maxHp": 20

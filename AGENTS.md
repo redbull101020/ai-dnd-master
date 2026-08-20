@@ -8,8 +8,11 @@ Use project documentation in this order:
 
 1. `docs/ARCHITECTURE.md` — canonical architecture and contracts.
 2. `docs/ROADMAP.md` — implementation order and current status.
-3. `README.md` — project overview and developer workflow.
-4. `CLAUDE.md` — supplementary condensed guidance.
+3. `docs/DECISIONS.md` — append-only rationale/history; never an alternative contract.
+4. `README.md` — project overview and developer workflow.
+5. `CLAUDE.md` — supplementary condensed guidance.
+
+`ARCHITECTURE.md = current canonical contract`; `DECISIONS.md = append-only rationale/history`.
 
 Before non-trivial work, inspect the current repository state, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and the relevant implementation/tests.
 
@@ -76,6 +79,13 @@ During implementation:
 * do not overwrite or revert unrelated work.
 
 Changes to canonical contracts such as Envelope fields, ID formats, State Ownership, serialization, or dependency direction require corresponding updates to `docs/ARCHITECTURE.md`.
+
+When making a new substantial architectural decision or changing an existing contract:
+
+1. update the canonical contract in `docs/ARCHITECTURE.md`;
+2. add a new entry in `docs/DECISIONS.md`;
+3. do not rewrite an accepted historical entry;
+4. when reversing a decision, add a new decision and mark the old one `Superseded`.
 
 If the task requests analysis or planning only, do not modify files.
 

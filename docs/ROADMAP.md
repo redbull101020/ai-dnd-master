@@ -2,9 +2,41 @@
 
 Фазы разработки AI D&D Engine.
 
-Другие документы: [`../README.md`](../README.md) — обзор проекта · [`ARCHITECTURE.md`](ARCHITECTURE.md) — контракты и источник истины · [`../CLAUDE.md`](../CLAUDE.md) — выжимка правил для AI-агента.
+Другие документы: [`../README.md`](../README.md) — обзор проекта · [`ARCHITECTURE.md`](ARCHITECTURE.md) — текущий канонический контракт · [`DECISIONS.md`](DECISIONS.md) — append-only мотивация и история решений · [`../CLAUDE.md`](../CLAUDE.md) — выжимка правил для AI-агента.
 
 Каждая фаза реализуется в рамках контрактов из `ARCHITECTURE.md`. Опорные разделы указаны под заголовком фазы.
+
+`ARCHITECTURE.md = current canonical contract`; `DECISIONS.md = append-only rationale/history`.
+
+---
+
+## Phase 0 — Foundation
+
+> Контракты: Architecture Foundation, Application Layers, Contracts, ID System,
+> State Ownership, Serialization Rules.
+
+- [x] Canonical architecture documented
+- [x] Application/Domain/Infrastructure package skeleton
+- [x] Python package bootstrap through `pyproject.toml`
+- [x] Package import smoke test
+- [x] Architecture contract consistency pass
+- [x] Architectural decision log
+- [x] Repository placeholder/data hygiene
+- [x] Current-vs-planned documentation alignment
+- [x] Minimal GitHub Actions pytest workflow
+
+### Definition of Done
+
+- `pip install -e ".[dev]"` работает в чистом Python 3.12 environment;
+- `import dnd_engine` работает;
+- весь `pytest` проходит;
+- package skeleton соответствует §2;
+- в tracked repository нет 0-byte `.json` placeholders;
+- Architecture/README/CLAUDE не конфликтуют по Event Envelope, runtime IDs, State Ownership и Pydantic boundary;
+- GitHub Actions workflow выполняет тот же pytest suite;
+- Phase 1 может начинаться без изменения Foundation contracts.
+
+Следующий этап после Foundation — **Phase 1 — Core**.
 
 ---
 
@@ -109,7 +141,7 @@
 
 # Текущий статус
 
-🚧 **Early Development** — стадия проектирования архитектуры и создания базового Rule Engine.
+✅ **Phase 0 — Foundation** подготовлена к завершению. Следующий этап — **Phase 1 — Core**.
 
 Порядок работ:
 
