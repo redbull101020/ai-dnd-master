@@ -162,7 +162,7 @@ AI  →  Narration
 ## Структура проекта
 
 ```text
-dnd-engine/
+ai-dnd-master/
 │
 ├── README.md
 ├── CLAUDE.md
@@ -170,6 +170,7 @@ dnd-engine/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md
+│   ├── DECISIONS.md
 │   └── ROADMAP.md
 │
 ├── src/
@@ -183,7 +184,7 @@ dnd-engine/
 │   └── dnd_5e/                  # Definitions: classes, spells, monsters, items, ...
 │
 ├── campaigns/
-│   └── campaign_001/            # config.json, state.json, world/, characters/, events/
+│   └── campaign_001/            # campaign-specific state and event storage
 │
 └── tests/
     ├── rules/
