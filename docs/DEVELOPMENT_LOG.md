@@ -214,3 +214,58 @@ contracts.
   validators, Definition lookup, and ruleset datasets.
 - Conditions, effects, movement, position, combat State, inventory, equipment,
   and all other future-phase fields.
+
+## 2026-08-22 — Phase 1 CampaignState slice
+
+### Initial state
+
+- Fetched `origin/main` and created `codex/feat/phase-1-campaign-state`
+  directly from commit `6ce02c0e3161a53b4f12506f3687e3016e1109c1` with a clean working tree.
+- `CreatureState` was already merged and marked complete in the Phase 1
+  Roadmap. Campaign ownership was documented, but no concrete minimal
+  `CampaignState` Python schema existed.
+
+### Implemented
+
+- Added mutable campaign-scoped `CampaignState` with exactly `id`,
+  `ruleset_id`, and `ruleset_version`, all typed as `str`.
+- Kept Campaign identity and the Ruleset identity/version reference separate,
+  without runtime validation, coercion, lookup, or custom mutation methods.
+- Added deterministic Domain unit tests for construction, exact fields and
+  types, mutable State semantics, separate identities, separate Ruleset ID and
+  version, and exclusion of cross-domain and future fields.
+- Added the canonical minimal contract to Architecture, including ownership,
+  deferred Campaign fields, World State ownership of world/game time, and the
+  distinction between snapshot containment and State Ownership.
+- Added append-only DEC-0010 and marked only `CampaignState` complete in the
+  Phase 1 Roadmap.
+
+### Changed files
+
+- `src/dnd_engine/domain/state/campaign.py` — minimal `CampaignState` model.
+- `tests/domain/test_campaign_state.py` — deterministic unit tests.
+- `docs/ARCHITECTURE.md` — canonical Phase 1 `CampaignState` contract.
+- `docs/DECISIONS.md` — append-only DEC-0010.
+- `docs/ROADMAP.md` — marked only `CampaignState` complete in Phase 1.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Verification
+
+- The repository `.venv` was verified functional with Python 3.12.9 and
+  pytest 9.1.1. The full suite was run through
+  `.venv\Scripts\python.exe -m pytest`; no project dependency was added.
+- Narrow `CampaignState` suite with the cache provider disabled: 7 tests
+  passed.
+- Full pytest suite: 86 tests passed.
+- `git diff --check` passed.
+- No formatter, linter, or type checker is configured in the repository.
+
+### Intentionally deferred
+
+- Campaign Engine, CampaignStateManager, repositories, command/event handlers,
+  serialization, persistence, registries, factories, ID validation, and
+  Ruleset lookup or migration behavior.
+- Campaign metadata, session state, lifecycle/status fields, and snapshot
+  schema versioning.
+- Creature, World, Combat, Quest, Inventory, Equipment, Event Log, AI State,
+  and all other cross-domain State.

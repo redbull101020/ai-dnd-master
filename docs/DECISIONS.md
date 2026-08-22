@@ -82,3 +82,12 @@ This append-only log records rationale and history. `ARCHITECTURE.md = current c
 - **Decision:** `DamageType` is a Domain `StrEnum` with exactly 13 lowercase string values: `acid`, `bludgeoning`, `cold`, `fire`, `force`, `lightning`, `necrotic`, `piercing`, `poison`, `psychic`, `radiant`, `slashing`, and `thunder`. `WeaponDefinition.damage_type` uses `DamageType`, and future serialization emits the enum string value.
 - **Consequences:** weapon definitions cannot extend the canonical damage-type vocabulary with arbitrary enum members. This decision introduces no resistance, immunity, vulnerability, or damage-calculation mechanics; those remain deferred to their corresponding future Roadmap phases.
 - **Affected contracts/files:** `docs/ARCHITECTURE.md` §§3.1.1, 12.16; `src/dnd_engine/domain/value_objects/damage_type.py`; `src/dnd_engine/domain/definitions/weapon.py`.
+
+## DEC-0010 — Minimal Phase 1 CampaignState contract
+
+- **Date:** 2026-08-22
+- **Status:** Accepted
+- **Context:** Phase 1 reached `CampaignState`. Architecture already assigned Campaign ownership but did not define a concrete minimal Python schema, leaving room for the implementation to become an implicit aggregate or God Object for other State domains.
+- **Decision:** Phase 1 `CampaignState` is mutable and contains exactly `id: str`, `ruleset_id: str`, and `ruleset_version: str`. Other State domains are not embedded in it. World/game time remains exclusively in World State. Concrete fields for campaign metadata, session state, and lifecycle are deferred until corresponding use cases and contracts exist.
+- **Consequences:** Campaign State remains small while exposing campaign identity and an explicit ruleset identity/version reference. State Ownership boundaries remain intact. A persistence snapshot may aggregate State domains separately without transferring their ownership to `CampaignState`. Future extensions require a concrete use case and canonical contract update.
+- **Affected contracts/files:** `docs/ARCHITECTURE.md` §3.2.2; `src/dnd_engine/domain/state/campaign.py`.
