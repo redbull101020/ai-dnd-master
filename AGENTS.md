@@ -75,6 +75,7 @@ During implementation:
 * do not perform unrelated refactors;
 * preserve existing contracts unless their change is explicitly approved;
 * update canonical documentation when behavior or contracts change;
+* for each substantive implementation or documentation iteration, append a factual entry to `docs/DEVELOPMENT_LOG.md`;
 * add or update tests for changed behavior;
 * do not overwrite or revert unrelated work.
 
