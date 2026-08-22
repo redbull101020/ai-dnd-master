@@ -48,3 +48,52 @@ contracts.
 - Dice Engine.
 - Exact `StateStore` / `EventStore` responsibility boundary.
 - All Phase 1 Python implementation.
+
+## 2026-08-22 — Phase 1 AbilityScores and base Definition implementation
+
+### Initial state
+
+- Phase 1 canonical contracts existed in `docs/ARCHITECTURE.md` and DEC-0008,
+  but `AbilityScores` and the base `Definition` had no Python implementation.
+- The Domain packages contained only package placeholders, and no Domain unit
+  tests covered these contracts.
+
+### Implemented
+
+- Added the immutable six-field `AbilityScores` Value Object with exact `int`
+  type and the canonical `1..30` invariant enforced for every score.
+- Added the immutable base `Definition` with only `id` and `version`.
+- Added deterministic unit tests for valid construction, score boundaries,
+  per-field invalid values and types, immutability, and exact canonical
+  dataclass fields.
+
+### Changed files
+
+- `src/dnd_engine/domain/value_objects/ability_scores.py` — `AbilityScores`.
+- `src/dnd_engine/domain/definitions/base.py` — base `Definition`.
+- `tests/domain/test_ability_scores.py` — `AbilityScores` unit tests.
+- `tests/domain/test_definition.py` — base `Definition` unit tests.
+- `docs/ROADMAP.md` — marked only `AbilityScores` complete in Phase 1.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Verification
+
+- Fetched `origin/main` at `f02d6c2163775cdd01f420f05357090183b80486`
+  and created the feature branch from that commit.
+- The repository `.venv` was broken and the Windows Python launcher had no
+  installed runtime. Tests used bundled Python 3.12.13 and pytest 9.1.1 from a
+  temporary dependency directory outside the repository, with `src` supplied
+  through a test-only `PYTHONPATH`.
+- Narrow `AbilityScores` suite: 29 tests passed.
+- Full pytest suite with the cache provider disabled: 35 tests passed.
+- `git diff --check` passed; Git emitted only the existing Windows checkout
+  warning that LF would be converted to CRLF if Git rewrites the files.
+
+### Intentionally deferred
+
+- `ItemDefinition`, `WeaponDefinition`, and `MonsterDefinition`.
+- `CreatureState` and `CampaignState`.
+- Dice Engine and Event model.
+- `StateStore` / persistence.
+- Serialization, registries, factories, repositories, and derived rule
+  calculations.
