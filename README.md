@@ -22,6 +22,7 @@
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Источник истины.** Контракты, Envelope-схемы, ID System, слои, State Ownership, правила сериализации |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Append-only журнал мотивации и истории архитектурных решений |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Фазы разработки и текущий статус |
+| [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md) | Append-only история выполненных development iterations; не источник контрактов или статуса |
 | `CLAUDE.md` | Выжимка правил проекта для AI-агента |
 
 `ARCHITECTURE.md = current canonical contract`; `DECISIONS.md = append-only rationale/history`. При любом расхождении приоритет у `docs/ARCHITECTURE.md`.
@@ -171,7 +172,8 @@ ai-dnd-master/
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
-│   └── ROADMAP.md
+│   ├── ROADMAP.md
+│   └── DEVELOPMENT_LOG.md
 │
 ├── src/
 │   └── dnd_engine/
@@ -313,7 +315,7 @@ AI понимает намерение. Engine решает:
 
 ## Status
 
-✅ **Phase 0 — Foundation** подготовлена к завершению. Следующий этап: **Phase 1 — Core**.
+✅ **Phase 0 — Foundation** завершена. Текущий этап: **Phase 1 — Core**.
 
 Текущие фазы и приоритеты — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

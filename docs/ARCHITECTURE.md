@@ -22,6 +22,9 @@
 | Нужно найти | Раздел |
 | --- | --- |
 | Обязательные поля Definition | §3.1 |
+| Контракт AbilityScores | §1.2.1 |
+| Минимальные Phase 1 Definitions | §3.1.1 |
+| Минимальный CreatureState | §3.2.1 |
 | Схема Command Envelope | §9.1 |
 | Поля Command Envelope | §9.2 |
 | Схема Event Envelope | §8.1 |
@@ -46,6 +49,7 @@
 * [1. Технологический стек / Technology Stack](#1-технологический-стек--technology-stack)
   * [1.1. Backend](#11-backend)
   * [1.2. Domain Model](#12-domain-model)
+    * [1.2.1. AbilityScores Value Object](#121-abilityscores-value-object)
   * [1.3. API](#13-api)
   * [1.4. Storage](#14-storage)
   * [1.5. Tests](#15-tests)
@@ -60,7 +64,9 @@
   * [2.6. Полная схема / Full Layer Diagram](#26-полная-схема--full-layer-diagram)
 * [3. Контракты / Contracts](#3-контракты--contracts)
   * [3.1. Definition Contract](#31-definition-contract)
+    * [3.1.1. Minimal Phase 1 Definition Contracts](#311-minimal-phase-1-definition-contracts)
   * [3.2. State Contract](#32-state-contract)
+    * [3.2.1. Minimal Phase 1 CreatureState Contract](#321-minimal-phase-1-creaturestate-contract)
   * [3.3. Command Contract](#33-command-contract)
   * [3.4. Event Contract](#34-event-contract)
   * [3.5. ResolutionResult Contract](#35-resolutionresult-contract)
@@ -221,6 +227,44 @@ Domain Engine должен работать как обычный Python-код:
 ```python
 result = engine.execute(command)
 ```
+
+#### 1.2.1. AbilityScores Value Object
+
+`AbilityScores` — immutable Domain Value Object, используемый базовыми Phase 1
+Definition- и State-моделями.
+
+Каноническая Python-семантика:
+
+```python
+@dataclass(frozen=True)
+class AbilityScores:
+    strength: int
+    dexterity: int
+    constitution: int
+    intelligence: int
+    wisdom: int
+    charisma: int
+```
+
+Все шесть полей обязательны. Для каждого поля действует invariant:
+
+```text
+1 <= ability score <= 30
+```
+
+`AbilityScores`:
+
+* не является State owner;
+* не имеет собственного runtime ID;
+* не содержит modifiers, proficiency, skills или saving throw bonuses;
+* не содержит temporary modifiers;
+* не выполняет rule calculations.
+
+Если abilities существа изменяются во время игры, Creature Domain создаёт новое
+значение `AbilityScores` и помещает его в принадлежащий ему `CreatureState`.
+Производные значения вроде `strength_modifier` относятся к rule calculation и
+не входят в Phase 1 contract. При JSON-сериализации используется обычное правило
+camelCase; все шесть canonical имён уже однословные.
 
 ---
 
@@ -452,7 +496,7 @@ Presentation Layer **не содержит D&D правил**.
 ```python
 # route
 if attack_roll >= target.ac:
-    target.hp -= damage
+    target.current_hp -= damage
 ```
 
 Правильно:
@@ -692,20 +736,65 @@ id
 version
 ```
 
-Дополнительные поля определяются конкретным Definition.
+Дополнительные поля определяются конкретным Definition. `name` не является
+обязательным полем абсолютно всех будущих Definitions.
 
-Например:
+#### 3.1.1. Minimal Phase 1 Definition Contracts
+
+Phase 1 начинает Core с минимальных immutable data contracts без полей будущих
+Roadmap phases.
+
+##### `ItemDefinition`
 
 ```python
 @dataclass(frozen=True)
-class WeaponDefinition:
+class ItemDefinition:
     id: str
     version: int
     name: str
+```
+
+`ItemDefinition` — immutable rules/content definition. Он не содержит item
+instance ID, owner ID, quantity, equipped state, durability, container state или
+campaign-specific fields.
+
+##### `WeaponDefinition`
+
+`WeaponDefinition IS-A ItemDefinition`.
+
+```python
+@dataclass(frozen=True)
+class WeaponDefinition(ItemDefinition):
     damage_dice: str
     damage_type: str
-    properties: list[str]
+    properties: tuple[str, ...]
 ```
+
+В Phase 1 `damage_dice` хранит простое dice expression вида `NdM`, например
+`1d8`; сложный dice parser сейчас не проектируется. `damage_type` остаётся domain
+value, но отдельный `DamageType` enum и точный closed set будут закреплены вместе
+с кодовой реализацией `WeaponDefinition`/`DamageType`. `properties` имеют
+immutable semantics; serializer представляет tuple обычным JSON array.
+
+`WeaponDefinition` не содержит attack bonus, current wielder, equipped slot,
+ammunition count, current condition, magic bonuses или runtime item identity.
+
+##### `MonsterDefinition`
+
+```python
+@dataclass(frozen=True)
+class MonsterDefinition:
+    id: str
+    version: int
+    name: str
+    ability_scores: AbilityScores
+```
+
+`MonsterDefinition` — immutable template/rules definition. Он не содержит
+current HP, current conditions/effects, position, combat turn data, monster
+runtime ID или inventory/equipment state. AC, speed, CR, senses, actions,
+spellcasting и другие поля будущих phases добавляются только тогда, когда их
+потребует Roadmap.
 
 ---
 
@@ -773,16 +862,47 @@ old definition → mutation
 
 State описывает конкретный экземпляр в конкретной кампании.
 
-Пример:
+#### 3.2.1. Minimal Phase 1 CreatureState Contract
+
+Каноническая Python-семантика:
 
 ```python
 @dataclass
 class CreatureState:
     id: str
     definition_id: str
-    hp: int
+    ability_scores: AbilityScores
+    current_hp: int
     max_hp: int
 ```
+
+Канонические имена HP:
+
+```text
+Python: current_hp, max_hp
+JSON:   currentHp, maxHp
+```
+
+Invariants:
+
+```text
+max_hp >= 1
+0 <= current_hp <= max_hp
+```
+
+`CreatureState` — mutable campaign-scoped State; owner — Creature Domain. `id`
+является runtime instance ID, а `definition_id` — отдельной ссылкой на immutable
+Definition. Runtime ID никогда не выводится из Definition ID. Вложенный
+`AbilityScores` сохраняет immutable Value Object semantics.
+
+Combat Engine, AI, API и другие подсистемы не мутируют `CreatureState` напрямую.
+Все изменения проходят через canonical Command → Resolver → Event → Creature
+State Owner flow.
+
+В Phase 1 `CreatureState` не содержит skills, saving throw results, proficiency,
+conditions, effects, movement, position, initiative, turn resources, equipment
+или inventory. Зафиксированный ownership этих понятий не требует преждевременно
+добавлять их в минимальную модель.
 
 State:
 
@@ -830,7 +950,7 @@ LLM
 Например запрещено:
 
 ```python
-character.hp -= 10
+character.current_hp -= 10
 ```
 
 в API.
@@ -1065,7 +1185,7 @@ class ResolutionResult:
   "stateChanges": [
     {
       "entityId": "monster_001",
-      "field": "hp",
+      "field": "currentHp",
       "from": 20,
       "to": 10
     }
@@ -2791,11 +2911,11 @@ State Ownership определяет, **какая подсистема явля
 Без ownership быстро возникает:
 
 ```text
-CombatEngine ──► character.hp
-QuestEngine  ──► character.hp
-AI            ──► character.hp
-API           ──► character.hp
-NPC system   ──► character.hp
+CombatEngine ──► character.current_hp
+QuestEngine  ──► character.current_hp
+AI            ──► character.current_hp
+API           ──► character.current_hp
+NPC system   ──► character.current_hp
 ```
 
 В итоге невозможно определить:
@@ -2903,7 +3023,7 @@ life state
 но не должен самовольно менять:
 
 ```text
-creature.hp -= 10
+creature.current_hp -= 10
 ```
 
 Он создаёт:
@@ -2915,7 +3035,7 @@ DamageApplied
 После применения Event:
 
 ```text
-CreatureState.hp
+CreatureState.current_hp
 ```
 
 изменяется владельцем State.
@@ -3229,7 +3349,7 @@ Owner
 ```text
 CombatEngine
     ↓
-fighter.hp -= 10
+fighter.current_hp -= 10
 ```
 
 Правильно:
@@ -3781,6 +3901,7 @@ Domain Model:
 class CreatureState:
     id: str
     definition_id: str
+    ability_scores: AbilityScores
     current_hp: int
     max_hp: int
 ```
@@ -3791,6 +3912,14 @@ JSON:
 {
   "id": "monster_001",
   "definitionId": "goblin",
+  "abilityScores": {
+    "strength": 8,
+    "dexterity": 14,
+    "constitution": 10,
+    "intelligence": 10,
+    "wisdom": 8,
+    "charisma": 8
+  },
   "currentHp": 12,
   "maxHp": 20
 }
@@ -4301,7 +4430,7 @@ flowchart TD
 Нельзя:
 
 ```python
-state["characters"][id]["hp"] -= 10
+state["characters"][id]["currentHp"] -= 10
 ```
 
 в Rule Engine.
@@ -4320,7 +4449,7 @@ CreatureState
 
 ```json
 {
-  "hp": 10,
+  "currentHp": 10,
   "randomCustomField": "hello"
 }
 ```

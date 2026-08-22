@@ -64,3 +64,12 @@ This append-only log records rationale and history. `ARCHITECTURE.md = current c
 - **Decision:** README lists Python 3.12+, JSON/JSONL, pytest, and setuptools as current Foundation; FastAPI, WebSocket, Pydantic v2, and LLM adapters are planned boundary stack.
 - **Consequences:** planned dependencies wait for their Roadmap phase.
 - **Affected contracts/files:** `README.md`, `docs/ROADMAP.md`.
+
+## DEC-0008 — Phase 1 starts with minimal Core data contracts
+
+- **Date:** 2026-08-22
+- **Status:** Accepted
+- **Context:** Phase 1 needed canonical first-pass Value Object, Definition, and Creature State shapes before Python implementation, including one unambiguous HP field name.
+- **Decision:** `AbilityScores` is an immutable six-score Value Object whose required values are each in `1..30`. `CreatureState` uses `current_hp` / `max_hp` in Python (`currentHp` / `maxHp` in JSON). `ItemDefinition`, `WeaponDefinition`, and `MonsterDefinition` contain only their documented minimal Phase 1 fields, and `WeaponDefinition` is a specialization of `ItemDefinition`. Runtime State remains separate from immutable Definitions.
+- **Consequences:** fields belonging to later Roadmap phases are intentionally absent; future slices can extend the canonical contracts only when the corresponding behavior is implemented.
+- **Affected contracts/files:** `docs/ARCHITECTURE.md` §§1.2.1, 3.1.1, 3.2.1.
