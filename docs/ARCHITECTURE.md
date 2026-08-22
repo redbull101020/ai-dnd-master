@@ -762,19 +762,59 @@ campaign-specific fields.
 
 `WeaponDefinition IS-A ItemDefinition`.
 
+`DamageType` — закрытый Domain `StrEnum`:
+
+```python
+from enum import StrEnum
+
+
+class DamageType(StrEnum):
+    ACID = "acid"
+    BLUDGEONING = "bludgeoning"
+    COLD = "cold"
+    FIRE = "fire"
+    FORCE = "force"
+    LIGHTNING = "lightning"
+    NECROTIC = "necrotic"
+    PIERCING = "piercing"
+    POISON = "poison"
+    PSYCHIC = "psychic"
+    RADIANT = "radiant"
+    SLASHING = "slashing"
+    THUNDER = "thunder"
+```
+
+Канонический Phase 1 closed set и его lowercase domain/serialized values:
+
+```text
+acid
+bludgeoning
+cold
+fire
+force
+lightning
+necrotic
+piercing
+poison
+psychic
+radiant
+slashing
+thunder
+```
+
 ```python
 @dataclass(frozen=True)
 class WeaponDefinition(ItemDefinition):
     damage_dice: str
-    damage_type: str
+    damage_type: DamageType
     properties: tuple[str, ...]
 ```
 
 В Phase 1 `damage_dice` хранит простое dice expression вида `NdM`, например
-`1d8`; сложный dice parser сейчас не проектируется. `damage_type` остаётся domain
-value, но отдельный `DamageType` enum и точный closed set будут закреплены вместе
-с кодовой реализацией `WeaponDefinition`/`DamageType`. `properties` имеют
-immutable semantics; serializer представляет tuple обычным JSON array.
+`1d8`; сложный dice parser сейчас не проектируется. `damage_type` использует
+только `DamageType`. На будущей serialization boundary `DamageType`
+сериализуется через его lowercase string value. `properties` имеют immutable
+semantics; serializer представляет tuple обычным JSON array.
 
 `WeaponDefinition` не содержит attack bonus, current wielder, equipped slot,
 ammunition count, current condition, magic bonuses или runtime item identity.
@@ -4276,11 +4316,14 @@ Enums сериализуются строками.
 Python:
 
 ```python
-class DamageType(Enum):
-    FIRE = "fire"
-    COLD = "cold"
-    SLASHING = "slashing"
+from dnd_engine.domain.value_objects.damage_type import DamageType
+
+
+damage_type = DamageType.FIRE
+serialized_value = damage_type.value  # "fire"
 ```
+
+Канонический closed set `DamageType` определён в §3.1.1.
 
 JSON:
 

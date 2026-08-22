@@ -47,9 +47,9 @@
 * [ ] `CampaignState`
 * [ ] `CreatureState`
 * [x] `AbilityScores`
-* [ ] `ItemDefinition`
-* [ ] `WeaponDefinition`
-* [ ] `MonsterDefinition`
+* [x] `ItemDefinition`
+* [x] `WeaponDefinition`
+* [x] `MonsterDefinition`
 * [ ] Dice Engine
 * [ ] Event model
 * [ ] State Store

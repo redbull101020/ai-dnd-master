@@ -73,3 +73,12 @@ This append-only log records rationale and history. `ARCHITECTURE.md = current c
 - **Decision:** `AbilityScores` is an immutable six-score Value Object whose required values are each in `1..30`. `CreatureState` uses `current_hp` / `max_hp` in Python (`currentHp` / `maxHp` in JSON). `ItemDefinition`, `WeaponDefinition`, and `MonsterDefinition` contain only their documented minimal Phase 1 fields, and `WeaponDefinition` is a specialization of `ItemDefinition`. Runtime State remains separate from immutable Definitions.
 - **Consequences:** fields belonging to later Roadmap phases are intentionally absent; future slices can extend the canonical contracts only when the corresponding behavior is implemented.
 - **Affected contracts/files:** `docs/ARCHITECTURE.md` §§1.2.1, 3.1.1, 3.2.1.
+
+## DEC-0009 — DamageType is a closed Domain StrEnum
+
+- **Date:** 2026-08-22
+- **Status:** Accepted
+- **Context:** DEC-0008 and the initial Phase 1 `WeaponDefinition` contract deferred the exact `damage_type` Domain type and closed set until code implementation.
+- **Decision:** `DamageType` is a Domain `StrEnum` with exactly 13 lowercase string values: `acid`, `bludgeoning`, `cold`, `fire`, `force`, `lightning`, `necrotic`, `piercing`, `poison`, `psychic`, `radiant`, `slashing`, and `thunder`. `WeaponDefinition.damage_type` uses `DamageType`, and future serialization emits the enum string value.
+- **Consequences:** weapon definitions cannot extend the canonical damage-type vocabulary with arbitrary enum members. This decision introduces no resistance, immunity, vulnerability, or damage-calculation mechanics; those remain deferred to their corresponding future Roadmap phases.
+- **Affected contracts/files:** `docs/ARCHITECTURE.md` §§3.1.1, 12.16; `src/dnd_engine/domain/value_objects/damage_type.py`; `src/dnd_engine/domain/definitions/weapon.py`.
