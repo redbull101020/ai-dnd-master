@@ -161,3 +161,56 @@ contracts.
 - Dice parsing, attack and damage calculations, HP changes, and weapon
   mechanics.
 - Resistance, immunity, vulnerability, and runtime inventory/equipment State.
+
+## 2026-08-22 — Phase 1 CreatureState slice
+
+### Initial state
+
+- PR #21 was merged into `origin/main` at commit
+  `02e941fbc158448d11ddc0cea0afbd6026ef313e`; the feature branch was created
+  directly from that commit with a clean working tree.
+- The minimal `CreatureState` contract was canonical in
+  `docs/ARCHITECTURE.md` and DEC-0008, but had no Python implementation or
+  Domain unit tests.
+
+### Implemented
+
+- Added mutable campaign-scoped `CreatureState` with exactly `id`,
+  `definition_id`, `ability_scores`, `current_hp`, and `max_hp`.
+- Reused the immutable `AbilityScores` Value Object without adding Definition
+  lookup, ID validation, coercion, serialization, or State transitions.
+- Enforced exact Python `int` types for both HP fields, including rejection of
+  `bool`, and the canonical `max_hp >= 1` and
+  `0 <= current_hp <= max_hp` invariants.
+- Added deterministic Domain unit tests for the canonical fields and types,
+  mutable State and immutable embedded Value Object semantics, distinct runtime
+  and Definition IDs, HP boundaries and invalid values, and exclusion of future
+  phase fields.
+
+### Changed files
+
+- `src/dnd_engine/domain/state/creature.py` — minimal `CreatureState` model.
+- `tests/domain/test_creature_state.py` — deterministic unit tests.
+- `docs/ROADMAP.md` — marked only `CreatureState` complete in Phase 1.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Verification
+
+- The repository `.venv` remained broken because its launcher referenced an
+  unavailable Python installation. Tests used bundled Python 3.12.13 with the
+  existing temporary pytest 9.1.1 dependency directory outside the repository.
+- Narrow `CreatureState` suite with the cache provider disabled: 22 tests
+  passed.
+- Full pytest suite with the cache provider disabled: 79 tests passed.
+- `git diff --check` passed.
+- No formatter, linter, or type checker is configured in the repository.
+
+### Intentionally deferred
+
+- `CampaignState`, Dice Engine, Event model, Commands, resolvers, Event
+  handlers, and State Store.
+- Damage, healing, and all other State transition mechanics.
+- Serialization, JSON persistence, registries, repositories, factories, ID
+  validators, Definition lookup, and ruleset datasets.
+- Conditions, effects, movement, position, combat State, inventory, equipment,
+  and all other future-phase fields.
