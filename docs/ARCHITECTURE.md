@@ -26,6 +26,7 @@
 | Минимальные Phase 1 Definitions | §3.1.1 |
 | Минимальный CreatureState | §3.2.1 |
 | Минимальный CampaignState | §3.2.2 |
+| Минимальный Dice Engine | §1.7.1 |
 | Схема Command Envelope | §9.1 |
 | Поля Command Envelope | §9.2 |
 | Схема Event Envelope | §8.1 |
@@ -56,6 +57,7 @@
   * [1.5. Tests](#15-tests)
   * [1.6. AI Layer](#16-ai-layer)
   * [1.7. Random Number Generation](#17-random-number-generation)
+    * [1.7.1. Minimal Phase 1 Dice Engine Contract](#171-minimal-phase-1-dice-engine-contract)
 * [2. Слои приложения / Application Layers](#2-слои-приложения--application-layers)
   * [2.1. Presentation Layer](#21-presentation-layer)
   * [2.2. Application Layer](#22-application-layer)
@@ -443,6 +445,63 @@ dice.roll("1d20")
 * replay;
 * debugging;
 * deterministic simulations.
+
+#### 1.7.1. Minimal Phase 1 Dice Engine Contract
+
+`DiceEngine` — Domain `Protocol`. Rule resolvers зависят только от него:
+
+```python
+from typing import Protocol
+
+
+class DiceEngine(Protocol):
+    def roll(self, expression: str) -> DiceRoll:
+        ...
+```
+
+Результат одного dice expression — минимальный immutable Domain Value Object:
+
+```python
+@dataclass(frozen=True)
+class DiceRoll:
+    expression: str
+    rolls: tuple[int, ...]
+    total: int
+```
+
+`expression` — exact `str` и хранит точное принятое canonical expression.
+`rolls` — непустой tuple с каждым индивидуальным положительным exact `int` (не
+`bool`) в порядке бросков. `total` — exact `int` (не `bool`) и в Phase 1 равен
+`sum(rolls)`. `DiceRoll` проверяет только собственные intrinsic invariants и не
+выполняет проверку результата относительно размера кубика.
+
+Phase 1 принимает только strict lowercase notation `NdM`, эквивалентную grammar
+`[1-9][0-9]*d[1-9][0-9]*`, с invariants `count >= 1` и `sides >= 2`.
+Количество всегда указывается явно. Modifiers, arithmetic expressions,
+advantage/disadvantage, keep/drop, rerolls, exploding dice и полный dice DSL не
+входят в Phase 1.
+
+Простой parser остаётся private implementation detail Infrastructure adapter:
+
+```text
+Domain DiceEngine Protocol
+          ↑
+Infrastructure PythonDiceEngine
+          ↑
+injected random.Random
+```
+
+`PythonDiceEngine` находится в Infrastructure и получает явный injected
+`random.Random`. Все individual rolls создаются только этим instance; вызовы
+module-global `random.randint`, `random.choice`, `random.seed` и другая
+uncontrolled gameplay randomness запрещены. Domain не импортирует stdlib
+`random` и не зависит от Infrastructure RNG implementation.
+
+Внутреннее состояние RNG не является authoritative Campaign, Creature или
+World State. Dice Engine не является State owner, не мутирует State, не
+обращается к State Store, не создаёт Events и не сохраняет RNG state. Seed и
+возможный будущий replay относятся к Infrastructure/composition concerns, а не
+к `DiceEngine.roll()`.
 
 ---
 
@@ -1240,9 +1299,9 @@ class ResolutionResult:
 
   "rolls": [
     {
-      "expression": "1d20+7",
+      "expression": "1d20",
       "rolls": [14],
-      "total": 21
+      "total": 14
     }
   ],
 
@@ -1267,6 +1326,9 @@ class ResolutionResult:
   "errors": []
 }
 ```
+
+Modifiers в будущих rules применяются на уровне rule resolution. Они не
+расширяют strict Phase 1 `DiceEngine` parser и не входят в `DiceRoll.total`.
 
 ---
 

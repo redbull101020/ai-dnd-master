@@ -269,3 +269,68 @@ contracts.
   schema versioning.
 - Creature, World, Combat, Quest, Inventory, Equipment, Event Log, AI State,
   and all other cross-domain State.
+
+## 2026-08-22 — Phase 1 Dice Engine slice
+
+### Initial state
+
+- Fetched `origin/main` and created `codex/feat/phase-1-dice-engine` directly
+  from commit `771cf1d6e1aa43524f77662eda5e1fa4c02f8358` with a clean working tree.
+- All earlier Phase 1 data-contract items were implemented. Architecture
+  required gameplay randomness to pass through `DiceEngine`, but the Domain
+  port, result Value Object, strict notation, parser ownership, and production
+  RNG injection contract were not yet concrete.
+
+### Implemented
+
+- Added immutable `DiceRoll` with exactly `expression`, individual tuple
+  `rolls`, and `total`, plus its minimal intrinsic type, positivity, non-empty,
+  and sum invariants.
+- Added the Domain `DiceEngine` `Protocol` with
+  `roll(expression: str) -> DiceRoll`.
+- Added Infrastructure `PythonDiceEngine` with private strict lowercase `NdM`
+  parsing and an injected `random.Random`; every individual result uses that
+  controlled instance.
+- Added deterministic Domain and Infrastructure tests for Value Object
+  invariants, frozen/tuple semantics, valid notation including non-standard
+  sides, invalid/unsupported expressions, exact input types, same-seed
+  sequences, injected RNG state, and isolation from module-global RNG state.
+- Added canonical Architecture §1.7.1, clarified the future
+  `ResolutionResult` example, appended DEC-0011, and marked only Dice Engine
+  complete in the Phase 1 Roadmap.
+
+### Changed files
+
+- `src/dnd_engine/domain/value_objects/dice_roll.py` — immutable `DiceRoll`.
+- `src/dnd_engine/domain/services/dice.py` — Domain `DiceEngine` port.
+- `src/dnd_engine/infrastructure/random/dice.py` — injected Python RNG adapter.
+- `tests/domain/test_dice_roll.py` — Domain Value Object tests.
+- `tests/infrastructure/test_dice_engine.py` — adapter, notation, and
+  determinism tests.
+- `docs/ARCHITECTURE.md` — canonical minimal Dice Engine contract.
+- `docs/DECISIONS.md` — append-only DEC-0011.
+- `docs/ROADMAP.md` — marked only Dice Engine complete in Phase 1.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Verification
+
+- The repository `.venv` launcher referenced an unavailable Python
+  installation. Tests used bundled Python 3.12.13 with the existing temporary
+  pytest 9.1.1 dependency directory outside the repository and a test-only
+  `PYTHONPATH`; no project dependency was added.
+- Narrow Dice Engine suite with the cache provider disabled: 53 tests passed.
+- Full pytest suite with the cache provider disabled: 139 tests passed.
+- `git diff --check` passed; Git emitted only existing Windows checkout
+  warnings that LF will be converted to CRLF if Git rewrites changed Markdown
+  files.
+- No formatter, linter, or type checker is configured in the repository.
+
+### Intentionally deferred
+
+- Event model, Event emission, State Store, State mutation, persistence,
+  serialization, RNG state persistence, and replay subsystem.
+- `ResolutionResult`, ability checks, saving throws, attacks, damage, healing,
+  modifiers, advantage/disadvantage, critical logic, and all other Phase 2
+  gameplay rules.
+- Full dice DSL, parser packages, production fake framework, API/security
+  resource limits, and package-level re-export APIs.
