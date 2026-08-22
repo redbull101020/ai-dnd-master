@@ -91,3 +91,12 @@ This append-only log records rationale and history. `ARCHITECTURE.md = current c
 - **Decision:** Phase 1 `CampaignState` is mutable and contains exactly `id: str`, `ruleset_id: str`, and `ruleset_version: str`. Other State domains are not embedded in it. World/game time remains exclusively in World State. Concrete fields for campaign metadata, session state, and lifecycle are deferred until corresponding use cases and contracts exist.
 - **Consequences:** Campaign State remains small while exposing campaign identity and an explicit ruleset identity/version reference. State Ownership boundaries remain intact. A persistence snapshot may aggregate State domains separately without transferring their ownership to `CampaignState`. Future extensions require a concrete use case and canonical contract update.
 - **Affected contracts/files:** `docs/ARCHITECTURE.md` §3.2.2; `src/dnd_engine/domain/state/campaign.py`.
+
+## DEC-0011 — Minimal Phase 1 Dice Engine contract
+
+- **Date:** 2026-08-22
+- **Status:** Accepted
+- **Context:** Phase 1 reached Dice Engine. Architecture already required all gameplay randomness to pass through `DiceEngine` and showed `roll("1d20")`, but the exact Domain API, result type, minimal parsing ownership, and RNG injection contract were not canonical.
+- **Decision:** `DiceEngine` is a Domain `Protocol` with `roll(expression: str) -> DiceRoll`. Immutable `DiceRoll` contains the accepted `expression`, individual `rolls`, and their `total`. Phase 1 accepts strict simple lowercase `NdM` only; modifiers and a full DSL are deferred. Parsing remains private to the Infrastructure implementation. Production `PythonDiceEngine` receives an injected `random.Random`; Domain does not depend on Python RNG implementation or Infrastructure. RNG internal state is not authoritative campaign State.
+- **Consequences:** Rules can receive deterministic scripted `DiceEngine` implementations, production randomness remains replaceable, and equivalent controlled RNG sources can reproduce sequences. Individual rolls remain available for debugging and future resolution/replay work. No Phase 2 rules or replay subsystem are introduced.
+- **Affected contracts/files:** `docs/ARCHITECTURE.md` §1.7.1; `src/dnd_engine/domain/services/dice.py`; `src/dnd_engine/domain/value_objects/dice_roll.py`; `src/dnd_engine/infrastructure/random/dice.py`.

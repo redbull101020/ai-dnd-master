@@ -50,7 +50,7 @@
 * [x] `ItemDefinition`
 * [x] `WeaponDefinition`
 * [x] `MonsterDefinition`
-* [ ] Dice Engine
+* [x] Dice Engine
 * [ ] Event model
 * [ ] State Store
 
