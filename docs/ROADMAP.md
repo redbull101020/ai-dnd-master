@@ -46,7 +46,7 @@
 
 * [ ] `CampaignState`
 * [ ] `CreatureState`
-* [ ] `AbilityScores`
+* [x] `AbilityScores`
 * [ ] `ItemDefinition`
 * [ ] `WeaponDefinition`
 * [ ] `MonsterDefinition`
