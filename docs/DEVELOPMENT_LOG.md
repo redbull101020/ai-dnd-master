@@ -97,3 +97,67 @@ contracts.
 - `StateStore` / persistence.
 - Serialization, registries, factories, repositories, and derived rule
   calculations.
+
+## 2026-08-22 — Phase 1 core Definition slice
+
+### Initial state
+
+- `AbilityScores` and the base `Definition` were implemented, but the three
+  minimal Phase 1 Definition contracts remained documented-only Roadmap items.
+- `WeaponDefinition.damage_type` was still documented as `str`, with the exact
+  Domain type and closed set intentionally deferred until code implementation.
+
+### Implemented
+
+- Added the closed 13-value `DamageType` Domain `StrEnum`.
+- Added immutable `ItemDefinition`, `WeaponDefinition`, and
+  `MonsterDefinition` dataclasses using the existing base `Definition` and
+  `AbilityScores` contracts.
+- Added deterministic unit tests covering exact members, values, dataclass
+  fields, inheritance, frozen semantics, tuple properties, and exclusion of
+  runtime State fields.
+
+### Canonical contract updates
+
+- `WeaponDefinition.damage_type` now uses `DamageType` rather than arbitrary
+  `str`; its canonical lowercase domain/serialized values are documented.
+- DEC-0009 records the closed `DamageType` decision without introducing damage
+  calculation, resistance, immunity, or vulnerability mechanics.
+- Only `ItemDefinition`, `WeaponDefinition`, and `MonsterDefinition` were marked
+  complete in the Phase 1 Roadmap.
+
+### Changed files
+
+- `src/dnd_engine/domain/value_objects/damage_type.py` — `DamageType`.
+- `src/dnd_engine/domain/definitions/item.py` — `ItemDefinition`.
+- `src/dnd_engine/domain/definitions/weapon.py` — `WeaponDefinition`.
+- `src/dnd_engine/domain/definitions/monster.py` — `MonsterDefinition`.
+- `tests/domain/test_damage_type.py` — `DamageType` unit tests.
+- `tests/domain/test_item_definition.py` — `ItemDefinition` unit tests.
+- `tests/domain/test_weapon_definition.py` — `WeaponDefinition` unit tests.
+- `tests/domain/test_monster_definition.py` — `MonsterDefinition` unit tests.
+- `docs/ARCHITECTURE.md` — canonical `DamageType` and updated weapon contract.
+- `docs/DECISIONS.md` — append-only DEC-0009.
+- `docs/ROADMAP.md` — three completed Definition items.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Verification
+
+- Fetched `origin/main` and created `feat/phase-1-core-definitions` directly at
+  `7b882c5d75fe908dcdd32fc35086a28bd0062619`.
+- The PATH `python` command and pre-existing `.venv` remained unavailable. Tests
+  used bundled Python 3.12.13 with the existing temporary pytest 9.1.1
+  dependency directory outside the repository.
+- Narrow new Domain suite: 22 tests passed.
+- Full pytest suite with the cache provider disabled: 57 tests passed.
+- `git diff --check` passed; Git emitted only the existing Windows checkout
+  warnings that LF would be converted to CRLF if Git rewrites changed files.
+
+### Intentionally deferred
+
+- `CreatureState`, `CampaignState`, Dice Engine, Event model, and State Store.
+- Serializers, persistence, registries, factories, repositories, and ruleset
+  datasets.
+- Dice parsing, attack and damage calculations, HP changes, and weapon
+  mechanics.
+- Resistance, immunity, vulnerability, and runtime inventory/equipment State.
