@@ -44,7 +44,7 @@
 
 > Контракты: [§3.1 Definition](ARCHITECTURE.md#31-definition-contract) · [§3.2 State](ARCHITECTURE.md#32-state-contract) · [§4 ID System](ARCHITECTURE.md#4-id-system) · [§8 Event Envelope](ARCHITECTURE.md#8-event-envelope) · [§12.10 Event Serialization](ARCHITECTURE.md#1210-event-serialization)
 
-* [ ] `CampaignState`
+* [x] `CampaignState`
 * [x] `CreatureState`
 * [x] `AbilityScores`
 * [x] `ItemDefinition`

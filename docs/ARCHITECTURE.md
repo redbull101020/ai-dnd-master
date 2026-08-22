@@ -25,6 +25,7 @@
 | Контракт AbilityScores | §1.2.1 |
 | Минимальные Phase 1 Definitions | §3.1.1 |
 | Минимальный CreatureState | §3.2.1 |
+| Минимальный CampaignState | §3.2.2 |
 | Схема Command Envelope | §9.1 |
 | Поля Command Envelope | §9.2 |
 | Схема Event Envelope | §8.1 |
@@ -67,6 +68,7 @@
     * [3.1.1. Minimal Phase 1 Definition Contracts](#311-minimal-phase-1-definition-contracts)
   * [3.2. State Contract](#32-state-contract)
     * [3.2.1. Minimal Phase 1 CreatureState Contract](#321-minimal-phase-1-creaturestate-contract)
+    * [3.2.2. Minimal Phase 1 CampaignState Contract](#322-minimal-phase-1-campaignstate-contract)
   * [3.3. Command Contract](#33-command-contract)
   * [3.4. Event Contract](#34-event-contract)
   * [3.5. ResolutionResult Contract](#35-resolutionresult-contract)
@@ -959,6 +961,37 @@ persisted
 Definition → immutable
 State      → mutable
 ```
+
+---
+
+#### 3.2.2. Minimal Phase 1 CampaignState Contract
+
+Каноническая Python-семантика:
+
+```python
+@dataclass
+class CampaignState:
+    id: str
+    ruleset_id: str
+    ruleset_version: str
+```
+
+`CampaignState` — mutable campaign-scoped State; owner — Campaign Engine /
+CampaignStateManager. `id` является runtime Campaign ID. `ruleset_id` и
+`ruleset_version` являются отдельными строковыми полями и вместе образуют
+минимальную ссылку на Ruleset identity и его версию.
+
+Минимальная Phase 1 модель не содержит другие State domains. В частности,
+`CreatureState`, `WorldState`, `CombatState`, `QuestState`, `InventoryState` и
+`EquipmentState` не становятся полями или вложенными коллекциями
+`CampaignState`. `WorldState`
+остаётся единственным authoritative owner world/game time.
+
+Global campaign metadata, session state и campaign lifecycle концептуально
+относятся к Campaign ownership, но их concrete fields отложены до появления
+соответствующих use cases и канонических контрактов. Persistence snapshot может
+агрегировать несколько State domains отдельно; snapshot containment не меняет
+State Ownership и не превращает `CampaignState` в aggregate или God Object.
 
 ---
 
