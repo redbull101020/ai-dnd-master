@@ -334,3 +334,79 @@ contracts.
   gameplay rules.
 - Full dice DSL, parser packages, production fake framework, API/security
   resource limits, and package-level re-export APIs.
+
+## 2026-08-23 — Phase 1 Event model slice
+
+### Initial state
+
+- Fetched `origin/main` and created `codex/feat/phase-1-event-model` directly
+  from the audited commit `c1b07eedceed3f81334c087299583f1399933e16`
+  with a clean worktree; current `origin/main` matched the approved Event-model
+  task baseline.
+- The Event envelope was canonical documentation, but no Domain `GameEvent`,
+  Event codec, or Event tests existed. The Domain timestamp type and recursive
+  payload immutability semantics were not yet explicit.
+
+### Implemented
+
+- Added one frozen generic `GameEvent` with exactly the nine canonical Domain
+  fields, an explicit timezone-aware UTC `datetime`, and intrinsic field/value
+  validation without external ID, entity, registry, or gameplay checks.
+- Added defensive recursive payload freezing for JSON-compatible values:
+  mappings are copied into immutable mapping proxies and arrays into tuples.
+- Added a pure `EventSerializer` for the exact camelCase Event envelope,
+  canonical UTC `Z` timestamps, normal JSON objects/arrays, nullable-field
+  behavior, strict required/unknown envelope fields, and immutable round trips.
+- Added deterministic Domain and Infrastructure tests for exact shape, frozen
+  and deep-immutable semantics, timestamp constraints, JSON payload validation,
+  exact serialization, nullable fields, malformed input, and round trips.
+
+### Canonical contract updates
+
+- Clarified that Phase 1 has one `GameEvent` rather than separate Domain Event
+  and envelope types; timestamp is explicit aware UTC `datetime`, payload is
+  defensively immutable, and `EventSerializer` is a pure boundary.
+- Appended DEC-0012 and marked only Event model complete in Phase 1.
+
+### Changed files
+
+- `src/dnd_engine/domain/events/game_event.py` — immutable generic Event model.
+- `src/dnd_engine/infrastructure/persistence/json/event_serializer.py` — pure
+  canonical Event codec.
+- `tests/domain/test_game_event.py` — Domain Event contract tests.
+- `tests/infrastructure/test_event_serializer.py` — Event codec tests.
+- `docs/ARCHITECTURE.md` — approved Event contract clarifications.
+- `docs/DECISIONS.md` — append-only DEC-0012.
+- `docs/ROADMAP.md` — marked only Event model complete.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Verification
+
+- The repository `.venv` launcher was absent. Tests used bundled Python
+  3.12.13 with pytest 9.1.1 installed into a temporary directory outside the
+  repository and `src` supplied through a test-only `PYTHONPATH`; no project
+  dependency was added.
+- Focused Event suites with the cache provider disabled: 41 tests passed.
+- Full pytest suite with the cache provider disabled: 180 tests passed.
+- `git diff --check` passed; Git emitted only the existing Windows checkout
+  warnings that LF will be converted to CRLF if it rewrites changed Markdown.
+- No formatter, linter, or type checker is configured in the repository.
+
+### Intentionally deferred
+
+- State Store, Event Store, filesystem/JSONL persistence, Event ID and sequence
+  allocation, State mutation/application, replay, and Event Sourcing machinery.
+- `ResolutionResult`, concrete gameplay Events and payload types, Command/rule
+  resolvers, and all Phase 2 gameplay rules.
+
+## 2026-08-23 — Phase 1 Event timestamp review fix
+
+- Tightened Event timestamp deserialization by requiring the parsed UTC
+  `datetime` to serialize back to the input's exact canonical Event format.
+- Added deterministic regressions for non-canonical ISO 8601 variants,
+  serializer-produced fractional microseconds, and explicit JSON null actor and
+  causation fields.
+- Event serializer suite: 26 tests passed; Domain Event suite: 22 tests passed;
+  full pytest suite: 187 tests passed. Tests used bundled Python 3.12.13 and the
+  existing temporary pytest 9.1.1 installation outside the repository.
+- No Architecture, Decision Log, or Roadmap contract/status change was needed.

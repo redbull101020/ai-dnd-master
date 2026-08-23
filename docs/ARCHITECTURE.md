@@ -1197,14 +1197,24 @@ class GameEvent:
 
     campaign_id: str
 
-    timestamp: str
+    timestamp: datetime
 
     actor_id: str | None
 
     caused_by: str | None
 
-    payload: dict
+    payload: Mapping[str, JSONValue]
 ```
+
+В Phase 1 используется один generic immutable Domain-тип `GameEvent`, который
+соответствует каноническому Event Envelope. Отдельный Python-тип
+`EventEnvelope` не вводится. `timestamp` и `event_id` передаются при создании
+явно; `GameEvent` не читает системные часы и не выделяет ID.
+
+`payload` содержит только JSON-совместимые значения и при создании Event
+рекурсивно копируется в неизменяемое представление: mappings становятся
+неизменяемыми mappings, а list/tuple — tuple. Поэтому исходные mutable
+коллекции и сохранённый payload не могут изменить опубликованный Event.
 
 Пример:
 
@@ -2358,6 +2368,11 @@ Event из другой кампании не может изменить State 
 
 `timestamp` описывает момент создания Event в системе.
 
+В Domain это явно переданный timezone-aware UTC `datetime`. `GameEvent` не
+вызывает системные часы; naive и non-UTC значения не принимаются. При
+сериализации timestamp представляется как ISO 8601 UTC с каноническим суффиксом
+`Z`.
+
 Формат:
 
 ```text
@@ -2389,6 +2404,10 @@ ISO 8601 / UTC
 
 `timestamp` не заменяет `GameTime`.
 
+Это wall-clock время создания Event, независимое от игрового/world time. Оно
+также не является ключом порядка Event: порядок задаётся Event Store sequence
+и монотонными Event ID согласно §12.11.
+
 ---
 
 ### 8.8. `actorId`
@@ -2413,6 +2432,10 @@ system
 ```
 
 или используется специальный системный actor, если это требуется конкретной подсистеме.
+
+Канонический serializer всегда выводит `actorId`, используя JSON `null` для
+Domain `None`. При десериализации отсутствующее поле и явный `null` означают
+`None` только для этого nullable поля Event Envelope.
 
 ---
 
@@ -2460,6 +2483,10 @@ event_104 CreatureDefeated
 
 Это позволяет восстановить цепочку причин.
 
+Канонический serializer всегда выводит `causedBy`, используя JSON `null` для
+Domain `None`. При десериализации отсутствующее поле и явный `null` означают
+`None` только для этого nullable поля Event Envelope.
+
 ---
 
 ### 8.10. `payload`
@@ -2492,6 +2519,11 @@ actorId
 ```
 
 Они принадлежат Envelope.
+
+Phase 1 сохраняет payload generic и не вводит типы payload для конкретных
+gameplay Events. Domain payload имеет defensive recursively immutable
+JSON-like semantics; преобразование неизменяемых mappings/tuples обратно в
+обычные JSON objects/arrays выполняется только на serialization boundary.
 
 ---
 
@@ -4187,6 +4219,16 @@ debug logs
 
 ### 12.10. Event Serialization
 
+Phase 1 `EventSerializer` является чистой границей между `GameEvent` и
+каноническим JSON-совместимым Event Envelope: он не выполняет filesystem I/O,
+не добавляет Event в лог и не применяет Event к State. Domain timestamp
+сериализуется в ISO 8601 UTC с `Z`; nullable `actorId` и `causedBy` всегда
+присутствуют в output и имеют значение `null` для Domain `None`.
+
+EventStore, выделение Event ID/sequence, JSONL append, replay, применение Event
+к State и concrete gameplay Event types находятся вне Phase 1 Event model и
+реализуются отдельными будущими slices.
+
 Event Log является append-only.
 
 Формат:
@@ -4447,6 +4489,7 @@ JSON:
 ```text
 ISO 8601
 UTC
+canonical Z suffix
 ```
 
 Пример:
