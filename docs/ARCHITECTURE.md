@@ -1054,6 +1054,30 @@ State Ownership и не превращает `CampaignState` в aggregate или
 
 ---
 
+#### 3.2.3. Minimal Phase 1 StateSnapshot Contract
+
+Каноническая Python-семантика:
+
+```python
+@dataclass(frozen=True)
+class StateSnapshot:
+    campaign: CampaignState
+    creatures: tuple[CreatureState, ...]
+```
+
+`StateSnapshot` — persistence grouping текущих State Owner objects для одного
+snapshot, а не новый gameplay State Owner. `CampaignState` сохраняет только
+Campaign ownership, а каждый `CreatureState` — Creature ownership; containment
+в snapshot не разрешает cross-domain mutation и не передаёт Creature ownership
+кампании.
+
+Phase 1 snapshot допускает ноль, один или несколько `CreatureState`. Runtime
+ID существ внутри одного snapshot уникальны. Snapshot не имеет собственного
+runtime ID, revision или optimistic-concurrency version и не содержит Event
+Log, Commands, AI context либо State из будущих фаз.
+
+---
+
 #### State lifecycle
 
 ```mermaid
@@ -4188,29 +4212,100 @@ State snapshot должен быть достаточным для восста�
 state.json
      │
      ▼
-Deserialize
+StateSerializer
      │
      ▼
-CampaignState
+StateSnapshot
 ```
 
-`state.json` обязан содержать всё необходимое для восстановления:
+Phase 1 `StateStore` — snapshot-only Domain port:
+
+```python
+class StateStore(Protocol):
+    def load(self, campaign_id: str) -> StateSnapshot: ...
+    def save(self, snapshot: StateSnapshot) -> None: ...
+```
+
+Минимальная стабильная boundary error hierarchy:
 
 ```text
-current world state
-current characters
-current NPC state
-current quests
-active combat
-current game time
-world flags
+StateStoreError
+├── StateNotFoundError
+└── InvalidStateSnapshotError
 ```
 
-Но не обязан содержать:
+`StateSerializer` является чистой Infrastructure-границей между
+`StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
+filesystem I/O. Каноническая Phase 1 schema:
+
+```json
+{
+  "schemaVersion": 1,
+  "campaignId": "campaign_001",
+  "state": {
+    "campaign": {
+      "id": "campaign_001",
+      "rulesetId": "dnd_5e",
+      "rulesetVersion": "5.2.1"
+    },
+    "creatures": [
+      {
+        "id": "monster_001",
+        "definitionId": "goblin",
+        "abilityScores": {
+          "strength": 8,
+          "dexterity": 14,
+          "constitution": 10,
+          "intelligence": 10,
+          "wisdom": 8,
+          "charisma": 8
+        },
+        "currentHp": 12,
+        "maxHp": 20
+      }
+    ]
+  }
+}
+```
+
+JSON использует camelCase. Deserialization требует exact `schemaVersion: 1`,
+все required fields и точные JSON primitive/container types; unknown fields,
+defaults, type coercion, несовпадение outer `campaignId` с
+`state.campaign.id`, невалидные Domain values и duplicate creature IDs
+запрещены. Serialization всегда сортирует creatures по runtime ID.
+
+Phase 1 `FilesystemStateStore` хранит snapshot в:
+
+```text
+<campaigns-root>/<campaign_id>/state.json
+```
+
+Adapter получает campaigns root как `Path`, использует UTF-8 и deterministic
+JSON formatting с final newline. Save сначала полностью сериализует snapshot,
+затем пишет temporary file в той же campaign directory, закрывает его и
+атомарно заменяет `state.json` через `os.replace`; при ошибке temporary file
+удаляется best-effort. Это single-file replacement, а не гарантия durability
+для нескольких файлов или после любого crash.
+
+Phase 1 использует single-writer assumption. `schemaVersion` описывает storage
+schema и не является State revision; optimistic locking, revision fields и
+file/process/distributed locks отсутствуют.
+
+`StateStore` не читает и не пишет `events/events.jsonl`, не использует
+`EventSerializer`, не генерирует и не применяет Events и не выполняет replay.
+EventStore, replay и transaction ordering между Event persistence и State
+projection отложены до отдельного будущего решения.
+
+Текущая Phase 1 schema содержит только уже реализованные `CampaignState` и
+collection `CreatureState`. По мере появления следующих State domains snapshot
+schema должна расширяться отдельным версионируемым контрактом, не превращая
+`CampaignState` в God Object.
+
+Snapshot не содержит:
 
 ```text
 полную историю событий
-LLM prompts
+LLM prompts или AI context
 transient HTTP data
 debug logs
 ```
@@ -4351,6 +4446,10 @@ Command Schema Version
 ```
 
 — четыре независимых механизма версионирования.
+
+В Phase 1 поддерживается только exact integer `schemaVersion = 1`; `bool` не
+считается integer version. Это версия storage schema, а не revision текущего
+State и не механизм concurrency control.
 
 ---
 
