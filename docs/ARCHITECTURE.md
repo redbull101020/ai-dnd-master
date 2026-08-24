@@ -29,6 +29,7 @@
 | Минимальный Dice Engine | §1.7.1 |
 | Схема Command Envelope | §9.1 |
 | Поля Command Envelope | §9.2 |
+| Python Command boundary | §3.3 |
 | Схема Event Envelope | §8.1 |
 | Поля Event Envelope | §8.2 |
 | Формат ID любой сущности | §4.13 |
@@ -41,6 +42,8 @@
 | Разница Command и Event | §9.8 |
 | Порядок применения событий | §12.11 |
 | Коды ошибок | §3.9 |
+| Семантика ResolutionResult | §3.5 |
+| Подготовительный контракт Ability Check | §3.10 |
 | Версионирование схем | §12.13 |
 
 ### Оглавление / Table of contents
@@ -74,10 +77,11 @@
   * [3.3. Command Contract](#33-command-contract)
   * [3.4. Event Contract](#34-event-contract)
   * [3.5. ResolutionResult Contract](#35-resolutionresult-contract)
-  * [3.6. GameContext Contract](#36-gamecontext-contract)
+  * [3.6. Shared orchestration abstractions are deferred](#36-shared-orchestration-abstractions-are-deferred)
   * [3.7. Общий жизненный цикл игрового действия / Action Lifecycle](#37-общий-жизненный-цикл-игрового-действия--action-lifecycle)
   * [3.8. Atomicity](#38-atomicity)
   * [3.9. Error Contract](#39-error-contract)
+  * [3.10. Minimal Phase 2 Ability Check preparation](#310-minimal-phase-2-ability-check-preparation)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -226,11 +230,16 @@ SQL
 конкретного LLM-провайдера
 ```
 
-Domain Engine должен работать как обычный Python-код:
+Domain rules и concrete resolvers должны работать как обычный Python-код:
 
-```python
-result = engine.execute(command)
+```text
+Application handler
+        ↓
+concrete Domain resolver
 ```
+
+Общий `GameEngine.execute(...)` API не является prerequisite для Phase 2 и пока
+не реализован (§3.6).
 
 #### 1.2.1. AbilityScores Value Object
 
@@ -595,7 +604,7 @@ AttackCommand
 AttackCommandHandler
      │
      ▼
-GameEngine
+Domain resolver
 ```
 
 Application Layer отвечает на вопрос:
@@ -605,6 +614,11 @@ Application Layer отвечает на вопрос:
 Domain отвечает:
 
 > **Что по правилам должно произойти?**
+
+Concrete Application handler/use case отвечает за загрузку нужного State,
+поиск actor/target, вызов stateless Domain resolver, создание Event envelope
+metadata и сборку `ResolutionResult`. Только state-mutating use case сохраняет
+обновлённый snapshot через `StateStore`; read-only resolution save не вызывает.
 
 ---
 
@@ -645,6 +659,11 @@ PostgreSQL
 JSON files
 LLM APIs
 ```
+
+Domain resolver принимает уже валидированную concrete typed Command и нужные
+Domain objects/ports. Он не загружает и не сохраняет State, не создаёт Event ID,
+не читает clock, не сериализует и не импортирует Application или
+Infrastructure.
 
 ---
 
@@ -717,7 +736,7 @@ flowchart LR
     end
 
     subgraph Domain
-        Engine[Game Engine]
+        Resolvers[Resolvers / Domain Services]
         Rules[Rules]
         State[State]
         Commands[Commands]
@@ -738,18 +757,18 @@ flowchart LR
     WS --> Handler
 
     Handler --> Service
-    Service --> Engine
+    Service --> Resolvers
 
-    Engine --> Rules
-    Engine --> State
-    Engine --> Commands
-    Engine --> Events
+    Resolvers --> Rules
+    Resolvers --> State
+    Resolvers --> Commands
+    Resolvers --> Events
     Rules --> Definitions
 
     State --> Persistence
     Events --> Persistence
 
-    Engine --> RNG
+    Resolvers --> RNG
     Service --> LLM
 ```
 
@@ -765,12 +784,6 @@ State
 Command
 Event
 ResolutionResult
-```
-
-Дополнительно используется:
-
-```text
-GameContext
 ```
 
 Контракты определяют не только формат данных, но и **жизненный цикл**.
@@ -1129,19 +1142,7 @@ State mutation
 
 Command — намерение выполнить игровое действие.
 
-Базовая схема:
-
-```python
-@dataclass
-class Command:
-    command_id: str
-    type: str
-    campaign_id: str
-    actor_id: str
-    payload: dict
-```
-
-JSON:
+Канонический внешний/логический формат остаётся Command Envelope из §9:
 
 ```json
 {
@@ -1155,6 +1156,49 @@ JSON:
   }
 }
 ```
+
+Этот JSON/boundary contract и валидированное Python-представление описывают
+разные стороны одной команды:
+
+```text
+serialized / boundary representation
+        ↓ validation and mapping
+canonical Command Envelope
+        ↓
+validated application/domain representation
+        ↓
+concrete typed immutable Command
+```
+
+Gameplay Python Commands являются concrete frozen dataclasses с typed payload и
+фиксированным `type`. Generic Python `Command` base class с
+`payload: dict[str, Any]` не является gameplay contract. Generic inheritance
+hierarchy на этом этапе не вводится.
+
+Первый planned concrete contract:
+
+```python
+@dataclass(frozen=True)
+class AbilityCheckPayload:
+    ability: Ability
+    dc: int
+
+
+@dataclass(frozen=True)
+class AbilityCheckCommand:
+    command_id: str
+    campaign_id: str
+    actor_id: str
+    payload: AbilityCheckPayload
+    type: Literal["AbilityCheckCommand"] = field(
+        init=False,
+        default="AbilityCheckCommand",
+    )
+```
+
+`actor_id` обязателен. `payload` не содержит arbitrary dictionary внутри
+rule-resolution boundary. Эти классы являются Phase 2 preparation contract и
+ещё не реализованы.
 
 ---
 
@@ -1305,84 +1349,78 @@ DamageCorrected(-3)
 
 ### 3.5. ResolutionResult Contract
 
-ResolutionResult — результат одной операции Engine.
+`ResolutionResult[T]` — immutable typed результат обработки одной Command.
 
 Он не является State и не является Event.
 
 ```python
-@dataclass
-class ResolutionResult:
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class ResolutionResult(Generic[T]):
     success: bool
-
     command_id: str
-
-    rolls: list
-    events: list
-
-    state_changes: list
-
-    errors: list
+    outcome: T | None
+    rolls: tuple[DiceRoll, ...]
+    events: tuple[GameEvent, ...]
+    errors: tuple[EngineError, ...]
 ```
 
-Пример:
+`success` означает, что command/application processing и rule resolution
+успешно завершены. Это **не** gameplay outcome. Например, будущая проваленная
+Ability Check представляется так:
 
-```json
-{
-  "success": true,
-  "commandId": "command_000001",
-
-  "rolls": [
-    {
-      "expression": "1d20",
-      "rolls": [14],
-      "total": 14
-    }
-  ],
-
-  "events": [
-    {
-      "type": "AttackHit"
-    },
-    {
-      "type": "DamageApplied"
-    }
-  ],
-
-  "stateChanges": [
-    {
-      "entityId": "monster_001",
-      "field": "currentHp",
-      "from": 20,
-      "to": 10
-    }
-  ],
-
-  "errors": []
-}
+```text
+ResolutionResult.success is True
+outcome.succeeded is False
+errors == ()
 ```
+
+Command успешно обработана, хотя персонаж провалил проверку. Ожидаемая
+application/domain processing failure имеет другую форму:
+
+```text
+ResolutionResult.success is False
+outcome is None
+events == ()
+errors != ()
+```
+
+Отдельного concrete `StateChange` contract пока нет, поэтому
+`state_changes` не является полем `ResolutionResult`. Authoritative State
+mutation pipeline остаётся Event-driven: Events применяются владельцами State.
+Необходимость отдельного representation рассматривается при первом concrete
+state-mutating Phase 2 mechanic, а не вводится placeholder abstraction заранее.
 
 Modifiers в будущих rules применяются на уровне rule resolution. Они не
 расширяют strict Phase 1 `DiceEngine` parser и не входят в `DiceRoll.total`.
 
 ---
 
-### 3.6. GameContext Contract
+### 3.6. Shared orchestration abstractions are deferred
 
-GameContext передаёт Engine всё необходимое для resolution.
+Для начала Phase 2 не требуются concrete `GameEngine` или `GameContext`.
+Первый vertical slice использует explicit Application handler/use case и
+прямой вызов concrete Domain resolver.
 
-```python
-@dataclass
-class GameContext:
-    campaign_id: str
-    state_store: StateStore
-    definitions: DefinitionRegistry
-    dice: DiceEngine
-    event_bus: EventBus
+Не вводятся заранее:
+
+```text
+GameEngine.execute(...)
+CommandBus
+EventBus
+generic resolver registry
+generic handler registry
+dispatcher
+transaction coordinator
+GameContext implementation
 ```
 
-GameContext не является глобальным State.
-
-Он является **runtime dependency container конкретной операции**.
+Общая Engine orchestration abstraction появляется только тогда, когда несколько
+concrete Commands выявят реально повторяющееся поведение. Engine остаётся
+системой слоёв и модулей, а не одним монолитным классом или framework,
+спроектированным по одному use case.
 
 ---
 
@@ -1425,6 +1463,9 @@ flowchart TD
     Project --> Result
     Result --> Context
 ```
+
+Для read-only Command этап State projection является no-op: Event всё ещё может
+фиксировать domain fact, но `StateStore.save()` не вызывается.
 
 ---
 
@@ -1470,7 +1511,37 @@ Command
 
 ### 3.9. Error Contract
 
-Ошибки Engine также должны быть структурированными.
+Ожидаемые command/application/domain failures имеют минимальное structured
+Domain representation:
+
+```python
+class ErrorCode(StrEnum):
+    INVALID_COMMAND = "INVALID_COMMAND"
+    ENTITY_NOT_FOUND = "ENTITY_NOT_FOUND"
+    DEFINITION_NOT_FOUND = "DEFINITION_NOT_FOUND"
+    ACTION_NOT_AVAILABLE = "ACTION_NOT_AVAILABLE"
+    INVALID_TARGET = "INVALID_TARGET"
+    OUT_OF_RANGE = "OUT_OF_RANGE"
+    NOT_VISIBLE = "NOT_VISIBLE"
+    RESOURCE_NOT_AVAILABLE = "RESOURCE_NOT_AVAILABLE"
+    INVALID_STATE = "INVALID_STATE"
+    RULE_VIOLATION = "RULE_VIOLATION"
+
+
+@dataclass(frozen=True)
+class EngineError:
+    code: ErrorCode
+    message: str
+    entity_id: str | None = None
+    field: str | None = None
+```
+
+`EngineError` описывает ожидаемую structured processing failure и входит в
+`ResolutionResult.errors`. Большая exception hierarchy не создаётся.
+Intrinsic invalid construction Python object может использовать `TypeError` и
+`ValueError`. Infrastructure и programming failures не преобразуются
+автоматически в gameplay errors. `ErrorCode` и `EngineError` пока являются
+Phase 2 preparation contract и ещё не реализованы.
 
 Пример:
 
@@ -1499,6 +1570,121 @@ RULE_VIOLATION
 ```
 
 AI должен получать `code`, а не пытаться парсить произвольный текст ошибки.
+
+---
+
+### 3.10. Minimal Phase 2 Ability Check preparation
+
+Первый рекомендуемый Phase 2 vertical slice, ещё не реализованный:
+
+```text
+AbilityCheckCommand
+        ↓
+Application validation / State lookup
+        ↓
+CreatureState
+        ↓
+resolve_ability_check(...)
+        ↓
+AbilityCheckResult
+        ↓
+AbilityCheckResolved
+        ↓
+ResolutionResult[AbilityCheckResult]
+```
+
+Canonical closed ability identifier:
+
+```python
+class Ability(StrEnum):
+    STRENGTH = "strength"
+    DEXTERITY = "dexterity"
+    CONSTITUTION = "constitution"
+    INTELLIGENCE = "intelligence"
+    WISDOM = "wisdom"
+    CHARISMA = "charisma"
+```
+
+`Ability` переиспользуется будущими Ability Checks, Saving Throws и Skills и
+безопаснее arbitrary `str`. Enum пока не реализован.
+
+Ability modifier является pure derived Domain rule:
+
+```text
+ability_modifier(score) = (score - 10) // 2
+```
+
+Canonical `AbilityScores` range остаётся `1..30`. Modifier не хранится в
+`AbilityScores` или State; `AbilityScores` остаётся Phase 1 Value Object, а
+derived calculation принадлежит Rule Engine rules.
+
+`dc` является exact `int` на concrete validated Command boundary (`bool` не
+является integer DC). Arbitrary hard range вроде `5..30` не вводится: значения
+вне common recommended DCs сами по себе не являются основанием для rejection.
+
+Future resolver boundary:
+
+```python
+def resolve_ability_check(
+    command: AbilityCheckCommand,
+    creature: CreatureState,
+    dice: DiceEngine,
+) -> AbilityCheckResult:
+    ...
+```
+
+Resolver выполняет только rule resolution, не мутирует `CreatureState` и делает
+ровно один `dice.roll("1d20")`. Он не загружает State, не знает `StateStore`, не
+сохраняет State, не создаёт Event ID, не читает clock, не сериализует и не
+импортирует Infrastructure/Application. Application загружает snapshot, находит
+actor, вызывает resolver, добавляет Event envelope metadata и собирает
+`ResolutionResult`.
+
+Future result:
+
+```python
+@dataclass(frozen=True)
+class AbilityCheckResult:
+    ability: Ability
+    dc: int
+    roll: DiceRoll
+    modifier: int
+    total: int
+    succeeded: bool
+```
+
+`roll.total` — raw dice result. `AbilityCheckResult.total` равен
+`roll.total + modifier`; `succeeded` равен `total >= dc`. Контракт Phase 1
+`DiceRoll` не меняется, а dice notation не расширяется modifiers,
+advantage/disadvantage или keep/drop syntax.
+
+Ability Check не мутирует State. Обычный handler вызывает
+`StateStore.load(...)`, но не `StateStore.save(...)`. После successful rule
+resolution Application создаёт один `AbilityCheckResolved` через существующий
+generic `GameEvent` envelope; resolver Event не создаёт. Отдельные
+`AbilityCheckSucceeded` и `AbilityCheckFailed` не вводятся — gameplay outcome
+находится в `payload.succeeded`.
+
+Future payload v1:
+
+```json
+{
+  "ability": "strength",
+  "dc": 15,
+  "roll": {
+    "expression": "1d20",
+    "rolls": [7],
+    "total": 7
+  },
+  "modifier": -1,
+  "total": 6,
+  "succeeded": false
+}
+```
+
+Envelope уже содержит `eventId`, `commandId`, `type`, `version`, `campaignId`,
+`timestamp`, `actorId` и `causedBy`; payload их не дублирует. EventStore,
+runtime Event persistence, replay, GameEngine и dispatcher остаются deferred.
 
 ---
 
@@ -2799,6 +2985,10 @@ CreatureState
 ### 9.6. `payload`
 
 `payload` содержит только параметры конкретной команды.
+
+На serialized boundary это JSON object. После validation он маппится в
+concrete typed immutable payload соответствующей Python Command (§3.3), а не
+передаётся в rule resolver как arbitrary `dict[str, Any]`.
 
 Например:
 

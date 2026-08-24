@@ -128,11 +128,9 @@ Infrastructure    infrastructure/   persistence, LLM, RNG, filesystem
 
 **Domain ни от чего не зависит.** Он не импортирует FastAPI, SQLAlchemy, SDK LLM-провайдеров или реализацию файловой системы. Infrastructure зависит от Domain через интерфейсы, а не наоборот.
 
-Благодаря этому Rule Engine можно запустить как обычный Python-код, без HTTP и без сети:
-
-```python
-result = engine.execute(command)
-```
+Благодаря этому Domain rules и concrete resolvers можно выполнять как обычный
+Python-код, без HTTP и без сети. Общий `GameEngine.execute(...)` API пока не
+реализован и не требуется для первого Phase 2 vertical slice.
 
 > Подробно: [§2 Слои приложения](docs/ARCHITECTURE.md#2-слои-приложения--application-layers) · [§2.5 Запрещённые зависимости](docs/ARCHITECTURE.md#25-запрещённые-зависимости--forbidden-dependencies)
 
@@ -210,13 +208,16 @@ Event Log  +  Materialized State
 `events/events.jsonl` — append-only история всех событий (канонический формат, [§12.10](docs/ARCHITECTURE.md#1210-event-serialization)).
 `state.json` — быстрый snapshot текущего состояния, восстановимый из истории.
 
-На этапе MVP используется файловая система. Переход на SQLite/PostgreSQL возможен без изменения Domain-слоя, поскольку доступ к хранилищу идёт через Repository.
+Phase 1 реализует filesystem persistence для `state.json`. EventStore, runtime
+JSONL append и replay пока deferred. На этапе MVP используется файловая система;
+переход на SQLite/PostgreSQL возможен без изменения Domain-слоя, поскольку
+доступ к хранилищу идёт через Repository.
 
 ---
 
 ## Технологический стек
 
-### Current Foundation stack
+### Current implemented stack
 
 ```text
 Python 3.12+
@@ -251,7 +252,9 @@ python -m pip install -e ".[dev]"
 python -m pytest
 ```
 
-Runnable API появится на соответствующей фазе Roadmap; текущая Foundation-итерация проверяется установкой пакета и pytest.
+Runnable API появится на соответствующей фазе Roadmap; текущий Core repository
+проверяется установкой пакета и pytest. Phase 2 gameplay mechanics пока не
+реализованы.
 
 ---
 
@@ -315,7 +318,9 @@ AI понимает намерение. Engine решает:
 
 ## Status
 
-✅ **Phase 0 — Foundation** завершена. Текущий этап: **Phase 1 — Core**.
+- ✅ **Phase 0 — Foundation** завершена.
+- ✅ **Phase 1 — Core** завершена.
+- ➡️ Текущий этап: **Phase 2 — Basic Rules**.
 
 Текущие фазы и приоритеты — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

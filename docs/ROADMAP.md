@@ -36,7 +36,7 @@
 - GitHub Actions workflow выполняет тот же pytest suite;
 - Phase 1 может начинаться без изменения Foundation contracts.
 
-Следующий этап после Foundation — **Phase 1 — Core**.
+Phase 0 подготовила фундамент для завершённой **Phase 1 — Core**.
 
 ---
 
@@ -54,9 +54,13 @@
 * [x] Event model
 * [x] State Store
 
+**Phase 1 — Core: COMPLETE.** Все перечисленные Core contracts реализованы и
+покрыты соответствующими automated tests. Новые требования задним числом в
+Definition of Done Phase 1 не добавляются.
+
 ## Phase 2 — Basic Rules
 
-> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope)
+> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check preparation](ARCHITECTURE.md#310-minimal-phase-2-ability-check-preparation) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope)
 
 * [ ] Ability checks
 * [ ] Saving throws
@@ -141,7 +145,9 @@
 
 # Текущий статус
 
-✅ **Phase 0 — Foundation** завершена. Текущий этап — **Phase 1 — Core**.
+- ✅ **Phase 0 — Foundation** завершена.
+- ✅ **Phase 1 — Core** завершена.
+- ➡️ Текущий этап — **Phase 2 — Basic Rules**.
 
 Порядок работ:
 

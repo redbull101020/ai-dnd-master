@@ -460,3 +460,67 @@ contracts.
   persistence.
 - Commands, gameplay State transitions, future State domains, and all Phase 2
   rules.
+
+## 2026-08-24 — Phase 1 finalization and Phase 2 contract preparation
+
+### Initial state
+
+- Phase 1 implementation and its Roadmap checklist were complete.
+- README and the Roadmap still named Phase 1 as the current development phase.
+- No Phase 2 gameplay mechanic was implemented.
+- The Architecture still left generic Command payloads,
+  `ResolutionResult.success`, `state_changes`, expected error representation,
+  and the first Phase 2 resolver/application boundary ambiguous.
+
+### Changed
+
+- Aligned README and Roadmap status, officially closed Phase 1, and declared
+  Phase 2 — Basic Rules current without completing any Phase 2 item.
+- Fixed the boundary between the canonical JSON Command Envelope and concrete
+  typed immutable Python gameplay Commands.
+- Fixed the exact planned generic `ResolutionResult` fields and separated
+  processing success from gameplay success without materializing
+  `state_changes`.
+- Prepared the minimal `ErrorCode` / `EngineError`, Ability identifier,
+  modifier, DC, resolver, result, Event, and read-only Application boundaries
+  for the future Ability Check slice.
+- Deferred shared GameEngine/framework abstractions and EventStore, and added
+  append-only DEC-0014.
+
+### Changed files
+
+- `README.md` — completed Phase 1/current Phase 2 status and current-stack text.
+- `CLAUDE.md` — clarified JSON Envelope versus typed Python Command payload.
+- `docs/ARCHITECTURE.md` — canonical Phase 2 preparation contracts and
+  orchestration boundaries.
+- `docs/ROADMAP.md` — Phase 1 completion and current Phase 2 status.
+- `docs/DECISIONS.md` — append-only DEC-0014.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- `AbilityCheckCommand`, `AbilityCheckPayload`, `Ability`,
+  `AbilityCheckResult`, `ability_modifier`, or an Ability Check resolver.
+- An Application handler or runtime `AbilityCheckResolved` production.
+- EventStore, replay, event-to-State application, GameEngine, buses,
+  dispatcher, registry, or transaction framework.
+- Any Phase 2 gameplay mechanics.
+
+### Verification
+
+- Fetched `origin/main` at `7e87d4a96235ae84aa9e0faba272cf71039bee1a`
+  and created `codex/chore/finalize-phase-1-phase-2-prep` directly from it with
+  a clean working tree.
+- Audited all nine Phase 1 Roadmap implementations and their corresponding
+  Domain/Infrastructure tests; no implementation gap was found.
+- The repository `.venv` launcher remained broken and PATH had no Python.
+  Tests used bundled Python 3.12.13 with pytest 9.1.1 installed into a temporary
+  dependency directory outside the repository and `src` supplied through a
+  test-only `PYTHONPATH`; no project dependency was added.
+- Full pytest suite with the cache provider disabled: 255 tests passed.
+- Repository-wide status/contract searches and full diff review completed;
+  historical statements in append-only logs were left unchanged.
+- `git diff --check` passed; Git emitted only the existing Windows checkout
+  warnings that LF will be converted to CRLF if Git rewrites changed files.
+- No formatter, linter, type checker, or additional documentation check is
+  configured in the repository.
