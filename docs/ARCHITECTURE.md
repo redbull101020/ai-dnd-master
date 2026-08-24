@@ -1745,6 +1745,7 @@ Runtime ID используется для конкретного экземпл
 Примеры:
 
 ```text
+campaign_001
 character_001
 npc_001
 monster_001
@@ -1950,6 +1951,15 @@ name = "Aragorn"
 ### 4.10. Scope
 
 ID имеют область уникальности.
+
+#### Campaign
+
+Campaign ID является внешней областью для всех остальных runtime ID и сам ни во
+что не вложен. Уникален в пределах campaigns root (§12.9):
+
+```text
+campaigns_root + campaign_id
+```
 
 #### Definition
 
