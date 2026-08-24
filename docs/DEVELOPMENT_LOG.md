@@ -749,3 +749,22 @@ contracts.
 - No formatter, linter, or type checker is configured in the repository.
 - Diff written to `review.patch` in the repository root for review; not
   committed.
+
+## 2026-08-24 — Campaign ID gaps and missing-gh PR gate documented
+
+- Branch `claude/docs-campaign-id-gaps`, based on `origin/main` at
+  `8fefbbb3dde54f745e9b095f99835e0888470080`.
+- In `docs/ARCHITECTURE.md`, added `campaign_001` to the §4.2 runtime ID
+  examples and documented Campaign uniqueness within campaigns root in §4.10.
+- In `CLAUDE.md`, clarified that missing `gh` blocks an authorised PR creation
+  attempt but does not block commit or push.
+- No Decision Log entry was added because both edits document behaviour already
+  implied by the canon and Phase 1 filesystem layout, while the `gh` change only
+  clarifies repository workflow. The §4.11 Campaign ID generation-service gap
+  recorded by DEC-0017 remains deliberately open.
+- Full unchanged pytest suite on bundled external Python 3.12.13 with pytest
+  9.1.1: 255 passed. No source or test file was changed.
+- No formatter, linter, or type checker is configured in the repository.
+- Diff written to
+  `C:\Users\redbu\Documents\GitHub\ai-dnd-master\review.patch` for review;
+  not committed.
