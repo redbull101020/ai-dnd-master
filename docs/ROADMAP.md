@@ -63,14 +63,14 @@ Definition of Done Phase 1 не добавляются.
 > Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check preparation](ARCHITECTURE.md#310-minimal-phase-2-ability-check-preparation) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope)
 
 * [ ] Ability checks
+* [ ] Proficiency
 * [ ] Saving throws
 * [ ] Skills
-* [ ] Proficiency
+* [ ] AC
 * [ ] Attack rolls
+* [ ] HP
 * [ ] Damage
 * [ ] Healing
-* [ ] AC
-* [ ] HP
 * [ ] Conditions
 
 ## Phase 3 — Combat

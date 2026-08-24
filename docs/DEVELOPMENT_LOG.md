@@ -768,3 +768,165 @@ contracts.
 - Diff written to
   `C:\Users\redbu\Documents\GitHub\ai-dnd-master\review.patch` for review;
   not committed.
+
+## 2026-08-24 — Phase 2 Ability Check contract gates
+
+### Initial state
+
+- Fetched `origin/main` and created `feat/phase-2-ability-check-slice`
+  directly from `e204ae48766fec10ce7bf1290dc4bbe235a00820` with a clean
+  worktree.
+- Phase 1 was complete, no Phase 2 mechanic was marked complete, and no
+  `ResolutionResult`, `Ability`, Ability Check Command/result/resolver,
+  Application handler, `EngineError`, Event metadata provider, or EventStore
+  production implementation existed.
+- The planned `ResolutionResult` duplicated rolls, while Application Event
+  creation and deferred EventStore ID allocation left metadata responsibility
+  ambiguous.
+
+### Canonical contract changes
+
+- Added the planned injected `EventMetadata` / `EventMetadataProvider`
+  application-facing seam. Application handlers do not allocate Event IDs or
+  read the system clock; the provider is not durable EventStore semantics, and
+  EventStore remains deferred as the future authoritative durable sequence/ID
+  allocator.
+- Removed generic top-level `ResolutionResult.rolls` and fixed success,
+  failure, and Event-command-correlation invariants without requiring Events
+  for every successful future use case.
+- Retained the generic `GameEvent` envelope and fixed
+  `AbilityCheckResolvedPayloadV1` plus the
+  `build_ability_check_resolved_v1(...)` builder boundary.
+- Appended DEC-0019, which supersedes only the affected exact field and Event
+  metadata responsibility provisions of historical DEC-0014.
+- Reordered the unchecked Phase 2 mechanics to Ability checks, Proficiency,
+  Saving throws, Skills, AC, Attack rolls, HP, Damage, Healing, Conditions.
+- Resynchronised the corresponding planned-contract summary and naming traps
+  in `CLAUDE.md`.
+
+### Changed files
+
+- `docs/ARCHITECTURE.md` — Application metadata, ResolutionResult, and Ability
+  Check Event payload/builder contracts.
+- `docs/ROADMAP.md` — Phase 2 dependency order only; no item completed.
+- `docs/DECISIONS.md` — append-only DEC-0019.
+- `CLAUDE.md` — canonical-summary synchronisation.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No production Python code, tests, rules, campaign data, dependency, State
+  mutation, persistence, EventStore, bus, dispatcher, or framework abstraction
+  was added or changed.
+
+### Verification
+
+- Bundled Python 3.12.13 with pytest 9.1.1 installed into a temporary external
+  dependency directory; no project dependency changed.
+- Full pytest suite with the cache provider disabled: 255 tests passed.
+- Repository searches confirmed the planned contracts still have no
+  production implementation and the Phase 2 checklist contains the exact
+  requested unchecked order.
+- `git diff --check` passed; Git emitted only Windows checkout warnings that LF
+  will be converted to CRLF if Git rewrites the changed Markdown files.
+- No formatter, linter, or type checker is configured in the repository:
+  `not configured`.
+
+## 2026-08-24 — Phase 2 Ability Check Domain foundation
+
+### Initial state
+
+- Continued on `feat/phase-2-ability-check-slice`, based on
+  `e204ae48766fec10ce7bf1290dc4bbe235a00820`, with only the expected
+  uncommitted Task 1 documentation changes in the worktree.
+- Task 1 had fixed the Domain contracts and Application metadata boundary, but
+  no Phase 2 production types, rule resolver, concrete Event payload builder,
+  or related tests existed.
+
+### Implemented
+
+- Added the six-value `Ability` Domain `StrEnum` and the frozen typed
+  `AbilityCheckPayload` / `AbilityCheckCommand` without a generic Command base.
+- Added the minimal `ErrorCode` / frozen `EngineError` contracts and generic
+  frozen `ResolutionResult[T]` with success/failure and Event correlation
+  invariants, without `rolls` or `state_changes` fields.
+- Added the pure `ability_modifier` rule, immutable `AbilityCheckResult`, and
+  deterministic `resolve_ability_check(...)` using exactly one injected
+  `DiceEngine.roll("1d20")` call.
+- Added immutable `AbilityCheckResolvedPayloadV1` and
+  `build_ability_check_resolved_v1(...)`, preserving generic `GameEvent` and
+  deriving its fixed v1 envelope/payload from the Command and resolver outcome.
+- Added an AST-based architecture test that checks every Domain Python module
+  for forbidden imports from Application, Infrastructure, or API.
+
+### Changed files
+
+- `src/dnd_engine/domain/value_objects/ability.py` — closed ability identifier.
+- `src/dnd_engine/domain/commands/ability_check.py` — typed payload and Command.
+- `src/dnd_engine/domain/errors.py` — error code and structured error.
+- `src/dnd_engine/domain/resolution.py` — generic resolution result.
+- `src/dnd_engine/domain/rules/ability_check.py` — modifier, result, and resolver.
+- `src/dnd_engine/domain/events/ability_check.py` — typed payload and generic
+  Event builder.
+- `tests/domain/test_ability_check.py` — Ability, Command, modifier, resolver,
+  derived-result, dice-call, and non-mutation tests.
+- `tests/domain/test_resolution_result.py` — errors and result invariants.
+- `tests/domain/test_ability_check_event.py` — payload/builder and existing
+  Event serialization integration.
+- `tests/architecture/test_domain_dependencies.py` — Domain dependency guard.
+- `docs/ARCHITECTURE.md` and `CLAUDE.md` — minimal implemented-status sync.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Boundaries preserved
+
+- The resolver does not mutate `CreatureState` or `AbilityScores`, load or save
+  State, create Events, allocate IDs, read a clock, serialize, or import an
+  outer layer.
+- The Event builder accepts injected ID/timestamp and performs no persistence.
+- No Application handler, `EventMetadataProvider` code, metadata allocator,
+  EventStore, State mutation, registry, dispatcher, bus, framework abstraction,
+  future mechanic, API, dependency, or AI integration was added.
+- The Phase 2 Ability checks Roadmap item remains unchecked until the
+  Application vertical slice is complete.
+
+### Verification
+
+- Python 3.12.13 with pytest 9.1.1 from the existing temporary external
+  dependency directory; project dependencies were unchanged.
+- Narrow `tests/domain tests/architecture` suite: 193 tests passed.
+- Full pytest suite: 313 tests passed.
+- The AST architecture test passed with no Domain → Application,
+  Infrastructure, or API imports.
+- `git diff --check` passed; Git emitted only Windows checkout warnings that LF
+  will be converted to CRLF if Git rewrites changed files.
+- Formatter, linter, and type checker remain `not configured`.
+
+## 2026-08-24 — Domain dependency guard relative-import correction
+
+- Corrected the architecture test's relative-import resolution by deriving the
+  package from the source path without its filename and using stdlib
+  `importlib.util.resolve_name`.
+- Added regression coverage for forbidden relative imports from an ordinary
+  Domain module and `domain/__init__.py`, allowed Domain-relative imports
+  including `from . import ...`, absolute forbidden imports, and the current
+  production Domain tree scan.
+- Production code and Ability Check contracts were unchanged; Application Task
+  3 was not started and no dependency was added.
+- Python 3.12.13 / pytest 9.1.1: `tests/architecture` — 5 passed;
+  `tests/domain tests/architecture` — 197 passed; full suite — 317 passed.
+- `git diff --check` passed; formatter, linter, and type checker remain
+  `not configured`.
+
+## 2026-08-24 — Ability Check documentation status correction
+
+- In `docs/ARCHITECTURE.md` §3.10, changed the stale `Future payload v1`
+  label to `Canonical payload v1` for the implemented
+  `AbilityCheckResolvedPayloadV1` contract.
+- In §12.10, kept EventStore, durable Event ID/sequence allocation, JSONL
+  append, replay, and Event application deferred while recording that the
+  generic `GameEvent` envelope and first concrete Ability Check payload/builder
+  are implemented.
+- No production code, tests, Roadmap status, architectural decision, contract
+  schema, or dependency changed; Application Task 3 was not started.
+- Full pytest suite on Python 3.12.13 / pytest 9.1.1: 317 passed.
+- `git diff --check` passed.
