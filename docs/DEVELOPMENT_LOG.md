@@ -567,4 +567,83 @@ contracts.
 - `git diff --check` passed.
 - `git diff --stat` against `origin/main` touched exactly
   `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, and `docs/DEVELOPMENT_LOG.md`.
+
+## 2026-08-24 — CLAUDE.md rebuild and duplication policy (DEC-0016)
+
+### Initial state
+
+- Fetched `origin/main` and worked from commit
+  `03aaf901b407b76c3fc9de8b0e919a20ca2e9111` on branch
+  `claude/docs-claude-md-rebuild-6w8etl`, which the session's harness had
+  already created at that same commit with a clean worktree.
+- `CLAUDE.md` reproduced a third, invented Command lifecycle vocabulary
+  (`Received → Rejected | Accepted → Resolving → Completed | Failed`) whose
+  initial state `Received` existed nowhere in the canon — the exact stale
+  variant DEC-0015 left open for a separate slice. It also duplicated three
+  canonical structures verbatim (the full ID reference table, the full State
+  Ownership matrix, both Envelope JSON examples) while omitting every
+  implemented Phase 1 contract, the phase-scope rule, the §3.6
+  deferred-abstractions list, the mandatory `docs/DEVELOPMENT_LOG.md` append
+  rule, the document map, and branch/PR policy.
+
+### Changed
+
+- Rebuilt `CLAUDE.md` in full: added a document map, current-phase and
+  phase-discipline statement, a table of implemented Phase 1 contracts, a
+  list of fixed-but-unimplemented Phase 2 preparation contracts, the §3.6
+  deferred-abstractions list, the single canonical Command lifecycle from
+  §9.7 (removing the stale `Received` variant), a naming-traps table
+  covering points where default intuition diverges from the canon, and
+  branch/PR/tooling policy. Removed the verbatim ID table, Owner Matrix, and
+  both JSON envelope examples in favor of section references.
+- Appended append-only DEC-0016 recording the CLAUDE.md duplication policy:
+  the file reproduces verbatim only single facts an agent can violate
+  without noticing (names, closed value sets, phase status, prohibitions),
+  never structures (tables, field lists, JSON schemas), which live in
+  exactly one place in `docs/ARCHITECTURE.md`.
+- Verified every `§N.N` reference against its `docs/ARCHITECTURE.md` section
+  subject and every `docs/ARCHITECTURE.md#slug` anchor against the GitHub
+  slug of its actual heading text; all 23 links and all bare section
+  references matched with no corrections required.
+
+### Changed files
+
+- `CLAUDE.md` — full rebuild per the fixed text supplied for this task.
+- `docs/DECISIONS.md` — append-only DEC-0016.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No Python, test, rule, or campaign file was changed.
+- `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `README.md`, and `AGENTS.md`
+  were read for verification but not modified.
+- No Phase 2 contract (`AbilityCheckCommand`, `Ability`, `ErrorCode`,
+  `EngineError`, `ResolutionResult`, etc.) was implemented, stubbed, or
+  scaffolded.
+
+### Verification
+
+- Anchor corrections: none. All 23 `docs/ARCHITECTURE.md#slug` links and the
+  four bare `§9.7` / `§12.9` / `§3.2.3` references matched the canon exactly;
+  no `§12.13` bare reference exists anywhere in the fixed `CLAUDE.md` text
+  actually supplied for this task, so none was left to verify or correct.
+- Section-number and factual-claim spot checks against
+  `docs/ARCHITECTURE.md`: the §9.7 Command lifecycle string, the 13-value
+  `DamageType` enum, `current_hp`/`max_hp` and `currentHp`/`maxHp` HP naming
+  (also DEC-0008), the §3.6 deferred-abstractions list, and the
+  `ResolutionResult`/`ErrorCode` statements in §3.5/§3.9 all matched
+  verbatim; no mismatch found.
+- Phase status cross-checked against `docs/ROADMAP.md`: Phase 0 and Phase 1
+  complete, Phase 2 — Basic Rules current; matches.
+- Python 3.11.15 was the ambient interpreter in this environment, below the
+  `>=3.12` target declared in `pyproject.toml`/`AGENTS.md`; a Python 3.12.3
+  virtualenv was created in the session scratchpad and used for the
+  installation and test run below instead.
+- `pip install -e ".[dev]"` succeeded under Python 3.12.3 (pytest 9.1.1).
+- Full pytest suite: 255 passed, matching the expected count on `main`.
+- No formatter, linter, or type checker is configured in this repository;
+  none was installed or run — reported as `not configured`.
+- `git diff --check` passed.
+- `git diff --stat` against `origin/main` touched exactly `CLAUDE.md`,
+  `docs/DECISIONS.md`, and `docs/DEVELOPMENT_LOG.md`.
 - No formatter, linter, or type checker is configured in the repository.
