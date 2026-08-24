@@ -1204,30 +1204,10 @@ rule-resolution boundary. Эти классы являются Phase 2 preparati
 
 #### Command lifecycle
 
-```mermaid
-flowchart LR
-
-    Created[Created]
-    Validating[Validating]
-    Valid[Valid]
-    Invalid[Invalid]
-    Executing[Executing]
-    Completed[Completed]
-    Failed[Failed]
-
-    Created --> Validating
-    Validating --> Valid
-    Validating --> Invalid
-
-    Valid --> Executing
-
-    Executing --> Completed
-    Executing --> Failed
-
-    Invalid --> [*]
-    Completed --> [*]
-    Failed --> [*]
-```
+Канонический жизненный цикл Command описан ровно в одном разделе —
+[§9.7 Command lifecycle](#97-command-lifecycle). Здесь он намеренно не
+дублируется: два независимых описания одного жизненного цикла уже разошлись
+(DEC-0015).
 
 Главное правило:
 

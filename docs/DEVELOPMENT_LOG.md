@@ -524,3 +524,47 @@ contracts.
   warnings that LF will be converted to CRLF if Git rewrites changed files.
 - No formatter, linter, type checker, or additional documentation check is
   configured in the repository.
+
+## 2026-08-24 — Command lifecycle documentation deduplication
+
+### Initial state
+
+- Fetched `origin/main` and created `claude/docs-command-lifecycle-dedup-ci9085`
+  directly from commit `ac78dca6ae2b40099810f92a800300b807e0f718` with a clean
+  worktree.
+- `docs/ARCHITECTURE.md` described the Command lifecycle twice with two
+  incompatible state vocabularies: §3.3 used `Created → Validating →
+  Valid | Invalid → Executing → Completed | Failed`, and §9.7 used
+  `Created → Validating → Rejected | Accepted → Resolving → Completed | Failed`.
+
+### Changed
+
+- Removed the duplicate `flowchart LR` mermaid diagram under the unnumbered
+  `#### Command lifecycle` subsection in §3.3 Command Contract and replaced it
+  with a short reference to §9.7 Command lifecycle as the single canonical
+  description.
+- Left §9.7 Command lifecycle, the Quick lookup table, and the table of
+  contents unchanged.
+- Appended append-only DEC-0015 recording the decision.
+
+### Changed files
+
+- `docs/ARCHITECTURE.md` — deduplicated the §3.3 Command lifecycle subsection.
+- `docs/DECISIONS.md` — append-only DEC-0015.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- `CLAUDE.md` still states the stale `Received → ...` Command lifecycle
+  variant; correcting it is deferred to a separate slice.
+- No Python, test, rule, or campaign file was changed. No `AbilityCheckCommand`,
+  `Ability`, `ErrorCode`, `EngineError`, `ResolutionResult`, or other Phase 2
+  contract was implemented, stubbed, or scaffolded.
+
+### Verification
+
+- Full pytest suite: 255 tests passed.
+- `git diff --check` passed.
+- `git diff --stat` against `origin/main` touched exactly
+  `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, and `docs/DEVELOPMENT_LOG.md`.
+- No formatter, linter, or type checker is configured in the repository.
