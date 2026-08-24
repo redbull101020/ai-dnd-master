@@ -81,6 +81,8 @@ During implementation:
 
 Changes to canonical contracts such as Envelope fields, ID formats, State Ownership, serialization, or dependency direction require corresponding updates to `docs/ARCHITECTURE.md`.
 
+`CLAUDE.md` reproduces a deliberately small set of canonical facts (DEC-0016): the names and section numbers of the implemented contracts, the `current_hp` / `max_hp` naming, the closed `DamageType` set, the Command lifecycle states, the deferred-abstraction list, and the current phase. After changing a canonical contract, reread `CLAUDE.md` and update it within the same change, in the same slice, if any reproduced fact changed. Updating `docs/ARCHITECTURE.md` alone is not sufficient: nothing detects the drift automatically, and an agent reads the summary before it reads the canon.
+
 When making a new substantial architectural decision or changing an existing contract:
 
 1. update the canonical contract in `docs/ARCHITECTURE.md`;
@@ -182,12 +184,9 @@ For implementation work:
 * create a dedicated branch from the intended base;
 * keep the branch scoped to one coherent change;
 * inspect `git status` and the final diff before committing;
-* never include unrelated files, `.venv`, caches, packaging artifacts, or runtime-generated files;
-* do not commit, push, create a PR, merge, or enable auto-merge unless explicitly authorized.
+* never include unrelated files, `.venv`, caches, packaging artifacts, or runtime-generated files.
 
-Commit, push, PR creation, and merge are separate actions and require separate authorization.
-
-Unless explicitly requested otherwise, create pull requests as **draft**.
+Authorisation for commit, push, pull request creation, and merge is governed by the section "Change authorisation and diff review" below. Do not restate those rules here.
 
 PR descriptions should state:
 
@@ -196,8 +195,6 @@ PR descriptions should state:
 * tests and checks run;
 * documentation changed;
 * known risks, limitations, or follow-up work.
-
-Do not merge without explicit authorization.
 
 ## Change authorisation and diff review
 
