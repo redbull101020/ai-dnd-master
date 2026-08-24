@@ -52,7 +52,7 @@
 * [x] `MonsterDefinition`
 * [x] Dice Engine
 * [x] Event model
-* [ ] State Store
+* [x] State Store
 
 ## Phase 2 — Basic Rules
 

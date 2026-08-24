@@ -410,3 +410,53 @@ contracts.
   full pytest suite: 187 tests passed. Tests used bundled Python 3.12.13 and the
   existing temporary pytest 9.1.1 installation outside the repository.
 - No Architecture, Decision Log, or Roadmap contract/status change was needed.
+
+## 2026-08-24 — Phase 1 State Store slice
+
+### Initial state
+
+- Fetched `origin/main` and created `codex/feat/phase-1-state-store` directly
+  from commit `985eb691f3dda44de006b85384f86cce3fb88dec` with a clean worktree.
+- The Phase 1 Event model was merged and all earlier Phase 1 items were
+  complete; only State Store remained unchecked in the Roadmap.
+
+### Implemented
+
+- Added frozen `StateSnapshot` as a persistence grouping of one
+  `CampaignState` and a tuple of uniquely identified `CreatureState` objects,
+  without changing State Ownership.
+- Added the snapshot-only Domain `StateStore` Protocol and stable
+  `StateStoreError`, `StateNotFoundError`, and `InvalidStateSnapshotError`
+  hierarchy.
+- Added pure strict `StateSerializer` for exact camelCase schema version 1,
+  without defaults or coercion, with nested Domain validation and deterministic
+  Creature ordering.
+- Added UTF-8 `FilesystemStateStore` at `<root>/<campaign_id>/state.json`, path
+  containment at the Infrastructure boundary, stable error translation, and
+  atomic same-directory temporary-file replacement through `os.replace`.
+- Added deterministic Domain, serializer, and filesystem tests, including
+  Event file isolation and atomic failure behavior. Updated Architecture,
+  appended DEC-0013, and completed only the Phase 1 State Store Roadmap item.
+
+### Verification
+
+- Narrow StateSnapshot/StateSerializer/FilesystemStateStore suites with the
+  cache provider disabled: 68 tests passed.
+- Full pytest suite with the cache provider disabled: 255 tests passed.
+- Tests used bundled Python 3.12.13 and the existing temporary pytest 9.1.1
+  installation outside the repository; the repository `.venv` launcher still
+  referenced an unavailable Python installation.
+- `git diff --check` passed; Git emitted only existing Windows checkout
+  warnings that LF will be converted to CRLF if Git rewrites changed files.
+- No formatter, linter, or type checker is configured in the repository.
+- `pyproject.toml` and production dependencies were unchanged.
+
+### Intentionally deferred
+
+- EventStore, Event ID/sequence allocation, Event persistence, replay, and
+  Event-to-State application.
+- Transaction ordering between EventStore persistence and State projection.
+- State revisions, optimistic concurrency, locks, migrations, and database
+  persistence.
+- Commands, gameplay State transitions, future State domains, and all Phase 2
+  rules.
