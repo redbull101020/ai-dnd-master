@@ -109,6 +109,12 @@ Definition:
 
 Обязательны все пять полей. Специфика команды живёт **только** внутри `payload` — не выноси `targetId`/`weaponId` на верхний уровень.
 
+Это JSON/boundary envelope, а не обязательный generic Python Domain-класс.
+После boundary validation gameplay-команда представляется отдельным immutable
+typed dataclass с concrete typed payload; произвольный `dict[str, Any]` не
+проходит внутрь rule-resolution boundary. Generic Command inheritance hierarchy
+на текущем этапе не вводится.
+
 Жизненный цикл: `Received → Rejected | Accepted → Resolving → Completed | Failed`.
 
 Command — намерение, а не результат. Команда не изменяет State напрямую: она порождает Events, и уже они меняют состояние.
