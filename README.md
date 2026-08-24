@@ -253,8 +253,8 @@ python -m pytest
 ```
 
 Runnable API появится на соответствующей фазе Roadmap; текущий Core repository
-проверяется установкой пакета и pytest. Phase 2 gameplay mechanics пока не
-реализованы.
+проверяется установкой пакета и pytest. Phase 2 начата; первый read-only Ability
+Check vertical slice реализован.
 
 ---
 

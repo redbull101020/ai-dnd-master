@@ -37,6 +37,7 @@
 * Phase 0 — Foundation: завершена.
 * Phase 1 — Core: завершена.
 * **Phase 2 — Basic Rules: текущая.**
+* Первый read-only Ability Check vertical slice Phase 2 реализован.
 
 Актуальный статус — в `docs/ROADMAP.md`; при расхождении с этим списком выигрывает Roadmap.
 
@@ -114,15 +115,12 @@ Definition immutable: во время сессии не мутируется, п
 
 ---
 
-## Реализованные Domain-контракты Phase 2
+## Реализованные контракты Phase 2
 
 * `ResolutionResult[T]` (§3.5). `success` означает успех обработки команды и разрешения правил, **не** игровой исход: проваленная проверка — это `success is True` и `outcome.succeeded is False`. Полей `state_changes` и generic top-level `rolls` нет; placeholder-абстракция `StateChange` не вводится.
 * `ErrorCode` и `EngineError` (§3.9). Минимальное structured representation ожидаемых ошибок без exception hierarchy.
-* Ability Check Domain foundation (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier`, `resolve_ability_check`, `AbilityCheckResolvedPayloadV1` и `build_ability_check_resolved_v1`. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
-
-## Зафиксированные, но не реализованные Application-контракты
-
-* `EventMetadata` и `EventMetadataProvider` (§3.10) остаются application-facing injection seam. Application handler, State lookup и сборка итогового `ResolutionResult` ещё не реализованы. Handler не генерирует Event ID и не читает clock.
+* Ability Check vertical slice (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier`, `resolve_ability_check`, `AbilityCheckResolvedPayloadV1` и `build_ability_check_resolved_v1`. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
+* Application orchestration (§2.2, §3.10): `EventMetadata`, `EventMetadataProvider` и explicit `AbilityCheckHandler`. Handler загружает State, находит actor, вызывает resolver, получает metadata через injected provider и собирает Event/`ResolutionResult`; он не читает clock, не генерирует ID, не мутирует State и не вызывает `StateStore.save()`.
 
 ---
 
@@ -141,9 +139,13 @@ transaction coordinator
 GameContext implementation
 ```
 
-Отложены также EventStore, runtime-append в JSONL, применение Events к State и replay.
+Отложены также EventStore, Event persistence/runtime-append в JSONL, применение
+Events к State, replay и transaction/UoW.
 
-Первый vertical slice Phase 2 — это explicit Application handler и прямой вызов конкретного Domain resolver. Общая orchestration abstraction появляется только тогда, когда несколько конкретных Commands покажут реально повторяющееся поведение. Получив задачу «реализовать механику», не начинай с шины команд.
+Первый vertical slice Phase 2 использует explicit Application handler и прямой
+вызов конкретного Domain resolver. Общая orchestration abstraction появляется
+только тогда, когда несколько конкретных Commands покажут реально повторяющееся
+поведение. Получив задачу «реализовать механику», не начинай с шины команд.
 
 ---
 

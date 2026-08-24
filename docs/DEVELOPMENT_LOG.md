@@ -930,3 +930,54 @@ contracts.
   schema, or dependency changed; Application Task 3 was not started.
 - Full pytest suite on Python 3.12.13 / pytest 9.1.1: 317 passed.
 - `git diff --check` passed.
+
+## 2026-08-24 — Phase 2 Ability Check read-only vertical slice
+
+### Initial state
+
+- Continued on `feat/phase-2-ability-check-slice`, based on
+  `e204ae48766fec10ce7bf1290dc4bbe235a00820`.
+- The Task 1 and Task 2 foundation was present in existing commit `d90ccda`
+  rather than as the expected uncommitted worktree changes; the worktree was
+  clean at precheck and the committed contracts matched the agreed design.
+- Task 2 Domain and architecture precheck: 62 tests passed.
+- After review, the uncommitted Task 3 change-set was normalized onto
+  `feat/phase-2-ability-check-application`, created directly from current
+  `origin/main` at `7a3b8108c044cdcf12913a10eb624c289c7e8933`; that history
+  already contains `d90ccda` through PR #35.
+
+### Implemented
+
+- Added frozen `EventMetadata` with exact-string Event ID and exact aware UTC
+  `datetime` validation, plus the minimal `EventMetadataProvider` Application
+  protocol. No concrete production allocator was added.
+- Added explicit `AbilityCheckHandler`: it loads one snapshot, finds the actor,
+  calls the deterministic resolver, obtains injected Event metadata, builds one
+  `AbilityCheckResolved` v1 `GameEvent`, and returns a typed
+  `ResolutionResult[AbilityCheckResult]`.
+- Missing actors return `ENTITY_NOT_FOUND` as a processing failure without a
+  dice roll, metadata request, Event, or save. A failed gameplay check remains
+  successful processing and publishes its resolved Event.
+- The handler is read-only: it creates no working copy, applies no Event to
+  State, mutates no `CreatureState`, and never calls `StateStore.save()`.
+
+### Tests and status documentation
+
+- Added nine Application tests with local fakes/spies for successful and failed
+  gameplay checks, missing actor behavior, State non-mutation, exact metadata
+  injection and validation, exception propagation, and absence of saves.
+- Marked only Phase 2 Ability checks complete in the Roadmap and retained the
+  Task 1 dependency order for all remaining mechanics.
+- Updated Architecture, README, and CLAUDE status text to describe the completed
+  slice while retaining EventStore, Event persistence, State application,
+  transaction/UoW, buses, dispatcher, and GameEngine as deferred.
+
+### Verification and boundaries
+
+- Python 3.12.13 / pytest 9.1.1: Application tests — 9 passed; full suite —
+  326 passed. Domain dependency test remains green.
+- No production or development dependency was added. Formatter, linter, and
+  type checker remain `not configured`.
+- No EventStore, Event persistence, State mutation/application, transaction or
+  UoW, bus, dispatcher, GameEngine, registry, future Phase 2 mechanic, database,
+  API, AI integration, or expanded dice DSL was added.
