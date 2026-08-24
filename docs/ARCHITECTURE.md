@@ -81,7 +81,7 @@
   * [3.7. Общий жизненный цикл игрового действия / Action Lifecycle](#37-общий-жизненный-цикл-игрового-действия--action-lifecycle)
   * [3.8. Atomicity](#38-atomicity)
   * [3.9. Error Contract](#39-error-contract)
-  * [3.10. Minimal Phase 2 Ability Check preparation](#310-minimal-phase-2-ability-check-preparation)
+  * [3.10. Minimal Phase 2 Ability Check vertical slice](#310-minimal-phase-2-ability-check-vertical-slice)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1578,15 +1578,14 @@ AI должен получать `code`, а не пытаться парсить
 
 ---
 
-### 3.10. Minimal Phase 2 Ability Check preparation
+### 3.10. Minimal Phase 2 Ability Check vertical slice
 
-Domain foundation первого Phase 2 vertical slice реализован; Application
-validation, State lookup и итоговая orchestration остаются следующим slice:
+Первый read-only Phase 2 vertical slice реализован полностью:
 
 ```text
 AbilityCheckCommand
         ↓
-Application validation / State lookup
+AbilityCheckHandler / State lookup
         ↓
 CreatureState
         ↓
@@ -1642,8 +1641,8 @@ def resolve_ability_check(
 Resolver выполняет только rule resolution, не мутирует `CreatureState` и делает
 ровно один `dice.roll("1d20")`. Он не загружает State, не знает `StateStore`, не
 сохраняет State, не создаёт Event ID, не читает clock, не сериализует и не
-импортирует Infrastructure/Application. Application загружает snapshot, находит
-actor и вызывает resolver.
+импортирует Infrastructure/Application. Реализованный Application handler
+загружает snapshot, находит actor и вызывает resolver.
 
 Immutable Domain result:
 
@@ -1682,7 +1681,9 @@ clock напрямую. UI, AI и API не являются authoritative metada
 `EventMetadataProvider` является application-facing injection seam, а не
 `EventStore`, и не обещает durability. Future `EventStore` остаётся
 authoritative durable allocator Event sequence/ID; его production implementation
-в этом slice не вводится.
+в этом slice не вводится. `EventMetadata` и `EventMetadataProvider` реализованы
+в `application.services.event_metadata`; concrete production allocator не
+реализован.
 
 Когда durable `EventStore` будет реализован, production source для `EventMetadataProvider.event_id` должен использовать authoritative EventStore/его allocator и не создавать конкурирующую схему Event ID allocation.
 
@@ -1692,7 +1693,13 @@ resolution Application получает injected Event metadata и создаё�
 `AbilityCheckResolved` через существующий generic `GameEvent` envelope;
 resolver Event не создаёт. Отдельные
 `AbilityCheckSucceeded` и `AbilityCheckFailed` не вводятся — gameplay outcome
-находится в `payload.succeeded`.
+находится в `payload.succeeded`. Explicit `AbilityCheckHandler` реализован в
+`application.handlers.ability_check` и собирает
+`ResolutionResult[AbilityCheckResult]` без working copy или Event application.
+
+Реализованные компоненты slice: typed `AbilityCheckCommand`, deterministic
+resolver, immutable `AbilityCheckResult`, typed Event payload builder, explicit
+Application handler и injected metadata port.
 
 Минимальный typed payload contract для `AbilityCheckResolved` version 1:
 
@@ -1746,7 +1753,8 @@ Canonical payload v1:
 
 Envelope уже содержит `eventId`, `commandId`, `type`, `version`, `campaignId`,
 `timestamp`, `actorId` и `causedBy`; payload их не дублирует. EventStore,
-runtime Event persistence, replay, GameEngine и dispatcher остаются deferred.
+runtime Event persistence, State mutation/application, replay, transaction/UoW,
+buses, dispatcher и GameEngine остаются deferred.
 
 ---
 
