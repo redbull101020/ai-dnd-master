@@ -1431,8 +1431,8 @@ flowchart TD
 
     Command --> Validate
 
-    Validate -->|Invalid| Result
-    Validate -->|Valid| Resolve
+    Validate -->|Rejected| Result
+    Validate -->|Accepted| Resolve
 
     Resolve --> Roll
     Roll --> Events

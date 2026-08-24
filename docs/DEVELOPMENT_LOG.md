@@ -647,3 +647,20 @@ contracts.
 - `git diff --stat` against `origin/main` touched exactly `CLAUDE.md`,
   `docs/DECISIONS.md`, and `docs/DEVELOPMENT_LOG.md`.
 - No formatter, linter, or type checker is configured in the repository.
+
+## 2026-08-24 — §3.7 Action Lifecycle edge labels
+
+- Relabelled the two validation edges of the §3.7 Action Lifecycle diagram in
+  `docs/ARCHITECTURE.md` from `Invalid` / `Valid` to `Rejected` / `Accepted`,
+  matching the canonical §9.7 Command lifecycle vocabulary. No node, no other
+  edge, no heading, and no surrounding text changed.
+- These were the last occurrence in the canonical contract of the vocabulary
+  DEC-0015 rejected, which `CLAUDE.md` already described as rejected.
+- No Decision Log entry was added: this changes no Envelope, ID format, State
+  Ownership, serialization, or dependency direction.
+- A repository-wide sweep for `Received`, `Executing`, and standalone `Valid` /
+  `Invalid` found no remaining live use outside append-only history and the
+  two `CLAUDE.md` lines that describe the rejected vocabulary.
+- Full pytest suite on Python 3.12.9 with pytest 9.1.1: 255 passed. No source,
+  test, rule, or campaign file was changed.
+- No formatter, linter, or type checker is configured in the repository.
