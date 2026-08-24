@@ -664,3 +664,29 @@ contracts.
 - Full pytest suite on Python 3.12.9 with pytest 9.1.1: 255 passed. No source,
   test, rule, or campaign file was changed.
 - No formatter, linter, or type checker is configured in the repository.
+
+## 2026-08-24 — Change authorisation and diff-review workflow
+
+- Branch `claude/docs-change-authorisation`, based on `origin/main` at
+  `7c249b5b8f63eb9d1fa16173acc008c1fa35977f`.
+- Added a new top-level "Change authorisation and diff review" section to
+  `AGENTS.md`, placed immediately after the existing "Branches and pull
+  requests" section at the end of the file. It states that commit, push, PR
+  creation, and merge require separate authorisation given after the user
+  has seen the diff, that authorisation embedded in the task description
+  does not count, and that a `review.patch` diff must be produced instead.
+- In `CLAUDE.md`, section "Ветки, PR и инструменты", replaced the two
+  bullets on commit/push/PR/merge authorisation and PR draft policy with
+  four bullets covering separate authorisation after diff review, the
+  mandatory `review.patch` artefact, PR draft policy, and the missing-`gh`
+  stop condition, followed by a reference paragraph pointing to the new
+  `AGENTS.md` section.
+- Added a `.gitignore` block ignoring `*.patch` and `*.diff` review
+  artefacts; no prior rule in the file covered either pattern.
+- No Decision Log entry was added: this changes no Envelope, ID format,
+  State Ownership, serialization, or dependency direction.
+- Full pytest suite on Python 3.12.9 with pytest 9.1.1: 255 passed. No
+  source, test, rule, or campaign file was changed.
+- No formatter, linter, or type checker is configured in the repository.
+- Diff written to `review.patch` in the repository root for review; not
+  committed.

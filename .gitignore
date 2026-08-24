@@ -16,3 +16,7 @@ __pycache__/
 
 # Pytest cache
 .pytest_cache/
+
+# Review artefacts: diffs produced for out-of-band review. Never committed.
+*.patch
+*.diff
