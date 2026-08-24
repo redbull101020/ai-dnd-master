@@ -722,3 +722,30 @@ contracts.
 - No formatter, linter, or type checker is configured in the repository.
 - Diff written to `review.patch` in the repository root for review; not
   committed.
+
+## 2026-08-24 — AGENTS.md deduplicated and CLAUDE.md resync obligation added
+
+- Branch `claude/docs-agents-resync-rule-dec18`, based on `origin/main` at
+  `0e7d9a7d174d3b1088c050a1e3d7a39de88801ba`.
+- In `AGENTS.md` "Branches and pull requests", removed the last bullet
+  duplicating commit/push/PR/merge authorisation, closed the bullet list
+  on the preceding item, and replaced the two authorisation paragraphs
+  plus the trailing "Do not merge without explicit authorization." line
+  with a single cross-reference to "Change authorisation and diff review",
+  which remains the sole statement of those rules.
+- In `AGENTS.md` "Working method", inserted a paragraph after the
+  canonical-contracts sentence requiring `CLAUDE.md` to be reread and,
+  within the same slice, updated whenever a canonical contract change
+  affects one of the specific facts it reproduces per DEC-0016.
+- Appended DEC-0018 to `docs/DECISIONS.md`, recording both changes and
+  their shared motivation.
+- `CLAUDE.md` itself was not modified: it is already consistent with the
+  new rule, and this slice adds the obligation to reread it, it does not
+  exercise that obligation against a contract change.
+- Full pytest suite on Python 3.12.9 with pytest 9.1.1: 255 passed (run
+  with `--basetemp` pointed outside the default OS temp directory, whose
+  `pytest-of-redbu` folder was not writable in this environment). No
+  source, test, rule, or campaign file was changed.
+- No formatter, linter, or type checker is configured in the repository.
+- Diff written to `review.patch` in the repository root for review; not
+  committed.
