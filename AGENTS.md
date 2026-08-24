@@ -198,3 +198,27 @@ PR descriptions should state:
 * known risks, limitations, or follow-up work.
 
 Do not merge without explicit authorization.
+
+## Change authorisation and diff review
+
+Commit, push, opening a pull request, and merging are four separate actions. Each requires its own authorisation from the user, and that authorisation is given after the user has seen the diff.
+
+Authorisation embedded in the task description itself does not count. A task that says "commit and open a pull request" is not sufficient authorisation to do so. Finish the edits, run the checks, produce the patch, report, and stop. Wait for a separate instruction.
+
+After finishing the edits for a slice, always write the diff to `review.patch` in the repository root and give its path in the report:
+
+```bash
+git diff > review.patch
+```
+
+If the changes have already been committed under a separate authorisation, diff against the base instead:
+
+```bash
+git diff origin/main > review.patch
+```
+
+`*.patch` and `*.diff` are gitignored. Never stage or commit the patch file, and never include it in the list of changed files.
+
+Pull requests are opened as drafts unless the user explicitly asks otherwise. Merge and auto-merge always require explicit authorisation and are never inferred.
+
+If the `gh` CLI is not available in the environment, stop and report it. Do not open a pull request through the REST API, and do not read `git credential`, `.git-credentials`, or any other credential store to obtain a token.
