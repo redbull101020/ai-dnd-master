@@ -2053,6 +2053,11 @@ extra_attack
 campaign_001
 ```
 
+Campaign ID использует строгий числовой формат `campaign_NNN`. Semantic ID,
+допустимые для Quest и Location, для Campaign запрещены: `campaignId` является
+обязательным полем обоих Envelope и одновременно именем каталога кампании
+(§12.9). Человекочитаемое название кампании не кодируется в ID.
+
 ---
 
 #### Player Identity / Character State IDs
@@ -2246,6 +2251,7 @@ command_000003
 | ----------------- | ---------------- | ---------------- |
 | Ruleset           | `snake_case`     | `dnd_5e`         |
 | Definition        | `snake_case`     | `longsword`      |
+| Campaign          | `campaign_NNN`   | `campaign_001`   |
 | Character         | `character_NNN`  | `character_001`  |
 | Player Identity   | `player_NNN`     | `player_001`     |
 | NPC               | `npc_NNN`        | `npc_001`        |

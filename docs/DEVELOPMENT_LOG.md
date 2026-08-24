@@ -690,3 +690,35 @@ contracts.
 - No formatter, linter, or type checker is configured in the repository.
 - Diff written to `review.patch` in the repository root for review; not
   committed.
+
+## 2026-08-24 — Campaign ID format fixed in the canonical contract
+
+- Branch `claude/docs-campaign-id-format`, based on `origin/main` at
+  `e73d9632965aea1e7fcdb1bb981862b3cd364aa8`.
+- In `docs/ARCHITECTURE.md` §4.12, added a paragraph after the `Campaign
+  IDs` code block stating that Campaign ID uses the strict numeric format
+  `campaign_NNN` and that semantic IDs, permitted for Quest and Location,
+  are forbidden for Campaign.
+- In `docs/ARCHITECTURE.md` §4.13, inserted a `Campaign | campaign_NNN |
+  campaign_001` row between the `Definition` and `Character` rows.
+- Appended DEC-0017 to `docs/DECISIONS.md`, recording the decision and its
+  rationale.
+- §4.2's example list still omits Campaign, §4.10 states no uniqueness
+  scope for Campaign, and §4.11 assigns no ID-generating service for
+  Campaign; all three gaps are left untouched, as this is a
+  documentation-only slice.
+- Implementation check: every campaign ID literal found in `src/`,
+  `tests/`, and `campaigns/` is `campaign_001` or `campaign_002`, all
+  matching `campaign_NNN`; `rules/` has none. The three `campaign_id`
+  values used in `tests/infrastructure/test_state_store.py`'s path-escape
+  test (`../outside`, `nested/campaign`, `..`) are inputs the test asserts
+  are rejected, not accepted campaign IDs. No component validates campaign
+  ID format by pattern — `FilesystemStateStore` only checks the value is a
+  `str` and that the resolved path stays a direct child of the store root;
+  `CampaignState` and the JSON serializers require a `str` with no shape
+  check. No contradiction with `campaign_NNN` was found.
+- Full pytest suite on Python 3.12.9 with pytest 9.1.1: 255 passed. No
+  source, test, rule, or campaign file was changed.
+- No formatter, linter, or type checker is configured in the repository.
+- Diff written to `review.patch` in the repository root for review; not
+  committed.
