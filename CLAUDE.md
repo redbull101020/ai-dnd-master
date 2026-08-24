@@ -114,13 +114,15 @@ Definition immutable: во время сессии не мутируется, п
 
 ---
 
-## Зафиксированные, но не реализованные контракты
+## Реализованные Domain-контракты Phase 2
 
-Форма уже канонична — свою не изобретай. Реализации нет; она появляется в своём срезе.
+* `ResolutionResult[T]` (§3.5). `success` означает успех обработки команды и разрешения правил, **не** игровой исход: проваленная проверка — это `success is True` и `outcome.succeeded is False`. Полей `state_changes` и generic top-level `rolls` нет; placeholder-абстракция `StateChange` не вводится.
+* `ErrorCode` и `EngineError` (§3.9). Минимальное structured representation ожидаемых ошибок без exception hierarchy.
+* Ability Check Domain foundation (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier`, `resolve_ability_check`, `AbilityCheckResolvedPayloadV1` и `build_ability_check_resolved_v1`. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
 
-* `ResolutionResult[T]` (§3.5). `success` означает успех обработки команды и разрешения правил, **не** игровой исход: проваленная проверка — это `success is True` и `outcome.succeeded is False`. Поля `state_changes` нет, placeholder-абстракция `StateChange` не вводится.
-* `ErrorCode` и `EngineError` (§3.9). Минимальное structured representation ожидаемых ошибок. Большая иерархия исключений не создаётся. Некорректная конструкция объекта может использовать `TypeError` и `ValueError`; инфраструктурные и программные сбои не превращаются автоматически в gameplay-ошибки.
-* Подготовка Ability Check (§3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier`, событие `AbilityCheckResolved`. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
+## Зафиксированные, но не реализованные Application-контракты
+
+* `EventMetadata` и `EventMetadataProvider` (§3.10) остаются application-facing injection seam. Application handler, State lookup и сборка итогового `ResolutionResult` ещё не реализованы. Handler не генерирует Event ID и не читает clock.
 
 ---
 
@@ -245,6 +247,7 @@ Event immutable: после записи не редактируется и не
 | Отдельные `Event` и `EventEnvelope` | один `GameEvent` |
 | `datetime.now()`, naive datetime, смещение `+00:00` | aware UTC, передан снаружи, в JSON — `Z` |
 | `state_changes` в `ResolutionResult` | такого поля нет |
+| generic top-level `rolls` в `ResolutionResult` | roll находится в typed outcome и durable Event payload |
 | Хранимый `modifier` в `AbilityScores` | чистое правило `(score - 10) // 2` |
 | `AbilityCheckSucceeded` / `AbilityCheckFailed` | один `AbilityCheckResolved`, исход в `payload.succeeded` |
 

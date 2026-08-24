@@ -616,9 +616,12 @@ Domain отвечает:
 > **Что по правилам должно произойти?**
 
 Concrete Application handler/use case отвечает за загрузку нужного State,
-поиск actor/target, вызов stateless Domain resolver, создание Event envelope
-metadata и сборку `ResolutionResult`. Только state-mutating use case сохраняет
-обновлённый snapshot через `StateStore`; read-only resolution save не вызывает.
+поиск actor/target и вызов stateless Domain resolver. После successful
+resolution handler получает Event metadata через injected
+`EventMetadataProvider`, строит generic `GameEvent` envelope и собирает
+`ResolutionResult`; он не выделяет Event ID самостоятельно и не читает
+system clock напрямую. Только state-mutating use case сохраняет обновлённый
+snapshot через `StateStore`; read-only resolution save не вызывает.
 
 ---
 
@@ -1175,7 +1178,7 @@ Gameplay Python Commands являются concrete frozen dataclasses с typed p
 `payload: dict[str, Any]` не является gameplay contract. Generic inheritance
 hierarchy на этом этапе не вводится.
 
-Первый planned concrete contract:
+Первый concrete contract:
 
 ```python
 @dataclass(frozen=True)
@@ -1197,8 +1200,8 @@ class AbilityCheckCommand:
 ```
 
 `actor_id` обязателен. `payload` не содержит arbitrary dictionary внутри
-rule-resolution boundary. Эти классы являются Phase 2 preparation contract и
-ещё не реализованы.
+rule-resolution boundary. Эти классы реализованы в
+`domain.commands.ability_check`.
 
 ---
 
@@ -1342,7 +1345,6 @@ class ResolutionResult(Generic[T]):
     success: bool
     command_id: str
     outcome: T | None
-    rolls: tuple[DiceRoll, ...]
     events: tuple[GameEvent, ...]
     errors: tuple[EngineError, ...]
 ```
@@ -1353,6 +1355,7 @@ Ability Check представляется так:
 
 ```text
 ResolutionResult.success is True
+outcome is not None
 outcome.succeeded is False
 errors == ()
 ```
@@ -1366,6 +1369,28 @@ outcome is None
 events == ()
 errors != ()
 ```
+
+Canonical invariants имеют общий вид:
+
+```text
+success is True
+→ outcome is not None
+→ errors == ()
+
+success is False
+→ outcome is None
+→ events == ()
+→ errors != ()
+
+for every event in events:
+    event.command_id == ResolutionResult.command_id
+```
+
+Successful result не обязан иметь непустой `events`: будущий successful use
+case может не публиковать Event. Generic top-level `rolls` отсутствует. Для
+Ability Check один и тот же `DiceRoll` допустимо представлен в typed immediate
+`AbilityCheckResult` и durable Event payload, но оба представления строятся из
+одного результата resolution, а не вычисляются независимо.
 
 Отдельного concrete `StateChange` contract пока нет, поэтому
 `state_changes` не является полем `ResolutionResult`. Authoritative State
@@ -1520,8 +1545,8 @@ class EngineError:
 `ResolutionResult.errors`. Большая exception hierarchy не создаётся.
 Intrinsic invalid construction Python object может использовать `TypeError` и
 `ValueError`. Infrastructure и programming failures не преобразуются
-автоматически в gameplay errors. `ErrorCode` и `EngineError` пока являются
-Phase 2 preparation contract и ещё не реализованы.
+автоматически в gameplay errors. `ErrorCode` и `EngineError` реализованы как
+минимальные Domain contracts без exception hierarchy.
 
 Пример:
 
@@ -1555,7 +1580,8 @@ AI должен получать `code`, а не пытаться парсить
 
 ### 3.10. Minimal Phase 2 Ability Check preparation
 
-Первый рекомендуемый Phase 2 vertical slice, ещё не реализованный:
+Domain foundation первого Phase 2 vertical slice реализован; Application
+validation, State lookup и итоговая orchestration остаются следующим slice:
 
 ```text
 AbilityCheckCommand
@@ -1586,7 +1612,7 @@ class Ability(StrEnum):
 ```
 
 `Ability` переиспользуется будущими Ability Checks, Saving Throws и Skills и
-безопаснее arbitrary `str`. Enum пока не реализован.
+безопаснее arbitrary `str`. Enum реализован в Domain value objects.
 
 Ability modifier является pure derived Domain rule:
 
@@ -1602,7 +1628,7 @@ derived calculation принадлежит Rule Engine rules.
 является integer DC). Arbitrary hard range вроде `5..30` не вводится: значения
 вне common recommended DCs сами по себе не являются основанием для rejection.
 
-Future resolver boundary:
+Domain resolver boundary:
 
 ```python
 def resolve_ability_check(
@@ -1617,10 +1643,9 @@ Resolver выполняет только rule resolution, не мутирует 
 ровно один `dice.roll("1d20")`. Он не загружает State, не знает `StateStore`, не
 сохраняет State, не создаёт Event ID, не читает clock, не сериализует и не
 импортирует Infrastructure/Application. Application загружает snapshot, находит
-actor, вызывает resolver, добавляет Event envelope metadata и собирает
-`ResolutionResult`.
+actor и вызывает resolver.
 
-Future result:
+Immutable Domain result:
 
 ```python
 @dataclass(frozen=True)
@@ -1638,14 +1663,71 @@ class AbilityCheckResult:
 `DiceRoll` не меняется, а dice notation не расширяется modifiers,
 advantage/disadvantage или keep/drop syntax.
 
+Для Event metadata Application использует один минимальный injected seam:
+
+```python
+@dataclass(frozen=True)
+class EventMetadata:
+    event_id: str
+    timestamp: datetime
+
+
+class EventMetadataProvider(Protocol):
+    def next_metadata(self, campaign_id: str) -> EventMetadata:
+        ...
+```
+
+Application handler не генерирует Event ID самостоятельно и не читает system
+clock напрямую. UI, AI и API не являются authoritative metadata source.
+`EventMetadataProvider` является application-facing injection seam, а не
+`EventStore`, и не обещает durability. Future `EventStore` остаётся
+authoritative durable allocator Event sequence/ID; его production implementation
+в этом slice не вводится.
+
+Когда durable `EventStore` будет реализован, production source для `EventMetadataProvider.event_id` должен использовать authoritative EventStore/его allocator и не создавать конкурирующую схему Event ID allocation.
+
 Ability Check не мутирует State. Обычный handler вызывает
 `StateStore.load(...)`, но не `StateStore.save(...)`. После successful rule
-resolution Application создаёт один `AbilityCheckResolved` через существующий
-generic `GameEvent` envelope; resolver Event не создаёт. Отдельные
+resolution Application получает injected Event metadata и создаёт один
+`AbilityCheckResolved` через существующий generic `GameEvent` envelope;
+resolver Event не создаёт. Отдельные
 `AbilityCheckSucceeded` и `AbilityCheckFailed` не вводятся — gameplay outcome
 находится в `payload.succeeded`.
 
-Future payload v1:
+Минимальный typed payload contract для `AbilityCheckResolved` version 1:
+
+```python
+@dataclass(frozen=True)
+class AbilityCheckResolvedPayloadV1:
+    ability: Ability
+    dc: int
+    roll: DiceRoll
+    modifier: int
+    total: int
+    succeeded: bool
+```
+
+Domain builder:
+
+```python
+def build_ability_check_resolved_v1(
+    *,
+    event_id: str,
+    timestamp: datetime,
+    command: AbilityCheckCommand,
+    outcome: AbilityCheckResult,
+) -> GameEvent:
+    ...
+```
+
+Builder фиксирует `type="AbilityCheckResolved"` и `version=1`, берёт
+`command_id`, `campaign_id` и `actor_id` из Command, использует
+`caused_by=None` для этого slice и строит generic JSON-compatible payload из
+`AbilityCheckResult` через `AbilityCheckResolvedPayloadV1`. Он не читает clock,
+не генерирует ID и не обращается к persistence. Один полученный resolver
+outcome является источником как typed immediate result, так и Event payload.
+
+Canonical payload v1:
 
 ```json
 {
@@ -4506,9 +4588,14 @@ Phase 1 `EventSerializer` является чистой границей меж�
 сериализуется в ISO 8601 UTC с `Z`; nullable `actorId` и `causedBy` всегда
 присутствуют в output и имеют значение `null` для Domain `None`.
 
-EventStore, выделение Event ID/sequence, JSONL append, replay, применение Event
-к State и concrete gameplay Event types находятся вне Phase 1 Event model и
-реализуются отдельными будущими slices.
+EventStore, выделение durable Event ID/sequence, JSONL append, replay и
+применение Event к State остаются deferred и реализуются отдельными будущими
+slices.
+
+Generic `GameEvent` envelope остаётся общим Event contract. Первый concrete
+gameplay payload contract, `AbilityCheckResolvedPayloadV1`, и его Domain builder
+реализованы в Phase 2; дополнительные gameplay Event contracts добавляются
+только вместе с соответствующими mechanics.
 
 Event Log является append-only.
 
