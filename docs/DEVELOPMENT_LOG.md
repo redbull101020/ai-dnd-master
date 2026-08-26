@@ -1038,3 +1038,43 @@ contracts.
 - Existing broad runtime-constructor validation gaps in simple State/Definition
   dataclasses were not retrofitted; DEC-0020 records the policy without claiming
   that a complete Domain-invariant audit has already been performed.
+
+## 2026-08-26 — Group 2 tooling quality track
+
+### Initial state
+
+- Pytest was the only configured development check; mypy was neither a
+  development dependency nor configured in `pyproject.toml`.
+- CI already tested Python 3.12, 3.13, and 3.14 with
+  `actions/checkout@v7` and `actions/setup-python@v7`, so the earlier CI hygiene
+  finding required no additional compatibility or Action-version change.
+- Four tests inspected annotation objects through `dataclasses.Field.type`:
+  the `CreatureState`, `CampaignState`, `MonsterDefinition`, and
+  `WeaponDefinition` tests.
+
+### Implemented
+
+- Added mypy as a development-only dependency and configured an incremental
+  Python 3.12 baseline for `src/dnd_engine`, with error codes and unused-config
+  warnings enabled.
+- Added one Python 3.12 CI `typecheck` job, separate from the unchanged pytest
+  compatibility matrix.
+- Removed the four brittle annotation-object assertions while retaining exact
+  canonical field-name tests and the meaningful constructed-value assertions.
+- Added the configured type-check command to the README quick start.
+
+### Verification
+
+- A clean editable `.[dev]` install completed in a temporary Python 3.12.13
+  environment with mypy 1.20.2 and pytest 9.1.1.
+- The four affected Domain test files passed: 42 tests.
+- `python -m mypy src/dnd_engine` passed with no issues in 48 source files; no
+  source typing changes or new ignores were required.
+- The full pytest suite passed: 328 tests.
+- `git diff --check` passed.
+
+### Intentionally deferred
+
+- Strict mypy mode and mypy checking of the test suite.
+- Formatter, linter, pre-commit, tox/nox, and coverage tooling.
+- Production dependency changes and unrelated runtime refactors.

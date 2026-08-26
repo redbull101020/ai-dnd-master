@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
+    "mypy>=1.15,<2",
     "pytest>=8.0",
 ]
 
@@ -23,3 +24,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/dnd_engine"]
+show_error_codes = true
+warn_unused_configs = true
