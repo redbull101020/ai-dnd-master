@@ -121,7 +121,8 @@ Definition immutable: во время сессии не мутируется, п
 * `ErrorCode` и `EngineError` (§3.9). Минимальное structured representation ожидаемых ошибок без exception hierarchy.
 * Ability Check vertical slice (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier` и `resolve_ability_check`. Result использует `D20Roll`; total вычисляется из `roll.selected`. `AbilityCheckResolvedPayloadV1`/V1 builder сохранены как legacy NORMAL-only schema, а `AbilityCheckResolvedPayloadV2`/V2 builder являются current writer. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
 * Application orchestration (§2.2, §3.10): `EventMetadata`, `EventMetadataProvider` и explicit `AbilityCheckHandler`. Handler загружает State, находит actor, вызывает resolver, получает metadata через injected provider и собирает Event/`ResolutionResult`; он не читает clock, не генерирует ID, не мутирует State и не вызывает `StateStore.save()`.
-* Proficiency foundation (§3.11): `character_proficiency_bonus(level)` — pure derived character-level rule. Он не хранит bonus в `CreatureState`, не изменяет raw Ability Check и не применяется к monster proficiency по Challenge Rating; concrete proficiency membership и authoritative character-level State остаются deferred.
+* Proficiency foundation (§3.11): `character_proficiency_bonus(level)` — pure derived character-level rule. Authoritative input хранится в `CharacterState.total_level`, effective Saving Throw proficiency membership — в `CharacterState.saving_throw_proficiencies`; bonus не хранится, raw Ability Check не изменён, monster/skill/other proficiency и class progression остаются deferred.
+* Character State foundation (§3.2.3, §3.2.4, §12.9): отдельный `CharacterState` является второй проекцией той же runtime character entity и использует ID существующего `CreatureState`; current State schema V2 хранит `characters`, writer выпускает только V2, а strict legacy V1 reader создаёт `characters=()` без invented defaults.
 * Minimal d20 semantics (§3.12): closed `RollMode`, immutable `D20Roll` и concrete `resolve_d20_roll`. NORMAL использует один independent `"1d20"` call, ADVANTAGE/DISADVANTAGE — два; `"2d20"` и natural-1/natural-20 interpretation не вводятся. Effective mode не является Command/API/AI input.
 
 ---
@@ -231,7 +232,7 @@ Event immutable: после записи не редактируется и не
 * Чтение и запись — только в Infrastructure, через Serializer или Repository. Serializer — чистая граница без ввода-вывода.
 * Python `snake_case` ↔ JSON `camelCase`. Границу пересекает только сериализатор.
 * **JSON** — Definitions, state snapshots, config, AI context, API DTO. **JSONL** — append-only потоки; одна строка = один JSON-объект.
-* `state.json` содержит целочисленный `schemaVersion = 1`. Это версия схемы, а не ревизия State.
+* Current `state.json` содержит целочисленный `schemaVersion = 2`; writer выпускает только V2, reader принимает exact V2 и legacy V1. Это версия схемы, а не ревизия State.
 * **Десериализация строгая:** все поля обязательны; неизвестные поля, значения по умолчанию и приведение типов запрещены. Доменные инварианты проверяются при разборе.
 * Untrusted boundary проверяет shape, runtime types, schema/version, форматы и ссылки при dereference. Domain Value Objects и State/Definitions сами защищают intrinsic/semantic invariants; transport validation не копируется в каждый dataclass.
 * Domain constructors не выполняют coercion (`"1" → 1`, `list → tuple`, `string → enum`); normalization принадлежит boundary mapper/loader.
