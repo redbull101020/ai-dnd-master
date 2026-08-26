@@ -1226,3 +1226,64 @@ contracts.
   level-up systems, and monster proficiency/Challenge Rating paths.
 - Generic proficiency/modifier frameworks, new State owners, EventStore,
   replay, transactions, buses, registries, frameworks, and dependencies.
+
+## 2026-08-26 — Phase 2 Character Saving Throw vertical slice
+
+### Initial state
+
+- Fetched `origin/main` and created
+  `codex/phase2-character-saving-throw` directly from
+  `f533813f66c304f3a475eacc172776287d0cf6ed` with a clean worktree.
+- The repository already contained `CharacterState`, character proficiency
+  progression, shared d20 selection semantics, `ResolutionResult`,
+  `EventMetadataProvider`, and State schema V2, but no Saving Throw
+  Command/resolver/Event/handler flow.
+
+### Implemented
+
+- Extracted the pure `ability_modifier()` rule to `domain.rules.ability` and
+  preserved the existing Ability Check import path through a module-level
+  import without changing Ability Check behavior.
+- Added immutable `SavingThrowPayload` / `SavingThrowCommand`, the
+  character-specific `resolve_character_saving_throw(...)`, and immutable
+  `SavingThrowResult` with separate ability-modifier and proficiency-bonus
+  contributions.
+- Composed authoritative `CreatureState` ability scores with matching
+  `CharacterState` total level and Saving Throw proficiency membership. The
+  resolver delegates NORMAL/ADVANTAGE/DISADVANTAGE to `resolve_d20_roll()` and
+  applies no automatic natural-1/natural-20 result semantics.
+- Added typed `SavingThrowResolvedPayloadV1` and a generic `GameEvent` builder
+  with the current d20 shape and separate `abilityModifier` /
+  `proficiencyBonus` audit fields.
+- Added explicit `SavingThrowHandler`. Missing Creature returns
+  `ENTITY_NOT_FOUND`; missing matching Character projection returns
+  `INVALID_STATE`. Infrastructure/programming failures propagate.
+- Preserved read-only behavior: the handler never calls `StateStore.save()`,
+  does not apply Events to State, and creates no persisted Event artifact.
+- Added Domain, Application, and real-adapter integration coverage; updated
+  canonical Architecture §3.13, proficiency/d20/current-status references,
+  Event serialization documentation, append-only DEC-0024, and `CLAUDE.md`.
+  `docs/ROADMAP.md` and State/persistence contracts were unchanged.
+
+### Verification
+
+- Python 3.12.13 in a temporary external virtual environment with the existing
+  declared dependencies: pytest 9.1.1 and mypy 1.20.2; no dependency changed.
+- New/shared Domain tests: 64 passed.
+- New Application and real-adapter integration tests: 8 passed.
+- Ability Check/proficiency/d20 regressions: 105 passed.
+- Documentation-reference tests: 2 passed.
+- Full pytest suite: 500 passed.
+- `python -m mypy src/dnd_engine`: no issues in 57 source files.
+- `git diff --check` passed.
+- Formatter and linter remain not configured.
+
+### Intentionally deferred
+
+- Monster Saving Throws, Challenge Rating and monster proficiency sources,
+  Death Saving Throws, Skills, Expertise, and other proficiency categories.
+- Conditions/Effects and advantage-source aggregation/cancellation, rerolls,
+  spells/effects that create Saving Throw Commands, and source Event causality.
+- Generic modifier/check/resolver frameworks, EventStore/runtime Event
+  persistence, replay, State mutation/application, transaction/UoW, buses,
+  registries, frameworks, databases, and new dependencies.

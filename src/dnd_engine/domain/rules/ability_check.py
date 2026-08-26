@@ -1,17 +1,12 @@
 from dataclasses import dataclass
 
 from dnd_engine.domain.commands.ability_check import AbilityCheckCommand
+from dnd_engine.domain.rules.ability import ability_modifier
 from dnd_engine.domain.rules.d20 import resolve_d20_roll
 from dnd_engine.domain.services.dice import DiceEngine
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.d20 import D20Roll, RollMode
-
-
-def ability_modifier(score: int) -> int:
-    if type(score) is not int:
-        raise TypeError("score must be an int")
-    return (score - 10) // 2
 
 
 @dataclass(frozen=True)
