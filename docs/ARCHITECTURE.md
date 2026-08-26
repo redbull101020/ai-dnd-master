@@ -45,6 +45,7 @@
 | Семантика ResolutionResult | §3.5 |
 | Подготовительный контракт Ability Check | §3.10 |
 | Proficiency bonus персонажа | §3.11 |
+| Минимальная d20 semantics | §3.12 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
 
@@ -85,6 +86,7 @@
   * [3.9. Error Contract](#39-error-contract)
   * [3.10. Minimal Phase 2 Ability Check vertical slice](#310-minimal-phase-2-ability-check-vertical-slice)
   * [3.11. Minimal Phase 2 Proficiency foundation](#311-minimal-phase-2-proficiency-foundation)
+  * [3.12. Minimal Phase 2 d20 semantics](#312-minimal-phase-2-d20-semantics)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1401,9 +1403,9 @@ for every event in events:
 
 Successful result не обязан иметь непустой `events`: будущий successful use
 case может не публиковать Event. Generic top-level `rolls` отсутствует. Для
-Ability Check один и тот же `DiceRoll` допустимо представлен в typed immediate
-`AbilityCheckResult` и durable Event payload, но оба представления строятся из
-одного результата resolution, а не вычисляются независимо.
+Ability Check один и тот же `D20Roll` представлен в typed immediate
+`AbilityCheckResult` и current V2 Event payload, но оба представления строятся
+из одного результата resolution, а не вычисляются независимо.
 
 Отдельного concrete `StateChange` contract пока нет, поэтому
 `state_changes` не является полем `ResolutionResult`. Authoritative State
@@ -1654,15 +1656,23 @@ def resolve_ability_check(
     command: AbilityCheckCommand,
     creature: CreatureState,
     dice: DiceEngine,
+    *,
+    roll_mode: RollMode = RollMode.NORMAL,
 ) -> AbilityCheckResult:
     ...
 ```
 
-Resolver выполняет только rule resolution, не мутирует `CreatureState` и делает
-ровно один `dice.roll("1d20")`. Он не загружает State, не знает `StateStore`, не
-сохраняет State, не создаёт Event ID, не читает clock, не сериализует и не
-импортирует Infrastructure/Application. Реализованный Application handler
-загружает snapshot, находит actor и вызывает resolver.
+`roll_mode` — keyword-only effective rule result и не входит в
+`AbilityCheckPayload`, `AbilityCheckCommand`, Command Envelope, API DTO или AI
+input. Пока production source advantage/disadvantage отсутствует, Application
+handler вызывает resolver без этого аргумента и получает `RollMode.NORMAL`.
+
+Resolver выполняет только rule resolution, не мутирует `CreatureState` и
+получает physical d20 result через `resolve_d20_roll(dice, roll_mode)` (§3.12).
+Он не загружает State, не знает `StateStore`, не сохраняет State, не создаёт
+Event ID, не читает clock, не сериализует и не импортирует
+Infrastructure/Application. Реализованный Application handler загружает
+snapshot, находит actor и вызывает resolver.
 
 Immutable Domain result:
 
@@ -1671,16 +1681,16 @@ Immutable Domain result:
 class AbilityCheckResult:
     ability: Ability
     dc: int
-    roll: DiceRoll
+    roll: D20Roll
     modifier: int
     total: int
     succeeded: bool
 ```
 
-`roll.total` — raw dice result. `AbilityCheckResult.total` равен
-`roll.total + modifier`; `succeeded` равен `total >= dc`. Контракт Phase 1
-`DiceRoll` не меняется, а dice notation не расширяется modifiers,
-advantage/disadvantage или keep/drop syntax.
+`roll.selected` — effective raw d20 value. `AbilityCheckResult.total` равен
+`roll.selected + modifier`; `succeeded` равен `total >= dc`. Контракт Phase 1
+`DiceRoll.total = sum(rolls)` не меняется, а dice notation не расширяется
+modifiers, advantage/disadvantage или keep/drop syntax.
 
 Для Event metadata Application использует один минимальный injected seam:
 
@@ -1721,7 +1731,7 @@ resolver Event не создаёт. Отдельные
 resolver, immutable `AbilityCheckResult`, typed Event payload builder, explicit
 Application handler и injected metadata port.
 
-Минимальный typed payload contract для `AbilityCheckResolved` version 1:
+`AbilityCheckResolved` version 1 остаётся immutable legacy NORMAL-only schema:
 
 ```python
 @dataclass(frozen=True)
@@ -1750,9 +1760,12 @@ def build_ability_check_resolved_v1(
 Builder фиксирует `type="AbilityCheckResolved"` и `version=1`, берёт
 `command_id`, `campaign_id` и `actor_id` из Command, использует
 `caused_by=None` для этого slice и строит generic JSON-compatible payload из
-`AbilityCheckResult` через `AbilityCheckResolvedPayloadV1`. Он не читает clock,
-не генерирует ID и не обращается к persistence. Один полученный resolver
-outcome является источником как typed immediate result, так и Event payload.
+`AbilityCheckResult` через `AbilityCheckResolvedPayloadV1`. После перехода
+result на `D20Roll` builder разрешён только для `RollMode.NORMAL`: он создаёт
+точное legacy `DiceRoll(expression="1d20", rolls=(selected,), total=selected)`
+представление. Для `ADVANTAGE` и `DISADVANTAGE` builder выбрасывает `ValueError`,
+поскольку lossy V1 representation запрещено. Он не читает clock, не генерирует
+ID и не обращается к persistence.
 
 Canonical payload v1:
 
@@ -1770,6 +1783,50 @@ Canonical payload v1:
   "succeeded": false
 }
 ```
+
+Current canonical writer использует `AbilityCheckResolved` version 2:
+
+```python
+@dataclass(frozen=True)
+class AbilityCheckResolvedPayloadV2:
+    ability: Ability
+    dc: int
+    roll: D20Roll
+    modifier: int
+    total: int
+    succeeded: bool
+
+
+def build_ability_check_resolved_v2(
+    *,
+    event_id: str,
+    timestamp: datetime,
+    command: AbilityCheckCommand,
+    outcome: AbilityCheckResult,
+) -> GameEvent:
+    ...
+```
+
+Canonical payload v2:
+
+```json
+{
+  "ability": "strength",
+  "dc": 15,
+  "roll": {
+    "mode": "advantage",
+    "rolls": [7, 16],
+    "selected": 16
+  },
+  "modifier": 3,
+  "total": 19,
+  "succeeded": true
+}
+```
+
+`AbilityCheckHandler` пишет только V2. Один resolver outcome остаётся источником
+typed immediate result и Event payload; generic `GameEvent` и
+`EventSerializer` не меняются.
 
 Envelope уже содержит `eventId`, `commandId`, `type`, `version`, `campaignId`,
 `timestamp`, `actorId` и `causedBy`; payload их не дублирует. EventStore,
@@ -1829,6 +1886,59 @@ Check contract остаются неизменными.
 membership для skill checks, saving throws, attacks, tools или других
 proficiencies, а также Expertise, half/double proficiency и stacking rules.
 Эти контракты добавляются только вместе с соответствующими concrete mechanics.
+
+---
+
+### 3.12. Minimal Phase 2 d20 semantics
+
+Общий concrete d20 primitive отделяет physical dice-expression result от
+effective selection для advantage/disadvantage:
+
+```python
+class RollMode(StrEnum):
+    NORMAL = "normal"
+    ADVANTAGE = "advantage"
+    DISADVANTAGE = "disadvantage"
+
+
+@dataclass(frozen=True)
+class D20Roll:
+    mode: RollMode
+    rolls: tuple[int, ...]
+    selected: int
+
+
+def resolve_d20_roll(dice: DiceEngine, mode: RollMode) -> D20Roll:
+    ...
+```
+
+`RollMode` — effective roll mode, уже определённый authoritative игровыми
+правилами. Он не является причиной advantage/disadvantage, Condition, Effect,
+State, Command intent или generic modifier collection. UI, API и AI не являются
+authoritative source режима.
+
+Canonical resolution semantics:
+
+```text
+NORMAL       → один independent dice.roll("1d20"), selected = raw
+ADVANTAGE    → два independent dice.roll("1d20"), selected = max(raw rolls)
+DISADVANTAGE → два independent dice.roll("1d20"), selected = min(raw rolls)
+```
+
+`dice.roll("2d20")` для advantage/disadvantage не используется. Каждый ответ
+`DiceEngine` обязан быть actual `DiceRoll` для expression `"1d20"` ровно с
+одним individual roll; нарушение является programming/infrastructure contract
+failure, а не gameplay `EngineError`. `DiceEngine` Protocol и Phase 1
+`DiceRoll` не меняются: `DiceRoll.total` по-прежнему равен `sum(rolls)`.
+
+`D20Roll` хранит только `mode`, ordered raw `rolls` и effective `selected`.
+Значения natural 1 и natural 20 здесь не интерпретируются как automatic
+failure, automatic success или critical result; такую семантику при
+необходимости определяет конкретная будущая mechanic.
+
+Sources/cancellation advantage/disadvantage, Conditions, Effects, Saving
+Throws, Skills, Attack Rolls и generic modifier/check frameworks остаются
+deferred.
 
 ---
 
@@ -4680,8 +4790,9 @@ debug logs
 
 ### 12.10. Event Serialization
 
-Implementation status: **Implemented** для immutable `GameEvent`,
-`AbilityCheckResolvedPayloadV1`/builder и чистого `EventSerializer`.
+Implementation status: **Implemented** для immutable `GameEvent`, legacy
+`AbilityCheckResolvedPayloadV1`/V1 builder, current
+`AbilityCheckResolvedPayloadV2`/V2 builder и чистого `EventSerializer`.
 
 Phase 1 `EventSerializer` является чистой границей между `GameEvent` и
 каноническим JSON-совместимым Event Envelope: он не выполняет filesystem I/O,
@@ -4697,10 +4808,12 @@ EventStore, выделение durable Event ID/sequence, JSONL append, replay �
 применение Event к State остаются deferred и реализуются отдельными будущими
 slices.
 
-Generic `GameEvent` envelope остаётся общим Event contract. Первый concrete
-gameplay payload contract, `AbilityCheckResolvedPayloadV1`, и его Domain builder
-реализованы в Phase 2; дополнительные gameplay Event contracts добавляются
-только вместе с соответствующими mechanics.
+Generic `GameEvent` envelope остаётся общим Event contract.
+`AbilityCheckResolvedPayloadV1` сохранён как immutable legacy NORMAL-only
+schema; `AbilityCheckResolvedPayloadV2` является current canonical writer и
+содержит effective d20 mode, ordered raw rolls и selected value. Runtime Event
+persistence этим не реализована. Дополнительные gameplay Event contracts
+добавляются только вместе с соответствующими mechanics.
 
 Event Log является append-only.
 

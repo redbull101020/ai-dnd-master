@@ -1125,3 +1125,51 @@ contracts.
 - Monster proficiency by Challenge Rating, `CreatureState` or State snapshot
   schema changes, Ability Check integration, generic modifier/proficiency
   frameworks, and new orchestration or persistence abstractions.
+
+## 2026-08-26 — Phase 2 Group 3A canonical d20 semantics
+
+### Initial state
+
+- Fetched `origin/main` and created `codex/phase2-d20-semantics` directly from
+  `e9715f7398844f4f0e237c4892e66405e180e0a4` with a clean worktree.
+- The Ability Check vertical slice used `DiceRoll.total`, wrote
+  `AbilityCheckResolved` V1, and had no shared effective d20 selection contract.
+
+### Implemented
+
+- Added the closed `RollMode` enum, immutable validated
+  `D20Roll(mode, rolls, selected)`, and concrete `resolve_d20_roll()` rule.
+- Implemented one independent `"1d20"` call for NORMAL and two independent
+  `"1d20"` calls for ADVANTAGE/DISADVANTAGE, with strict validation of each
+  primitive `DiceEngine` response and no `"2d20"` shortcut.
+- Migrated `AbilityCheckResult` and `resolve_ability_check()` to `D20Roll` and
+  `roll.selected`, adding the keyword-only effective `roll_mode` seam with a
+  NORMAL default while leaving the Command contract unchanged.
+- Added `AbilityCheckResolvedPayloadV2` and its builder as the current writer;
+  retained V1 as the exact legacy `DiceRoll` schema for NORMAL outcomes only
+  and rejected lossy ADVANTAGE/DISADVANTAGE conversion.
+- Updated Domain, Application, integration, and `ResolutionResult` fixtures and
+  tests, canonical Architecture §§3.10/3.12/12.10, append-only DEC-0022, and
+  the reproduced Phase 2 facts in `CLAUDE.md`. `docs/ROADMAP.md` was unchanged.
+
+### Verification
+
+- Python 3.12.13 in a temporary external virtual environment with the existing
+  declared dev dependencies: pytest 9.1.1 and mypy 1.20.2. The repository
+  `.venv` launcher was stale and referenced a missing local Python executable.
+- New d20 tests: 32 passed.
+- Migrated Ability Check Domain/Event/Application/integration tests: 56 passed.
+- Documentation-reference tests: 2 passed.
+- Full pytest suite: 384 passed.
+- `python -m mypy src/dnd_engine`: no issues in 51 source files.
+- `git diff --check` passed; Git emitted only Windows LF-to-CRLF checkout
+  warnings for changed files.
+
+### Intentionally deferred
+
+- Saving Throws, Skills, Attack Rolls, AC, authoritative character level,
+  proficiency membership, Conditions, Effects, and advantage/disadvantage
+  source aggregation or cancellation.
+- Generic modifier/check frameworks, rerolls, Lucky, critical-hit or automatic
+  natural-1/natural-20 semantics, EventStore/runtime Event persistence, replay,
+  State mutation, buses, registries, dispatcher, and broader orchestration.

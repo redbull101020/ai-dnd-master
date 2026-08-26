@@ -15,6 +15,7 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.d20 import RollMode
 from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 
 
@@ -141,7 +142,9 @@ def test_successful_gameplay_check_orchestrates_read_only_result_and_event() -> 
     assert result.command_id == "command_000001"
     assert result.outcome is not None
     assert result.outcome.ability is Ability.STRENGTH
-    assert result.outcome.roll.total == 13
+    assert result.outcome.roll.mode is RollMode.NORMAL
+    assert result.outcome.roll.rolls == (13,)
+    assert result.outcome.roll.selected == 13
     assert result.outcome.modifier == 2
     assert result.outcome.total == 15
     assert result.outcome.succeeded is True
@@ -152,7 +155,7 @@ def test_successful_gameplay_check_orchestrates_read_only_result_and_event() -> 
     assert event.event_id == "event_000123"
     assert event.timestamp is FIXED_TIMESTAMP
     assert event.type == "AbilityCheckResolved"
-    assert event.version == 1
+    assert event.version == 2
     assert event.command_id == result.command_id
     assert event.campaign_id == "campaign_001"
     assert event.actor_id == "character_001"
@@ -161,9 +164,9 @@ def test_successful_gameplay_check_orchestrates_read_only_result_and_event() -> 
         "ability": result.outcome.ability.value,
         "dc": result.outcome.dc,
         "roll": {
-            "expression": result.outcome.roll.expression,
+            "mode": result.outcome.roll.mode.value,
             "rolls": result.outcome.roll.rolls,
-            "total": result.outcome.roll.total,
+            "selected": result.outcome.roll.selected,
         },
         "modifier": result.outcome.modifier,
         "total": result.outcome.total,

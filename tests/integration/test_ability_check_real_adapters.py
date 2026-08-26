@@ -13,6 +13,7 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.d20 import RollMode
 from dnd_engine.infrastructure.filesystem.state_store import FilesystemStateStore
 from dnd_engine.infrastructure.random.dice import PythonDiceEngine
 
@@ -87,11 +88,11 @@ def test_ability_check_uses_real_adapters_without_persisting_state(
     outcome = result.outcome
     assert outcome.ability is Ability.STRENGTH
     assert outcome.dc == 15
-    assert outcome.roll.expression == "1d20"
+    assert outcome.roll.mode is RollMode.NORMAL
     assert len(outcome.roll.rolls) == 1
     raw_roll = outcome.roll.rolls[0]
     assert 1 <= raw_roll <= 20
-    assert outcome.roll.total == raw_roll
+    assert outcome.roll.selected == raw_roll
     assert outcome.modifier == 2
     assert outcome.total == raw_roll + outcome.modifier
     assert outcome.succeeded is (outcome.total >= outcome.dc)
@@ -101,7 +102,7 @@ def test_ability_check_uses_real_adapters_without_persisting_state(
     assert event.event_id == "event_000321"
     assert event.command_id == command.command_id
     assert event.type == "AbilityCheckResolved"
-    assert event.version == 1
+    assert event.version == 2
     assert event.campaign_id == command.campaign_id
     assert event.timestamp == FIXED_TIMESTAMP
     assert event.actor_id == command.actor_id
@@ -110,9 +111,9 @@ def test_ability_check_uses_real_adapters_without_persisting_state(
         "ability": outcome.ability.value,
         "dc": outcome.dc,
         "roll": {
-            "expression": outcome.roll.expression,
+            "mode": outcome.roll.mode.value,
             "rolls": outcome.roll.rolls,
-            "total": outcome.roll.total,
+            "selected": outcome.roll.selected,
         },
         "modifier": outcome.modifier,
         "total": outcome.total,

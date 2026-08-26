@@ -119,9 +119,10 @@ Definition immutable: во время сессии не мутируется, п
 
 * `ResolutionResult[T]` (§3.5). `success` означает успех обработки команды и разрешения правил, **не** игровой исход: проваленная проверка — это `success is True` и `outcome.succeeded is False`. Полей `state_changes` и generic top-level `rolls` нет; placeholder-абстракция `StateChange` не вводится.
 * `ErrorCode` и `EngineError` (§3.9). Минимальное structured representation ожидаемых ошибок без exception hierarchy.
-* Ability Check vertical slice (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier`, `resolve_ability_check`, `AbilityCheckResolvedPayloadV1` и `build_ability_check_resolved_v1`. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
+* Ability Check vertical slice (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier` и `resolve_ability_check`. Result использует `D20Roll`; total вычисляется из `roll.selected`. `AbilityCheckResolvedPayloadV1`/V1 builder сохранены как legacy NORMAL-only schema, а `AbilityCheckResolvedPayloadV2`/V2 builder являются current writer. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
 * Application orchestration (§2.2, §3.10): `EventMetadata`, `EventMetadataProvider` и explicit `AbilityCheckHandler`. Handler загружает State, находит actor, вызывает resolver, получает metadata через injected provider и собирает Event/`ResolutionResult`; он не читает clock, не генерирует ID, не мутирует State и не вызывает `StateStore.save()`.
 * Proficiency foundation (§3.11): `character_proficiency_bonus(level)` — pure derived character-level rule. Он не хранит bonus в `CreatureState`, не изменяет raw Ability Check и не применяется к monster proficiency по Challenge Rating; concrete proficiency membership и authoritative character-level State остаются deferred.
+* Minimal d20 semantics (§3.12): closed `RollMode`, immutable `D20Roll` и concrete `resolve_d20_roll`. NORMAL использует один independent `"1d20"` call, ADVANTAGE/DISADVANTAGE — два; `"2d20"` и natural-1/natural-20 interpretation не вводятся. Effective mode не является Command/API/AI input.
 
 ---
 
@@ -214,6 +215,7 @@ Event immutable: после записи не редактируется и не
 
 * `DiceEngine` — Domain `Protocol` с единственным методом `roll(expression: str) -> DiceRoll`.
 * Принимается **только строгая нотация `NdM`** в нижнем регистре. Модификаторы, advantage/disadvantage, keep/drop и полный DSL не поддерживаются и не добавляются.
+* Advantage/disadvantage реализуются поверх primitive `"1d20"` calls через `resolve_d20_roll`, а не расширением dice-expression DSL или изменением `DiceRoll.total` (§3.12).
 * Парсер выражения приватен для реализации в Infrastructure; Domain о нём не знает.
 * Production-реализация `PythonDiceEngine` получает `random.Random` инъекцией. Domain не зависит от реализации RNG.
 * Внутреннее состояние RNG не является авторитетным State кампании.
@@ -253,6 +255,7 @@ Event immutable: после записи не редактируется и не
 | `datetime.now()`, naive datetime, смещение `+00:00` | aware UTC, передан снаружи, в JSON — `Z` |
 | `state_changes` в `ResolutionResult` | такого поля нет |
 | generic top-level `rolls` в `ResolutionResult` | roll находится в typed outcome и durable Event payload |
+| `roll.total` в Ability Check | `D20Roll.selected`; `DiceRoll.total` остаётся суммой dice expression |
 | Хранимый `modifier` в `AbilityScores` | чистое правило `(score - 10) // 2` |
 | `AbilityCheckSucceeded` / `AbilityCheckFailed` | один `AbilityCheckResolved`, исход в `payload.succeeded` |
 

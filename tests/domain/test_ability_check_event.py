@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError, fields
 from datetime import datetime, timezone
+from typing import Callable
 
 import pytest
 
@@ -9,10 +10,14 @@ from dnd_engine.domain.commands.ability_check import (
 )
 from dnd_engine.domain.events.ability_check import (
     AbilityCheckResolvedPayloadV1,
+    AbilityCheckResolvedPayloadV2,
     build_ability_check_resolved_v1,
+    build_ability_check_resolved_v2,
 )
+from dnd_engine.domain.events.game_event import GameEvent
 from dnd_engine.domain.rules.ability_check import AbilityCheckResult
 from dnd_engine.domain.value_objects.ability import Ability
+from dnd_engine.domain.value_objects.d20 import D20Roll, RollMode
 from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 from dnd_engine.infrastructure.persistence.json.event_serializer import EventSerializer
 
@@ -37,18 +42,22 @@ def outcome(
     *,
     ability: Ability = Ability.STRENGTH,
     dc: int = 15,
+    mode: RollMode = RollMode.NORMAL,
 ) -> AbilityCheckResult:
+    rolls = (7,) if mode is RollMode.NORMAL else (7, 16)
+    selected = 16 if mode is RollMode.ADVANTAGE else 7
+    total = selected - 1
     return AbilityCheckResult(
         ability=ability,
         dc=dc,
-        roll=DiceRoll(expression="1d20", rolls=(7,), total=7),
+        roll=D20Roll(mode=mode, rolls=rolls, selected=selected),
         modifier=-1,
-        total=6,
-        succeeded=False,
+        total=total,
+        succeeded=total >= dc,
     )
 
 
-def test_typed_payload_has_exact_fields_and_is_immutable() -> None:
+def test_v1_typed_payload_has_exact_legacy_fields_and_is_immutable() -> None:
     payload = AbilityCheckResolvedPayloadV1(
         ability=Ability.STRENGTH,
         dc=15,
@@ -70,7 +79,7 @@ def test_typed_payload_has_exact_fields_and_is_immutable() -> None:
         payload.total = 7  # type: ignore[misc]
 
 
-def test_builder_sets_exact_envelope_and_injected_metadata() -> None:
+def test_v1_builder_sets_exact_envelope_and_injected_metadata() -> None:
     event = build_ability_check_resolved_v1(
         event_id="event_000123",
         timestamp=FIXED_TIMESTAMP,
@@ -88,14 +97,12 @@ def test_builder_sets_exact_envelope_and_injected_metadata() -> None:
     assert event.caused_by is None
 
 
-def test_builder_creates_exact_payload_from_outcome() -> None:
-    result = outcome()
-
+def test_v1_builder_preserves_exact_legacy_normal_payload() -> None:
     event = build_ability_check_resolved_v1(
         event_id="event_000123",
         timestamp=FIXED_TIMESTAMP,
         command=command(),
-        outcome=result,
+        outcome=outcome(),
     )
 
     assert event.payload == {
@@ -110,17 +117,6 @@ def test_builder_creates_exact_payload_from_outcome() -> None:
         "total": 6,
         "succeeded": False,
     }
-    assert event.payload["roll"]["rolls"] == result.roll.rolls  # type: ignore[index]
-
-
-def test_builder_payload_uses_existing_event_serializer_shape() -> None:
-    event = build_ability_check_resolved_v1(
-        event_id="event_000123",
-        timestamp=FIXED_TIMESTAMP,
-        command=command(),
-        outcome=outcome(),
-    )
-
     assert EventSerializer.serialize(event)["payload"] == {
         "ability": "strength",
         "dc": 15,
@@ -135,6 +131,77 @@ def test_builder_payload_uses_existing_event_serializer_shape() -> None:
     }
 
 
+@pytest.mark.parametrize("mode", [RollMode.ADVANTAGE, RollMode.DISADVANTAGE])
+def test_v1_builder_rejects_non_normal_roll_modes(mode: RollMode) -> None:
+    with pytest.raises(ValueError, match="only normal"):
+        build_ability_check_resolved_v1(
+            event_id="event_000123",
+            timestamp=FIXED_TIMESTAMP,
+            command=command(),
+            outcome=outcome(mode=mode),
+        )
+
+
+def test_v2_typed_payload_has_exact_fields_and_is_immutable() -> None:
+    result = outcome(mode=RollMode.ADVANTAGE)
+    payload = AbilityCheckResolvedPayloadV2(
+        ability=result.ability,
+        dc=result.dc,
+        roll=result.roll,
+        modifier=result.modifier,
+        total=result.total,
+        succeeded=result.succeeded,
+    )
+
+    assert tuple(field.name for field in fields(payload)) == (
+        "ability",
+        "dc",
+        "roll",
+        "modifier",
+        "total",
+        "succeeded",
+    )
+    with pytest.raises(FrozenInstanceError):
+        payload.total = 16  # type: ignore[misc]
+
+
+def test_v2_builder_creates_canonical_payload_and_serializer_shape() -> None:
+    result = outcome(mode=RollMode.ADVANTAGE)
+    event = build_ability_check_resolved_v2(
+        event_id="event_000123",
+        timestamp=FIXED_TIMESTAMP,
+        command=command(),
+        outcome=result,
+    )
+
+    assert event.type == "AbilityCheckResolved"
+    assert event.version == 2
+    assert event.payload == {
+        "ability": "strength",
+        "dc": 15,
+        "roll": {
+            "mode": "advantage",
+            "rolls": (7, 16),
+            "selected": 16,
+        },
+        "modifier": -1,
+        "total": 15,
+        "succeeded": True,
+    }
+    assert EventSerializer.serialize(event)["payload"] == {
+        "ability": "strength",
+        "dc": 15,
+        "roll": {
+            "mode": "advantage",
+            "rolls": [7, 16],
+            "selected": 16,
+        },
+        "modifier": -1,
+        "total": 15,
+        "succeeded": True,
+    }
+
+
 @pytest.mark.parametrize(
     ("event_outcome", "message"),
     [
@@ -142,12 +209,17 @@ def test_builder_payload_uses_existing_event_serializer_shape() -> None:
         (outcome(dc=16), "dc"),
     ],
 )
-def test_builder_rejects_outcome_command_mismatch(
+@pytest.mark.parametrize(
+    "builder",
+    [build_ability_check_resolved_v1, build_ability_check_resolved_v2],
+)
+def test_builders_reject_outcome_command_mismatch(
     event_outcome: AbilityCheckResult,
     message: str,
+    builder: Callable[..., GameEvent],
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        build_ability_check_resolved_v1(
+        builder(
             event_id="event_000123",
             timestamp=FIXED_TIMESTAMP,
             command=command(),

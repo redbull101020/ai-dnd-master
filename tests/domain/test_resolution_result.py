@@ -8,14 +8,14 @@ from dnd_engine.domain.events.game_event import GameEvent
 from dnd_engine.domain.resolution import ResolutionResult
 from dnd_engine.domain.rules.ability_check import AbilityCheckResult
 from dnd_engine.domain.value_objects.ability import Ability
-from dnd_engine.domain.value_objects.dice_roll import DiceRoll
+from dnd_engine.domain.value_objects.d20 import D20Roll, RollMode
 
 
 def outcome(*, succeeded: bool = True) -> AbilityCheckResult:
     return AbilityCheckResult(
         ability=Ability.STRENGTH,
         dc=10 if succeeded else 20,
-        roll=DiceRoll(expression="1d20", rolls=(10,), total=10),
+        roll=D20Roll(mode=RollMode.NORMAL, rolls=(10,), selected=10),
         modifier=0,
         total=10,
         succeeded=succeeded,

@@ -1,7 +1,7 @@
 from dnd_engine.application.services.event_metadata import EventMetadataProvider
 from dnd_engine.domain.commands.ability_check import AbilityCheckCommand
 from dnd_engine.domain.errors import EngineError, ErrorCode
-from dnd_engine.domain.events.ability_check import build_ability_check_resolved_v1
+from dnd_engine.domain.events.ability_check import build_ability_check_resolved_v2
 from dnd_engine.domain.resolution import ResolutionResult
 from dnd_engine.domain.rules.ability_check import (
     AbilityCheckResult,
@@ -54,7 +54,7 @@ class AbilityCheckHandler:
 
         outcome = resolve_ability_check(command, creature, self._dice)
         metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
-        event = build_ability_check_resolved_v1(
+        event = build_ability_check_resolved_v2(
             event_id=metadata.event_id,
             timestamp=metadata.timestamp,
             command=command,
