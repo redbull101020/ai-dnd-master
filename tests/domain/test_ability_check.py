@@ -15,17 +15,18 @@ from dnd_engine.domain.rules.ability_check import (
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.d20 import D20Roll, RollMode
 from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 
 
 class ScriptedDiceEngine:
-    def __init__(self, roll: DiceRoll) -> None:
-        self._roll = roll
+    def __init__(self, *rolls: DiceRoll) -> None:
+        self._rolls = iter(rolls)
         self.calls: list[str] = []
 
     def roll(self, expression: str) -> DiceRoll:
         self.calls.append(expression)
-        return self._roll
+        return next(self._rolls)
 
 
 def make_creature() -> CreatureState:
@@ -192,11 +193,12 @@ def test_resolver_selects_requested_score_and_rolls_exactly_once() -> None:
     assert result == AbilityCheckResult(
         ability=Ability.DEXTERITY,
         dc=20,
-        roll=DiceRoll(expression="1d20", rolls=(7,), total=7),
+        roll=D20Roll(mode=RollMode.NORMAL, rolls=(7,), selected=7),
         modifier=2,
         total=9,
         succeeded=False,
     )
+    assert isinstance(result.roll, D20Roll)
 
 
 @pytest.mark.parametrize(
@@ -231,6 +233,36 @@ def test_resolver_does_not_mutate_creature_or_ability_scores() -> None:
     assert creature.ability_scores is original_scores
 
 
+@pytest.mark.parametrize(
+    ("mode", "raw_rolls", "selected", "expected_total"),
+    [
+        (RollMode.ADVANTAGE, (7, 16), 16, 18),
+        (RollMode.DISADVANTAGE, (7, 16), 7, 9),
+    ],
+)
+def test_resolver_uses_selected_roll_for_advantage_and_disadvantage(
+    mode: RollMode,
+    raw_rolls: tuple[int, int],
+    selected: int,
+    expected_total: int,
+) -> None:
+    dice = ScriptedDiceEngine(
+        *(DiceRoll(expression="1d20", rolls=(raw,), total=raw) for raw in raw_rolls)
+    )
+
+    result = resolve_ability_check(
+        make_command(ability=Ability.DEXTERITY),
+        make_creature(),
+        dice,
+        roll_mode=mode,
+    )
+
+    assert dice.calls == ["1d20", "1d20"]
+    assert result.roll == D20Roll(mode=mode, rolls=raw_rolls, selected=selected)
+    assert result.total == expected_total
+    assert result.total != sum(raw_rolls) + result.modifier
+
+
 def test_ability_check_result_is_immutable_and_consistent() -> None:
     result = resolve_ability_check(
         make_command(),
@@ -244,7 +276,7 @@ def test_ability_check_result_is_immutable_and_consistent() -> None:
         AbilityCheckResult(
             ability=Ability.STRENGTH,
             dc=15,
-            roll=DiceRoll(expression="1d20", rolls=(7,), total=7),
+            roll=D20Roll(mode=RollMode.NORMAL, rolls=(7,), selected=7),
             modifier=-1,
             total=7,
             succeeded=False,
