@@ -104,7 +104,13 @@ LLM отвечает за понимание намерения, поведен�
 
 ### 4. Events являются историей изменений
 
-Состояние меняется только через события. Событие — факт, который уже произошёл; оно неизменяемо и не удаляется. История событий позволяет восстановить состояние, отлаживать и воспроизводить партии.
+По каноническому контракту состояние меняется только через события. Событие —
+факт, который уже произошёл; оно неизменяемо и не удаляется. Сейчас реализованы
+модель `GameEvent`, сериализация Event и первый read-only
+`AbilityCheckResolved`, но production Event Log и replay subsystem ещё нет.
+Durable ordered Events, version-aware decoding и deterministic Event → State
+application в будущем позволят реализовать recovery/replay; текущий
+`state.json` пока нельзя восстановить из persisted Event history.
 
 ### 5. Определённость важнее удобства
 
@@ -205,13 +211,23 @@ ai-dnd-master/
 Event Log  +  Materialized State
 ```
 
-`events/events.jsonl` — append-only история всех событий (канонический формат, [§12.10](docs/ARCHITECTURE.md#1210-event-serialization)).
-`state.json` — быстрый snapshot текущего состояния, восстановимый из истории.
+**Implemented now:**
 
-Phase 1 реализует filesystem persistence для `state.json`. EventStore, runtime
-JSONL append и replay пока deferred. На этапе MVP используется файловая система;
-переход на SQLite/PostgreSQL возможен без изменения Domain-слоя, поскольку
-доступ к хранилищу идёт через Repository.
+* filesystem snapshot persistence в `state.json`;
+* immutable `GameEvent` model;
+* чистый `EventSerializer` без filesystem I/O.
+
+**Planned / deferred:**
+
+* runtime `EventStore` и append в канонический потоковый формат
+  `events/events.jsonl` ([§12.10](docs/ARCHITECTURE.md#1210-event-serialization));
+* authoritative persistence порядка Events;
+* Event → State projection, recovery и replay.
+
+Наличие пути `events/events.jsonl` в архитектуре или scaffold не означает, что
+работающий EventStore уже существует. На этапе MVP используется файловая
+система; переход на SQLite/PostgreSQL не должен требовать изменения Domain
+rules, поскольку persistence доступна через `StateStore` port.
 
 ---
 

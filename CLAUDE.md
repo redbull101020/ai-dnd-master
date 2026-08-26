@@ -222,7 +222,7 @@ Event immutable: после записи не редактируется и не
 
 ## Сериализация
 
-> [§12.1 Где разрешена](docs/ARCHITECTURE.md#121-где-разрешена-сериализация--where-serialization-is-allowed) · [§12.2 Форматы](docs/ARCHITECTURE.md#122-канонические-форматы--canonical-formats) · §12.9 · [§12.10 Event Serialization](docs/ARCHITECTURE.md#1210-event-serialization) · [§12.21 Запрещённые практики](docs/ARCHITECTURE.md#1221-запрещённые-практики--forbidden-practices)
+> [§12.1 Где разрешена](docs/ARCHITECTURE.md#121-где-разрешена-сериализация--where-serialization-is-allowed) · [§12.2 Форматы](docs/ARCHITECTURE.md#122-канонические-форматы--canonical-formats) · §12.9 · [§12.10 Event Serialization](docs/ARCHITECTURE.md#1210-event-serialization) · [§12.21 Запрещённые практики](docs/ARCHITECTURE.md#1221-запрещённые-практики--forbidden-practices) · [§12.25 Runtime Validation Policy](docs/ARCHITECTURE.md#1225-runtime-validation-policy)
 
 * Сериализации **нет внутри Rule Engine.** Resolver не открывает файлы и не знает про JSON.
 * Чтение и запись — только в Infrastructure, через Serializer или Repository. Serializer — чистая граница без ввода-вывода.
@@ -230,6 +230,8 @@ Event immutable: после записи не редактируется и не
 * **JSON** — Definitions, state snapshots, config, AI context, API DTO. **JSONL** — append-only потоки; одна строка = один JSON-объект.
 * `state.json` содержит целочисленный `schemaVersion = 1`. Это версия схемы, а не ревизия State.
 * **Десериализация строгая:** все поля обязательны; неизвестные поля, значения по умолчанию и приведение типов запрещены. Доменные инварианты проверяются при разборе.
+* Untrusted boundary проверяет shape, runtime types, schema/version, форматы и ссылки при dereference. Domain Value Objects и State/Definitions сами защищают intrinsic/semantic invariants; transport validation не копируется в каждый dataclass.
+* Domain constructors не выполняют coercion (`"1" → 1`, `list → tuple`, `string → enum`); normalization принадлежит boundary mapper/loader.
 * Timestamp — timezone-aware UTC `datetime` в Domain, ISO 8601 с канонической `Z` в JSON. Значение передаётся снаружи: доменный объект не читает часы.
 * Nullable-поля Envelope всегда присутствуют в JSON: Domain `None` пишется как `null`.
 

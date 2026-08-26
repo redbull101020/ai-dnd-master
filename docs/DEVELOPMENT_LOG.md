@@ -981,3 +981,60 @@ contracts.
 - No EventStore, Event persistence, State mutation/application, transaction or
   UoW, bus, dispatcher, GameEngine, registry, future Phase 2 mechanic, database,
   API, AI integration, or expanded dice DSL was added.
+
+## 2026-08-26 — Phase 2 Group 1 hardening and current maintenance
+
+### Initial state
+
+- Fetched `origin/main` and created `codex/phase2-group1-hardening` directly
+  from `8fc3c4642d44cded80aa12f1daf91de484a46327` with a clean worktree.
+- The completed read-only Ability Check used production adapters but had no
+  integration test joining filesystem State persistence, deserialization,
+  Application orchestration, and injected production RNG.
+- Current-contract documentation had no automated local-link/section-reference
+  check or general runtime-validation ownership policy, and README still
+  described replay-oriented storage more strongly than current capabilities.
+
+### Implemented
+
+- Added one deterministic real-adapter Ability Check integration test using
+  `FilesystemStateStore`, its actual `StateSerializer`/JSON path,
+  `PythonDiceEngine(random.Random(...))`, and a test-only fixed Event metadata
+  provider. It verifies typed outcome/Event consistency, unchanged persisted
+  `state.json` bytes, and absence of temporary or Event artifacts.
+- Added a stdlib-only repository documentation-reference test for local
+  Markdown files/anchors and current `§...` Architecture section references;
+  historical Decision/Development Log section references remain outside the
+  current-contract check.
+- Added canonical runtime-validation ownership policy §12.25 and append-only
+  DEC-0020. Strict boundary shape/type/version/reference validation is separated
+  from intrinsic Domain invariants, with no silent Domain coercion and no
+  symmetry-driven mass `__post_init__` retrofit.
+- Clarified README storage/replay capability and added narrow
+  Implemented/Planned/Deferred markers to affected Event lifecycle,
+  persistence, ordering, projection, replay, and atomic-mutation sections.
+- Updated CI to one Python 3.12/3.13/3.14 matrix, `contents: read`, and the
+  current official `actions/checkout@v7` / `actions/setup-python@v7` majors.
+
+### Verification
+
+- Clean external Python 3.12.13 virtual environment: editable `.[dev]` install
+  completed with pytest 9.1.1; no project dependency changed.
+- New integration test: 1 passed.
+- New documentation-reference tests: 2 passed.
+- Existing Application suite: 9 passed.
+- Architecture suite: 7 passed.
+- Infrastructure suite: 118 passed.
+- Full suite after code/documentation/CI changes: 329 passed.
+- No formatter, linter, or type checker is configured: `not configured`.
+
+### Intentionally deferred
+
+- `TEST-02` `dataclasses.Field.type` cleanup: no touched test required it and no
+  observed compatibility failure reached its conditional trigger.
+- Static type checking, concurrency/revisions, database/ORM, full dice DSL,
+  generic registries/dispatcher, EventStore, runtime Event append, replay,
+  State mutation/application, and transaction/UoW remain unimplemented.
+- Existing broad runtime-constructor validation gaps in simple State/Definition
+  dataclasses were not retrofitted; DEC-0020 records the policy without claiming
+  that a complete Domain-invariant audit has already been performed.
