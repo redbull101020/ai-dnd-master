@@ -45,6 +45,7 @@
 | Семантика ResolutionResult | §3.5 |
 | Подготовительный контракт Ability Check | §3.10 |
 | Версионирование схем | §12.13 |
+| Runtime validation policy | §12.25 |
 
 ### Оглавление / Table of contents
 
@@ -174,6 +175,7 @@
   * [12.22. Serialization Responsibility Matrix](#1222-serialization-responsibility-matrix)
   * [12.23. Канонический Serialization Pipeline](#1223-канонический-serialization-pipeline)
   * [12.24. Главный принцип сериализации / Core Serialization Principle](#1224-главный-принцип-сериализации--core-serialization-principle)
+  * [12.25. Runtime Validation Policy](#1225-runtime-validation-policy)
 
 </details>
 
@@ -1236,6 +1238,10 @@ AttackHit
 
 Event описывает уже произошедший факт.
 
+Implementation status: **Implemented** для immutable `GameEvent`, его
+serialization boundary и concrete `AbilityCheckResolved`; runtime publication,
+persistence и State projection — **Planned / Deferred**.
+
 Базовая схема:
 
 ```python
@@ -1292,6 +1298,11 @@ class GameEvent:
 #### Event lifecycle
 
 Event нельзя редактировать после публикации.
+
+Implementation status: **Planned / Deferred** для полного
+publish → persist → project lifecycle. Текущий код создаёт и валидирует Events,
+но runtime Event publication/persistence и authoritative Event → State
+application ещё не реализованы.
 
 ```mermaid
 stateDiagram-v2
@@ -1433,6 +1444,10 @@ concrete Commands выявят реально повторяющееся пов�
 
 Все игровые действия должны проходить через один базовый pipeline:
 
+Implementation status: **Implemented** для read-only Ability Check до Event и
+`ResolutionResult`; runtime Event persistence и mutating State projection —
+**Planned / Deferred**.
+
 ```mermaid
 flowchart TD
 
@@ -1477,6 +1492,9 @@ flowchart TD
 ### 3.8. Atomicity
 
 Одна Command является одной логической транзакцией.
+
+Implementation status: **Planned / Deferred** до первого authoritative
+state-mutating command и отдельного State Mutation Foundation решения.
 
 Например:
 
@@ -2484,6 +2502,10 @@ flowchart TD
 
 Event Envelope — единый транспортный формат для **всех фактов**, произошедших в игре.
 
+Implementation status: **Implemented** для generic immutable `GameEvent` и
+`EventSerializer`; runtime EventStore, ordered append и projection —
+**Planned / Deferred**.
+
 Event не является командой, запросом или намерением.
 
 > **Event = неизменяемый факт, который уже произошёл.**
@@ -2824,6 +2846,10 @@ JSON-like semantics; преобразование неизменяемых mappi
 ---
 
 ### 8.11. Event lifecycle
+
+Implementation status: **Planned / Deferred** для полного runtime lifecycle.
+Текущий код создаёт и валидирует Events, но не предоставляет production
+publish/persist/project pipeline.
 
 ```mermaid
 flowchart LR
@@ -4060,6 +4086,11 @@ AI
 
 Все предыдущие контракты объединяются в единый pipeline:
 
+Implementation status: **Implemented** для read-only Ability Check до Event и
+result; Event persistence и authoritative Event → State application —
+**Planned / Deferred**. Диаграмма остаётся обязательным контрактом будущих
+mutating flows, а не заявлением о существующем replay subsystem.
+
 ```mermaid
 flowchart TD
 
@@ -4249,6 +4280,9 @@ Event Log
 Command Log
 длинных append-only потоков
 ```
+
+Implementation status: **Planned / Deferred** для runtime Event/Command logs.
+Канонический формат определён, но production JSONL append ещё не реализован.
 
 Одна строка = один JSON object.
 
@@ -4590,11 +4624,18 @@ debug logs
 
 ### 12.10. Event Serialization
 
+Implementation status: **Implemented** для immutable `GameEvent`,
+`AbilityCheckResolvedPayloadV1`/builder и чистого `EventSerializer`.
+
 Phase 1 `EventSerializer` является чистой границей между `GameEvent` и
 каноническим JSON-совместимым Event Envelope: он не выполняет filesystem I/O,
 не добавляет Event в лог и не применяет Event к State. Domain timestamp
 сериализуется в ISO 8601 UTC с `Z`; nullable `actorId` и `causedBy` всегда
 присутствуют в output и имеют значение `null` для Domain `None`.
+
+Implementation status: **Planned / Deferred** для runtime EventStore,
+authoritative ordering persistence, JSONL append, Event → State projection,
+recovery и replay.
 
 EventStore, выделение durable Event ID/sequence, JSONL append, replay и
 применение Event к State остаются deferred и реализуются отдельными будущими
@@ -4651,6 +4692,10 @@ events/events.jsonl
 ### 12.11. Event Ordering
 
 События в одной Campaign имеют строгий порядок.
+
+Implementation status: **Planned / Deferred**. Правило порядка является
+каноническим контрактом будущего EventStore; production ordering persistence
+сейчас отсутствует.
 
 Основным порядком считается:
 
@@ -5065,6 +5110,10 @@ assume armor = none
 
 ### 12.23. Канонический Serialization Pipeline
 
+Implementation status: State snapshot serialization и pure Event serialization
+— **Implemented**; EventStore append и последующее Event → State application —
+**Planned / Deferred**.
+
 Для входящих данных:
 
 ```text
@@ -5133,3 +5182,60 @@ Append to Event Store
 ```
 
 **JSON не определяет игровые правила. JSON только представляет Domain Model в переносимом виде.**
+
+---
+
+### 12.25. Runtime Validation Policy
+
+Runtime validation разделена между untrusted boundaries и Domain по смыслу
+проверяемого invariant.
+
+#### Untrusted boundaries are strict
+
+JSON persistence, future API DTO, future AI structured output, ruleset loading
+и configuration обязаны проверять required и unknown fields, exact runtime
+types без silent coercion, schema/version, format constraints и reference
+validity в момент фактического dereference. Конкретный контракт может явно
+разрешить normalization или default; без такого правила boundary не
+преобразует вход молча.
+
+#### Domain Value Objects own intrinsic invariants
+
+Value Object сам защищает свойства, без которых перестаёт быть валидным
+значением. Это уже относится, например, к `AbilityScores`, `DiceRoll` и
+immutable metadata values вроде `EventMetadata`, где применимо. Domain object
+не полагается на то, что serializer когда-то создал его корректно.
+
+#### State and Definitions protect semantic in-memory invariants
+
+Простые State/Definition dataclasses не обязаны копировать transport validation
+целиком, но защищают intrinsic invariants, необходимые для существования
+семантически валидного in-memory Domain object.
+
+```text
+unknown JSON field
+→ serializer / loader concern
+
+HP outside canonical domain range
+→ Domain invariant
+
+invalid JSON value type
+→ boundary concern,
+  но constructor не обязан позволять семантически невозможный Domain object
+```
+
+Serializer не «проверяет всё» вместо Domain. JSON/document shape и Domain
+invariants — разные ответственности.
+
+#### No validation duplication for symmetry
+
+Проверка добавляется из-за конкретного invariant, а не только потому, что у
+соседнего dataclass есть `__post_init__`. Новая policy не требует массового
+добавления одинаковых constructor checks во все существующие Definitions и
+State; конкретные пробелы исправляются в соответствующих slices.
+
+#### No coercion inside Domain
+
+Если canonical constructor contract ожидает typed Domain value, constructor не
+преобразует автоматически `"1"` в `1`, `list` в `tuple` или string в enum.
+Coercion и normalization принадлежат соответствующему boundary mapper/loader.
