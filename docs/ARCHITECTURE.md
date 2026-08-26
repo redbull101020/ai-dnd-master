@@ -44,6 +44,7 @@
 | Коды ошибок | §3.9 |
 | Семантика ResolutionResult | §3.5 |
 | Подготовительный контракт Ability Check | §3.10 |
+| Proficiency bonus персонажа | §3.11 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
 
@@ -83,6 +84,7 @@
   * [3.8. Atomicity](#38-atomicity)
   * [3.9. Error Contract](#39-error-contract)
   * [3.10. Minimal Phase 2 Ability Check vertical slice](#310-minimal-phase-2-ability-check-vertical-slice)
+  * [3.11. Minimal Phase 2 Proficiency foundation](#311-minimal-phase-2-proficiency-foundation)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1773,6 +1775,60 @@ Envelope уже содержит `eventId`, `commandId`, `type`, `version`, `cam
 `timestamp`, `actorId` и `causedBy`; payload их не дублирует. EventStore,
 runtime Event persistence, State mutation/application, replay, transaction/UoW,
 buses, dispatcher и GameEngine остаются deferred.
+
+---
+
+### 3.11. Minimal Phase 2 Proficiency foundation
+
+Первый минимальный Proficiency slice реализует одно pure derived Domain rule:
+
+```python
+def character_proficiency_bonus(level: int) -> int:
+    ...
+```
+
+Функция вычисляет proficiency bonus персонажа из его total character level.
+Input — exact `int` (`bool` не является допустимым integer level) в intrinsic
+character range `1..20`. Неверный runtime type даёт `TypeError`, а значение вне
+range — `ValueError`. Output — exact `int` в range `2..6`.
+
+Canonical progression:
+
+```text
+levels  1..4  → +2
+levels  5..8  → +3
+levels  9..12 → +4
+levels 13..16 → +5
+levels 17..20 → +6
+```
+
+В этом slice proficiency bonus не является State, Definition или State owner.
+Это pure derived Domain rule: функция не читает и не мутирует State, не
+использует randomness и не зависит от Application или Infrastructure.
+
+Character и monster proficiency имеют разные authoritative inputs:
+
+```text
+character proficiency bonus
+    derives from total character level
+
+monster proficiency bonus
+    follows monster/CR rules
+    and is outside this slice
+```
+
+`character_proficiency_bonus()` не является универсальной Creature formula и
+не применяется к monster progression по Challenge Rating.
+
+`proficiency_bonus` не добавляется в `CreatureState`: bonus является derived
+value, а authoritative representation total character level ещё не
+материализована в текущей State model. State snapshot schema и raw Ability
+Check contract остаются неизменными.
+
+Этот foundation slice не определяет authoritative storage character level,
+membership для skill checks, saving throws, attacks, tools или других
+proficiencies, а также Expertise, half/double proficiency и stacking rules.
+Эти контракты добавляются только вместе с соответствующими concrete mechanics.
 
 ---
 

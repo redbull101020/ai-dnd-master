@@ -121,6 +121,7 @@ Definition immutable: во время сессии не мутируется, п
 * `ErrorCode` и `EngineError` (§3.9). Минимальное structured representation ожидаемых ошибок без exception hierarchy.
 * Ability Check vertical slice (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult`, `ability_modifier`, `resolve_ability_check`, `AbilityCheckResolvedPayloadV1` и `build_ability_check_resolved_v1`. Модификатор — чистое производное правило `(score - 10) // 2`; он не хранится ни в `AbilityScores`, ни в State.
 * Application orchestration (§2.2, §3.10): `EventMetadata`, `EventMetadataProvider` и explicit `AbilityCheckHandler`. Handler загружает State, находит actor, вызывает resolver, получает metadata через injected provider и собирает Event/`ResolutionResult`; он не читает clock, не генерирует ID, не мутирует State и не вызывает `StateStore.save()`.
+* Proficiency foundation (§3.11): `character_proficiency_bonus(level)` — pure derived character-level rule. Он не хранит bonus в `CreatureState`, не изменяет raw Ability Check и не применяется к monster proficiency по Challenge Rating; concrete proficiency membership и authoritative character-level State остаются deferred.
 
 ---
 
