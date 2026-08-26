@@ -1078,3 +1078,50 @@ contracts.
 - Strict mypy mode and mypy checking of the test suite.
 - Formatter, linter, pre-commit, tox/nox, and coverage tooling.
 - Production dependency changes and unrelated runtime refactors.
+
+## 2026-08-26 — Phase 2 Proficiency foundation
+
+### Initial state
+
+- Fetched `origin/main` and created
+  `codex/phase2-proficiency-foundation` directly from
+  `93faa86a395c1545879ea3e5029a3a3c48fd0816` with a clean worktree.
+- Phase 2 Ability checks were complete while Proficiency remained unchecked;
+  no character-level proficiency rule, authoritative character level, or
+  proficiency membership model existed.
+
+### Implemented
+
+- Added the pure Domain rule `character_proficiency_bonus(level)` for exact
+  integer character levels `1..20`, with the canonical `+2..+6` progression,
+  `TypeError` for invalid runtime types, and `ValueError` outside the intrinsic
+  character-level range.
+- Added parameterized Domain tests for every tier boundary, non-exact integer
+  inputs including `bool`, and out-of-range levels.
+- Added canonical Architecture §3.11, append-only DEC-0021, and the minimal
+  implemented-contract reference in `CLAUDE.md`.
+- Kept the Roadmap Proficiency item unchecked because this foundation does not
+  complete the overall mechanic.
+
+### Verification
+
+- Python 3.12.13 in a temporary external virtual environment with the existing
+  declared development dependencies: pytest 9.1.1 and mypy 1.20.2.
+- New Proficiency tests: 17 passed. The first run reported one cache-write
+  warning from the pre-existing inaccessible repository `.pytest_cache`;
+  subsequent pytest checks disabled the cache provider.
+- Ability Check and CreatureState regression tests: 55 passed.
+- Documentation-reference tests: 2 passed.
+- Full pytest suite: 345 passed.
+- `python -m mypy src/dnd_engine`: no issues in 49 source files.
+- `git diff --check` passed; Git emitted only Windows checkout warnings that LF
+  will be converted to CRLF if Git rewrites the changed files.
+
+### Intentionally deferred
+
+- Authoritative character-level State, proficiency membership for skills,
+  saving throws, attacks, tools, and other mechanics, Expertise, half/double
+  proficiency, and stacking rules.
+- Monster proficiency by Challenge Rating, `CreatureState` or State snapshot
+  schema changes, Ability Check integration, generic modifier/proficiency
+  frameworks, and new orchestration or persistence abstractions.
