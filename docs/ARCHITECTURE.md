@@ -47,6 +47,7 @@
 | Подготовительный контракт Ability Check | §3.10 |
 | Proficiency bonus персонажа | §3.11 |
 | Минимальная d20 semantics | §3.12 |
+| Character Saving Throw vertical slice | §3.13 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
 
@@ -90,6 +91,7 @@
   * [3.10. Minimal Phase 2 Ability Check vertical slice](#310-minimal-phase-2-ability-check-vertical-slice)
   * [3.11. Minimal Phase 2 Proficiency foundation](#311-minimal-phase-2-proficiency-foundation)
   * [3.12. Minimal Phase 2 d20 semantics](#312-minimal-phase-2-d20-semantics)
+  * [3.13. Minimal Phase 2 Character Saving Throw vertical slice](#313-minimal-phase-2-character-saving-throw-vertical-slice)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1288,8 +1290,9 @@ AttackHit
 Event описывает уже произошедший факт.
 
 Implementation status: **Implemented** для immutable `GameEvent`, его
-serialization boundary и concrete `AbilityCheckResolved`; runtime publication,
-persistence и State projection — **Planned / Deferred**.
+serialization boundary и concrete `AbilityCheckResolved` /
+`SavingThrowResolved`; runtime publication, persistence и State projection —
+**Planned / Deferred**.
 
 Базовая схема:
 
@@ -1493,9 +1496,9 @@ concrete Commands выявят реально повторяющееся пов�
 
 Все игровые действия должны проходить через один базовый pipeline:
 
-Implementation status: **Implemented** для read-only Ability Check до Event и
-`ResolutionResult`; runtime Event persistence и mutating State projection —
-**Planned / Deferred**.
+Implementation status: **Implemented** для read-only Ability Check и Character
+Saving Throw до Event и `ResolutionResult`; runtime Event persistence и
+mutating State projection — **Planned / Deferred**.
 
 ```mermaid
 flowchart TD
@@ -1910,6 +1913,12 @@ derived Domain rule: функция не мутирует State, не испол
 теперь хранится в `CharacterState.total_level`; потребитель явно вызывает
 `character_proficiency_bonus(character.total_level)`.
 
+Первый concrete consumer этих authoritative progression facts реализован в
+Character Saving Throw slice (§3.13). Resolver проверяет membership выбранной
+Ability в `CharacterState.saving_throw_proficiencies` и только при наличии
+proficiency добавляет derived bonus из `total_level`. Это не означает
+завершение broader Proficiency system.
+
 Character и monster proficiency имеют разные authoritative inputs:
 
 ```text
@@ -1983,11 +1992,152 @@ failure, а не gameplay `EngineError`. `DiceEngine` Protocol и Phase 1
 `D20Roll` хранит только `mode`, ordered raw `rolls` и effective `selected`.
 Значения natural 1 и natural 20 здесь не интерпретируются как automatic
 failure, automatic success или critical result; такую семантику при
-необходимости определяет конкретная будущая mechanic.
+необходимости определяет конкретная mechanic. Primitive теперь используется
+двумя implemented consumers: Ability Check (§3.10) и Character Saving Throw
+(§3.13).
 
-Sources/cancellation advantage/disadvantage, Conditions, Effects, Saving
-Throws, Skills, Attack Rolls и generic modifier/check frameworks остаются
-deferred.
+Sources/cancellation advantage/disadvantage, Conditions, Effects, monster
+Saving Throws, Skills, Attack Rolls и generic modifier/check frameworks
+остаются deferred.
+
+---
+
+### 3.13. Minimal Phase 2 Character Saving Throw vertical slice
+
+Первый Saving Throw slice реализует только read-only character resolution:
+
+```text
+SavingThrowCommand
+        ↓
+SavingThrowHandler / State lookup
+        ↓
+CreatureState(actor_id) + CharacterState(actor_id)
+        ↓
+resolve_character_saving_throw(...)
+        ↓
+SavingThrowResult
+        ↓
+SavingThrowResolved V1
+        ↓
+ResolutionResult[SavingThrowResult]
+```
+
+Mechanic-level Command остаётся generic по имени, хотя первый concrete resolver
+является character-specific:
+
+```python
+@dataclass(frozen=True)
+class SavingThrowPayload:
+    ability: Ability
+    dc: int
+
+
+@dataclass(frozen=True)
+class SavingThrowCommand:
+    command_id: str
+    campaign_id: str
+    actor_id: str
+    payload: SavingThrowPayload
+    type: Literal["SavingThrowCommand"] = field(
+        init=False,
+        default="SavingThrowCommand",
+    )
+```
+
+Command выражает intent и не содержит level, proficiency membership/bonus,
+ability modifier, roll, selected value или `roll_mode`. Authoritative inputs
+берутся из State, а effective roll mode остаётся rule input.
+
+Domain resolver boundary:
+
+```python
+def resolve_character_saving_throw(
+    command: SavingThrowCommand,
+    creature: CreatureState,
+    character: CharacterState,
+    dice: DiceEngine,
+    *,
+    roll_mode: RollMode = RollMode.NORMAL,
+) -> SavingThrowResult:
+    ...
+```
+
+`command.actor_id`, `creature.id` и `character.id` обязаны совпадать; mismatch
+является programming/domain invocation failure (`ValueError`). Handler до
+resolver находит обе проекции по одному actor ID. Legacy V1 snapshot с
+`characters=()` не получает invented Character defaults.
+
+Canonical formula:
+
+```text
+ability_modifier = ability_modifier(selected Ability score)
+
+proficiency_bonus =
+    character_proficiency_bonus(CharacterState.total_level)
+    if ability in CharacterState.saving_throw_proficiencies
+    else 0
+
+total = D20Roll.selected + ability_modifier + proficiency_bonus
+succeeded = total >= dc
+```
+
+`ability_modifier()` является shared pure rule в `domain.rules.ability` и
+переиспользуется Ability Check. Proficiency bonus не хранится в State.
+Resolver использует `resolve_d20_roll(dice, roll_mode)` и не реализует вторую
+d20-selection logic. Natural 1 не является automatic failure, natural 20 не
+является automatic success: для этого slice всегда действует `total >= dc`.
+
+Immutable result хранит audit contributions раздельно:
+
+```python
+@dataclass(frozen=True)
+class SavingThrowResult:
+    ability: Ability
+    dc: int
+    roll: D20Roll
+    ability_modifier: int
+    proficiency_bonus: int
+    total: int
+    succeeded: bool
+```
+
+Application создаёт `SavingThrowResolved` V1 через generic `GameEvent`:
+
+```json
+{
+  "ability": "constitution",
+  "dc": 15,
+  "roll": {
+    "mode": "normal",
+    "rolls": [10],
+    "selected": 10
+  },
+  "abilityModifier": 2,
+  "proficiencyBonus": 3,
+  "total": 15,
+  "succeeded": true
+}
+```
+
+Event builder получает `event_id` и UTC `timestamp` от Application, фиксирует
+`type="SavingThrowResolved"`, `version=1`, correlation/scope/actor из Command и
+`caused_by=None`. Он не читает clock, не выделяет ID, не загружает и не
+сохраняет State.
+
+`SavingThrowHandler` использует explicit `StateStore`, `DiceEngine` и
+`EventMetadataProvider`. Missing `CreatureState` возвращает
+`ENTITY_NOT_FOUND`; существующий Creature без matching `CharacterState`
+возвращает `INVALID_STATE` с `field="characters"`. На обоих processing failure
+paths dice и metadata не вызываются. Проваленный gameplay save остаётся
+successful `ResolutionResult` с `outcome.succeeded is False` и одним Event.
+
+Slice read-only: `StateStore.save()` не вызывается, Event не применяется к
+State и runtime Event persistence не выполняется.
+
+Monster Saving Throws и их proficiency source, Death Saving Throws, Skills,
+Conditions/Effects и aggregation/cancellation advantage sources, generic
+modifier/check abstractions, resolver registry, EventStore, replay и State
+mutation остаются deferred.
 
 ---
 
@@ -4302,10 +4452,11 @@ AI
 
 Все предыдущие контракты объединяются в единый pipeline:
 
-Implementation status: **Implemented** для read-only Ability Check до Event и
-result; Event persistence и authoritative Event → State application —
-**Planned / Deferred**. Диаграмма остаётся обязательным контрактом будущих
-mutating flows, а не заявлением о существующем replay subsystem.
+Implementation status: **Implemented** для read-only Ability Check и Character
+Saving Throw до Event и result; Event persistence и authoritative Event →
+State application — **Planned / Deferred**. Диаграмма остаётся обязательным
+контрактом будущих mutating flows, а не заявлением о существующем replay
+subsystem.
 
 ```mermaid
 flowchart TD
@@ -4864,7 +5015,8 @@ debug logs
 
 Implementation status: **Implemented** для immutable `GameEvent`, legacy
 `AbilityCheckResolvedPayloadV1`/V1 builder, current
-`AbilityCheckResolvedPayloadV2`/V2 builder и чистого `EventSerializer`.
+`AbilityCheckResolvedPayloadV2`/V2 builder,
+`SavingThrowResolvedPayloadV1`/V1 builder и чистого `EventSerializer`.
 
 Phase 1 `EventSerializer` является чистой границей между `GameEvent` и
 каноническим JSON-совместимым Event Envelope: он не выполняет filesystem I/O,
@@ -4884,8 +5036,11 @@ Generic `GameEvent` envelope остаётся общим Event contract.
 `AbilityCheckResolvedPayloadV1` сохранён как immutable legacy NORMAL-only
 schema; `AbilityCheckResolvedPayloadV2` является current canonical writer и
 содержит effective d20 mode, ordered raw rolls и selected value. Runtime Event
-persistence этим не реализована. Дополнительные gameplay Event contracts
-добавляются только вместе с соответствующими mechanics.
+persistence этим не реализована. `SavingThrowResolvedPayloadV1` является
+current Saving Throw schema и содержит тот же `D20Roll` shape вместе с
+раздельными `abilityModifier` и `proficiencyBonus` audit contributions,
+описанными в §3.13. Дополнительные gameplay Event contracts добавляются только
+вместе с соответствующими mechanics.
 
 Event Log является append-only.
 
