@@ -10,8 +10,10 @@ from dnd_engine.domain.services.state_store import (
     StateStoreError,
 )
 from dnd_engine.domain.state.campaign import CampaignState
+from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
+from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 from dnd_engine.infrastructure.filesystem import state_store as state_store_module
 from dnd_engine.infrastructure.filesystem.state_store import FilesystemStateStore
@@ -38,6 +40,29 @@ def snapshot(
     )
 
 
+def character_snapshot() -> StateSnapshot:
+    creature = CreatureState(
+        id="character_001",
+        definition_id="fighter",
+        ability_scores=AbilityScores(16, 12, 14, 10, 10, 8),
+        current_hp=28,
+        max_hp=28,
+    )
+    return StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.2.1"),
+        creatures=(creature,),
+        characters=(
+            CharacterState(
+                id="character_001",
+                total_level=5,
+                saving_throw_proficiencies=frozenset(
+                    {Ability.STRENGTH, Ability.CONSTITUTION}
+                ),
+            ),
+        ),
+    )
+
+
 def write_json(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -45,7 +70,7 @@ def write_json(path: Path, data: object) -> None:
 
 def valid_data() -> dict[str, object]:
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "campaignId": "campaign_001",
         "state": {
             "campaign": {
@@ -54,8 +79,16 @@ def valid_data() -> dict[str, object]:
                 "rulesetVersion": "5.2.1",
             },
             "creatures": [],
+            "characters": [],
         },
     }
+
+
+def legacy_v1_data() -> dict[str, object]:
+    data = valid_data()
+    data["schemaVersion"] = 1
+    del data["state"]["characters"]  # type: ignore[index]
+    return data
 
 
 def test_state_store_errors_have_stable_hierarchy() -> None:
@@ -74,7 +107,41 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     assert store.load("campaign_001") == original
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
-    assert json.loads(serialized)["schemaVersion"] == 1
+    data = json.loads(serialized)
+    assert data["schemaVersion"] == 2
+    assert data["state"]["characters"] == []
+
+
+def test_load_accepts_legacy_v1_without_inventing_character_state(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "campaign_001" / "state.json"
+    write_json(state_path, legacy_v1_data())
+
+    loaded = FilesystemStateStore(tmp_path).load("campaign_001")
+
+    assert loaded.characters == ()
+
+
+def test_save_load_v2_preserves_character_state(tmp_path: Path) -> None:
+    store = FilesystemStateStore(tmp_path)
+    original = character_snapshot()
+
+    store.save(original)
+
+    assert store.load("campaign_001") == original
+
+
+def test_save_is_deterministic(tmp_path: Path) -> None:
+    store = FilesystemStateStore(tmp_path)
+    original = character_snapshot()
+    state_path = tmp_path / "campaign_001" / "state.json"
+
+    store.save(original)
+    first = state_path.read_bytes()
+    store.save(original)
+
+    assert state_path.read_bytes() == first
 
 
 def test_missing_state_raises_not_found(tmp_path: Path) -> None:
@@ -117,7 +184,7 @@ def test_invalid_snapshot_json_raises_invalid_snapshot(tmp_path: Path) -> None:
 
 def test_unsupported_schema_version_raises_invalid_snapshot(tmp_path: Path) -> None:
     data = valid_data()
-    data["schemaVersion"] = 2
+    data["schemaVersion"] = 3
     write_json(tmp_path / "campaign_001" / "state.json", data)
 
     with pytest.raises(InvalidStateSnapshotError):

@@ -1173,3 +1173,56 @@ contracts.
 - Generic modifier/check frameworks, rerolls, Lucky, critical-hit or automatic
   natural-1/natural-20 semantics, EventStore/runtime Event persistence, replay,
   State mutation, buses, registries, dispatcher, and broader orchestration.
+
+## 2026-08-26 — Phase 2 character proficiency State prerequisites
+
+### Initial state
+
+- Fetched `origin/main` and created
+  `codex/phase2-character-proficiency-state` directly from
+  `38f90097962f0c13d5f27a84e1c154f6334b846f` with a clean worktree.
+- The implemented character proficiency formula had no authoritative total
+  character level or Saving Throw proficiency membership State, and strict
+  State snapshot schema V1 contained only Campaign and Creature projections.
+
+### Implemented
+
+- Added mutable `CharacterState` with exactly `id`, exact integer
+  `total_level` in `1..20`, and actual immutable
+  `frozenset[Ability]` Saving Throw proficiency membership.
+- Expanded frozen `StateSnapshot` with backward-compatible
+  `characters=()`, unique Character IDs, and the invariant that every
+  Character projection has a corresponding Creature projection with the same
+  runtime ID.
+- Advanced the current State storage schema to V2. `StateSerializer` now
+  writes only exact V2 with deterministic Creature, Character, and proficiency
+  ordering; it reads exact V2 and exact legacy V1, mapping V1 to
+  `characters=()` without invented progression defaults.
+- Kept `FilesystemStateStore` production code unchanged; its existing
+  serializer delegation now saves and loads V2 while retaining V1 read
+  compatibility.
+- Updated canonical Architecture, added append-only DEC-0023, and synchronized
+  the reproduced State/proficiency facts in `CLAUDE.md`. The Roadmap remained
+  unchanged.
+
+### Verification
+
+- Python 3.12.13 from the existing temporary external virtual environment with
+  pytest 9.1.1 and mypy 1.20.2; no dependency was added.
+- CharacterState/StateSnapshot/StateSerializer/StateStore narrow suites: 112
+  passed.
+- Proficiency, d20, Ability Check Domain/Event/Application/integration
+  regressions: 105 passed.
+- Documentation-reference tests: 2 passed.
+- Full pytest suite: 428 passed.
+- `python -m mypy src/dnd_engine`: no issues in 52 source files.
+- `git diff --check` passed; Git emitted only Windows LF-to-CRLF checkout
+  warnings for changed files. Formatter and linter remain not configured.
+
+### Intentionally deferred
+
+- Saving Throw Command/resolver/Event/handler and any State mutation use case.
+- Skills, Expertise, other proficiency categories or provenance, class/XP/
+  level-up systems, and monster proficiency/Challenge Rating paths.
+- Generic proficiency/modifier frameworks, new State owners, EventStore,
+  replay, transactions, buses, registries, frameworks, and dependencies.

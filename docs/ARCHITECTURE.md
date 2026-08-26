@@ -26,6 +26,7 @@
 | Минимальные Phase 1 Definitions | §3.1.1 |
 | Минимальный CreatureState | §3.2.1 |
 | Минимальный CampaignState | §3.2.2 |
+| Минимальный CharacterState | §3.2.4 |
 | Минимальный Dice Engine | §1.7.1 |
 | Схема Command Envelope | §9.1 |
 | Поля Command Envelope | §9.2 |
@@ -77,6 +78,8 @@
   * [3.2. State Contract](#32-state-contract)
     * [3.2.1. Minimal Phase 1 CreatureState Contract](#321-minimal-phase-1-creaturestate-contract)
     * [3.2.2. Minimal Phase 1 CampaignState Contract](#322-minimal-phase-1-campaignstate-contract)
+    * [3.2.3. Minimal Phase 2 StateSnapshot Contract](#323-minimal-phase-2-statesnapshot-contract)
+    * [3.2.4. Minimal Phase 2 CharacterState Contract](#324-minimal-phase-2-characterstate-contract)
   * [3.3. Command Contract](#33-command-contract)
   * [3.4. Event Contract](#34-event-contract)
   * [3.5. ResolutionResult Contract](#35-resolutionresult-contract)
@@ -1076,7 +1079,7 @@ State Ownership и не превращает `CampaignState` в aggregate или
 
 ---
 
-#### 3.2.3. Minimal Phase 1 StateSnapshot Contract
+#### 3.2.3. Minimal Phase 2 StateSnapshot Contract
 
 Каноническая Python-семантика:
 
@@ -1085,6 +1088,7 @@ State Ownership и не превращает `CampaignState` в aggregate или
 class StateSnapshot:
     campaign: CampaignState
     creatures: tuple[CreatureState, ...]
+    characters: tuple[CharacterState, ...] = ()
 ```
 
 `StateSnapshot` — persistence grouping текущих State Owner objects для одного
@@ -1093,10 +1097,51 @@ Campaign ownership, а каждый `CreatureState` — Creature ownership; cont
 в snapshot не разрешает cross-domain mutation и не передаёт Creature ownership
 кампании.
 
-Phase 1 snapshot допускает ноль, один или несколько `CreatureState`. Runtime
-ID существ внутри одного snapshot уникальны. Snapshot не имеет собственного
-runtime ID, revision или optimistic-concurrency version и не содержит Event
-Log, Commands, AI context либо State из будущих фаз.
+Snapshot допускает ноль, один или несколько `CreatureState` и ноль, один или
+несколько `CharacterState`. Runtime ID существ внутри одного snapshot
+уникальны; runtime ID character-specific проекций также уникальны. Каждый
+`CharacterState.id` обязан совпадать с ID существующего `CreatureState` в том
+же snapshot. Обратное не требуется: не каждый Creature является Character, а
+`characters=()` валиден.
+
+Snapshot не имеет собственного runtime ID, revision или
+optimistic-concurrency version и не содержит Event Log, Commands, AI context
+либо State из будущих фаз.
+
+---
+
+#### 3.2.4. Minimal Phase 2 CharacterState Contract
+
+`CharacterState` хранит character-specific authoritative State facts,
+необходимые текущим Phase 2 mechanics:
+
+```python
+@dataclass
+class CharacterState:
+    id: str
+    total_level: int
+    saving_throw_proficiencies: frozenset[Ability]
+```
+
+`total_level` — authoritative current total character level. Это exact `int`
+(`bool` запрещён) в intrinsic range `1..20`. Proficiency bonus не хранится и
+остаётся derived через `character_proficiency_bonus(character.total_level)`.
+
+`saving_throw_proficiencies` — effective current membership: набор Ability,
+для которых персонаж proficient в Saving Throws. Поле является actual
+`frozenset`, содержит только actual `Ability`, может быть пустым и не обязано
+содержать ровно два значения. Mutable collections, strings и другие значения
+не коэрсятся.
+
+`CharacterState.id` совпадает с ID существующего `CreatureState` в том же
+`StateSnapshot`: это две State-проекции одной runtime character entity, а не
+inheritance. `CharacterState` не дублирует `definition_id`, `ability_scores`,
+`current_hp` или `max_hp`.
+
+Обе проекции принадлежат существующему owner `Creature / CreatureDomain`; новый
+State Owner не вводится. Skill proficiencies, class levels, XP, proficiency
+provenance, monster proficiency и другие proficiency categories остаются
+deferred.
 
 ---
 
@@ -1859,9 +1904,11 @@ levels 13..16 → +5
 levels 17..20 → +6
 ```
 
-В этом slice proficiency bonus не является State, Definition или State owner.
-Это pure derived Domain rule: функция не читает и не мутирует State, не
-использует randomness и не зависит от Application или Infrastructure.
+Proficiency bonus не является State, Definition или State owner. Это pure
+derived Domain rule: функция не мутирует State, не использует randomness и не
+зависит от Application или Infrastructure. Authoritative character-level input
+теперь хранится в `CharacterState.total_level`; потребитель явно вызывает
+`character_proficiency_bonus(character.total_level)`.
 
 Character и monster proficiency имеют разные authoritative inputs:
 
@@ -1877,15 +1924,17 @@ monster proficiency bonus
 `character_proficiency_bonus()` не является универсальной Creature formula и
 не применяется к monster progression по Challenge Rating.
 
-`proficiency_bonus` не добавляется в `CreatureState`: bonus является derived
-value, а authoritative representation total character level ещё не
-материализована в текущей State model. State snapshot schema и raw Ability
-Check contract остаются неизменными.
+`proficiency_bonus` не добавляется ни в `CreatureState`, ни в
+`CharacterState`: bonus остаётся derived value. Effective current Saving Throw
+proficiency membership хранится в
+`CharacterState.saving_throw_proficiencies` как `frozenset[Ability]`; источник
+или provenance каждого proficiency в текущем контракте не моделируется. Raw
+Ability Check contract остаётся неизменным.
 
-Этот foundation slice не определяет authoritative storage character level,
-membership для skill checks, saving throws, attacks, tools или других
-proficiencies, а также Expertise, half/double proficiency и stacking rules.
-Эти контракты добавляются только вместе с соответствующими concrete mechanics.
+Skill proficiency, attack/tool/weapon proficiency, Expertise, half/double
+proficiency, stacking rules, monster proficiency и class progression model
+остаются deferred. Эти контракты добавляются только вместе с соответствующими
+concrete mechanics.
 
 ---
 
@@ -3959,6 +4008,7 @@ AI State может быть перестроен из игровых Events и 
 | `CampaignState`     | Campaign Engine     | read                     |
 | `WorldState`        | World Engine        | read / commands / events |
 | `CreatureState`     | Creature Domain     | read / commands / events |
+| `CharacterState`    | Creature Domain     | read / commands / events |
 | `InventoryState`    | Inventory Engine    | read / commands          |
 | `EquipmentState`    | Equipment Engine    | read / commands          |
 | `CombatState`       | Combat Engine       | read / commands          |
@@ -4712,11 +4762,11 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Каноническая Phase 1 schema:
+filesystem I/O. Каноническая current V2 schema:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "campaignId": "campaign_001",
   "state": {
     "campaign": {
@@ -4726,31 +4776,53 @@ filesystem I/O. Каноническая Phase 1 schema:
     },
     "creatures": [
       {
-        "id": "monster_001",
-        "definitionId": "goblin",
+        "id": "character_001",
+        "definitionId": "fighter",
         "abilityScores": {
-          "strength": 8,
-          "dexterity": 14,
-          "constitution": 10,
+          "strength": 16,
+          "dexterity": 12,
+          "constitution": 14,
           "intelligence": 10,
-          "wisdom": 8,
+          "wisdom": 10,
           "charisma": 8
         },
-        "currentHp": 12,
-        "maxHp": 20
+        "currentHp": 28,
+        "maxHp": 28
+      }
+    ],
+    "characters": [
+      {
+        "id": "character_001",
+        "totalLevel": 5,
+        "savingThrowProficiencies": [
+          "constitution",
+          "strength"
+        ]
       }
     ]
   }
 }
 ```
 
-JSON использует camelCase. Deserialization требует exact `schemaVersion: 1`,
-все required fields и точные JSON primitive/container types; unknown fields,
-defaults, type coercion, несовпадение outer `campaignId` с
-`state.campaign.id`, невалидные Domain values и duplicate creature IDs
-запрещены. Serialization всегда сортирует creatures по runtime ID.
+JSON использует camelCase. Writer всегда выпускает `schemaVersion: 2` и exact
+V2 state fields `campaign`, `creatures`, `characters`, включая
+`"characters": []` для пустой collection. Creatures и Characters сортируются
+по runtime ID, а `savingThrowProficiencies` — по `Ability.value`.
 
-Phase 1 `FilesystemStateStore` хранит snapshot в:
+Reader принимает две точные схемы: legacy V1 с state fields `campaign` и
+`creatures`, и current V2 с обязательным дополнительным `characters`. Поле
+`characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
+`StateSnapshot.characters=()` и не придумывает level или proficiency defaults.
+
+Для обеих версий required fields и JSON primitive/container types точны;
+unknown fields, defaults, type coercion, несовпадение outer `campaignId` с
+`state.campaign.id`, невалидные Domain values и duplicate IDs запрещены. V2
+дополнительно требует, чтобы каждый Character ID ссылался на существующий
+Creature ID. Character entry содержит только `id`, `totalLevel` и
+`savingThrowProficiencies`; duplicate serialized abilities запрещены до
+преобразования списка в `frozenset[Ability]`.
+
+`FilesystemStateStore` хранит snapshot в:
 
 ```text
 <campaigns-root>/<campaign_id>/state.json
@@ -4763,19 +4835,19 @@ JSON formatting с final newline. Save сначала полностью сер�
 удаляется best-effort. Это single-file replacement, а не гарантия durability
 для нескольких файлов или после любого crash.
 
-Phase 1 использует single-writer assumption. `schemaVersion` описывает storage
-schema и не является State revision; optimistic locking, revision fields и
-file/process/distributed locks отсутствуют.
+Текущая реализация использует single-writer assumption. `schemaVersion`
+описывает storage schema и не является State revision; optimistic locking,
+revision fields и file/process/distributed locks отсутствуют.
 
 `StateStore` не читает и не пишет `events/events.jsonl`, не использует
 `EventSerializer`, не генерирует и не применяет Events и не выполняет replay.
 EventStore, replay и transaction ordering между Event persistence и State
 projection отложены до отдельного будущего решения.
 
-Текущая Phase 1 schema содержит только уже реализованные `CampaignState` и
-collection `CreatureState`. По мере появления следующих State domains snapshot
-schema должна расширяться отдельным версионируемым контрактом, не превращая
-`CampaignState` в God Object.
+Текущая V2 schema содержит `CampaignState`, collection `CreatureState` и
+character-specific collection `CharacterState`. По мере появления следующих
+State domains snapshot schema должна расширяться отдельным версионируемым
+контрактом, не превращая `CampaignState` в God Object.
 
 Snapshot не содержит:
 
@@ -4911,7 +4983,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -4942,9 +5014,10 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-В Phase 1 поддерживается только exact integer `schemaVersion = 1`; `bool` не
-считается integer version. Это версия storage schema, а не revision текущего
-State и не механизм concurrency control.
+Current State schema — exact integer `schemaVersion = 2`; writer выпускает
+только V2. Reader также принимает exact legacy integer `schemaVersion = 1`.
+Другие значения запрещены, а `bool` не считается integer version. Это версия
+storage schema, а не revision текущего State и не механизм concurrency control.
 
 ---
 
@@ -4975,6 +5048,12 @@ Migration
    ↓
 State v2
 ```
+
+Текущий explicit minimal migration path читает exact legacy V1 как
+`StateSnapshot(..., characters=())` без выведения character progression из
+`definitionId` и без invented defaults. После следующего сохранения writer
+выпускает только exact V2. Generic migration registry или framework не
+вводится.
 
 ---
 
