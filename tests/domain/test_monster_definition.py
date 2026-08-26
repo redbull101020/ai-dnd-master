@@ -40,11 +40,6 @@ def test_monster_definition_is_a_definition() -> None:
 
 
 def test_monster_definition_uses_ability_scores() -> None:
-    ability_scores_field = next(
-        field for field in fields(MonsterDefinition) if field.name == "ability_scores"
-    )
-
-    assert ability_scores_field.type is AbilityScores
     assert isinstance(goblin().ability_scores, AbilityScores)
 
 

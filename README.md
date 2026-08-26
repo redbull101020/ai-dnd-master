@@ -266,6 +266,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 python -m pip install -e ".[dev]"
 python -m pytest
+python -m mypy src/dnd_engine
 ```
 
 Runnable API появится на соответствующей фазе Roadmap; текущий Core repository

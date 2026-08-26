@@ -44,11 +44,6 @@ def test_weapon_definition_is_an_item_definition() -> None:
 
 
 def test_weapon_definition_damage_type_uses_canonical_type() -> None:
-    damage_type_field = next(
-        field for field in fields(WeaponDefinition) if field.name == "damage_type"
-    )
-
-    assert damage_type_field.type is DamageType
     assert isinstance(longsword().damage_type, DamageType)
 
 

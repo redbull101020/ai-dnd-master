@@ -55,14 +55,6 @@ def test_campaign_state_has_only_canonical_fields() -> None:
     assert tuple(field.name for field in fields(CampaignState)) == CANONICAL_FIELDS
 
 
-def test_campaign_state_fields_are_strings() -> None:
-    assert {field.name: field.type for field in fields(CampaignState)} == {
-        "id": str,
-        "ruleset_id": str,
-        "ruleset_version": str,
-    }
-
-
 def test_campaign_state_is_mutable() -> None:
     campaign = campaign_state()
 

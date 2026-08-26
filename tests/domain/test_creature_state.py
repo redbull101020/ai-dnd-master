@@ -95,12 +95,8 @@ def test_creature_state_keeps_runtime_and_definition_ids_separate() -> None:
 
 
 def test_creature_state_uses_ability_scores() -> None:
-    ability_scores_field = next(
-        field for field in fields(CreatureState) if field.name == "ability_scores"
-    )
     creature = creature_state()
 
-    assert ability_scores_field.type is AbilityScores
     assert isinstance(creature.ability_scores, AbilityScores)
 
 
