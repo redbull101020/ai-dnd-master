@@ -1983,3 +1983,87 @@ contracts.
 - `python -m mypy src/dnd_engine`: no issues in 68 source files.
 - `git diff --check`: reviewed as part of final diff review.
 - No commit, push, or pull request was performed.
+
+## 2026-08-27 — Initial React frontend and LoginPage foundation
+
+### Implemented
+
+- Added an isolated `frontend/` application using React 19, TypeScript strict
+  mode, Vite, CSS Modules, Vitest, React Testing Library, and ESLint.
+- Added the responsive `LoginPage` with semantic username/password controls,
+  custom client-side required-field validation, accessible errors/status,
+  and a keyboard-operable CSS wax-seal-inspired submit button.
+- Kept login presentation-only: valid submission preserves form values in
+  component state and reports that backend authentication is not connected.
+  No endpoint, credentials, success state, or D&D rule logic was introduced.
+- Added global fantasy design tokens and an original generated medieval room
+  background with gradient/color fallback and a readability overlay.
+- Added frontend setup/check instructions and ignored frontend dependency,
+  build, and coverage output at repository level.
+- Kept TypeScript on the compatible `>=6.0.0 <6.1.0` range because the
+  installed `typescript-eslint` 8.x peer contract does not yet support
+  TypeScript 7.
+
+### Tests added
+
+- Added seven behavior-focused LoginPage tests covering the page, both
+  inputs, submit button, empty validation, presentation-only submission, and
+  the absence of fabricated successful authentication.
+
+### Explicitly not implemented
+
+- No backend or authentication API integration, routing, campaign selection,
+  game UI, shared state manager, or frontend D&D mechanics.
+- Phase 7 remains open in `docs/ROADMAP.md`; canonical backend contracts and
+  Python Domain/Application code were not changed.
+
+### Verification
+
+- Node.js 24.19.0 and npm 11.17.0.
+- `npm run lint`: passed.
+- `npm run test`: 1 test file and 7 tests passed.
+- `npm run build`: Vite 8.2.2 production build passed.
+- In-app browser QA at 1920x1080, 1366x768, 768x1024, and 375x812: no
+  horizontal overflow, the panel remained inside the viewport, empty
+  validation and presentation-only valid submission rendered correctly,
+  and no console errors/warnings were reported.
+- Python/pytest regression checks were not run because neither `python`,
+  `py`, nor a repository `.venv` Python executable is available in this
+  environment; no Python source or packaging configuration was changed.
+
+## 2026-08-27 — Initial frontend review fixes
+
+### Changed
+
+- Replaced the LoginPage root `overflow: hidden` with horizontal clipping and
+  vertical auto-scrolling so short landscape viewports and browser zoom do
+  not make lower form content unreachable.
+- Converted `login-background.png` to quality-84 WebP at the original
+  1672x941 resolution and updated the CSS asset reference. The asset decreased
+  from 2,097,886 bytes to 157,220 bytes (approximately 92.5%) while retaining
+  the intended visual quality.
+- Added a separate `frontend` job to the existing GitHub Actions workflow.
+  It uses `actions/setup-node@v7`, Node.js 24.15.0, npm caching keyed by the
+  frontend lockfile, and runs `npm ci`, lint, tests, and the production build
+  from `frontend/`. Existing Python pytest and mypy jobs were not changed.
+- Declared the supported Node.js line as `^24.15.0` in `package.json`, synced
+  it into `package-lock.json`, and documented the same baseline in the
+  frontend README. This satisfies the installed Vite 8 engine and the stricter
+  current jsdom development-dependency engine.
+
+### Explicitly not implemented
+
+- No routing, Authentication API integration, API service, global state
+  management, additional screen, or Python backend change.
+
+### Verification
+
+- `npm ci`: completed successfully; 237 packages audited, zero vulnerabilities.
+- `npm run lint`: passed.
+- `npm run test`: 1 test file and 7 tests passed.
+- `npm run build`: Vite 8.2.2 production build passed.
+- In-app browser QA at 812x500 landscape and an effective 683x384 zoomed
+  viewport confirmed `overflow-x: hidden`, `overflow-y: auto`, working
+  vertical scrolling to the panel bottom, no horizontal overflow, the WebP
+  background request, and no console errors/warnings.
+- `git diff --check`: passed for the complete frontend diff.

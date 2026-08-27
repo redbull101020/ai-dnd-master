@@ -17,6 +17,11 @@ __pycache__/
 # Pytest cache
 .pytest_cache/
 
+# Frontend dependencies and generated output
+node_modules/
+dist/
+coverage/
+
 # Review artefacts: diffs produced for out-of-band review. Never committed.
 *.patch
 *.diff
