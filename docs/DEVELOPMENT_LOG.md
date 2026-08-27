@@ -1287,3 +1287,62 @@ contracts.
 - Generic modifier/check/resolver frameworks, EventStore/runtime Event
   persistence, replay, State mutation/application, transaction/UoW, buses,
   registries, frameworks, databases, and new dependencies.
+
+## 2026-08-27 — Phase 2 Skill proficiency State foundation
+
+### Initial state
+
+- Fetched `origin/main` and created
+  `codex/phase2-skill-proficiency-foundation` directly from
+  `3d8a83905a06b573ab41727f57c3673293ba48ac` with a clean worktree.
+- The repository had no canonical Skill identity, `CharacterState` contained
+  only total level and Saving Throw proficiency membership, and the current
+  State writer emitted schema V2.
+
+### Implemented
+
+- Added the closed 18-value `Skill` Domain `StrEnum` as an identity-only Value
+  Object without an associated Ability or rules logic.
+- Extended mutable `CharacterState` with the explicit required
+  `skill_proficiencies: frozenset[Skill]` effective membership field and strict
+  Domain validation. Derived proficiency bonus remains unstored.
+- Advanced the current State schema to V3 with required exact
+  `skillProficiencies` Character JSON arrays, deterministic sorting, duplicate
+  rejection, strict Skill decoding, and current V3-only writing.
+- Preserved exact V1/V2 reads. V1 still maps to `characters=()`; V2 Character
+  entries map to empty Skill membership and reserialize as V3 without changing
+  the legacy V2 wire schema.
+- Updated all explicit `CharacterState` construction sites and added Domain,
+  serializer, StateStore, legacy-migration, and Saving Throw regression
+  coverage.
+- Updated canonical Architecture §§1.2.2/3.2.4/3.11/12.9/12.12–12.13,
+  append-only DEC-0025, and factual current-contract summaries in `CLAUDE.md`.
+  `README.md` and `docs/ROADMAP.md` remained unchanged.
+
+### Verification
+
+- Python 3.12.13 from the existing temporary external environment with pytest
+  9.1.1 and mypy 1.20.2; no dependency changed. The repository `.venv`
+  launcher remains stale and references a missing Python executable.
+- Skill/CharacterState/StateSerializer/StateStore narrow suites: 122 passed.
+- Broader State/persistence suites: 162 passed.
+- Proficiency and Saving Throw Domain/Application/integration regressions:
+  49 passed.
+- Documentation-reference, Domain dependency, package, and JSON artifact
+  checks: 9 passed.
+- Full pytest suite: 522 passed. Pytest reported only a sandbox permission
+  warning while attempting to write `.pytest_cache`; test execution passed.
+- `python -m mypy src/dnd_engine`: no issues in 58 source files.
+- `git diff --check` passed; Git emitted only Windows LF-to-CRLF checkout
+  warnings for changed files. Formatter and linter remain not configured.
+
+### Intentionally deferred
+
+- `SkillCheckCommand`, payload/result/resolver/Event/Application handler,
+  integration Skill Check flow, and monster Skill Checks.
+- Fixed Skill-to-Ability mapping, Expertise, half proficiency, modifier
+  storage, generic proficiency/check/modifier frameworks, and broader Skills
+  or Proficiency Roadmap completion.
+- State mutation/application, EventStore/runtime Event persistence, replay,
+  transaction/UoW, buses, registries, frameworks, databases, and new
+  dependencies.
