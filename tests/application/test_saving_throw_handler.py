@@ -99,6 +99,7 @@ def make_character(*, character_id: str = "character_001") -> CharacterState:
         id=character_id,
         total_level=5,
         saving_throw_proficiencies=frozenset({Ability.CONSTITUTION}),
+        skill_proficiencies=frozenset(),
     )
 
 

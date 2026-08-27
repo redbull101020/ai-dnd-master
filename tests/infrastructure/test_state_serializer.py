@@ -8,6 +8,7 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.skill import Skill
 from dnd_engine.infrastructure.persistence.json.state_serializer import (
     StateSerializer,
 )
@@ -28,8 +29,8 @@ CREATURE_DATA: dict[str, object] = {
     "maxHp": 28,
 }
 
-CANONICAL_V2_DATA: dict[str, object] = {
-    "schemaVersion": 2,
+CANONICAL_V3_DATA: dict[str, object] = {
+    "schemaVersion": 3,
     "campaignId": "campaign_001",
     "state": {
         "campaign": {
@@ -43,10 +44,17 @@ CANONICAL_V2_DATA: dict[str, object] = {
                 "id": "character_001",
                 "totalLevel": 5,
                 "savingThrowProficiencies": ["constitution", "strength"],
+                "skillProficiencies": ["athletics", "perception"],
             }
         ],
     },
 }
+
+LEGACY_V2_DATA: dict[str, object] = deepcopy(CANONICAL_V3_DATA)
+LEGACY_V2_DATA["schemaVersion"] = 2
+del LEGACY_V2_DATA["state"]["characters"][0][  # type: ignore[index]
+    "skillProficiencies"
+]
 
 LEGACY_V1_DATA: dict[str, object] = {
     "schemaVersion": 1,
@@ -83,6 +91,9 @@ def character_state(character_id: str = "character_001") -> CharacterState:
         saving_throw_proficiencies=frozenset(
             {Ability.STRENGTH, Ability.CONSTITUTION}
         ),
+        skill_proficiencies=frozenset(
+            {Skill.ATHLETICS, Skill.PERCEPTION}
+        ),
     )
 
 
@@ -93,8 +104,12 @@ def snapshot(
     return StateSnapshot(campaign_state(), tuple(creatures), characters)
 
 
+def v3_data() -> dict[str, object]:
+    return deepcopy(CANONICAL_V3_DATA)
+
+
 def v2_data() -> dict[str, object]:
-    return deepcopy(CANONICAL_V2_DATA)
+    return deepcopy(LEGACY_V2_DATA)
 
 
 def v1_data() -> dict[str, object]:
@@ -108,20 +123,20 @@ def nested(data: dict[str, object], *path: str | int) -> object:
     return value
 
 
-def test_serialize_emits_exact_canonical_v2_mapping() -> None:
+def test_serialize_emits_exact_canonical_v3_mapping() -> None:
     serialized = StateSerializer.serialize(
         snapshot(creature_state(), characters=(character_state(),))
     )
 
-    assert serialized == CANONICAL_V2_DATA
-    assert serialized["schemaVersion"] == 2
+    assert serialized == CANONICAL_V3_DATA
+    assert serialized["schemaVersion"] == 3
 
 
-def test_serialize_emits_empty_characters_in_v2() -> None:
+def test_serialize_emits_empty_characters_in_v3() -> None:
     serialized = StateSerializer.serialize(snapshot())
 
     assert serialized == {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "campaignId": "campaign_001",
         "state": {
             "campaign": {
@@ -135,7 +150,7 @@ def test_serialize_emits_empty_characters_in_v2() -> None:
     }
 
 
-def test_serialize_uses_exact_v2_state_and_character_fields() -> None:
+def test_serialize_uses_exact_v3_state_and_character_fields() -> None:
     serialized = StateSerializer.serialize(
         snapshot(creature_state(), characters=(character_state(),))
     )
@@ -147,6 +162,7 @@ def test_serialize_uses_exact_v2_state_and_character_fields() -> None:
         "id",
         "totalLevel",
         "savingThrowProficiencies",
+        "skillProficiencies",
     }
 
 
@@ -154,6 +170,9 @@ def test_serialize_orders_creatures_characters_and_proficiencies() -> None:
     first = character_state("character_001")
     first.saving_throw_proficiencies = frozenset(
         {Ability.WISDOM, Ability.DEXTERITY, Ability.CHARISMA}
+    )
+    first.skill_proficiencies = frozenset(
+        {Skill.STEALTH, Skill.ACROBATICS, Skill.PERCEPTION}
     )
     serialized = StateSerializer.serialize(
         snapshot(
@@ -177,14 +196,64 @@ def test_serialize_orders_creatures_characters_and_proficiencies() -> None:
         "dexterity",
         "wisdom",
     ]
+    assert state["characters"][0]["skillProficiencies"] == [  # type: ignore[index]
+        "acrobatics",
+        "perception",
+        "stealth",
+    ]
 
 
-def test_v2_round_trip_reconstructs_equivalent_current_snapshot() -> None:
+def test_v3_round_trip_reconstructs_equivalent_current_snapshot() -> None:
     original = snapshot(creature_state(), characters=(character_state(),))
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
 
     assert reconstructed == original
+
+
+def test_serialize_emits_empty_skill_membership_as_array() -> None:
+    character = character_state()
+    character.skill_proficiencies = frozenset()
+
+    serialized = StateSerializer.serialize(
+        snapshot(creature_state(), characters=(character,))
+    )
+
+    assert serialized["state"]["characters"][0][  # type: ignore[index]
+        "skillProficiencies"
+    ] == []
+
+
+def test_deserialize_accepts_legacy_v2_with_empty_skill_membership() -> None:
+    reconstructed = StateSerializer.deserialize(v2_data())
+
+    assert reconstructed.characters[0].skill_proficiencies == frozenset()
+
+
+def test_deserialize_v3_restores_skill_membership() -> None:
+    reconstructed = StateSerializer.deserialize(v3_data())
+
+    assert reconstructed.characters[0].skill_proficiencies == frozenset(
+        {Skill.ATHLETICS, Skill.PERCEPTION}
+    )
+
+
+def test_legacy_v2_reserializes_as_current_v3() -> None:
+    serialized = StateSerializer.serialize(StateSerializer.deserialize(v2_data()))
+
+    assert serialized["schemaVersion"] == 3
+    assert serialized["state"]["characters"][0][  # type: ignore[index]
+        "skillProficiencies"
+    ] == []
+
+
+def test_legacy_v1_reserializes_as_current_v3() -> None:
+    reconstructed = StateSerializer.deserialize(v1_data())
+
+    serialized = StateSerializer.serialize(reconstructed)
+
+    assert serialized["schemaVersion"] == 3
+    assert serialized["state"]["characters"] == []  # type: ignore[index]
 
 
 def test_deserialize_accepts_exact_legacy_v1_without_inventing_character_state() -> None:
@@ -203,6 +272,15 @@ def test_deserialize_rejects_characters_field_in_legacy_v1() -> None:
         StateSerializer.deserialize(data)
 
 
+def test_legacy_v2_rejects_v3_skill_field() -> None:
+    data = v2_data()
+    character = nested(data, "state", "characters", 0)
+    character["skillProficiencies"] = []  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
 @pytest.mark.parametrize(
     ("path", "field"),
     [
@@ -214,11 +292,11 @@ def test_deserialize_rejects_characters_field_in_legacy_v1() -> None:
         (("state", "characters", 0), "classLevels"),
     ],
 )
-def test_v2_deserialize_rejects_unknown_fields(
+def test_v3_deserialize_rejects_unknown_fields(
     path: tuple[str | int, ...],
     field: str,
 ) -> None:
-    data = v2_data()
+    data = v3_data()
     nested(data, *path)[field] = "unexpected"  # type: ignore[index]
 
     with pytest.raises(ValueError):
@@ -236,13 +314,14 @@ def test_v2_deserialize_rejects_unknown_fields(
         (("state", "characters", 0), "id"),
         (("state", "characters", 0), "totalLevel"),
         (("state", "characters", 0), "savingThrowProficiencies"),
+        (("state", "characters", 0), "skillProficiencies"),
     ],
 )
-def test_v2_deserialize_rejects_missing_required_fields(
+def test_v3_deserialize_rejects_missing_required_fields(
     path: tuple[str | int, ...],
     field: str,
 ) -> None:
-    data = v2_data()
+    data = v3_data()
     del nested(data, *path)[field]  # type: ignore[index]
 
     with pytest.raises(ValueError):
@@ -263,13 +342,15 @@ def test_v2_deserialize_rejects_missing_required_fields(
         (("state", "characters", 0, "totalLevel"), "5"),
         (("state", "characters", 0, "savingThrowProficiencies"), ()),
         (("state", "characters", 0, "savingThrowProficiencies", 0), 1),
+        (("state", "characters", 0, "skillProficiencies"), ()),
+        (("state", "characters", 0, "skillProficiencies", 0), 1),
     ],
 )
-def test_v2_deserialize_rejects_wrong_types_without_coercion(
+def test_v3_deserialize_rejects_wrong_types_without_coercion(
     path: tuple[str | int, ...],
     value: object,
 ) -> None:
-    data = v2_data()
+    data = v3_data()
     parent = nested(data, *path[:-1])
     parent[path[-1]] = value  # type: ignore[index]
 
@@ -278,16 +359,16 @@ def test_v2_deserialize_rejects_wrong_types_without_coercion(
 
 
 @pytest.mark.parametrize("total_level", [0, 21])
-def test_v2_deserialize_rejects_out_of_range_total_level(total_level: int) -> None:
-    data = v2_data()
+def test_v3_deserialize_rejects_out_of_range_total_level(total_level: int) -> None:
+    data = v3_data()
     nested(data, "state", "characters", 0)["totalLevel"] = total_level  # type: ignore[index]
 
     with pytest.raises(ValueError):
         StateSerializer.deserialize(data)
 
 
-def test_v2_deserialize_rejects_invalid_ability_value() -> None:
-    data = v2_data()
+def test_v3_deserialize_rejects_invalid_ability_value() -> None:
+    data = v3_data()
     nested(data, "state", "characters", 0)["savingThrowProficiencies"] = [  # type: ignore[index]
         "STR"
     ]
@@ -296,8 +377,8 @@ def test_v2_deserialize_rejects_invalid_ability_value() -> None:
         StateSerializer.deserialize(data)
 
 
-def test_v2_deserialize_rejects_duplicate_serialized_proficiencies() -> None:
-    data = v2_data()
+def test_v3_deserialize_rejects_duplicate_serialized_proficiencies() -> None:
+    data = v3_data()
     nested(data, "state", "characters", 0)["savingThrowProficiencies"] = [  # type: ignore[index]
         "strength",
         "strength",
@@ -307,8 +388,29 @@ def test_v2_deserialize_rejects_duplicate_serialized_proficiencies() -> None:
         StateSerializer.deserialize(data)
 
 
-def test_v2_deserialize_rejects_duplicate_character_ids() -> None:
-    data = v2_data()
+def test_v3_deserialize_rejects_invalid_skill_value() -> None:
+    data = v3_data()
+    nested(data, "state", "characters", 0)["skillProficiencies"] = [  # type: ignore[index]
+        "acrobatics_check"
+    ]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v3_deserialize_rejects_duplicate_skill_proficiencies() -> None:
+    data = v3_data()
+    nested(data, "state", "characters", 0)["skillProficiencies"] = [  # type: ignore[index]
+        "stealth",
+        "stealth",
+    ]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v3_deserialize_rejects_duplicate_character_ids() -> None:
+    data = v3_data()
     characters = nested(data, "state", "characters")
     characters.append(deepcopy(characters[0]))  # type: ignore[attr-defined,index]
 
@@ -316,8 +418,8 @@ def test_v2_deserialize_rejects_duplicate_character_ids() -> None:
         StateSerializer.deserialize(data)
 
 
-def test_v2_deserialize_rejects_character_without_corresponding_creature() -> None:
-    data = v2_data()
+def test_v3_deserialize_rejects_character_without_corresponding_creature() -> None:
+    data = v3_data()
     nested(data, "state", "characters", 0)["id"] = "character_002"  # type: ignore[index]
 
     with pytest.raises(ValueError):
@@ -325,7 +427,7 @@ def test_v2_deserialize_rejects_character_without_corresponding_creature() -> No
 
 
 def test_deserialize_rejects_campaign_id_mismatch() -> None:
-    data = v2_data()
+    data = v3_data()
     data["campaignId"] = "campaign_002"
 
     with pytest.raises(ValueError):
@@ -333,7 +435,7 @@ def test_deserialize_rejects_campaign_id_mismatch() -> None:
 
 
 def test_deserialize_rejects_missing_schema_version() -> None:
-    data = v2_data()
+    data = v3_data()
     del data["schemaVersion"]
 
     with pytest.raises(ValueError):
@@ -344,7 +446,7 @@ def test_deserialize_rejects_missing_schema_version() -> None:
 def test_deserialize_rejects_other_missing_root_fields(
     missing_field: str,
 ) -> None:
-    data = v2_data()
+    data = v3_data()
     del data[missing_field]
 
     with pytest.raises(ValueError):
@@ -352,7 +454,7 @@ def test_deserialize_rejects_other_missing_root_fields(
 
 
 def test_deserialize_rejects_duplicate_creature_ids() -> None:
-    data = v2_data()
+    data = v3_data()
     creatures = nested(data, "state", "creatures")
     creatures.append(deepcopy(creatures[0]))  # type: ignore[attr-defined,index]
 
@@ -362,7 +464,7 @@ def test_deserialize_rejects_duplicate_creature_ids() -> None:
 
 @pytest.mark.parametrize("score", [0, 31])
 def test_deserialize_rejects_invalid_ability_scores(score: int) -> None:
-    data = v2_data()
+    data = v3_data()
     nested(data, "state", "creatures", 0, "abilityScores")["strength"] = score  # type: ignore[index]
 
     with pytest.raises(ValueError):
@@ -374,7 +476,7 @@ def test_deserialize_rejects_invalid_ability_scores(score: int) -> None:
     [(-1, 28), (29, 28), (0, 0)],
 )
 def test_deserialize_rejects_invalid_hp(current_hp: int, max_hp: int) -> None:
-    data = v2_data()
+    data = v3_data()
     creature = nested(data, "state", "creatures", 0)
     creature["currentHp"] = current_hp  # type: ignore[index]
     creature["maxHp"] = max_hp  # type: ignore[index]
@@ -383,11 +485,11 @@ def test_deserialize_rejects_invalid_hp(current_hp: int, max_hp: int) -> None:
         StateSerializer.deserialize(data)
 
 
-@pytest.mark.parametrize("schema_version", [0, 3, -1])
+@pytest.mark.parametrize("schema_version", [0, 4, -1])
 def test_deserialize_rejects_unsupported_schema_version(
     schema_version: int,
 ) -> None:
-    data = v2_data()
+    data = v3_data()
     data["schemaVersion"] = schema_version
 
     with pytest.raises(ValueError):
@@ -395,7 +497,7 @@ def test_deserialize_rejects_unsupported_schema_version(
 
 
 def test_deserialize_rejects_bool_schema_version() -> None:
-    data = v2_data()
+    data = v3_data()
     data["schemaVersion"] = True
 
     with pytest.raises(TypeError):
@@ -419,6 +521,18 @@ def test_serialize_rejects_mutated_invalid_character_state() -> None:
     character.total_level = 21
 
     with pytest.raises(ValueError):
+        StateSerializer.serialize(
+            snapshot(creature_state(), characters=(character,))
+        )
+
+
+def test_serialize_rejects_mutated_invalid_skill_membership() -> None:
+    character = character_state()
+    character.skill_proficiencies = frozenset(  # type: ignore[arg-type]
+        {"athletics"}
+    )
+
+    with pytest.raises(TypeError):
         StateSerializer.serialize(
             snapshot(creature_state(), characters=(character,))
         )

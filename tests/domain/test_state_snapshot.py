@@ -35,6 +35,7 @@ def character_state(character_id: str) -> CharacterState:
         saving_throw_proficiencies=frozenset(
             {Ability.STRENGTH, Ability.CONSTITUTION}
         ),
+        skill_proficiencies=frozenset(),
     )
 
 

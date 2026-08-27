@@ -23,6 +23,7 @@
 | --- | --- |
 | Обязательные поля Definition | §3.1 |
 | Контракт AbilityScores | §1.2.1 |
+| Контракт Skill | §1.2.2 |
 | Минимальные Phase 1 Definitions | §3.1.1 |
 | Минимальный CreatureState | §3.2.1 |
 | Минимальный CampaignState | §3.2.2 |
@@ -60,6 +61,7 @@
   * [1.1. Backend](#11-backend)
   * [1.2. Domain Model](#12-domain-model)
     * [1.2.1. AbilityScores Value Object](#121-abilityscores-value-object)
+    * [1.2.2. Skill Value Object](#122-skill-value-object)
   * [1.3. API](#13-api)
   * [1.4. Storage](#14-storage)
   * [1.5. Tests](#15-tests)
@@ -289,6 +291,41 @@ class AbilityScores:
 Производные значения вроде `strength_modifier` относятся к rule calculation и
 не входят в Phase 1 contract. При JSON-сериализации используется обычное правило
 camelCase; все шесть canonical имён уже однословные.
+
+---
+
+#### 1.2.2. Skill Value Object
+
+`Skill` — canonical closed Domain `StrEnum`, отвечающий только за identity
+навыка:
+
+```python
+class Skill(StrEnum):
+    ACROBATICS = "acrobatics"
+    ANIMAL_HANDLING = "animal_handling"
+    ARCANA = "arcana"
+    ATHLETICS = "athletics"
+    DECEPTION = "deception"
+    HISTORY = "history"
+    INSIGHT = "insight"
+    INTIMIDATION = "intimidation"
+    INVESTIGATION = "investigation"
+    MEDICINE = "medicine"
+    NATURE = "nature"
+    PERCEPTION = "perception"
+    PERFORMANCE = "performance"
+    PERSUASION = "persuasion"
+    RELIGION = "religion"
+    SLEIGHT_OF_HAND = "sleight_of_hand"
+    STEALTH = "stealth"
+    SURVIVAL = "survival"
+```
+
+Closed set содержит ровно 18 значений. `Skill` не хранит associated Ability,
+proficiency state, modifier, DC, Expertise или rules logic. Fixed mapping
+Skill → Ability не является частью identity-контракта: будущий Skill Check
+должен допускать alternative ability checks, например Strength
+(Intimidation).
 
 ---
 
@@ -1123,6 +1160,7 @@ class CharacterState:
     id: str
     total_level: int
     saving_throw_proficiencies: frozenset[Ability]
+    skill_proficiencies: frozenset[Skill]
 ```
 
 `total_level` — authoritative current total character level. Это exact `int`
@@ -1135,13 +1173,20 @@ class CharacterState:
 содержать ровно два значения. Mutable collections, strings и другие значения
 не коэрсятся.
 
+`skill_proficiencies` — authoritative effective current membership навыков, в
+которых character proficient. Поле является actual `frozenset`, содержит
+только actual `Skill`, может быть пустым и не ограничивает количество
+membership. Поле обязательно при обычном canonical construction и не имеет
+default. Mutable collections, canonical strings и другие значения не
+коэрсятся. Proficiency bonus по-прежнему derived и не хранится.
+
 `CharacterState.id` совпадает с ID существующего `CreatureState` в том же
 `StateSnapshot`: это две State-проекции одной runtime character entity, а не
 inheritance. `CharacterState` не дублирует `definition_id`, `ability_scores`,
 `current_hp` или `max_hp`.
 
 Обе проекции принадлежат существующему owner `Creature / CreatureDomain`; новый
-State Owner не вводится. Skill proficiencies, class levels, XP, proficiency
+State Owner не вводится. Skill Check mechanics, class levels, XP, proficiency
 provenance, monster proficiency и другие proficiency categories остаются
 deferred.
 
@@ -1940,10 +1985,16 @@ proficiency membership хранится в
 или provenance каждого proficiency в текущем контракте не моделируется. Raw
 Ability Check contract остаётся неизменным.
 
-Skill proficiency, attack/tool/weapon proficiency, Expertise, half/double
-proficiency, stacking rules, monster proficiency и class progression model
-остаются deferred. Эти контракты добавляются только вместе с соответствующими
-concrete mechanics.
+Effective current Skill proficiency membership хранится отдельно в
+`CharacterState.skill_proficiencies` как `frozenset[Skill]`. Это authoritative
+membership foundation, но не Skill Check mechanic: associated Ability не
+кодируется в `Skill`, а Command, resolver, Result, Event и Application handler
+в этом slice отсутствуют.
+
+Skill Check resolution, attack/tool/weapon proficiency, Expertise,
+half/double proficiency, stacking rules, monster proficiency и class
+progression model остаются deferred. Эти контракты добавляются только вместе с
+соответствующими concrete mechanics.
 
 ---
 
@@ -4913,11 +4964,11 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Каноническая current V2 schema:
+filesystem I/O. Каноническая current V3 schema:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "campaignId": "campaign_001",
   "state": {
     "campaign": {
@@ -4948,6 +4999,10 @@ filesystem I/O. Каноническая current V2 schema:
         "savingThrowProficiencies": [
           "constitution",
           "strength"
+        ],
+        "skillProficiencies": [
+          "athletics",
+          "perception"
         ]
       }
     ]
@@ -4955,23 +5010,29 @@ filesystem I/O. Каноническая current V2 schema:
 }
 ```
 
-JSON использует camelCase. Writer всегда выпускает `schemaVersion: 2` и exact
-V2 state fields `campaign`, `creatures`, `characters`, включая
+JSON использует camelCase. Writer всегда выпускает `schemaVersion: 3` и exact
+V3 state fields `campaign`, `creatures`, `characters`, включая
 `"characters": []` для пустой collection. Creatures и Characters сортируются
-по runtime ID, а `savingThrowProficiencies` — по `Ability.value`.
+по runtime ID, `savingThrowProficiencies` — по `Ability.value`, а
+`skillProficiencies` — по `Skill.value`. Пустые membership сериализуются как
+JSON arrays `[]`.
 
-Reader принимает две точные схемы: legacy V1 с state fields `campaign` и
-`creatures`, и current V2 с обязательным дополнительным `characters`. Поле
-`characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
-`StateSnapshot.characters=()` и не придумывает level или proficiency defaults.
+Reader принимает три точные схемы: legacy V1 с state fields `campaign` и
+`creatures`, legacy V2 с обязательным дополнительным `characters`, и current
+V3. Поле `characters` в V1 является unknown и запрещено. Успешное чтение V1
+создаёт `StateSnapshot.characters=()` и не придумывает level или proficiency
+defaults. V2 Character entry сохраняет exact legacy fields `id`, `totalLevel`
+и `savingThrowProficiencies`; reader мигрирует его в canonical
+`CharacterState` с `skill_proficiencies=frozenset()`.
 
-Для обеих версий required fields и JSON primitive/container types точны;
+Для всех трёх версий required fields и JSON primitive/container types точны;
 unknown fields, defaults, type coercion, несовпадение outer `campaignId` с
-`state.campaign.id`, невалидные Domain values и duplicate IDs запрещены. V2
-дополнительно требует, чтобы каждый Character ID ссылался на существующий
-Creature ID. Character entry содержит только `id`, `totalLevel` и
-`savingThrowProficiencies`; duplicate serialized abilities запрещены до
-преобразования списка в `frozenset[Ability]`.
+`state.campaign.id`, невалидные Domain values и duplicate IDs запрещены. V2 и
+V3 дополнительно требуют, чтобы каждый Character ID ссылался на существующий
+Creature ID. V3 Character entry содержит exact fields `id`, `totalLevel`,
+`savingThrowProficiencies` и `skillProficiencies`; duplicate serialized
+abilities и skills запрещены до преобразования списков в соответствующие
+`frozenset`.
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -4995,7 +5056,7 @@ revision fields и file/process/distributed locks отсутствуют.
 EventStore, replay и transaction ordering между Event persistence и State
 projection отложены до отдельного будущего решения.
 
-Текущая V2 schema содержит `CampaignState`, collection `CreatureState` и
+Текущая V3 schema содержит `CampaignState`, collection `CreatureState` и
 character-specific collection `CharacterState`. По мере появления следующих
 State domains snapshot schema должна расширяться отдельным версионируемым
 контрактом, не превращая `CampaignState` в God Object.
@@ -5138,7 +5199,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -5169,10 +5230,11 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 2`; writer выпускает
-только V2. Reader также принимает exact legacy integer `schemaVersion = 1`.
-Другие значения запрещены, а `bool` не считается integer version. Это версия
-storage schema, а не revision текущего State и не механизм concurrency control.
+Current State schema — exact integer `schemaVersion = 3`; writer выпускает
+только V3. Reader также принимает exact legacy integer `schemaVersion = 1` и
+`schemaVersion = 2`. Другие значения запрещены, а `bool` не считается integer
+version. Это версия storage schema, а не revision текущего State и не механизм
+concurrency control.
 
 ---
 
@@ -5192,6 +5254,8 @@ state.json
 schemaVersion = 1
         ↓
 schemaVersion = 2
+        ↓
+schemaVersion = 3
 ```
 
 Появляется migration:
@@ -5202,13 +5266,18 @@ State v1
 Migration
    ↓
 State v2
+   ↓
+Migration
+   ↓
+State v3
 ```
 
-Текущий explicit minimal migration path читает exact legacy V1 как
+Текущие explicit minimal migration paths читают exact legacy V1 как
 `StateSnapshot(..., characters=())` без выведения character progression из
-`definitionId` и без invented defaults. После следующего сохранения writer
-выпускает только exact V2. Generic migration registry или framework не
-вводится.
+`definitionId` и exact legacy V2 с
+`CharacterState.skill_proficiencies=frozenset()`. После следующего сохранения
+writer выпускает только exact V3. Legacy wire schemas задним числом не
+расширяются; generic migration registry или framework не вводится.
 
 ---
 

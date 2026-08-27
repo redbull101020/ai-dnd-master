@@ -6,10 +6,12 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.skill import Skill
 
 
 LEGACY_SCHEMA_VERSION = 1
-SCHEMA_VERSION = 2
+LEGACY_SCHEMA_V2_VERSION = 2
+SCHEMA_VERSION = 3
 
 _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
@@ -22,11 +24,12 @@ _CREATURE_FIELDS = {
     "currentHp",
     "maxHp",
 }
-_CHARACTER_FIELDS = {
+_V2_CHARACTER_FIELDS = {
     "id",
     "totalLevel",
     "savingThrowProficiencies",
 }
+_V3_CHARACTER_FIELDS = _V2_CHARACTER_FIELDS | {"skillProficiencies"}
 _ABILITY_SCORE_FIELDS = {
     "strength",
     "dexterity",
@@ -120,6 +123,14 @@ def _validate_character(character: CharacterState) -> None:
         raise TypeError(
             "character saving_throw_proficiencies must contain only Ability values"
         )
+    if type(character.skill_proficiencies) is not frozenset:
+        raise TypeError("character skill_proficiencies must be a frozenset")
+    if not all(
+        isinstance(skill, Skill) for skill in character.skill_proficiencies
+    ):
+        raise TypeError(
+            "character skill_proficiencies must contain only Skill values"
+        )
 
 
 def _serialize_ability_scores(ability_scores: AbilityScores) -> dict[str, object]:
@@ -152,6 +163,13 @@ def _serialize_character(character: CharacterState) -> dict[str, object]:
             for ability in sorted(
                 character.saving_throw_proficiencies,
                 key=lambda ability: ability.value,
+            )
+        ],
+        "skillProficiencies": [
+            skill.value
+            for skill in sorted(
+                character.skill_proficiencies,
+                key=lambda skill: skill.value,
             )
         ],
     }
@@ -208,7 +226,11 @@ class StateSerializer:
         _require_exact_fields(root, _ROOT_FIELDS, "State snapshot")
 
         schema_version = _require_int(root["schemaVersion"], "schemaVersion")
-        if schema_version not in {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}:
+        if schema_version not in {
+            LEGACY_SCHEMA_VERSION,
+            LEGACY_SCHEMA_V2_VERSION,
+            SCHEMA_VERSION,
+        }:
             raise ValueError(f"unsupported schemaVersion: {schema_version}")
 
         campaign_id = _require_str(root["campaignId"], "campaignId")
@@ -248,7 +270,11 @@ class StateSerializer:
             if type(characters_data) is not list:
                 raise TypeError("state.characters must be a list")
             characters = tuple(
-                StateSerializer._deserialize_character(character_data, index)
+                StateSerializer._deserialize_character(
+                    character_data,
+                    index,
+                    schema_version,
+                )
                 for index, character_data in enumerate(characters_data)
             )
         return StateSnapshot(
@@ -294,9 +320,18 @@ class StateSerializer:
         )
 
     @staticmethod
-    def _deserialize_character(data: object, index: int) -> CharacterState:
+    def _deserialize_character(
+        data: object,
+        index: int,
+        schema_version: int,
+    ) -> CharacterState:
         character = _require_mapping(data, f"state.characters[{index}]")
-        _require_exact_fields(character, _CHARACTER_FIELDS, "character")
+        character_fields = (
+            _V2_CHARACTER_FIELDS
+            if schema_version == LEGACY_SCHEMA_V2_VERSION
+            else _V3_CHARACTER_FIELDS
+        )
+        _require_exact_fields(character, character_fields, "character")
 
         total_level = _require_int(
             character["totalLevel"],
@@ -332,8 +367,36 @@ class StateSerializer:
                 )
             proficiencies.append(ability)
 
+        skill_proficiencies: list[Skill] = []
+        if schema_version == SCHEMA_VERSION:
+            skill_proficiencies_data = character["skillProficiencies"]
+            if type(skill_proficiencies_data) is not list:
+                raise TypeError(
+                    f"state.characters[{index}].skillProficiencies must be a list"
+                )
+            for proficiency_index, value in enumerate(
+                skill_proficiencies_data
+            ):
+                skill_value = _require_str(
+                    value,
+                    "state.characters"
+                    f"[{index}].skillProficiencies[{proficiency_index}]",
+                )
+                try:
+                    skill = Skill(skill_value)
+                except ValueError as error:
+                    raise ValueError(
+                        f"invalid skill proficiency: {skill_value!r}"
+                    ) from error
+                if skill in skill_proficiencies:
+                    raise ValueError(
+                        "skillProficiencies must not contain duplicates"
+                    )
+                skill_proficiencies.append(skill)
+
         return CharacterState(
             id=_require_str(character["id"], f"state.characters[{index}].id"),
             total_level=total_level,
             saving_throw_proficiencies=frozenset(proficiencies),
+            skill_proficiencies=frozenset(skill_proficiencies),
         )

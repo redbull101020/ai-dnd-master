@@ -15,6 +15,7 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.skill import Skill
 from dnd_engine.infrastructure.filesystem import state_store as state_store_module
 from dnd_engine.infrastructure.filesystem.state_store import FilesystemStateStore
 
@@ -58,6 +59,9 @@ def character_snapshot() -> StateSnapshot:
                 saving_throw_proficiencies=frozenset(
                     {Ability.STRENGTH, Ability.CONSTITUTION}
                 ),
+                skill_proficiencies=frozenset(
+                    {Skill.ATHLETICS, Skill.PERCEPTION}
+                ),
             ),
         ),
     )
@@ -70,7 +74,7 @@ def write_json(path: Path, data: object) -> None:
 
 def valid_data() -> dict[str, object]:
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "campaignId": "campaign_001",
         "state": {
             "campaign": {
@@ -91,6 +95,35 @@ def legacy_v1_data() -> dict[str, object]:
     return data
 
 
+def legacy_v2_data() -> dict[str, object]:
+    data = valid_data()
+    data["schemaVersion"] = 2
+    data["state"]["creatures"] = [  # type: ignore[index]
+        {
+            "id": "character_001",
+            "definitionId": "fighter",
+            "abilityScores": {
+                "strength": 16,
+                "dexterity": 12,
+                "constitution": 14,
+                "intelligence": 10,
+                "wisdom": 10,
+                "charisma": 8,
+            },
+            "currentHp": 28,
+            "maxHp": 28,
+        }
+    ]
+    data["state"]["characters"] = [  # type: ignore[index]
+        {
+            "id": "character_001",
+            "totalLevel": 5,
+            "savingThrowProficiencies": ["constitution", "strength"],
+        }
+    ]
+    return data
+
+
 def test_state_store_errors_have_stable_hierarchy() -> None:
     assert issubclass(StateNotFoundError, StateStoreError)
     assert issubclass(InvalidStateSnapshotError, StateStoreError)
@@ -108,7 +141,7 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 2
+    assert data["schemaVersion"] == 3
     assert data["state"]["characters"] == []
 
 
@@ -123,7 +156,18 @@ def test_load_accepts_legacy_v1_without_inventing_character_state(
     assert loaded.characters == ()
 
 
-def test_save_load_v2_preserves_character_state(tmp_path: Path) -> None:
+def test_load_accepts_legacy_v2_with_empty_skill_membership(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "campaign_001" / "state.json"
+    write_json(state_path, legacy_v2_data())
+
+    loaded = FilesystemStateStore(tmp_path).load("campaign_001")
+
+    assert loaded.characters[0].skill_proficiencies == frozenset()
+
+
+def test_save_load_v3_preserves_character_state(tmp_path: Path) -> None:
     store = FilesystemStateStore(tmp_path)
     original = character_snapshot()
 
@@ -184,7 +228,7 @@ def test_invalid_snapshot_json_raises_invalid_snapshot(tmp_path: Path) -> None:
 
 def test_unsupported_schema_version_raises_invalid_snapshot(tmp_path: Path) -> None:
     data = valid_data()
-    data["schemaVersion"] = 3
+    data["schemaVersion"] = 4
     write_json(tmp_path / "campaign_001" / "state.json", data)
 
     with pytest.raises(InvalidStateSnapshotError):

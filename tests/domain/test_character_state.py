@@ -4,12 +4,14 @@ import pytest
 
 from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.value_objects.ability import Ability
+from dnd_engine.domain.value_objects.skill import Skill
 
 
 CANONICAL_FIELDS = (
     "id",
     "total_level",
     "saving_throw_proficiencies",
+    "skill_proficiencies",
 )
 
 
@@ -19,16 +21,29 @@ def character_state(
     saving_throw_proficiencies: frozenset[Ability] = frozenset(
         {Ability.STRENGTH, Ability.CONSTITUTION}
     ),
+    skill_proficiencies: frozenset[Skill] = frozenset(
+        {Skill.ATHLETICS, Skill.PERCEPTION}
+    ),
 ) -> CharacterState:
     return CharacterState(
         id="character_001",
         total_level=total_level,
         saving_throw_proficiencies=saving_throw_proficiencies,
+        skill_proficiencies=skill_proficiencies,
     )
 
 
 def test_character_state_has_exact_canonical_fields() -> None:
     assert tuple(field.name for field in fields(CharacterState)) == CANONICAL_FIELDS
+
+
+def test_character_state_requires_explicit_skill_membership() -> None:
+    with pytest.raises(TypeError):
+        CharacterState(  # type: ignore[call-arg]
+            id="character_001",
+            total_level=5,
+            saving_throw_proficiencies=frozenset(),
+        )
 
 
 def test_character_state_accepts_canonical_values() -> None:
@@ -38,6 +53,9 @@ def test_character_state_accepts_canonical_values() -> None:
     assert character.total_level == 5
     assert character.saving_throw_proficiencies == frozenset(
         {Ability.STRENGTH, Ability.CONSTITUTION}
+    )
+    assert character.skill_proficiencies == frozenset(
+        {Skill.ATHLETICS, Skill.PERCEPTION}
     )
 
 
@@ -83,9 +101,13 @@ def test_character_state_rejects_non_ability_members(value: object) -> None:
 
 
 def test_character_state_accepts_empty_membership() -> None:
-    character = character_state(saving_throw_proficiencies=frozenset())
+    character = character_state(
+        saving_throw_proficiencies=frozenset(),
+        skill_proficiencies=frozenset(),
+    )
 
     assert character.saving_throw_proficiencies == frozenset()
+    assert character.skill_proficiencies == frozenset()
 
 
 def test_character_state_does_not_limit_effective_membership_count() -> None:
@@ -95,4 +117,38 @@ def test_character_state_does_not_limit_effective_membership_count() -> None:
         character_state(saving_throw_proficiencies=all_abilities)
         .saving_throw_proficiencies
         == all_abilities
+    )
+
+
+@pytest.mark.parametrize(
+    "proficiencies",
+    [
+        {Skill.ATHLETICS},
+        (Skill.ATHLETICS,),
+        [Skill.ATHLETICS],
+    ],
+)
+def test_character_state_rejects_non_frozenset_skill_membership(
+    proficiencies: object,
+) -> None:
+    with pytest.raises(TypeError):
+        character_state(  # type: ignore[arg-type]
+            skill_proficiencies=proficiencies,
+        )
+
+
+@pytest.mark.parametrize("value", ["athletics", 1, None])
+def test_character_state_rejects_non_skill_members(value: object) -> None:
+    with pytest.raises(TypeError):
+        character_state(
+            skill_proficiencies=frozenset({value}),  # type: ignore[arg-type]
+        )
+
+
+def test_character_state_does_not_limit_skill_membership_count() -> None:
+    all_skills = frozenset(Skill)
+
+    assert (
+        character_state(skill_proficiencies=all_skills).skill_proficiencies
+        == all_skills
     )
