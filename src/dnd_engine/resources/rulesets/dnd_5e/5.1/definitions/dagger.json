@@ -1,0 +1,9 @@
+{
+  "type": "weapon",
+  "id": "dagger",
+  "version": 1,
+  "name": "Dagger",
+  "damageDice": "1d4",
+  "damageType": "piercing",
+  "properties": ["finesse", "light", "thrown"]
+}

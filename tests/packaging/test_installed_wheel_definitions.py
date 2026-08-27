@@ -37,6 +37,8 @@ from pathlib import Path
 
 import dnd_engine
 from dnd_engine.domain.definitions.monster import MonsterDefinition
+from dnd_engine.domain.definitions.weapon import WeaponDefinition
+from dnd_engine.domain.value_objects.damage_type import DamageType
 from dnd_engine.infrastructure.definitions.packaged import PackagedDefinitionSource
 
 repo_root = Path(os.environ["REPO_ROOT_UNDER_TEST"]).resolve()
@@ -56,6 +58,20 @@ assert type(monster) is MonsterDefinition, type(monster)
 assert monster.id == "goblin", monster.id
 assert monster.armor_class == 15, monster.armor_class
 assert monster.ability_scores.dexterity == 14, monster.ability_scores.dexterity
+
+weapon = source.get_definition(
+    ruleset_id="dnd_5e",
+    ruleset_version="5.1",
+    definition_id="dagger",
+    expected_type=WeaponDefinition,
+)
+
+assert type(weapon) is WeaponDefinition, type(weapon)
+assert weapon.id == "dagger", weapon.id
+assert weapon.name == "Dagger", weapon.name
+assert weapon.damage_dice == "1d4", weapon.damage_dice
+assert weapon.damage_type is DamageType.PIERCING, weapon.damage_type
+assert weapon.properties == ("finesse", "light", "thrown"), weapon.properties
 print("INSTALLED_WHEEL_LOOKUP_OK")
 """
 

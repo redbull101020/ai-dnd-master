@@ -547,21 +547,41 @@ Phase 1 принимает только strict lowercase notation `NdM`, экв�
 advantage/disadvantage, keep/drop, rerolls, exploding dice и полный dice DSL не
 входят в Phase 1.
 
-Простой parser остаётся private implementation detail Infrastructure adapter:
+Начиная с G4b (DEC-0030) strict grammar `NdM` extraction/validation
+живёт в одном pure Domain primitive, а не как private implementation detail
+Infrastructure adapter:
 
-```text
-Domain DiceEngine Protocol
-          ↑
-Infrastructure PythonDiceEngine
-          ↑
-injected random.Random
+```python
+def parse_ndm(expression: str) -> tuple[int, int]:
+    ...
 ```
 
-`PythonDiceEngine` находится в Infrastructure и получает явный injected
-`random.Random`. Все individual rolls создаются только этим instance; вызовы
+`src/dnd_engine/domain/dice.py` реализует эту функцию. Она принимает только
+exact `str`, syntactic grammar и invariants (`count >= 1`, `sides >= 2`)
+идентичны Phase 1 контракту выше, и не знает про RNG, `random.Random` или
+`DiceRoll`:
+
+```text
+Domain DiceEngine Protocol      Domain parse_ndm()
+          ↑                        ↑          ↑
+Infrastructure PythonDiceEngine ────┘          │
+          ↑                                    │
+injected random.Random          WeaponDefinition.damage_dice (§3.1.1)
+```
+
+`PythonDiceEngine` находится в Infrastructure, получает явный injected
+`random.Random` и вызывает shared `parse_ndm(expression)` вместо собственного
+regex/parser. Все individual rolls создаются только этим instance; вызовы
 module-global `random.randint`, `random.choice`, `random.seed` и другая
 uncontrolled gameplay randomness запрещены. Domain не импортирует stdlib
-`random` и не зависит от Infrastructure RNG implementation.
+`random` и не зависит от Infrastructure RNG implementation; `parse_ndm` сам по
+себе не зависит ни от чего кроме stdlib `re`.
+
+`WeaponDefinition.damage_dice` (§3.1.1) использует тот же `parse_ndm` как
+`__post_init__` intrinsic invariant: это второй consumer одного и того же
+accepted-language правила, а не отдельная copy grammar. Grammar остаётся
+неизменной strict lowercase `NdM`; DiceExpression Value Object, AST или полный
+DSL не вводятся.
 
 Внутреннее состояние RNG не является authoritative Campaign, Creature или
 World State. Dice Engine не является State owner, не мутирует State, не
@@ -944,11 +964,18 @@ class WeaponDefinition(ItemDefinition):
     properties: tuple[str, ...]
 ```
 
-В Phase 1 `damage_dice` хранит простое dice expression вида `NdM`, например
-`1d8`; сложный dice parser сейчас не проектируется. `damage_type` использует
-только `DamageType`. На будущей serialization boundary `DamageType`
-сериализуется через его lowercase string value. `properties` имеют immutable
-semantics; serializer представляет tuple обычным JSON array.
+`damage_dice` хранит простое dice expression вида `NdM`, например `1d8`, как
+plain `str` — parsed representation (`count`/`sides`) в самом Definition не
+хранится. Начиная с G4b (§1.7.1, DEC-0030) `damage_dice` — intrinsic Domain
+invariant: `WeaponDefinition.__post_init__` вызывает shared `parse_ndm()` и
+отклоняет любое значение, которое runtime `DiceEngine.roll()` тоже отклонил
+бы, включая direct Domain construction в обход Infrastructure loader.
+Invalid type (не exact `str`) — `TypeError`; invalid notation (включая
+`sides < 2`, например `1d1`) — `ValueError`. Сложный dice parser/DSL сейчас
+не проектируется. `damage_type` использует только `DamageType`. На будущей
+serialization boundary `DamageType` сериализуется через его lowercase string
+value. `properties` имеют immutable semantics; serializer представляет tuple
+обычным JSON array.
 
 `WeaponDefinition` не содержит attack bonus, current wielder, equipped slot,
 ammunition count, current condition, magic bonuses или runtime item identity.
@@ -6359,8 +6386,14 @@ src/dnd_engine/resources/
 
 ```text
 src/dnd_engine/resources/rulesets/dnd_5e/5.1/definitions/goblin.json
+src/dnd_engine/resources/rulesets/dnd_5e/5.1/definitions/dagger.json
 src/dnd_engine/resources/rulesets/dnd_5e/5.1/NOTICE.md
 ```
+
+`dagger.json` — единственный production `weapon` Definition, добавлен вместе
+с G4b (§1.7.1, §3.1.1, DEC-0030) как real consumer strict `NdM` invariant для
+`WeaponDefinition.damage_dice`, decoded существующим `_decode_weapon()` без
+изменения decoder dispatch.
 
 Это единственная authoritative копия packaged Definition data. Прежний
 top-level scaffold `rules/dnd_5e/` (только `.gitkeep` placeholders, без
@@ -6489,7 +6522,8 @@ package/wheel, а не только из repository checkout. Обязатель
 proof: build реального wheel, установка в изолированный venv (не
 `pip install -e`), запуск child-процесса вне repository checkout, typed
 lookup `ruleset_id="dnd_5e"`, `ruleset_version="5.1"`,
-`definition_id="goblin"`, `expected_type=MonsterDefinition` через
-production `PackagedDefinitionSource()` без явного `resources_root`, и
+`definition_id="goblin"`, `expected_type=MonsterDefinition`, а с G4b (DEC-0030)
+тем же процессом также `definition_id="dagger"`, `expected_type=WeaponDefinition`,
+через production `PackagedDefinitionSource()` без явного `resources_root`, и
 проверка `DefinitionNotFoundError` для отсутствующего Definition. Тест живёт
 в `tests/packaging/`.
