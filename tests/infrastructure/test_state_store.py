@@ -23,7 +23,7 @@ from dnd_engine.infrastructure.filesystem.state_store import FilesystemStateStor
 def snapshot(
     *,
     campaign_id: str = "campaign_001",
-    ruleset_version: str = "5.2.1",
+    ruleset_version: str = "5.1",
     current_hp: int = 7,
     definition_id: str = "goblin",
 ) -> StateSnapshot:
@@ -50,7 +50,7 @@ def character_snapshot() -> StateSnapshot:
         max_hp=28,
     )
     return StateSnapshot(
-        campaign=CampaignState("campaign_001", "dnd_5e", "5.2.1"),
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
         creatures=(creature,),
         characters=(
             CharacterState(
@@ -80,7 +80,7 @@ def valid_data() -> dict[str, object]:
             "campaign": {
                 "id": "campaign_001",
                 "rulesetId": "dnd_5e",
-                "rulesetVersion": "5.2.1",
+                "rulesetVersion": "5.1",
             },
             "creatures": [],
             "characters": [],
@@ -191,6 +191,15 @@ def test_save_is_deterministic(tmp_path: Path) -> None:
 def test_missing_state_raises_not_found(tmp_path: Path) -> None:
     with pytest.raises(StateNotFoundError):
         FilesystemStateStore(tmp_path).load("campaign_001")
+
+
+def test_load_does_not_dereference_definition_id(tmp_path: Path) -> None:
+    store = FilesystemStateStore(tmp_path)
+    store.save(snapshot(definition_id="does_not_exist"))
+
+    loaded = store.load("campaign_001")
+
+    assert loaded.creatures[0].definition_id == "does_not_exist"
 
 
 @pytest.mark.parametrize("contents", ["{", "not json", ""])

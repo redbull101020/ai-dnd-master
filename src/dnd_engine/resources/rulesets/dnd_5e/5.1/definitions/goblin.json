@@ -1,0 +1,15 @@
+{
+  "type": "monster",
+  "id": "goblin",
+  "version": 1,
+  "name": "Goblin",
+  "abilityScores": {
+    "strength": 8,
+    "dexterity": 14,
+    "constitution": 10,
+    "intelligence": 10,
+    "wisdom": 8,
+    "charisma": 8
+  },
+  "armorClass": 15
+}

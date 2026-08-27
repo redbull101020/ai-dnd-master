@@ -8,3 +8,8 @@ from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 class MonsterDefinition(Definition):
     name: str
     ability_scores: AbilityScores
+    armor_class: int
+
+    def __post_init__(self) -> None:
+        if type(self.armor_class) is not int:
+            raise TypeError("armor_class must be an int")

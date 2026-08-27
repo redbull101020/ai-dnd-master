@@ -7,7 +7,7 @@ from dnd_engine.domain.definitions.monster import MonsterDefinition
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 
 
-CANONICAL_FIELDS = ("id", "version", "name", "ability_scores")
+CANONICAL_FIELDS = ("id", "version", "name", "ability_scores", "armor_class")
 
 
 def goblin() -> MonsterDefinition:
@@ -23,6 +23,7 @@ def goblin() -> MonsterDefinition:
             wisdom=8,
             charisma=8,
         ),
+        armor_class=15,
     )
 
 
@@ -33,6 +34,7 @@ def test_monster_definition_accepts_canonical_fields() -> None:
     assert monster.version == 1
     assert monster.name == "Goblin"
     assert monster.ability_scores.dexterity == 14
+    assert monster.armor_class == 15
 
 
 def test_monster_definition_is_a_definition() -> None:
@@ -68,5 +70,34 @@ def test_monster_definition_does_not_accept_runtime_fields() -> None:
             version=1,
             name="Goblin",
             ability_scores=goblin().ability_scores,
+            armor_class=15,
             current_hp=7,
+        )
+
+
+def test_monster_definition_armor_class_is_exact_int() -> None:
+    monster = goblin()
+
+    assert type(monster.armor_class) is int
+
+
+def test_monster_definition_rejects_bool_armor_class() -> None:
+    with pytest.raises(TypeError):
+        MonsterDefinition(
+            id="goblin",
+            version=1,
+            name="Goblin",
+            ability_scores=goblin().ability_scores,
+            armor_class=True,  # type: ignore[arg-type]
+        )
+
+
+def test_monster_definition_rejects_non_int_armor_class() -> None:
+    with pytest.raises(TypeError):
+        MonsterDefinition(
+            id="goblin",
+            version=1,
+            name="Goblin",
+            ability_scores=goblin().ability_scores,
+            armor_class="15",  # type: ignore[arg-type]
         )

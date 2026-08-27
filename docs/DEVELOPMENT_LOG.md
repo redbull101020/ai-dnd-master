@@ -1524,3 +1524,295 @@ contracts.
 - `git diff --check`: passed, no output.
 - `git status --short` showed only `docs/ARCHITECTURE.md`,
   `docs/DECISIONS.md`, and `docs/DEVELOPMENT_LOG.md` modified.
+
+## 2026-08-27 — Definition access foundation and packaged SRD 5.1 ruleset boundary (G4a)
+
+### Initial state
+
+- Fetched `origin/main` and created `claude/phase2-g4a-definition-loading`
+  directly from `f820e79b0bc33a4139306d6799c1d7b7b524f3ae` with a clean
+  worktree.
+- DEC-0028/§3.15 had fixed G4a as the mandatory prerequisite gate before AC
+  IMPLEMENTATION without designing it: no Definition access port existed,
+  `MonsterDefinition` (§3.1.1) had no `armor_class`, `rules/dnd_5e/` was pure
+  `.gitkeep` scaffold outside the installable `src/` tree, and
+  `ruleset_version="5.2.1"` was used throughout the canon and test fixtures
+  as the current `dnd_5e` example value without ever being tied to a
+  specific SRD edition.
+
+### Implemented
+
+- Added Domain port `DefinitionSource` and semantic exceptions
+  `DefinitionSourceError` / `DefinitionNotFoundError` /
+  `DefinitionTypeMismatchError` in `src/dnd_engine/domain/services/definitions.py`,
+  mirroring the existing `StateStore` port-in-Domain pattern: generic
+  `get_definition(*, ruleset_id, ruleset_version, definition_id,
+  expected_type) -> TDefinition`, taking only the two ruleset identity
+  strings (never the full `CampaignState`), never returning `None`.
+- Added `MonsterDefinition.armor_class: int` (§3.1.1), the only new field,
+  with an intrinsic invariant rejecting `bool`/non-`int`; no other monster
+  field and no numeric range beyond exact `int` was added.
+- Added production Infrastructure adapter `PackagedDefinitionSource`
+  (`src/dnd_engine/infrastructure/definitions/packaged.py`) reading packaged
+  JSON via `importlib.resources`, with an optional `resources_root`
+  constructor override for isolated tests. It strictly validates the
+  untrusted JSON boundary (malformed JSON, non-object root, missing/unknown
+  fields, wrong primitive types including `bool`-for-`int`, malformed
+  `abilityScores`, unknown `type`, invalid Domain values, payload `id`
+  mismatch), discriminates the actual concrete Definition kind from an
+  explicit `type` field (`monster`/`item`/`weapon`) via a small deterministic
+  dispatch (not a registry), and only then checks
+  `isinstance(decoded, expected_type)`. All of the above raise a distinct
+  Infrastructure `InvalidPackagedDefinitionError`, never silently collapsed
+  into `DefinitionNotFoundError`.
+- Moved ruleset Definition data into the installable package at
+  `src/dnd_engine/resources/rulesets/<ruleset_id>/<ruleset_version>/definitions/<definition_id>.json`
+  and added one production Definition, SRD 5.1 `goblin`
+  (`id`, `version`, `name`, ability scores, `armorClass: 15`), with a
+  `NOTICE.md` recording SRD 5.1 / CC-BY-4.0 attribution. Verified the
+  packaged Ability Scores (STR 8, DEX 14, CON 10, INT 10, WIS 8, CHA 8) and
+  Armor Class 15 against the official SRD 5.1 Goblin stat block before
+  writing the file. Removed the obsolete top-level `rules/dnd_5e/` scaffold
+  (`.gitkeep` placeholders only) so exactly one authoritative packaged
+  dataset exists; no weapon or second-monster production dataset was added
+  (G4b untouched).
+- Added `[tool.setuptools.package-data]` to `pyproject.toml` for
+  `dnd_engine.resources` so the built wheel actually contains the packaged
+  JSON/`NOTICE.md`; no production dependency was added.
+- Replaced the ambiguous `ruleset_version="5.2.1"` current-value usage with
+  the canonical SRD 5.1 value `"5.1"` in `docs/ARCHITECTURE.md` (§§4.6–4.7,
+  12.9) and in `tests/domain/test_campaign_state.py`,
+  `tests/domain/test_state_snapshot.py`,
+  `tests/infrastructure/test_state_serializer.py`, and
+  `tests/infrastructure/test_state_store.py`. No `Ruleset` Value Object was
+  introduced.
+- Kept referential validation lazy: `StateStore`, `StateSerializer`, and
+  `StateSnapshot` were not touched to call `DefinitionSource`, and a new
+  regression test (`test_load_does_not_dereference_definition_id`) proves a
+  snapshot with a nonexistent `definition_id` still loads and deserializes.
+- Added `tests/packaging/test_installed_wheel_definitions.py`: builds a real
+  wheel from an isolated copy of the source tree (so setuptools' `build/`
+  staging directory never lands inside the repository checkout), installs it
+  into a fresh venv (never `pip install -e`), and runs a child process
+  outside the checkout with `PYTHONPATH` cleared, proving both the
+  successful `goblin` lookup (`MonsterDefinition`, `armor_class == 15`,
+  `ability_scores.dexterity == 14`) and `DefinitionNotFoundError` for a
+  missing id resolve from the installed wheel alone, independent of the
+  `src/`/`rules/` repository path.
+- Added `tests/domain/test_definition_source.py` (port/error-hierarchy
+  contract with a fake source) and
+  `tests/infrastructure/test_packaged_definition_source.py` (production
+  default lookup, ruleset/version scoping, missing vs. wrong-type vs.
+  content-corruption distinctions, unknown type, missing/unknown fields,
+  wrong primitive types including `bool`-for-`int`, malformed
+  `abilityScores`, intrinsic Domain invariant violation, id mismatch,
+  malformed/non-object JSON). Extended `tests/domain/test_monster_definition.py`
+  with the new canonical field list and `armor_class` int/bool checks.
+  Repointed `tests/test_json_artifacts.py` from the removed `rules/` tree to
+  `src/dnd_engine/resources/rulesets/`.
+- Updated `AGENTS.md`, `CLAUDE.md`, and `README.md` to stop naming
+  `rules/dnd_5e/` as the canonical Definition location and to point at
+  `src/dnd_engine/resources/rulesets/` instead; added a G4a summary bullet
+  and two naming-trap rows to `CLAUDE.md` per the DEC-0018 resync
+  obligation.
+- Added canonical Architecture §3.16 (Definition Access vertical slice, G4a)
+  and §12.26 (Packaged Ruleset Resources), updated §3.1.1
+  (`MonsterDefinition.armor_class`), §3.15 (G4a prerequisite status,
+  resolved wrong-type/missing policy, resolved packaging requirement), and
+  §§4.6–4.7/12.9 (canonical `ruleset_version`), plus Quick lookup and
+  table-of-contents entries. Appended DEC-0029.
+
+### Changed files
+
+- New: `src/dnd_engine/domain/services/definitions.py`,
+  `src/dnd_engine/infrastructure/definitions/__init__.py`,
+  `src/dnd_engine/infrastructure/definitions/packaged.py`,
+  `src/dnd_engine/resources/__init__.py`,
+  `src/dnd_engine/resources/rulesets/dnd_5e/5.1/definitions/goblin.json`,
+  `src/dnd_engine/resources/rulesets/dnd_5e/5.1/NOTICE.md`,
+  `tests/domain/test_definition_source.py`,
+  `tests/infrastructure/test_packaged_definition_source.py`,
+  `tests/packaging/test_installed_wheel_definitions.py`.
+- Modified: `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, `AGENTS.md`,
+  `CLAUDE.md`, `README.md`, `pyproject.toml`,
+  `src/dnd_engine/domain/definitions/monster.py`,
+  `tests/domain/test_monster_definition.py`,
+  `tests/domain/test_campaign_state.py`,
+  `tests/domain/test_state_snapshot.py`,
+  `tests/infrastructure/test_state_serializer.py`,
+  `tests/infrastructure/test_state_store.py`, `tests/test_json_artifacts.py`.
+- Removed: `rules/dnd_5e/` (twelve `.gitkeep` scaffold files, no real
+  content).
+
+### Explicitly not implemented
+
+- `ArmorClassCommand`/`Result`/`Event`/`Handler`, `unarmored_armor_class`,
+  `resolve_character_armor_class`, `monster_armor_class`, `AttackCommand`,
+  any attack resolver, hit/miss comparison, weapon proficiency, damage, or
+  HP mutation.
+- A shared strict `NdM` parser, `WeaponDefinition.damage_dice` redesign, or a
+  weapon production dataset (G4b).
+- A generic exception → `EngineError` mapping function (no concrete
+  Application consumer exists yet; the future mapping is fixed in canon
+  only).
+- `docs/ROADMAP.md` AC and Attack rolls items remain unchecked; no broad
+  completion claim was invented since Roadmap has no explicit G4a line.
+
+### Verification
+
+- Python 3.12.9 (repository `.venv`). The default OS temp directory
+  (`%TEMP%\pytest-of-redbu`) remained inaccessible with a `PermissionError`
+  in this environment, so an external `--basetemp` was used for all pytest
+  runs.
+- `python -m pytest tests/domain/test_monster_definition.py tests/domain/test_definition_source.py tests/domain/test_campaign_state.py tests/domain/test_state_snapshot.py tests/domain/test_creature_state.py`:
+  55 passed.
+- `python -m pytest tests/infrastructure/ tests/test_json_artifacts.py`:
+  174 passed.
+- `python -m pytest tests/architecture/`: 7 passed.
+- `python -m pytest tests/packaging/` (installed-wheel proof, run
+  separately): 2 passed in ~13-14s; confirmed via manual wheel build that
+  the wheel contains `dnd_engine/resources/rulesets/dnd_5e/5.1/NOTICE.md`
+  and `.../definitions/goblin.json`.
+- Full `python -m pytest --basetemp=<external tmp>`: 622 passed (620
+  pre-existing-shape tests plus the 2 installed-wheel tests), no regressions.
+- `python -m mypy src/dnd_engine`: no issues in 66 source files.
+- `git diff --check`: reports 6 "trailing whitespace" warnings on new
+  `pyproject.toml` lines. Confirmed these are not added spaces: the file's
+  git blob already stores literal CRLF line endings before this change
+  (pre-existing unchanged context lines show the same `^M` in `git diff`),
+  and the new lines match that pre-existing per-file convention exactly. Not
+  changed, to avoid introducing a mixed-line-ending diff into an unrelated
+  pre-existing file convention.
+- `git status --short` / `git diff --stat` / `git diff` were reviewed for
+  unrelated changes; none found. No `dist/`, `build/`, `*.egg-info/`,
+  temporary venvs, wheel files, or cache files were left tracked or in the
+  diff (the packaging test builds from an isolated copy of the source tree
+  specifically to avoid this).
+- No commit, push, or pull request was performed.
+
+## 2026-08-27 — G4a review fixes: licensing, path traversal, broken root, offline build, git diff --check
+
+### Initial state
+
+- Continued on the existing `claude/phase2-g4a-definition-loading` branch
+  (no new branch); re-fetched `origin/main` and confirmed it still matched
+  the recorded baseline `f820e79b0bc33a4139306d6799c1d7b7b524f3ae`, so no
+  rebase was required.
+- Review findings on the G4a slice above: the packaged `NOTICE.md` claimed
+  OGL 1.0a without including the OGL text; `PackagedDefinitionSource`
+  passed `ruleset_id`/`ruleset_version`/`definition_id` into
+  `Traversable.joinpath(...)` without validating they were a single
+  resource path segment; a missing/broken top-level packaged `rulesets/`
+  root was indistinguishable from an ordinary missing Definition; the
+  installed-wheel test always built through pip's isolated build
+  environment; and `git diff --check` failed on new `pyproject.toml` lines.
+
+### Fixed
+
+- **Licensing:** rewrote `src/dnd_engine/resources/rulesets/dnd_5e/5.1/NOTICE.md`
+  to use the official SRD 5.1 Creative Commons release instead of OGL:
+  the verbatim required Wizards attribution statement and the CC-BY-4.0
+  license/URL from the SRD 5.1 CC legal-information preamble, a short note
+  that the packaged JSON is a transformed/abbreviated extract (no prose
+  copied), and no attribution beyond what the preamble requires. Updated
+  the "OGL 1.0a" mentions in DEC-0029 and the prior G4a
+  `docs/DEVELOPMENT_LOG.md` entry to "CC-BY-4.0"; did not touch any other
+  historical entry.
+- **Path traversal:** added `_require_resource_segment()` in
+  `src/dnd_engine/infrastructure/definitions/packaged.py`, run before any
+  dynamic value reaches `Traversable.joinpath(...)`. `ruleset_id` and
+  `definition_id` must match the existing canonical lowercase snake_case
+  ID contract (§4.1/§4.6); `ruleset_version` must be one path segment with
+  no `/`, `\`, or `.`/`..` path semantics. A value that fails this check
+  raises the existing `DefinitionNotFoundError` — no new exception type —
+  since it cannot resolve to any packaged Definition. Synced this extended
+  semantics into §3.16 and §12.26, and added one sentence to DEC-0029.
+- **Broken resource root:** `_read_payload()` now checks the top-level
+  `<resources_root>/rulesets/` directory's existence/type before anything
+  else; if missing or not a directory, it raises
+  `InvalidPackagedDefinitionError` (packaging/infrastructure failure), kept
+  distinct from an ordinary missing/unsupported `ruleset_id`/`ruleset_version`
+  scope below that root (e.g. `dnd_5e/9.9/goblin`), which remains
+  `DefinitionNotFoundError` as before. No manifest or supported-ruleset
+  registry was added. Documented in §12.26.
+- **Offline-friendlier wheel build:** `tests/packaging/test_installed_wheel_definitions.py`
+  now checks whether the interpreter running the test already satisfies
+  the declared `setuptools>=68` build requirement
+  (`_build_environment_has_declared_setuptools()`) and, if so, adds
+  `--no-build-isolation` to the `pip wheel` invocation, skipping pip's
+  network-dependent isolated build environment; otherwise it falls back to
+  the previous (isolated) build. `--no-deps`, the fresh venv, `pip install
+  --no-index`, the outside-checkout child process, and the cleared
+  `PYTHONPATH` are all unchanged; no editable install is used.
+- **`git diff --check`:** investigated with `git ls-files --eol`, `git
+  check-attr`, `core.autocrlf`, and `core.whitespace` per the review
+  instructions. Every other tracked file in the repository has an
+  LF-committed blob (`i/lf`) with a CRLF working-tree copy from
+  `core.autocrlf=true` (`w/crlf`); `pyproject.toml` alone had a
+  CRLF-committed blob (`i/crlf`), which is why `git diff --check` flagged
+  only its new lines as "trailing whitespace" (the default
+  `core.whitespace` treats a bare `\r` before `\n` as trailing whitespace).
+  This is a pre-existing single-file anomaly, not a repository-wide
+  convention, so the minimal repository-consistent fix was to normalize
+  only `pyproject.toml` (a file already substantively changed in this
+  slice) to LF, matching every other tracked file. No `.gitattributes` was
+  added and `core.whitespace`/`core.autocrlf` were not changed (git config
+  is never modified). This necessarily shows the whole 33-line file as
+  changed in `git diff`, since its line endings changed throughout; no
+  other file's line endings were touched.
+
+### Changed files (relative to the prior G4a slice)
+
+- Modified: `src/dnd_engine/resources/rulesets/dnd_5e/5.1/NOTICE.md`,
+  `src/dnd_engine/infrastructure/definitions/packaged.py`,
+  `tests/infrastructure/test_packaged_definition_source.py`,
+  `tests/packaging/test_installed_wheel_definitions.py`,
+  `docs/ARCHITECTURE.md` (§3.16, §12.26), `docs/DECISIONS.md` (DEC-0029
+  amended in place, not superseded), `docs/DEVELOPMENT_LOG.md` (prior G4a
+  entry's OGL mention corrected; this entry appended), `pyproject.toml`
+  (line-ending normalization only; no content change beyond the prior
+  slice's `package-data` addition).
+- No files added or removed beyond the prior G4a slice.
+
+### Explicitly not implemented
+
+- No AC, Attack, G4b `NdM` parser, damage, HP, or equipment work.
+- No `DefinitionRegistry`, cache, plugin system, DI container, or database.
+- No new production dependency; `setuptools`/`wheel` used only as
+  already-declared build-system/dev tooling, not added to
+  `[project.dependencies]` or `[project.optional-dependencies]`.
+- No `Ruleset` Value Object, generic path sanitizer, or ID framework — the
+  traversal guard is two small regexes local to
+  `infrastructure/definitions/packaged.py`.
+
+### Verification
+
+- Python 3.12.9 (repository `.venv`); external `--basetemp` used again for
+  the same pre-existing default-temp-dir `PermissionError` reason.
+- `python -m pytest tests/infrastructure/test_packaged_definition_source.py`:
+  45 passed (includes new traversal, broken-root, and adversarial-fixture
+  tests).
+- `python -m pytest tests/architecture/`: 7 passed.
+- `python -m pytest tests/packaging/`: 2 passed (~9-10s with
+  `--no-build-isolation` active locally after installing `setuptools` into
+  the dev `.venv` for verification; falls back to the previous isolated,
+  network-dependent build when `setuptools` is absent).
+- Full `python -m pytest --basetemp=<external tmp>`: 646 passed (up from
+  622; the increase is the new traversal/broken-root/adversarial-fixture
+  tests), no regressions.
+- `python -m mypy src/dnd_engine`: no issues in 66 source files.
+- `git diff --check`: exit code 0, empty stdout; stderr contains only the
+  informational `warning: in the working copy of 'pyproject.toml', LF will
+  be replaced by CRLF the next time Git touches it` (a normal
+  `core.autocrlf` advisory, not a `--check` diagnostic).
+- Rebuilt the wheel manually and confirmed it still contains
+  `dnd_engine/resources/rulesets/dnd_5e/5.1/definitions/goblin.json` and
+  the corrected `NOTICE.md`; re-ran the installed-wheel test to confirm the
+  `goblin` lookup and `DefinitionNotFoundError` still resolve from the
+  installed copy.
+- `git status --short` / `git diff --stat` / `git diff` were reviewed;
+  changes are limited to the files listed above (`pyproject.toml`'s diff is
+  larger than its content change because of the line-ending normalization,
+  as explained above). No `dist/`, `build/`, `*.egg-info/`, temporary
+  venvs, wheel files, or cache files were left tracked or in the diff.
+- No commit, push, or pull request was performed.
