@@ -50,6 +50,7 @@
 | Минимальная d20 semantics | §3.12 |
 | Character Saving Throw vertical slice | §3.13 |
 | Character Skill Check vertical slice | §3.14 |
+| Armor Class design (approved, not implemented) | §3.15 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
 
@@ -96,6 +97,7 @@
   * [3.12. Minimal Phase 2 d20 semantics](#312-minimal-phase-2-d20-semantics)
   * [3.13. Minimal Phase 2 Character Saving Throw vertical slice](#313-minimal-phase-2-character-saving-throw-vertical-slice)
   * [3.14. Minimal Phase 2 Character Skill Check vertical slice](#314-minimal-phase-2-character-skill-check-vertical-slice)
+  * [3.15. Minimal Phase 2 Armor Class design](#315-minimal-phase-2-armor-class-design)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -2330,6 +2332,307 @@ artifacts. Expertise, half proficiency, monster Skill Checks, proficiency
 provenance/source lists и generic check/resolver/handler abstractions остаются
 deferred. После третьего concrete handler duplication может быть отдельно
 оценена, но этот slice не вводит shared orchestration framework.
+
+---
+
+### 3.15. Minimal Phase 2 Armor Class design
+
+Implementation status: **Approved design / Not implemented.**
+
+Этот раздел фиксирует согласованный (approved) design effective Armor Class
+(AC) как canonical source of truth. Раздел документирует design boundary; он
+не реализует AC, не добавляет `MonsterDefinition.armor_class` в §3.1.1 и не
+меняет production Python-код.
+
+#### Effective AC — derived, не persisted
+
+```text
+Effective Armor Class
+    = derived Domain rule result
+```
+
+Effective AC:
+
+```text
+не является State
+не является Definition
+не является отдельным State Owner
+не хранится как materialized поле CreatureState
+не хранится как materialized поле CharacterState
+```
+
+Authoritative State/Definition хранит только источники (inputs), из которых
+AC вычисляется на каждый запрос. Это тот же принцип, что уже применён к
+`ability_modifier(score)` (§3.10) и `character_proficiency_bonus(level)`
+(§3.11): дешёвый derived result не становится вторым source of truth.
+
+Не вводятся:
+
+```text
+CreatureState.armor_class
+CharacterState.armor_class
+ArmorClassState
+ACState
+```
+
+#### State Ownership сохраняется без изменений
+
+AC не получает нового Owner. Источники AC продолжают принадлежать
+существующим владельцам из §10.13:
+
+```text
+CreatureState abilities
+    → Creature / CreatureDomain
+
+equipped armor / shield
+    → EquipmentEngine / future EquipmentState  (§10.6)
+
+future Conditions / Effects AC inputs
+    → ownership and composition remain outside this AC slice
+
+Monster baseline rules data
+    → immutable MonsterDefinition  (§3.1.1)
+```
+
+Сам результат — effective Armor Class — является rule calculation / read
+model, а не authoritative mutable State. В частности, этот design explicitly
+не переносит equipped armor, shield или equipment slots в `CreatureState`:
+Equipment Owner (§10.6) остаётся прежним.
+
+This AC design does not resolve or change the existing Conditions/Effects
+ownership boundaries (§10.4 assigns conditions/effects to Creature Domain,
+while §10.13 separately lists `EffectState` / Effect Engine). Their
+contribution to effective AC remains deferred until the corresponding
+mechanic is designed.
+
+#### Initial Character AC scope: unarmored
+
+Первый поддерживаемый Character case — unarmored Character:
+
+```text
+AC = 10 + Dexterity modifier
+```
+
+Источник:
+
+```text
+CreatureState.ability_scores.dexterity
+        ↓
+ability_modifier(...)   (§3.10)
+        ↓
+10 + modifier
+```
+
+Зафиксировано:
+
+```text
+CharacterState для этой формулы не требуется
+proficiency не участвует
+DiceEngine не участвует
+результат не записывается обратно в State
+```
+
+Не проектируются в этом slice: armor, shield, class-specific AC formulas,
+Unarmored Defense variants, magic items, spell bonuses, temporary AC
+modifiers, Conditions/Effects AC aggregation, generic modifier pipeline.
+
+#### Initial Monster AC scope: baseline Definition fact
+
+Первый Monster case — baseline Monster AC. Источник:
+
+```text
+CreatureState.definition_id
+        ↓
+typed MonsterDefinition dereference
+        ↓
+MonsterDefinition.armor_class
+```
+
+`MonsterDefinition.armor_class` — будущее immutable baseline AC из monster
+rules/stat block. Зафиксировано:
+
+```text
+Monster AC не выводится из Dexterity
+внутреннее происхождение stat-block AC (natural armor / equipped armor /
+    shield / special rules) пока не раскладывается на составляющие
+runtime monster AC modifiers пока deferred
+```
+
+#### Граница: §3.1.1 MonsterDefinition в этом slice не меняется
+
+Текущий реализованный Phase 1 `MonsterDefinition` (§3.1.1) остаётся закрытым
+минимальным контрактом ровно с полями `id`, `version`, `name`,
+`ability_scores`. `armor_class` **не добавляется** в этот canonical
+implemented Phase 1 schema и production-класс
+`src/dnd_engine/domain/definitions/monster.py` в этом slice не меняется.
+
+`MonsterDefinition.armor_class` является согласованным prerequisite будущего
+AC implementation и будет добавлен вместе с G4a — первым реальным
+Definition-loading slice. Причина: нельзя объявить существующий реализованный
+Phase 1 contract расширенным задним числом до реализации и тестов.
+
+#### G4a — обязательный pipeline gate перед AC IMPLEMENTATION
+
+Согласованный pipeline фиксирован как:
+
+```text
+AC design → docs
+    ↓
+G4a
+    ↓
+AC IMPLEMENTATION
+    ├─ unarmored Character AC
+    └─ baseline Monster AC
+```
+
+G4a — обязательный prerequisite перед началом всего AC IMPLEMENTATION slice
+целиком, а не только перед Monster AC веткой. Ни unarmored Character AC, ни
+baseline Monster AC не реализуются до завершения G4a.
+
+Технически только Monster AC напрямую зависит от typed Definition access:
+unarmored Character AC (`10 + Dexterity modifier`) сам по себе не выполняет
+Definition lookup и не требует Definition access port по своей формуле.
+Character unarmored AC от этой technical asymmetry ничего не выигрывает: она
+не разрешает начать Character AC implementation раньше G4a. Оба пункта
+AC IMPLEMENTATION остаются за одним и тем же pipeline gate, и ни один из них
+не начинается до завершения G4a.
+
+После завершения G4a этот design не фиксирует ни относительный порядок, ни
+параллельность реализации unarmored Character AC и baseline Monster AC.
+Technical asymmetry в зависимости от Definition access не означает, что
+Monster AC обязан быть реализован первым или что Character AC обязан
+следовать за ним: очерёдность или параллельность двух веток
+AC IMPLEMENTATION после G4a остаётся открытым вопросом отдельного
+implementation slice, а не решением этого документа.
+
+G4a должен установить минимальную семантику typed Definition lookup:
+
+```text
+ruleset
++ definition_id
++ expected definition type
+        ↓
+typed Definition
+```
+
+Точная Python signature, port/API и его реализация в этом slice не
+проектируются — фиксируется только prerequisite/boundary. G4a отдельно
+включает:
+
+```text
+Definition access port
+typed lookup
+MonsterDefinition.armor_class
+minimal real MonsterDefinition data
+lazy referential validation
+DEFINITION_NOT_FOUND
+wrong-type failure policy
+packaged ruleset resources
+installed-wheel test
+```
+
+#### Referential validation остаётся lazy
+
+Для будущего Definition lookup зафиксирован только agreed principle:
+
+```text
+reference
+    ↓
+dereference
+    ├─ definition missing
+    └─ wrong definition type
+```
+
+Referential validation lazy: ссылка проверяется тогда, когда concrete
+mechanic реально dereference'ит Definition. Eager/global validation вида
+"load State → walk every definition_id → validate entire campaign graph" не
+вводится.
+
+Missing Definition использует уже существующий `ErrorCode.DEFINITION_NOT_FOUND`
+(§3.9); новый error code для этого случая не создаётся.
+
+Wrong-type dereference (например `definition_id` указывает на существующий,
+но не-`MonsterDefinition` объект) должен быть controlled processing failure;
+точная policy — какой `ErrorCode` или exception используется — определяется
+в G4a после проектирования typed Definition lookup boundary и в этом slice
+не выбирается.
+
+#### Packaging requirement для G4a
+
+Первый настоящий ruleset Definition loader не может работать только из
+repository checkout — он должен работать после обычной установки
+package/wheel. Следовательно, G4a должен решить packaged ruleset resources и
+добавить installed-wheel test. Конкретная структура (`importlib.resources`
+package layout, resource package name, JSON directory schema,
+registry/plugin architecture) в этом slice не проектируется. Зафиксировано
+только требование: Definition loading не должен зависеть от наличия git
+checkout или repository-relative path.
+
+#### AC не является Command
+
+Armor Class calculation сама по себе является read-only Domain
+calculation/query. Не вводятся:
+
+```text
+ArmorClassCommand
+ArmorClassPayload
+ArmorClassResult envelope
+ArmorClassResolved
+ArmorClassHandler
+ResolutionResult[ArmorClassResult]
+```
+
+только ради получения значения AC. AC calculation не мутирует State, не
+использует `StateStore.save()`, не создаёт `GameEvent`, не использует
+`EventMetadataProvider` и не использует `DiceEngine`. Application-level query
+для UI может появиться позже при concrete use case, но это не gameplay
+Command.
+
+#### Attack boundary
+
+```text
+AC mechanic
+    ↓
+effective target AC
+
+Attack mechanic
+    ↓
+consumes effective target AC
+```
+
+Attack не владеет AC, не сохраняет AC и не должен самостоятельно становиться
+owner AC sources. Для будущего audit/event payload Attack может сохранить
+effective AC, реально использованный при resolution, но это audit fact, а не
+persisted target State. Точная Attack Event schema в этом slice не
+фиксируется.
+
+Архитектурное намерение для следующего Attack design: первый минимальный
+Attack slice должен оставаться совместимым с `Character unarmed attack →
+Monster target`, то есть с уже существующими `Strength` ability modifier,
+character proficiency bonus (§3.11), `D20Roll` / `resolve_d20_roll` (§3.12) и
+Monster baseline AC — без преждевременного введения `EquipmentState`,
+equipped weapon, weapon proficiency, weapon ability selection, Finesse,
+range, ammunition, weapon mastery или full inventory system. Attack
+Command/Result/Event в этом slice не реализуются и не детализируются.
+
+#### Никаких новых abstractions
+
+Наличие Character AC и Monster AC — повод сохранить concrete policies, а не
+автоматически объединять их общей abstraction, в соответствии с DEC-0027. Не
+вводятся и не предлагаются как canonical production contract:
+
+```text
+ArmorClassProvider
+ArmorClassSource
+ArmorClassStrategy
+ArmorClassProfile
+ArmorClassFormula object hierarchy
+DefenseProfile
+ModifierPipeline
+ACModifierPipeline
+generic modifier framework
+generic Definition registry/plugin framework
+```
 
 ---
 

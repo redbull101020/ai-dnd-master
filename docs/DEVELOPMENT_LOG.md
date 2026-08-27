@@ -1425,3 +1425,102 @@ contracts.
 - `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `CLAUDE.md`, and `README.md`
   remained unchanged because the review confirms the existing §3.6 policy and
   changes no canonical contract or Roadmap completion status.
+
+## 2026-08-27 — Armor Class design documented (documentation-only)
+
+### Initial state
+
+- Fetched `origin/main` and created `codex/docs-phase2-ac-design` directly
+  from `3a40d1a5554d60fbcb70a4683f65b6fff6041e27` with a clean worktree.
+- Ability Check, Character Saving Throw, and Character Skill Check were
+  already implemented; DEC-0027 had left shared check/orchestration
+  abstractions deferred pending a concrete Attack Roll slice.
+- AC and Attack Rolls remained unchecked in the Roadmap. No Definition
+  access port, typed Definition lookup, or Definition-loading boundary
+  existed; the implemented Phase 1 `MonsterDefinition` (§3.1.1) had no
+  `armor_class` field.
+
+### Documented
+
+- Added canonical Architecture §3.15 recording the approved but
+  not-implemented Armor Class design: effective AC is a derived Domain rule
+  result, never persisted on `CreatureState`/`CharacterState`, and no new
+  `ArmorClassState`/`ACState` State Owner is introduced.
+- Fixed the initial Character AC scope (`10 + Dexterity modifier`, sourced
+  from `CreatureState.ability_scores.dexterity` via the existing
+  `ability_modifier()` rule, no `CharacterState`/proficiency/`DiceEngine`,
+  no State write-back) and the initial Monster AC scope (future
+  `MonsterDefinition.armor_class` baseline dereferenced through
+  `CreatureState.definition_id`, not derived from Dexterity).
+- Recorded G4a as the explicit pipeline gate before the whole AC
+  IMPLEMENTATION slice — both unarmored Character AC and baseline Monster
+  AC — not only before the Monster AC branch, even though only Monster AC
+  technically depends on typed Definition access (Definition access port,
+  typed lookup, `MonsterDefinition.armor_class`, minimal real data, lazy
+  referential validation, `DEFINITION_NOT_FOUND` for missing Definitions, a
+  wrong-type failure policy deferred to G4a, packaged ruleset resources, and
+  an installed-wheel test) without designing G4a's Python signature or
+  implementation.
+- Documented that AC calculation is a read-only Domain query, not a
+  Command/Event use case, and that Attack will consume effective target AC
+  without owning or persisting it, while explicitly excluding a generic
+  Armor Class provider/strategy/formula abstraction per DEC-0027.
+- Explicitly left the current implemented §3.1.1 `MonsterDefinition` schema
+  unchanged in this slice, adding only a design-note pointer to the future
+  G4a extension.
+- Recorded that Creature ability ownership (§10.4) and Equipment
+  armor/shield ownership (§10.6) are unchanged by this design, while
+  explicitly leaving Conditions/Effects ownership and composition for
+  future AC inputs undetermined by this slice, since §10.4 and §10.13
+  already describe that area differently and this design must not harden
+  either reading.
+- Appended DEC-0028 recording the decision and its rationale.
+
+### Changed files
+
+- `docs/ARCHITECTURE.md` — new §3.15 Armor Class design, plus Quick lookup
+  and table-of-contents entries.
+- `docs/DECISIONS.md` — append-only DEC-0028.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Explicitly not implemented
+
+- `MonsterDefinition.armor_class` production field, any Definition access
+  port, ruleset loader, ruleset data, or packaging change.
+- Any AC Python rule, Attack Roll, `EquipmentState`, `ArmorDefinition`, or
+  generic modifier framework.
+- No `src/`, `tests/`, `rules/`, `campaigns/`, `pyproject.toml`, `CLAUDE.md`,
+  `README.md`, or `docs/ROADMAP.md` change; the Roadmap AC and Attack rolls
+  items remain unchecked. `CLAUDE.md` was reread against the new §3.15
+  content and found to state nothing that contradicts it, so it was left
+  unchanged.
+
+### Verification
+
+- Reviewed `CLAUDE.md` against the new §3.15 content for contradiction per
+  the DEC-0018 resync obligation; found none, so `CLAUDE.md` was not edited.
+- Repository-wide search for `armor_class` / `armorClass` found the new AC
+  design/history (§3.15, DEC-0028, and this `docs/DEVELOPMENT_LOG.md` entry)
+  and the pre-existing `tests/domain/test_creature_state.py` future-phase-field
+  exclusion entry; no persisted `CreatureState`, `CharacterState`, or
+  `StateSnapshot` field was introduced.
+- Confirmed `ErrorCode.DEFINITION_NOT_FOUND` already exists in §3.9; no new
+  error code was added.
+- Confirmed `docs/ROADMAP.md` AC and Attack rolls items remain unchecked.
+- The repository `.venv` (Python 3.12.9) was usable in this environment.
+  The default OS temp directory (`%TEMP%\pytest-of-redbu`) was inaccessible
+  to pytest with a `PermissionError`, so an external `--basetemp` was used
+  for full-suite runs; the documentation-only narrow run did not hit this
+  path.
+- `python -m pytest tests/architecture/test_documentation_references.py`:
+  2 passed.
+- Full `python -m pytest --basetemp=<external tmp>`: 590 passed, matching
+  the pre-existing count on `origin/main`.
+- `mypy` was not yet installed in the repository `.venv`; it was installed
+  by running `pip install -e ".[dev]"`, which installs exactly the
+  dependencies already declared in `pyproject.toml` `[dev]` extras — no new
+  dependency declaration was added or changed. `python -m mypy
+  src/dnd_engine`: no issues in 62 source files.
+- `git diff --check`: passed, no output.
+- `git status --short` showed only `docs/ARCHITECTURE.md`,
+  `docs/DECISIONS.md`, and `docs/DEVELOPMENT_LOG.md` modified.
