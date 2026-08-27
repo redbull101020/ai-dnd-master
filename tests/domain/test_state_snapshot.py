@@ -14,7 +14,7 @@ def campaign_state() -> CampaignState:
     return CampaignState(
         id="campaign_001",
         ruleset_id="dnd_5e",
-        ruleset_version="5.2.1",
+        ruleset_version="5.1",
     )
 
 

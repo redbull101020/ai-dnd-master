@@ -85,7 +85,9 @@ Infrastructure реализует интерфейсы, объявленные �
 
 > [§3.1 Definition Contract](docs/ARCHITECTURE.md#31-definition-contract) · [§3.2 State Contract](docs/ARCHITECTURE.md#32-state-contract)
 
-**Definition** — неизменяемое описание из правил, лежит в `rules/dnd_5e/`.
+**Definition** — неизменяемое описание из правил. Единственная authoritative
+копия — packaged resource `src/dnd_engine/resources/rulesets/` (§12.26);
+отдельного top-level `rules/` больше нет.
 **State** — изменяемый экземпляр в кампании, лежит в `campaigns/campaign_NNN/`.
 
 Обязательные поля любого Definition — `id` и `version` (§3.1). `name` обязательным для всех Definitions не является.
@@ -126,6 +128,7 @@ Definition immutable: во время сессии не мутируется, п
 * Proficiency foundation (§3.11): `character_proficiency_bonus(level)` — pure derived character-level rule. Authoritative input хранится в `CharacterState.total_level`, effective Saving Throw и Skill membership — в explicit `saving_throw_proficiencies: frozenset[Ability]` и `skill_proficiencies: frozenset[Skill]`. Bonus не хранится; raw Ability Check не изменён, а Expertise, half proficiency, monster/other proficiency и class progression остаются deferred.
 * Skill/Character State foundation (§1.2.2, §3.2.3, §3.2.4, §12.9): `Skill` — closed 18-value identity-only `StrEnum` без fixed Ability mapping. Отдельный `CharacterState` является второй проекцией той же runtime character entity и использует ID существующего `CreatureState`; current State schema V3 хранит mandatory `skillProficiencies`, writer выпускает только V3, strict legacy V1 reader создаёт `characters=()`, а V2 reader создаёт empty Skill membership.
 * Minimal d20 semantics (§3.12): closed `RollMode`, immutable `D20Roll` и concrete `resolve_d20_roll`, используемые Ability Check, Character Saving Throw и Character Skill Check. NORMAL использует один independent `"1d20"` call, ADVANTAGE/DISADVANTAGE — два; `"2d20"` и primitive-level natural-1/natural-20 interpretation не вводятся. Effective mode не является Command/API/AI input.
+* Definition Access foundation, G4a (§3.16, §12.26): `DefinitionSource` (`domain/services/definitions.py`) — generic read-only Domain port `get_definition(*, ruleset_id, ruleset_version, definition_id, expected_type) -> TDefinition`, никогда не возвращает `None`. `DefinitionNotFoundError`/`DefinitionTypeMismatchError` — стабильные semantic lookup failures (будущий mapping: `DEFINITION_NOT_FOUND` / `INVALID_STATE, field="definition_id"`), отдельные от Infrastructure `InvalidPackagedDefinitionError`. Production adapter `PackagedDefinitionSource` (`infrastructure/definitions/packaged.py`) читает единственный authoritative packaged dataset `src/dnd_engine/resources/rulesets/` через `importlib.resources`. `MonsterDefinition.armor_class: int` — единственное новое Definition-поле, добавленное этим slice (§3.1.1). Referential validation остаётся lazy: State loading не dereference-ит `definition_id`. Это prerequisite для AC IMPLEMENTATION (§3.15) — AC/Attack сами не реализованы.
 
 ---
 
@@ -261,6 +264,8 @@ Event immutable: после записи не редактируется и не
 | `roll.total` в Ability Check | `D20Roll.selected`; `DiceRoll.total` остаётся суммой dice expression |
 | Хранимый `modifier` в `AbilityScores` | чистое правило `(score - 10) // 2` |
 | `AbilityCheckSucceeded` / `AbilityCheckFailed` | один `AbilityCheckResolved`, исход в `payload.succeeded` |
+| `ruleset_version = "5.2.1"` для `dnd_5e` | `dnd_5e` = SRD 5.1; канонический `ruleset_version = "5.1"` (§4.6) |
+| `rules/dnd_5e/...json` как источник Definition data | packaged resource `src/dnd_engine/resources/rulesets/...` (§12.26) |
 
 `DamageType` — ровно тринадцать значений, расширять нельзя:
 

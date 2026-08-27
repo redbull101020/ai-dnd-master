@@ -51,8 +51,11 @@
 | Character Saving Throw vertical slice | §3.13 |
 | Character Skill Check vertical slice | §3.14 |
 | Armor Class design (approved, not implemented) | §3.15 |
+| Definition access port (G4a, DefinitionSource) | §3.16 |
+| Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
+| Packaged ruleset resources / Definition loading boundary | §12.26 |
 
 ### Оглавление / Table of contents
 
@@ -98,6 +101,7 @@
   * [3.13. Minimal Phase 2 Character Saving Throw vertical slice](#313-minimal-phase-2-character-saving-throw-vertical-slice)
   * [3.14. Minimal Phase 2 Character Skill Check vertical slice](#314-minimal-phase-2-character-skill-check-vertical-slice)
   * [3.15. Minimal Phase 2 Armor Class design](#315-minimal-phase-2-armor-class-design)
+  * [3.16. Minimal Phase 2 Definition Access vertical slice (G4a)](#316-minimal-phase-2-definition-access-vertical-slice-g4a)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -191,6 +195,7 @@
   * [12.23. Канонический Serialization Pipeline](#1223-канонический-serialization-pipeline)
   * [12.24. Главный принцип сериализации / Core Serialization Principle](#1224-главный-принцип-сериализации--core-serialization-principle)
   * [12.25. Runtime Validation Policy](#1225-runtime-validation-policy)
+  * [12.26. Packaged Ruleset Resources](#1226-packaged-ruleset-resources)
 
 </details>
 
@@ -957,13 +962,17 @@ class MonsterDefinition:
     version: int
     name: str
     ability_scores: AbilityScores
+    armor_class: int
 ```
 
-`MonsterDefinition` — immutable template/rules definition. Он не содержит
-current HP, current conditions/effects, position, combat turn data, monster
-runtime ID или inventory/equipment state. AC, speed, CR, senses, actions,
-spellcasting и другие поля будущих phases добавляются только тогда, когда их
-потребует Roadmap.
+`MonsterDefinition` — immutable template/rules definition. `armor_class` —
+baseline Armor Class из monster stat block (exact `int`, `bool` отклоняется);
+это immutable Definition fact, а не effective/derived AC (§3.15) и не runtime
+State. Поле добавлено вместе с G4a (§3.16) как согласованный prerequisite
+из DEC-0028. `MonsterDefinition` не содержит current HP, current
+conditions/effects, position, combat turn data, monster runtime ID или
+inventory/equipment state. Speed, CR, senses, actions, spellcasting и другие
+поля будущих phases добавляются только тогда, когда их потребует Roadmap.
 
 ---
 
@@ -2337,7 +2346,9 @@ deferred. После третьего concrete handler duplication может б
 
 ### 3.15. Minimal Phase 2 Armor Class design
 
-Implementation status: **Approved design / Not implemented.**
+Implementation status: **Approved design / Not implemented.** G4a
+prerequisite (§3.16) is implemented; AC IMPLEMENTATION itself (unarmored
+Character AC, baseline Monster AC) is not.
 
 Этот раздел фиксирует согласованный (approved) design effective Armor Class
 (AC) как canonical source of truth. Раздел документирует design boundary; он
@@ -2458,20 +2469,27 @@ Monster AC не выводится из Dexterity
 runtime monster AC modifiers пока deferred
 ```
 
-#### Граница: §3.1.1 MonsterDefinition в этом slice не меняется
+#### Граница: §3.1.1 MonsterDefinition изменён только в G4a
 
-Текущий реализованный Phase 1 `MonsterDefinition` (§3.1.1) остаётся закрытым
-минимальным контрактом ровно с полями `id`, `version`, `name`,
-`ability_scores`. `armor_class` **не добавляется** в этот canonical
-implemented Phase 1 schema и production-класс
-`src/dnd_engine/domain/definitions/monster.py` в этом slice не меняется.
+На этапе AC design (DEC-0028) реализованный Phase 1 `MonsterDefinition`
+(§3.1.1) оставался закрытым минимальным контрактом ровно с полями `id`,
+`version`, `name`, `ability_scores`; `armor_class` не добавлялся, а
+production-класс `src/dnd_engine/domain/definitions/monster.py` не менялся.
 
-`MonsterDefinition.armor_class` является согласованным prerequisite будущего
-AC implementation и будет добавлен вместе с G4a — первым реальным
-Definition-loading slice. Причина: нельзя объявить существующий реализованный
-Phase 1 contract расширенным задним числом до реализации и тестов.
+`MonsterDefinition.armor_class` являлся согласованным prerequisite будущего
+AC implementation и был добавлен вместе с G4a (§3.16) — первым реальным
+Definition-loading slice, вместе с тестами. Причина: нельзя было объявить
+существующий реализованный Phase 1 contract расширенным задним числом до
+реализации и тестов; после G4a это расширение сделано явно и только в
+объёме поля `armor_class`.
 
 #### G4a — обязательный pipeline gate перед AC IMPLEMENTATION
+
+**Status: G4a prerequisite implemented (§3.16). AC IMPLEMENTATION сама по
+себе (unarmored Character AC, baseline Monster AC, их использование в
+Attack) остаётся не реализована.** Реализация G4a не означает начало AC
+IMPLEMENTATION и не помечает Roadmap AC/Attack rolls как выполненные
+(`docs/ROADMAP.md`).
 
 Согласованный pipeline фиксирован как:
 
@@ -2505,30 +2523,29 @@ Monster AC обязан быть реализован первым или что
 AC IMPLEMENTATION после G4a остаётся открытым вопросом отдельного
 implementation slice, а не решением этого документа.
 
-G4a должен установить минимальную семантику typed Definition lookup:
+G4a установил минимальную семантику typed Definition lookup:
 
 ```text
-ruleset
+ruleset_id + ruleset_version
 + definition_id
 + expected definition type
         ↓
 typed Definition
 ```
 
-Точная Python signature, port/API и его реализация в этом slice не
-проектируются — фиксируется только prerequisite/boundary. G4a отдельно
-включает:
+Точная Python signature, port/API и его реализация зафиксированы в §3.16.
+G4a реализовал:
 
 ```text
-Definition access port
-typed lookup
-MonsterDefinition.armor_class
-minimal real MonsterDefinition data
-lazy referential validation
-DEFINITION_NOT_FOUND
-wrong-type failure policy
-packaged ruleset resources
-installed-wheel test
+Definition access port           → §3.16 (DefinitionSource)
+typed lookup                     → §3.16 (DefinitionSource.get_definition)
+MonsterDefinition.armor_class    → §3.1.1
+minimal real MonsterDefinition data → §12.26 (packaged goblin)
+lazy referential validation      → §3.16, §12.26
+DEFINITION_NOT_FOUND             → §3.16 (DefinitionNotFoundError policy)
+wrong-type failure policy        → §3.16 (DefinitionTypeMismatchError policy)
+packaged ruleset resources       → §12.26
+installed-wheel test             → §12.26
 ```
 
 #### Referential validation остаётся lazy
@@ -2549,24 +2566,26 @@ mechanic реально dereference'ит Definition. Eager/global validation в�
 вводится.
 
 Missing Definition использует уже существующий `ErrorCode.DEFINITION_NOT_FOUND`
-(§3.9); новый error code для этого случая не создаётся.
+(§3.9); новый error code для этого случая не создаётся. На Domain/port
+boundary это выражено как `DefinitionNotFoundError` (§3.16); маппинг в
+`EngineError` выполнит конкретный будущий Application consumer (§3.16).
 
 Wrong-type dereference (например `definition_id` указывает на существующий,
-но не-`MonsterDefinition` объект) должен быть controlled processing failure;
-точная policy — какой `ErrorCode` или exception используется — определяется
-в G4a после проектирования typed Definition lookup boundary и в этом slice
-не выбирается.
+но не-`MonsterDefinition` объект) — controlled processing failure. G4a
+зафиксировал точную policy: Domain/port boundary выражает это как
+`DefinitionTypeMismatchError` (§3.16), а канонический будущий Application
+mapping — `ErrorCode.INVALID_STATE` с `field="definition_id"` (§3.16), а не
+`DEFINITION_NOT_FOUND` и не новый `ErrorCode`.
 
 #### Packaging requirement для G4a
 
 Первый настоящий ruleset Definition loader не может работать только из
 repository checkout — он должен работать после обычной установки
-package/wheel. Следовательно, G4a должен решить packaged ruleset resources и
-добавить installed-wheel test. Конкретная структура (`importlib.resources`
-package layout, resource package name, JSON directory schema,
-registry/plugin architecture) в этом slice не проектируется. Зафиксировано
-только требование: Definition loading не должен зависеть от наличия git
-checkout или repository-relative path.
+package/wheel. G4a решил packaged ruleset resources и добавил
+installed-wheel test (§12.26): производственные данные пакуются как
+`importlib.resources` package data внутри `src/dnd_engine/resources/`, и
+Definition loading не зависит от наличия git checkout или repository-relative
+path.
 
 #### AC не является Command
 
@@ -2633,6 +2652,143 @@ ACModifierPipeline
 generic modifier framework
 generic Definition registry/plugin framework
 ```
+
+---
+
+### 3.16. Minimal Phase 2 Definition Access vertical slice (G4a)
+
+Implementation status: **Implemented.** This is the G4a prerequisite required
+by §3.15/DEC-0028 before AC IMPLEMENTATION. It does not implement AC, Attack,
+or any State-mutating mechanic.
+
+#### Goal
+
+Production code obtains a typed, immutable Definition from a Creature's
+`definition_id` and a Campaign's ruleset identity, without `cast()` at each
+call site:
+
+```text
+CampaignState.ruleset_id
++ CampaignState.ruleset_version
++ CreatureState.definition_id
++ expected concrete Definition type
+        ↓
+typed read-only Definition access port
+        ↓
+Infrastructure packaged-ruleset adapter
+        ↓
+installed package resources
+        ↓
+strict JSON decode
+        ↓
+typed immutable Definition
+```
+
+#### `DefinitionSource` — Domain port
+
+`src/dnd_engine/domain/services/definitions.py` declares one generic
+read-only Domain `Protocol`, following the same port-in-Domain pattern as
+`StateStore` (§12.9):
+
+```python
+from typing import Protocol, TypeVar
+
+from dnd_engine.domain.definitions.base import Definition
+
+
+TDefinition = TypeVar("TDefinition", bound=Definition)
+
+
+class DefinitionSource(Protocol):
+    def get_definition(
+        self,
+        *,
+        ruleset_id: str,
+        ruleset_version: str,
+        definition_id: str,
+        expected_type: type[TDefinition],
+    ) -> TDefinition: ...
+```
+
+The boundary uses the existing plain `str` `ruleset_id` / `ruleset_version`
+fields already on `CampaignState` (§3.2.2); no new `Ruleset` Value Object is
+introduced. The full `CampaignState` is never passed to the port — only the
+two identity strings. `expected_type` makes the static return type the
+concrete requested subtype (e.g. `MonsterDefinition`), so callers do not
+`cast()`. The lookup never returns `None`; a missing or wrong-type Definition
+is a raised exception (below), and there is no untyped `dict` result. The
+port is synchronous only. Category methods such as `get_monster()` /
+`get_weapon()` / `get_item()` are not introduced while the single generic
+method is sufficient.
+
+#### Lookup boundary errors
+
+Same module:
+
+```text
+DefinitionSourceError            (base)
+├── DefinitionNotFoundError
+└── DefinitionTypeMismatchError
+```
+
+* `DefinitionNotFoundError` — the ruleset/version resolved correctly and no
+  Definition exists for `definition_id`. This also covers a non-canonical,
+  non-resolvable lookup identity: `ruleset_id`, `ruleset_version`, or
+  `definition_id` that is not one canonical resource path segment (e.g.
+  containing `..`, `/`, `\`, or otherwise not matching the existing §4.1/§4.6
+  ID contract) cannot resolve to any packaged Definition, so it fails the
+  same way as an ordinary miss rather than introducing a new exception
+  type; §12.26 documents that this check runs before any dynamic value is
+  joined into a resource path. Canonical future Application mapping:
+  `EngineError(code=ErrorCode.DEFINITION_NOT_FOUND, ...)` (§3.9). No new
+  `ErrorCode` is introduced.
+* `DefinitionTypeMismatchError` — a Definition exists for `definition_id` but
+  `isinstance(definition, expected_type)` is `False` (e.g. actual
+  `WeaponDefinition`, expected `MonsterDefinition`). This uses `isinstance`,
+  not exact type equality, so an expected `ItemDefinition` accepts an actual
+  `WeaponDefinition` (`WeaponDefinition IS-A ItemDefinition`). Canonical
+  future Application mapping: `EngineError(code=ErrorCode.INVALID_STATE,
+  field="definition_id", ...)`. Wrong type is never treated as
+  `DEFINITION_NOT_FOUND`, `RULE_VIOLATION`, a new `ErrorCode`, a silent
+  fallback, or a return of the wrong object.
+
+No concrete Application consumer exists in this slice (no AC handler is
+implemented), so no generic exception → `EngineError` mapping function is
+added; this paragraph fixes the future Application policy so the eventual AC
+consumer follows it rather than choosing new semantics. Infrastructure/content
+corruption (malformed JSON, unknown packaged Definition `type`, missing
+required packaged field, wrong primitive type, payload `id` mismatch, and
+similar) is a distinct Infrastructure-level `InvalidPackagedDefinitionError`
+(§12.26) and is never silently turned into `DefinitionNotFoundError`.
+
+#### Lazy referential validation
+
+`definition_id` remains an unvalidated reference until a concrete mechanic
+actually dereferences it, matching §3.15. `StateStore.load()`,
+`StateSerializer.deserialize`, `StateSnapshot.__post_init__`, and campaign
+startup do not call `DefinitionSource.get_definition(...)`; there is no
+eager/global campaign-graph validator. A `StateSnapshot` whose
+`CreatureState.definition_id` names a nonexistent Definition still loads and
+deserializes successfully; the failure appears only at the point some future
+mechanic (e.g. AC) performs the typed dereference.
+
+#### Infrastructure adapter
+
+`src/dnd_engine/infrastructure/definitions/packaged.py` implements
+`PackagedDefinitionSource`, a stateless production `DefinitionSource` reading
+packaged resources via `importlib.resources` (§12.26). It performs resource
+lookup, UTF-8 read, JSON parse, strict boundary validation (§12.25), actual
+`type`-based Definition-kind discrimination, Domain object construction, and
+`expected_type` validation. It does not perform State loading, build
+`ResolutionResult`, compute AC, create Events, cache, or access the network.
+
+#### Not introduced
+
+Consistent with §3.6 and DEC-0027, this slice adds no `DefinitionRegistry`,
+repository/unit-of-work framework, service locator, DI container, plugin
+system, entry points, global singleton, or mutable catalog. `ArmorClassCommand`
+/ `Result` / `Event` / `Handler`, `AttackCommand`/resolver, and any AC or HP
+calculation remain out of scope; see §3.15.
 
 ---
 
@@ -2828,14 +2984,22 @@ Ruleset использует:
 dnd_5e
 ```
 
+В этом проекте `dnd_5e` означает classic Dungeons & Dragons 5th Edition
+(2014 rules), то есть System Reference Document 5.1 ("SRD 5.1"), а не
+SRD 5.2.x / редакцию 2024 года ("5.5e"). Канонический `ruleset_version` для
+`dnd_5e` — `"5.1"`.
+
 Версия находится отдельно:
 
 ```json
 {
   "id": "dnd_5e",
-  "version": "5.2.1"
+  "version": "5.1"
 }
 ```
+
+`ruleset_id` и `ruleset_version` остаются обычными `str` полями (§3.2.2);
+отдельный Ruleset Value Object не вводится.
 
 ---
 
@@ -2864,7 +3028,7 @@ fireball_5_2_1
 {
   "ruleset": {
     "id": "dnd_5e",
-    "version": "5.2.1"
+    "version": "5.1"
   }
 }
 ```
@@ -5418,7 +5582,7 @@ filesystem I/O. Каноническая current V3 schema:
     "campaign": {
       "id": "campaign_001",
       "rulesetId": "dnd_5e",
-      "rulesetVersion": "5.2.1"
+      "rulesetVersion": "5.1"
     },
     "creatures": [
       {
@@ -6158,3 +6322,164 @@ State; конкретные пробелы исправляются в соот�
 Если canonical constructor contract ожидает typed Domain value, constructor не
 преобразует автоматически `"1"` в `1`, `list` в `tuple` или string в enum.
 Coercion и normalization принадлежат соответствующему boundary mapper/loader.
+
+---
+
+### 12.26. Packaged Ruleset Resources
+
+Implementation status: **Implemented (G4a, §3.16).**
+
+#### Single authoritative location
+
+Ruleset Definition JSON — installed Python package resources, а не
+repository-relative path. Каноническое дерево:
+
+```text
+src/dnd_engine/resources/
+├── __init__.py
+└── rulesets/
+    └── <ruleset_id>/
+        └── <ruleset_version>/
+            ├── NOTICE.md            (attribution, где применимо)
+            └── definitions/
+                └── <definition_id>.json
+```
+
+Текущее фактическое содержимое:
+
+```text
+src/dnd_engine/resources/rulesets/dnd_5e/5.1/definitions/goblin.json
+src/dnd_engine/resources/rulesets/dnd_5e/5.1/NOTICE.md
+```
+
+Это единственная authoritative копия packaged Definition data. Прежний
+top-level scaffold `rules/dnd_5e/` (только `.gitkeep` placeholders, без
+реального содержимого) удалён; дублирующего authoritative dataset нет и не
+вводится.
+
+#### Resource file format
+
+Один Definition — один JSON файл. JSON использует camelCase (§12.5),
+соответствуя остальным Definition/State boundary contracts. Каждый файл
+содержит explicit resource-level discriminator `type`, который **не**
+становится полем самого Domain dataclass:
+
+```json
+{
+  "type": "monster",
+  "id": "goblin",
+  "version": 1,
+  "name": "Goblin",
+  "abilityScores": {
+    "strength": 8,
+    "dexterity": 14,
+    "constitution": 10,
+    "intelligence": 10,
+    "wisdom": 8,
+    "charisma": 8
+  },
+  "armorClass": 15
+}
+```
+
+Канонические значения `type`: `"monster"`, `"item"`, `"weapon"` — по одному
+на каждый существующий конкретный Domain Definition kind (§3.1.1). YAML,
+schema DSL или generic serialization framework не вводятся.
+
+#### Strict loader validation
+
+Packaged Definition JSON — untrusted boundary (§12.25). Adapter отклоняет:
+
+```text
+malformed JSON
+non-object root
+missing required fields
+unknown fields
+wrong primitive/container types (including bool vs int, "15" vs 15)
+malformed abilityScores
+unknown Definition type
+invalid Domain values (e.g. invalid DamageType)
+requested definition_id != payload id
+```
+
+Rejection не порождает silent coercion и не создаёт universal schema
+framework: dispatch на конкретный decoder — небольшой deterministic
+`if`/`elif`/`else` по `type`, а не registry/plugin architecture.
+
+#### Actual type discrimination
+
+Lookup не декодирует payload в тип, продиктованный caller'ом. Adapter читает
+resource, читает actual `"type"`, декодирует в соответствующий concrete
+Definition dataclass, и только затем проверяет
+`isinstance(definition, expected_type)` (§3.16). `WeaponDefinition IS-A
+ItemDefinition`, поэтому актуальный `WeaponDefinition` проходит проверку при
+ожидаемом `ItemDefinition`.
+
+#### Infrastructure/content corruption is distinct from lookup failures
+
+`src/dnd_engine/infrastructure/definitions/packaged.py` определяет
+`InvalidPackagedDefinitionError` — отдельный Infrastructure exception для
+malformed/unsupported packaged content. Он не является подклассом
+`DefinitionSourceError` (§3.16) и не преобразуется автоматически в
+`DefinitionNotFoundError`: missing Definition (правильный ruleset/version,
+отсутствующий `definition_id`) и broken/corrupt packaged content — разные,
+различимые failures.
+
+Это распространяется и на сам packaged resource root. Adapter отдельно
+проверяет канонический top-level `<resources_root>/rulesets/`: если этот
+каталог отсутствует или не является директорией (broken/incomplete wheel,
+неправильно настроенный `resources_root`), это
+`InvalidPackagedDefinitionError` — packaging/infrastructure failure, а не
+lookup failure. Любой запрошенный, но unsupported scope **ниже** этого
+корня (например, `dnd_5e / 9.9 / goblin`, где `rulesets/` существует, но
+`9.9/` — нет) остаётся ordinary `DefinitionNotFoundError`: adapter не
+вводит manifest или supported-ruleset registry только ради различения всех
+возможных corruption variants ниже top-level root.
+
+#### Resource path traversal prevention
+
+`ruleset_id`, `ruleset_version` и `definition_id` — untrusted `str` values
+на этой boundary. Прежде чем построить resource path через
+`Traversable.joinpath(...)`, adapter проверяет каждое значение как ровно
+один canonical resource path segment (`_require_resource_segment`,
+до вызова `joinpath` на динамическом значении): `ruleset_id` и
+`definition_id` — против существующего lowercase snake_case ID contract
+(§4.1, §4.6); `ruleset_version` — как один path segment без `/`, `\` и без
+`.`/`..` path semantics. Значение, не прошедшее эту проверку (например
+`"../goblin"`, `"foo/bar"`, `"foo\\bar"`, `".."`, ведущий `.`), не может
+разрешиться ни в один packaged Definition и обрабатывается как
+`DefinitionNotFoundError` (§3.16) — отдельный exception type для этого не
+вводится. Никакой generic path sanitizer или ID framework не добавляется:
+это одна small locally-scoped проверка внутри
+`infrastructure/definitions/packaged.py`.
+
+#### Adapter mechanics
+
+`PackagedDefinitionSource` — stateless production `DefinitionSource`. Он
+получает опциональный `resources_root` (`importlib.resources.abc.Traversable`)
+в конструкторе; по умолчанию — `importlib.resources.files("dnd_engine.resources")`.
+Production/installed-wheel путь всегда использует этот default; тесты могут
+передать альтернативный `Traversable`-совместимый root (например
+`pathlib.Path` на временную test fixture directory) для изолированных
+wrong-type/corruption сценариев без создания второго production dataset.
+Adapter не использует `Path("rules/...")`, repository-relative path или
+предположения о текущей рабочей директории.
+
+#### Packaging configuration
+
+`pyproject.toml` объявляет `[tool.setuptools.package-data]` для
+`dnd_engine.resources`, включая packaged JSON/`NOTICE.md` в собираемый
+wheel. Новая production dependency не добавляется; `importlib.resources` и
+`json` — stdlib.
+
+#### Installed-wheel requirement
+
+Ruleset Definition loading должен работать после обычной установки
+package/wheel, а не только из repository checkout. Обязательный regression
+proof: build реального wheel, установка в изолированный venv (не
+`pip install -e`), запуск child-процесса вне repository checkout, typed
+lookup `ruleset_id="dnd_5e"`, `ruleset_version="5.1"`,
+`definition_id="goblin"`, `expected_type=MonsterDefinition` через
+production `PackagedDefinitionSource()` без явного `resources_root`, и
+проверка `DefinitionNotFoundError` для отсутствующего Definition. Тест живёт
+в `tests/packaging/`.

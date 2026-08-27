@@ -22,6 +22,12 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"dnd_engine.resources" = [
+    "rulesets/dnd_5e/5.1/definitions/*.json",
+    "rulesets/dnd_5e/5.1/NOTICE.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

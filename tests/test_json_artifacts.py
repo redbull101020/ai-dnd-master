@@ -4,9 +4,12 @@ from pathlib import Path
 
 def test_json_artifacts_are_nonempty_and_valid() -> None:
     repository_root = Path(__file__).resolve().parents[1]
+    packaged_resources = (
+        repository_root / "src" / "dnd_engine" / "resources" / "rulesets"
+    )
     artifacts = [
         path
-        for directory in (repository_root / "rules", repository_root / "campaigns")
+        for directory in (packaged_resources, repository_root / "campaigns")
         for path in directory.rglob("*.json")
     ]
 

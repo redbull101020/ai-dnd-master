@@ -36,7 +36,7 @@ CANONICAL_V3_DATA: dict[str, object] = {
         "campaign": {
             "id": "campaign_001",
             "rulesetId": "dnd_5e",
-            "rulesetVersion": "5.2.1",
+            "rulesetVersion": "5.1",
         },
         "creatures": [CREATURE_DATA],
         "characters": [
@@ -63,7 +63,7 @@ LEGACY_V1_DATA: dict[str, object] = {
         "campaign": {
             "id": "campaign_001",
             "rulesetId": "dnd_5e",
-            "rulesetVersion": "5.2.1",
+            "rulesetVersion": "5.1",
         },
         "creatures": [CREATURE_DATA],
     },
@@ -71,7 +71,7 @@ LEGACY_V1_DATA: dict[str, object] = {
 
 
 def campaign_state() -> CampaignState:
-    return CampaignState("campaign_001", "dnd_5e", "5.2.1")
+    return CampaignState("campaign_001", "dnd_5e", "5.1")
 
 
 def creature_state(creature_id: str = "character_001") -> CreatureState:
@@ -142,7 +142,7 @@ def test_serialize_emits_empty_characters_in_v3() -> None:
             "campaign": {
                 "id": "campaign_001",
                 "rulesetId": "dnd_5e",
-                "rulesetVersion": "5.2.1",
+                "rulesetVersion": "5.1",
             },
             "creatures": [],
             "characters": [],

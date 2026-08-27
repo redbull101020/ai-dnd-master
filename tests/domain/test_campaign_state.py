@@ -39,7 +39,7 @@ def campaign_state() -> CampaignState:
     return CampaignState(
         id="campaign_001",
         ruleset_id="dnd_5e",
-        ruleset_version="5.2.1",
+        ruleset_version="5.1",
     )
 
 
@@ -48,7 +48,7 @@ def test_campaign_state_accepts_canonical_fields() -> None:
 
     assert campaign.id == "campaign_001"
     assert campaign.ruleset_id == "dnd_5e"
-    assert campaign.ruleset_version == "5.2.1"
+    assert campaign.ruleset_version == "5.1"
 
 
 def test_campaign_state_has_only_canonical_fields() -> None:
@@ -75,7 +75,7 @@ def test_ruleset_id_and_version_are_separate() -> None:
     campaign = campaign_state()
 
     assert campaign.ruleset_id == "dnd_5e"
-    assert campaign.ruleset_version == "5.2.1"
+    assert campaign.ruleset_version == "5.1"
     assert campaign.ruleset_id != campaign.ruleset_version
 
 

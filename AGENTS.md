@@ -24,7 +24,7 @@ If code, documentation, Roadmap, and task requirements conflict, do not choose s
 * `src/dnd_engine/application/` — use cases, command handlers, orchestration.
 * `src/dnd_engine/api/` — presentation/API boundary.
 * `src/dnd_engine/infrastructure/` — persistence, filesystem, RNG implementations, LLM integrations.
-* `rules/dnd_5e/` — immutable/versioned ruleset Definitions.
+* `src/dnd_engine/resources/rulesets/` — packaged immutable/versioned ruleset Definitions (installed with the package; see `docs/ARCHITECTURE.md` §12.26). This is the single authoritative Definition dataset location; there is no separate top-level `rules/` copy.
 * `campaigns/` — campaign-specific mutable state and event history.
 * `tests/` — deterministic automated tests.
 * `docs/ARCHITECTURE.md` — canonical contracts.

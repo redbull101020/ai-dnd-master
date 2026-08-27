@@ -185,10 +185,10 @@ ai-dnd-master/
 │       ├── api/                 # Presentation
 │       ├── application/         # commands, handlers, services
 │       ├── domain/              # definitions, state, events, rules, value_objects
-│       └── infrastructure/      # persistence, llm, random
-│
-├── rules/
-│   └── dnd_5e/                  # Definitions: classes, spells, monsters, items, ...
+│       ├── infrastructure/      # persistence, llm, random, packaged Definition adapter
+│       └── resources/
+│           └── rulesets/
+│               └── dnd_5e/      # packaged Definitions: classes, spells, monsters, items, ...
 │
 ├── campaigns/
 │   └── campaign_001/            # campaign-specific state and event storage
@@ -201,7 +201,8 @@ ai-dnd-master/
     └── scenarios/
 ```
 
-`rules/` — данные правил, общие для всех кампаний.
+`src/dnd_engine/resources/rulesets/` — packaged ruleset данные, общие для всех
+кампаний; единственная authoritative копия Definition data (§12.26).
 `campaigns/` — состояние конкретных партий.
 
 ---
