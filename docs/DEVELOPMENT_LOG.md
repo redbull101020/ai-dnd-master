@@ -1346,3 +1346,63 @@ contracts.
 - State mutation/application, EventStore/runtime Event persistence, replay,
   transaction/UoW, buses, registries, frameworks, databases, and new
   dependencies.
+
+## 2026-08-27 — Phase 2 Character Skill Check vertical slice
+
+### Initial state
+
+- Fetched `origin/main` and created
+  `codex/phase2-character-skill-check` directly from
+  `fd06755c27f0ce636ed637487ddbd22c3037a0fe` with a clean worktree.
+- Verified the canonical 18-value `Skill`, V3 `CharacterState` Skill
+  membership persistence, shared ability/proficiency/d20 rules, passing
+  Character Saving Throw slice, and the §3.6 deferred-abstraction boundary.
+- The repository `.venv` launcher referenced a missing Python executable, so
+  verification used an external temporary Python 3.12.13 environment with the
+  existing declared `.[dev]` dependencies; no project dependency changed.
+
+### Implemented
+
+- Added immutable `SkillCheckPayload` / `SkillCheckCommand` with explicit
+  `skill`, `ability`, and `dc`; no fixed Skill-to-Ability mapping or generic
+  Command hierarchy was introduced.
+- Added character-specific `resolve_character_skill_check(...)` and immutable
+  `SkillCheckResult`. The resolver composes matching Creature/Character
+  projections, shared `ability_modifier`, conditional Skill membership,
+  shared character proficiency progression, and shared d20 selection.
+- Preserved alternative Ability semantics end-to-end: Strength (Intimidation)
+  uses Strength for the modifier and Intimidation for proficiency membership.
+- Added `SkillCheckResolvedPayloadV1` and the `SkillCheckResolved` V1 builder
+  with explicit Skill/Ability, `D20Roll`, separate ability/proficiency audit
+  contributions, and externally supplied Event metadata.
+- Added explicit read-only `SkillCheckHandler`. Missing Creature returns
+  `ENTITY_NOT_FOUND`; missing matching Character projection returns
+  `INVALID_STATE` with `field="characters"`. Load, dice, and metadata failures
+  retain the established propagation semantics.
+- Added dedicated Command, resolver/result, Event, Application, and real-
+  adapter integration tests, including projection immutability, lookup failure
+  ordering, no-save behavior, V3 Skill membership loading, byte-for-byte State
+  preservation, and seeded RNG reproducibility.
+- Added canonical Architecture §3.14, append-only DEC-0026, and synchronized
+  lifecycle, proficiency, d20, Event serialization, `CLAUDE.md`, and README
+  factual summaries. `docs/ROADMAP.md` remained unchanged.
+
+### Verification
+
+- New Skill Check Domain/Application/integration tests: 67 passed.
+- Expanded Skill, CharacterState/V3, Ability Check, Saving Throw, Application,
+  integration, and architecture regression selection: 281 passed.
+- Full pytest suite: 590 passed.
+- `python -m mypy src/dnd_engine`: no issues in 62 source files.
+- No formatter or linter is configured; neither was introduced.
+
+### Intentionally deferred
+
+- Expertise, half proficiency, monster Skill Checks, and default
+  Skill-to-Ability association in adjudication/presentation.
+- Generic check/resolver/result/payload/proficiency frameworks, buses,
+  registries, dispatcher, EventStore, replay, and State mutation/application.
+- Any post-third-consumer orchestration duplication review; this slice keeps
+  the three concrete handlers explicit.
+- Broad Skills and Proficiency Roadmap completion pending an explicit broader
+  Definition of Done.

@@ -106,8 +106,9 @@ LLM отвечает за понимание намерения, поведен�
 
 По каноническому контракту состояние меняется только через события. Событие —
 факт, который уже произошёл; оно неизменяемо и не удаляется. Сейчас реализованы
-модель `GameEvent`, сериализация Event и первый read-only
-`AbilityCheckResolved`, но production Event Log и replay subsystem ещё нет.
+модель `GameEvent`, сериализация Event и read-only Ability Check, Character
+Saving Throw и Character Skill Check Events, но production Event Log и replay
+subsystem ещё нет.
 Durable ordered Events, version-aware decoding и deterministic Event → State
 application в будущем позволят реализовать recovery/replay; текущий
 `state.json` пока нельзя восстановить из persisted Event history.
@@ -270,8 +271,8 @@ python -m mypy src/dnd_engine
 ```
 
 Runnable API появится на соответствующей фазе Roadmap; текущий Core repository
-проверяется установкой пакета и pytest. Phase 2 начата; первый read-only Ability
-Check vertical slice реализован.
+проверяется установкой пакета и pytest. Phase 2 начата; read-only Ability Check,
+Character Saving Throw и Character Skill Check vertical slices реализованы.
 
 ---
 
