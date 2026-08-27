@@ -66,7 +66,7 @@ Definition of Done Phase 1 не добавляются.
 * [ ] Proficiency
 * [ ] Saving throws
 * [ ] Skills
-* [ ] AC
+* [x] AC
 * [ ] Attack rolls
 * [ ] HP
 * [ ] Damage

@@ -1816,3 +1816,66 @@ contracts.
   as explained above). No `dist/`, `build/`, `*.egg-info/`, temporary
   venvs, wheel files, or cache files were left tracked or in the diff.
 - No commit, push, or pull request was performed.
+
+## 2026-08-27 — Minimal Armor Class implementation
+
+### Implemented
+
+- Added the pure Domain rule
+  `unarmored_character_armor_class(creature: CreatureState) -> int` in
+  `domain/rules/armor_class.py`. It reads
+  `creature.ability_scores.dexterity`, delegates modifier calculation to the
+  shared `ability_modifier()`, and returns `10 + modifier` without mutation,
+  Definition access, RNG, persistence, Commands, Events, or
+  `CharacterState`.
+- Baseline Monster AC uses the existing G4a production path: Campaign
+  ruleset identity plus `CreatureState.definition_id` are passed to typed
+  `DefinitionSource.get_definition(..., expected_type=MonsterDefinition)`,
+  after which the consumer reads `MonsterDefinition.armor_class` directly.
+  A pass-through `baseline_monster_armor_class()` abstraction was
+  intentionally not introduced because the immutable Definition field is
+  already the authoritative fact and no separate calculation policy exists.
+- Added focused Domain tests for neutral, positive, negative, and odd
+  Dexterity modifier semantics, the absence of a `CharacterState`
+  requirement, the exact `int` result, and source `CreatureState`
+  non-mutation.
+- Added an integration/regression proof using the packaged SRD 5.1 Goblin
+  through production `PackagedDefinitionSource`. Its runtime Creature
+  Dexterity intentionally differs from Definition data; the test proves
+  baseline Monster AC equals `MonsterDefinition.armor_class` and differs
+  from `10 + ability_modifier(creature.ability_scores.dexterity)`.
+- Updated `docs/ARCHITECTURE.md` §3.15 from approved/not implemented to the
+  implemented minimal Character/Monster boundary, preserved derived/not
+  persisted semantics and deferred Equipment/runtime modifiers/Attack, and
+  documented the deliberate absence of a Monster pass-through rule.
+- Marked the Roadmap AC item complete because canonical §3.15 defines the
+  minimal AC slice as exactly unarmored Character AC plus baseline Monster
+  AC and both are now implemented and tested. Updated the reproduced AC/G4a
+  status in `CLAUDE.md`. No new DEC was needed because DEC-0028/DEC-0029
+  already cover the implemented boundary.
+
+### Verification
+
+- Python 3.12.13 in an isolated temporary environment using the existing
+  `.[dev]` dependencies. The repository `.venv` was not modified; its
+  launcher currently points to a missing Python 3.12.9 installation.
+- Focused Character AC Domain tests: 6 passed.
+- Focused Monster AC integration/regression test: 1 passed.
+- Relevant Domain/G4a regressions: 69 passed.
+- Packaged Definition, serialization/store lazy-validation, and Monster AC
+  integration regressions: 142 passed.
+- Architecture/documentation invariants: 7 passed.
+- Installed-wheel packaged Definition tests: 2 passed. The first attempt was
+  blocked by sandbox denial on the global pip wheel cache; the unchanged test
+  passed after directing `PIP_CACHE_DIR` to a writable temporary directory.
+- Full suite: 653 passed.
+- `python -m mypy src/dnd_engine`: no issues in 67 source files (cache was
+  directed to a writable temporary directory).
+
+### Explicitly not implemented
+
+- No Monster AC function/resolver/provider, generic modifier framework,
+  State AC field, eager Definition dereference, Equipment, runtime AC
+  modifier, G4b, Attack, HP, damage, or other deferred mechanic.
+- No production dependency, packaged resource, Definition schema, State
+  schema, persistence, Command, Event, or error-taxonomy change.

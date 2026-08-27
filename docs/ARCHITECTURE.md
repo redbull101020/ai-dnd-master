@@ -50,7 +50,7 @@
 | Минимальная d20 semantics | §3.12 |
 | Character Saving Throw vertical slice | §3.13 |
 | Character Skill Check vertical slice | §3.14 |
-| Armor Class design (approved, not implemented) | §3.15 |
+| Armor Class (minimal implementation) | §3.15 |
 | Definition access port (G4a, DefinitionSource) | §3.16 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
@@ -2346,14 +2346,13 @@ deferred. После третьего concrete handler duplication может б
 
 ### 3.15. Minimal Phase 2 Armor Class design
 
-Implementation status: **Approved design / Not implemented.** G4a
-prerequisite (§3.16) is implemented; AC IMPLEMENTATION itself (unarmored
-Character AC, baseline Monster AC) is not.
+Implementation status: **Implemented (minimal scope).** G4a prerequisite
+(§3.16), unarmored Character AC, and baseline Monster AC are implemented;
+Attack, Equipment, and runtime AC modifiers remain deferred.
 
-Этот раздел фиксирует согласованный (approved) design effective Armor Class
-(AC) как canonical source of truth. Раздел документирует design boundary; он
-не реализует AC, не добавляет `MonsterDefinition.armor_class` в §3.1.1 и не
-меняет production Python-код.
+Этот раздел фиксирует реализованную minimal effective Armor Class (AC)
+boundary как canonical source of truth. Production implementation сохраняет
+derived Character calculation отдельно от immutable Monster Definition fact.
 
 #### Effective AC — derived, не persisted
 
@@ -2424,6 +2423,13 @@ mechanic is designed.
 AC = 10 + Dexterity modifier
 ```
 
+Реализованная pure Domain rule:
+
+```python
+def unarmored_character_armor_class(creature: CreatureState) -> int:
+    return 10 + ability_modifier(creature.ability_scores.dexterity)
+```
+
 Источник:
 
 ```text
@@ -2459,8 +2465,22 @@ typed MonsterDefinition dereference
 MonsterDefinition.armor_class
 ```
 
-`MonsterDefinition.armor_class` — будущее immutable baseline AC из monster
-rules/stat block. Зафиксировано:
+`MonsterDefinition.armor_class` — immutable baseline AC из monster rules/stat
+block. После successful typed lookup production consumer читает поле напрямую:
+
+```python
+monster_definition = definition_source.get_definition(
+    ruleset_id=campaign.ruleset_id,
+    ruleset_version=campaign.ruleset_version,
+    definition_id=creature.definition_id,
+    expected_type=MonsterDefinition,
+)
+armor_class = monster_definition.armor_class
+```
+
+Отдельная `baseline_monster_armor_class()` или другая pass-through Monster AC
+rule намеренно не вводится: у прямого чтения immutable Definition fact нет
+отдельной вычислительной policy. Зафиксировано:
 
 ```text
 Monster AC не выводится из Dexterity
@@ -2485,11 +2505,10 @@ Definition-loading slice, вместе с тестами. Причина: нел
 
 #### G4a — обязательный pipeline gate перед AC IMPLEMENTATION
 
-**Status: G4a prerequisite implemented (§3.16). AC IMPLEMENTATION сама по
-себе (unarmored Character AC, baseline Monster AC, их использование в
-Attack) остаётся не реализована.** Реализация G4a не означает начало AC
-IMPLEMENTATION и не помечает Roadmap AC/Attack rolls как выполненные
-(`docs/ROADMAP.md`).
+**Status: G4a prerequisite и AC IMPLEMENTATION (unarmored Character AC и
+baseline Monster AC) implemented. Attack остаётся не реализован.** Roadmap AC
+отмечен выполненным только после production rule и regression proof обеих
+веток; Attack rolls остаётся unchecked (`docs/ROADMAP.md`).
 
 Согласованный pipeline фиксирован как:
 
@@ -2503,25 +2522,16 @@ AC IMPLEMENTATION
     └─ baseline Monster AC
 ```
 
-G4a — обязательный prerequisite перед началом всего AC IMPLEMENTATION slice
-целиком, а не только перед Monster AC веткой. Ни unarmored Character AC, ни
-baseline Monster AC не реализуются до завершения G4a.
+G4a был обязательным prerequisite перед началом всего AC IMPLEMENTATION slice
+целиком, а не только перед Monster AC веткой. Обе ветки реализованы после
+завершения G4a.
 
 Технически только Monster AC напрямую зависит от typed Definition access:
 unarmored Character AC (`10 + Dexterity modifier`) сам по себе не выполняет
 Definition lookup и не требует Definition access port по своей формуле.
-Character unarmored AC от этой technical asymmetry ничего не выигрывает: она
-не разрешает начать Character AC implementation раньше G4a. Оба пункта
-AC IMPLEMENTATION остаются за одним и тем же pipeline gate, и ни один из них
-не начинается до завершения G4a.
-
-После завершения G4a этот design не фиксирует ни относительный порядок, ни
-параллельность реализации unarmored Character AC и baseline Monster AC.
-Technical asymmetry в зависимости от Definition access не означает, что
-Monster AC обязан быть реализован первым или что Character AC обязан
-следовать за ним: очерёдность или параллельность двух веток
-AC IMPLEMENTATION после G4a остаётся открытым вопросом отдельного
-implementation slice, а не решением этого документа.
+Character unarmored AC от этой technical asymmetry ничего не выигрывает: обе
+ветки прошли один и тот же G4a pipeline gate. Monster ветка использует typed
+lookup; Character rule не импортирует и не вызывает Definition access.
 
 G4a установил минимальную семантику typed Definition lookup:
 
