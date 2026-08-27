@@ -45,10 +45,11 @@
 | Порядок применения событий | §12.11 |
 | Коды ошибок | §3.9 |
 | Семантика ResolutionResult | §3.5 |
-| Подготовительный контракт Ability Check | §3.10 |
+| Ability Check vertical slice | §3.10 |
 | Proficiency bonus персонажа | §3.11 |
 | Минимальная d20 semantics | §3.12 |
 | Character Saving Throw vertical slice | §3.13 |
+| Character Skill Check vertical slice | §3.14 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
 
@@ -94,6 +95,7 @@
   * [3.11. Minimal Phase 2 Proficiency foundation](#311-minimal-phase-2-proficiency-foundation)
   * [3.12. Minimal Phase 2 d20 semantics](#312-minimal-phase-2-d20-semantics)
   * [3.13. Minimal Phase 2 Character Saving Throw vertical slice](#313-minimal-phase-2-character-saving-throw-vertical-slice)
+  * [3.14. Minimal Phase 2 Character Skill Check vertical slice](#314-minimal-phase-2-character-skill-check-vertical-slice)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1186,9 +1188,8 @@ inheritance. `CharacterState` не дублирует `definition_id`, `ability_
 `current_hp` или `max_hp`.
 
 Обе проекции принадлежат существующему owner `Creature / CreatureDomain`; новый
-State Owner не вводится. Skill Check mechanics, class levels, XP, proficiency
-provenance, monster proficiency и другие proficiency categories остаются
-deferred.
+State Owner не вводится. Class levels, XP, proficiency provenance, monster
+proficiency и другие proficiency categories остаются deferred.
 
 ---
 
@@ -1541,9 +1542,9 @@ concrete Commands выявят реально повторяющееся пов�
 
 Все игровые действия должны проходить через один базовый pipeline:
 
-Implementation status: **Implemented** для read-only Ability Check и Character
-Saving Throw до Event и `ResolutionResult`; runtime Event persistence и
-mutating State projection — **Planned / Deferred**.
+Implementation status: **Implemented** для read-only Ability Check, Character
+Saving Throw и Character Skill Check до Event и `ResolutionResult`; runtime
+Event persistence и mutating State projection — **Planned / Deferred**.
 
 ```mermaid
 flowchart TD
@@ -1958,11 +1959,13 @@ derived Domain rule: функция не мутирует State, не испол
 теперь хранится в `CharacterState.total_level`; потребитель явно вызывает
 `character_proficiency_bonus(character.total_level)`.
 
-Первый concrete consumer этих authoritative progression facts реализован в
-Character Saving Throw slice (§3.13). Resolver проверяет membership выбранной
-Ability в `CharacterState.saving_throw_proficiencies` и только при наличии
-proficiency добавляет derived bonus из `total_level`. Это не означает
-завершение broader Proficiency system.
+Concrete consumers этих authoritative progression facts реализованы в
+Character Saving Throw (§3.13) и Character Skill Check (§3.14). Saving Throw
+resolver проверяет membership выбранной Ability в
+`CharacterState.saving_throw_proficiencies`; Skill Check resolver проверяет
+membership явно выбранного Skill в `CharacterState.skill_proficiencies`.
+Только при наличии соответствующей proficiency они добавляют derived bonus из
+`total_level`. Это не означает завершение broader Proficiency system.
 
 Character и monster proficiency имеют разные authoritative inputs:
 
@@ -1986,15 +1989,13 @@ proficiency membership хранится в
 Ability Check contract остаётся неизменным.
 
 Effective current Skill proficiency membership хранится отдельно в
-`CharacterState.skill_proficiencies` как `frozenset[Skill]`. Это authoritative
-membership foundation, но не Skill Check mechanic: associated Ability не
-кодируется в `Skill`, а Command, resolver, Result, Event и Application handler
-в этом slice отсутствуют.
+`CharacterState.skill_proficiencies` как `frozenset[Skill]`. Character Skill
+Check (§3.14) использует это authoritative membership, но associated Ability
+не кодируется в `Skill`: concrete Command передаёт Skill и Ability отдельно.
 
-Skill Check resolution, attack/tool/weapon proficiency, Expertise,
-half/double proficiency, stacking rules, monster proficiency и class
-progression model остаются deferred. Эти контракты добавляются только вместе с
-соответствующими concrete mechanics.
+Attack/tool/weapon proficiency, Expertise, half/double proficiency, stacking
+rules, monster proficiency и class progression model остаются deferred. Эти
+контракты добавляются только вместе с соответствующими concrete mechanics.
 
 ---
 
@@ -2044,11 +2045,11 @@ failure, а не gameplay `EngineError`. `DiceEngine` Protocol и Phase 1
 Значения natural 1 и natural 20 здесь не интерпретируются как automatic
 failure, automatic success или critical result; такую семантику при
 необходимости определяет конкретная mechanic. Primitive теперь используется
-двумя implemented consumers: Ability Check (§3.10) и Character Saving Throw
-(§3.13).
+тремя implemented consumers: Ability Check (§3.10), Character Saving Throw
+(§3.13) и Character Skill Check (§3.14).
 
 Sources/cancellation advantage/disadvantage, Conditions, Effects, monster
-Saving Throws, Skills, Attack Rolls и generic modifier/check frameworks
+Saving Throws, monster Skill Checks, Attack Rolls и generic modifier/check frameworks
 остаются deferred.
 
 ---
@@ -2185,10 +2186,150 @@ successful `ResolutionResult` с `outcome.succeeded is False` и одним Even
 Slice read-only: `StateStore.save()` не вызывается, Event не применяется к
 State и runtime Event persistence не выполняется.
 
-Monster Saving Throws и их proficiency source, Death Saving Throws, Skills,
+Monster Saving Throws и их proficiency source, Death Saving Throws,
 Conditions/Effects и aggregation/cancellation advantage sources, generic
 modifier/check abstractions, resolver registry, EventStore, replay и State
 mutation остаются deferred.
+
+---
+
+### 3.14. Minimal Phase 2 Character Skill Check vertical slice
+
+Первый Skill Check slice реализует read-only проверку персонажа поверх
+canonical Skill identity и persisted proficiency membership:
+
+```text
+SkillCheckCommand
+        ↓
+SkillCheckHandler / State lookup
+        ↓
+CreatureState(actor_id) + CharacterState(actor_id)
+        ↓
+resolve_character_skill_check(...)
+        ↓
+SkillCheckResult
+        ↓
+SkillCheckResolved V1
+        ↓
+ResolutionResult[SkillCheckResult]
+```
+
+Command содержит Skill и Ability как два независимых explicit inputs:
+
+```python
+@dataclass(frozen=True)
+class SkillCheckPayload:
+    skill: Skill
+    ability: Ability
+    dc: int
+
+
+@dataclass(frozen=True)
+class SkillCheckCommand:
+    command_id: str
+    campaign_id: str
+    actor_id: str
+    payload: SkillCheckPayload
+    type: Literal["SkillCheckCommand"] = field(
+        init=False,
+        default="SkillCheckCommand",
+    )
+```
+
+`Skill` определяет proficiency membership, а `Ability` определяет выбранный
+ability score и modifier. Resolver не выводит Ability из Skill и не применяет
+fixed mapping. Поэтому, например, `Skill.INTIMIDATION + Ability.STRENGTH`
+является canonical combination и проходит без normalization к Charisma.
+Default Skill-to-Ability association может появиться только в будущем
+adjudication/presentation layer и не является Domain invariant этого slice.
+
+Domain resolver boundary:
+
+```python
+def resolve_character_skill_check(
+    command: SkillCheckCommand,
+    creature: CreatureState,
+    character: CharacterState,
+    dice: DiceEngine,
+    *,
+    roll_mode: RollMode = RollMode.NORMAL,
+) -> SkillCheckResult:
+    ...
+```
+
+`command.actor_id`, `creature.id` и `character.id` обязаны совпадать; mismatch
+является programming/domain invocation failure (`ValueError`). Formula:
+
+```text
+ability_modifier = ability_modifier(explicit Ability score)
+
+proficiency_bonus =
+    character_proficiency_bonus(CharacterState.total_level)
+    if explicit Skill in CharacterState.skill_proficiencies
+    else 0
+
+total = D20Roll.selected + ability_modifier + proficiency_bonus
+succeeded = total >= dc
+```
+
+Resolver переиспользует `ability_modifier()`,
+`character_proficiency_bonus()` и `resolve_d20_roll()`. Natural 1 не является
+automatic failure, natural 20 не является automatic success.
+
+Immutable result сохраняет и Skill, и фактически использованную Ability:
+
+```python
+@dataclass(frozen=True)
+class SkillCheckResult:
+    skill: Skill
+    ability: Ability
+    dc: int
+    roll: D20Roll
+    ability_modifier: int
+    proficiency_bonus: int
+    total: int
+    succeeded: bool
+```
+
+Application создаёт один generic `GameEvent` типа `SkillCheckResolved`, version
+1, с externally supplied `event_id` и UTC `timestamp`. Canonical V1 payload:
+
+```json
+{
+  "skill": "intimidation",
+  "ability": "strength",
+  "dc": 15,
+  "roll": {
+    "mode": "normal",
+    "rolls": [12],
+    "selected": 12
+  },
+  "abilityModifier": 3,
+  "proficiencyBonus": 3,
+  "total": 18,
+  "succeeded": true
+}
+```
+
+Builder проверяет соответствие `skill`, `ability` и `dc` между Command и
+outcome; он не генерирует metadata, не читает persistence и не выполняет RNG.
+Gameplay failure представлен тем же `SkillCheckResolved` с
+`succeeded=false`, а не отдельным Event type.
+
+`SkillCheckHandler` явно зависит от `StateStore`, `DiceEngine` и
+`EventMetadataProvider`. Он сначала ищет `CreatureState` по `actor_id`, затем
+matching `CharacterState`. Missing Creature возвращает `ENTITY_NOT_FOUND`;
+existing Creature без Character projection возвращает `INVALID_STATE` с
+`field="characters"`. На lookup failures dice и metadata не вызываются.
+Infrastructure/programming failures от load, dice и metadata проходят наружу
+по существующей boundary semantics.
+
+Slice read-only: handler никогда не вызывает `StateStore.save()`, не мутирует
+загруженные projections, не применяет Event к State и не создаёт persistence
+artifacts. Expertise, half proficiency, monster Skill Checks, proficiency
+provenance/source lists и generic check/resolver/handler abstractions остаются
+deferred. После третьего concrete handler duplication может быть отдельно
+оценена, но этот slice не вводит shared orchestration framework.
 
 ---
 
@@ -4503,11 +4644,11 @@ AI
 
 Все предыдущие контракты объединяются в единый pipeline:
 
-Implementation status: **Implemented** для read-only Ability Check и Character
-Saving Throw до Event и result; Event persistence и authoritative Event →
-State application — **Planned / Deferred**. Диаграмма остаётся обязательным
-контрактом будущих mutating flows, а не заявлением о существующем replay
-subsystem.
+Implementation status: **Implemented** для read-only Ability Check, Character
+Saving Throw и Character Skill Check до Event и result; Event persistence и
+authoritative Event → State application — **Planned / Deferred**. Диаграмма
+остаётся обязательным контрактом будущих mutating flows, а не заявлением о
+существующем replay subsystem.
 
 ```mermaid
 flowchart TD
@@ -5077,7 +5218,8 @@ debug logs
 Implementation status: **Implemented** для immutable `GameEvent`, legacy
 `AbilityCheckResolvedPayloadV1`/V1 builder, current
 `AbilityCheckResolvedPayloadV2`/V2 builder,
-`SavingThrowResolvedPayloadV1`/V1 builder и чистого `EventSerializer`.
+`SavingThrowResolvedPayloadV1`/V1 builder,
+`SkillCheckResolvedPayloadV1`/V1 builder и чистого `EventSerializer`.
 
 Phase 1 `EventSerializer` является чистой границей между `GameEvent` и
 каноническим JSON-совместимым Event Envelope: он не выполняет filesystem I/O,
@@ -5100,8 +5242,10 @@ schema; `AbilityCheckResolvedPayloadV2` является current canonical write
 persistence этим не реализована. `SavingThrowResolvedPayloadV1` является
 current Saving Throw schema и содержит тот же `D20Roll` shape вместе с
 раздельными `abilityModifier` и `proficiencyBonus` audit contributions,
-описанными в §3.13. Дополнительные gameplay Event contracts добавляются только
-вместе с соответствующими mechanics.
+описанными в §3.13. `SkillCheckResolvedPayloadV1` сохраняет explicit Skill и
+actual Ability вместе с тем же d20 shape и раздельными contributions (§3.14).
+Дополнительные gameplay Event contracts добавляются только вместе с
+соответствующими mechanics.
 
 Event Log является append-only.
 
