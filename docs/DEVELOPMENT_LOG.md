@@ -1406,3 +1406,22 @@ contracts.
   the three concrete handlers explicit.
 - Broad Skills and Proficiency Roadmap completion pending an explicit broader
   Definition of Done.
+
+## 2026-08-27 — Third read-only d20 consumer duplication review
+
+- Reviewed the concrete Ability Check, Character Saving Throw, and Character
+  Skill Check resolver, handler, projection lookup, result, and Event patterns.
+- Recorded the verdict `No production abstraction justified yet` in DEC-0027:
+  the existing shared ability, proficiency-bonus, d20, dice, Event metadata,
+  resolution-result, Event-envelope, and StateStore primitives are sufficient,
+  while each mechanic remains concrete.
+- Production code and tests were unchanged. Repeated test StateStore doubles,
+  Dice doubles, metadata providers, and Campaign/Creature fixtures were noted
+  as candidates for a separate low-risk test-only cleanup, not as evidence for
+  a production abstraction or generic testing framework.
+- The next production re-evaluation checkpoints are a concrete Attack Roll
+  slice and the first real state-mutating action; Character projection and
+  proficiency abstractions retain their separate evidence thresholds.
+- `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `CLAUDE.md`, and `README.md`
+  remained unchanged because the review confirms the existing §3.6 policy and
+  changes no canonical contract or Roadmap completion status.
