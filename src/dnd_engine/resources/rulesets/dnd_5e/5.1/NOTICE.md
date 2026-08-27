@@ -12,9 +12,9 @@ https://creativecommons.org/licenses/by/4.0/legalcode.
 
 The packaged JSON in this directory is a transformed, abbreviated extract
 of the SRD 5.1 source material: only selected closed-form fields (name,
-ability scores, armor class, identifiers) were taken from the source and
-re-expressed as JSON. No SRD prose, flavor text, or other narrative content
-is reproduced here.
+ability scores, armor class, damage dice, damage type, weapon properties,
+identifiers) were taken from the source and re-expressed as JSON. No SRD
+prose, flavor text, or other narrative content is reproduced here.
 
 ## Project ruleset identity
 
@@ -26,3 +26,9 @@ The `goblin` stat block fields packaged here (Armor Class 15; Ability
 Scores Strength 8, Dexterity 14, Constitution 10, Intelligence 10, Wisdom
 8, Charisma 8) were verified against the official SRD 5.1 Goblin stat
 block before being packaged.
+
+The `dagger` weapon fields packaged here (damage 1d4 piercing; properties
+finesse, light, thrown) were verified against the official SRD 5.1 Dagger
+weapon table entry before being packaged. Range, cost, and weight are not
+packaged: the current `WeaponDefinition` Domain contract has no fields for
+them.

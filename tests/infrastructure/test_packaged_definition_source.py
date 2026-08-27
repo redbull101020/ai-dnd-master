@@ -10,10 +10,22 @@ from dnd_engine.domain.services.definitions import (
     DefinitionNotFoundError,
     DefinitionTypeMismatchError,
 )
+from dnd_engine.domain.value_objects.damage_type import DamageType
 from dnd_engine.infrastructure.definitions.packaged import (
     InvalidPackagedDefinitionError,
     PackagedDefinitionSource,
 )
+
+
+DAGGER_PAYLOAD: dict[str, object] = {
+    "type": "weapon",
+    "id": "dagger",
+    "version": 1,
+    "name": "Dagger",
+    "damageDice": "1d4",
+    "damageType": "piercing",
+    "properties": ["finesse", "light", "thrown"],
+}
 
 
 GOBLIN_PAYLOAD: dict[str, object] = {
@@ -72,6 +84,37 @@ def test_production_default_reads_packaged_goblin() -> None:
     assert monster.ability_scores.intelligence == 10
     assert monster.ability_scores.wisdom == 8
     assert monster.ability_scores.charisma == 8
+
+
+def test_production_default_reads_packaged_dagger() -> None:
+    source = PackagedDefinitionSource()
+
+    weapon = source.get_definition(
+        ruleset_id="dnd_5e",
+        ruleset_version="5.1",
+        definition_id="dagger",
+        expected_type=WeaponDefinition,
+    )
+
+    assert type(weapon) is WeaponDefinition
+    assert weapon.id == "dagger"
+    assert weapon.version == 1
+    assert weapon.name == "Dagger"
+    assert weapon.damage_dice == "1d4"
+    assert weapon.damage_type is DamageType.PIERCING
+    assert weapon.properties == ("finesse", "light", "thrown")
+
+
+def test_production_dagger_requested_as_monster_raises_type_mismatch() -> None:
+    source = PackagedDefinitionSource()
+
+    with pytest.raises(DefinitionTypeMismatchError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="dagger",
+            expected_type=MonsterDefinition,
+        )
 
 
 def test_lookup_is_scoped_to_requested_ruleset_and_version(tmp_path: Path) -> None:
@@ -153,6 +196,56 @@ def test_wrong_type_allows_isinstance_subtype_relation(tmp_path: Path) -> None:
     assert type(weapon) is WeaponDefinition
     assert weapon.damage_type.value == "piercing"
     assert weapon.properties == ("finesse", "light", "thrown")
+
+
+def test_weapon_definition_decodes_with_expected_weapon_type(tmp_path: Path) -> None:
+    write_definition(tmp_path, definition_id="dagger", payload=DAGGER_PAYLOAD)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    weapon = source.get_definition(
+        ruleset_id="dnd_5e",
+        ruleset_version="5.1",
+        definition_id="dagger",
+        expected_type=WeaponDefinition,
+    )
+
+    assert type(weapon) is WeaponDefinition
+    assert weapon.id == "dagger"
+    assert weapon.version == 1
+    assert weapon.name == "Dagger"
+    assert weapon.damage_dice == "1d4"
+    assert weapon.damage_type is DamageType.PIERCING
+    assert weapon.properties == ("finesse", "light", "thrown")
+
+
+def test_malformed_damage_dice_string_raises_invalid_packaged(tmp_path: Path) -> None:
+    payload = dict(DAGGER_PAYLOAD)
+    payload["damageDice"] = "1D4"
+    write_definition(tmp_path, definition_id="dagger", payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="dagger",
+            expected_type=WeaponDefinition,
+        )
+
+
+def test_malformed_damage_dice_primitive_raises_invalid_packaged(tmp_path: Path) -> None:
+    payload = dict(DAGGER_PAYLOAD)
+    payload["damageDice"] = 4
+    write_definition(tmp_path, definition_id="dagger", payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="dagger",
+            expected_type=WeaponDefinition,
+        )
 
 
 def test_item_definition_decodes(tmp_path: Path) -> None:

@@ -1879,3 +1879,107 @@ contracts.
   modifier, G4b, Attack, HP, damage, or other deferred mechanic.
 - No production dependency, packaged resource, Definition schema, State
   schema, persistence, Command, Event, or error-taxonomy change.
+
+## 2026-08-27 — Weapon damage dice foundation (G4b)
+
+### Implemented
+
+- Added a shared pure Domain primitive `parse_ndm(expression: str) ->
+  tuple[int, int]` in `src/dnd_engine/domain/dice.py`. It accepts only
+  exact `str`, enforces strict lowercase grammar `[1-9][0-9]*d[1-9][0-9]*`,
+  and rejects `sides < 2`, preserving the exact prior error types/messages
+  (`TypeError("expression must be a str")`,
+  `ValueError("invalid dice expression")`,
+  `ValueError("dice must have at least two sides")`). It imports nothing
+  beyond stdlib `re`.
+- Migrated `PythonDiceEngine.roll()` (`infrastructure/random/dice.py`) to
+  call `parse_ndm(expression)` instead of its own private regex/parser
+  method, which was removed rather than duplicated. RNG call count, call
+  order, and `DiceRoll.total` computation are unchanged.
+- Added `WeaponDefinition.__post_init__` (`domain/definitions/weapon.py`)
+  calling the same `parse_ndm(self.damage_dice)` as an intrinsic Domain
+  invariant. `damage_dice` remains a plain `str` field; no `(count, sides)`
+  representation is stored and no field was added.
+- Added the first production weapon Definition,
+  `src/dnd_engine/resources/rulesets/dnd_5e/5.1/definitions/dagger.json`
+  (SRD 5.1: `1d4` piercing; properties `finesse`, `light`, `thrown`; no
+  range/cost/weight, which the current `WeaponDefinition` contract does not
+  model). Decoded by the existing, unmodified `_decode_weapon()` dispatch in
+  `PackagedDefinitionSource` (G4a). Updated
+  `rulesets/dnd_5e/5.1/NOTICE.md` to record the `dagger` field provenance
+  alongside the existing `goblin` entry.
+- `pyproject.toml`'s existing `rulesets/dnd_5e/5.1/definitions/*.json`
+  package-data wildcard already covers `dagger.json`; no change was made.
+- Recorded DEC-0030, narrowing DEC-0011's "parsing remains private to the
+  Infrastructure implementation" clause now that `WeaponDefinition` is a
+  second, non-RNG consumer of the same grammar; DEC-0011's `DiceEngine`/
+  `DiceRoll`/RNG-injection contract is otherwise unaffected. Updated
+  `docs/ARCHITECTURE.md` §1.7.1 (parser ownership), §3.1.1
+  (`WeaponDefinition.damage_dice` intrinsic invariant), and §12.26 (packaged
+  dataset now lists `dagger.json`; installed-wheel proof description
+  extended). Updated `CLAUDE.md`'s "Случайность" and "Реализованные
+  контракты Phase 2" sections to match.
+
+### Tests added
+
+- `tests/domain/test_dice_parser.py` (new): exhaustive valid/invalid-syntax/
+  invalid-type matrix for `parse_ndm`, including leading zeros, uppercase
+  `D`, whitespace, modifier/keep-drop/exploding notation, and non-ASCII
+  digit variants (Arabic-indic, fullwidth) that the literal `[0-9]` grammar
+  does not accept.
+- `tests/domain/test_weapon_definition.py`: added valid `1d8` acceptance,
+  malformed-syntax/leading-zero/whitespace/modifier/uppercase rejection,
+  `1d1` rejection, non-`str`/`str`-subclass rejection, all via direct
+  `WeaponDefinition(...)` construction (no packaged loader involved).
+- `tests/infrastructure/test_dice_engine.py`: left unmodified as the
+  regression proof that the migration did not change accepted/rejected
+  expressions, exact-`str` requirement, seeded-sequence equality, or
+  injected/global RNG state.
+- `tests/infrastructure/test_packaged_definition_source.py`: added a direct
+  `WeaponDefinition`-typed decode of a packaged `dagger`-shaped fixture, a
+  malformed `"damageDice": "1D4"` string case and a malformed `damageDice:
+  4` primitive case (both asserting `InvalidPackagedDefinitionError`), a
+  production `dagger` lookup via `PackagedDefinitionSource()` asserting
+  exact fields, and `dagger` requested as `MonsterDefinition` asserting
+  `DefinitionTypeMismatchError`.
+- `tests/packaging/test_installed_wheel_definitions.py`: extended the
+  existing success child script to also resolve `dagger` as
+  `WeaponDefinition` from the installed wheel and assert its id, name,
+  `damage_dice`, `DamageType.PIERCING`, and properties tuple, proving
+  `dagger.json` ships inside the wheel rather than only the checkout.
+
+### Explicitly not implemented
+
+- No Attack rolls, damage resolution, HP, hit/miss resolution, attack
+  modifiers, weapon attack bonus, range/ammunition mechanics, versatile
+  damage switching, two-handed behavior, equipment/wielding, or generic
+  modifier pipeline.
+- No `DiceExpression` Value Object, dice AST, or full dice DSL; no
+  `DefinitionRegistry`, decoder registry/plugin system, service locator, or
+  DI container; no generic Definition serialization framework.
+- No new `WeaponDefinition` field, no second production weapon, no new
+  packaged data location, no new Infrastructure exception type, and no
+  change to the existing `DefinitionNotFoundError` /
+  `DefinitionTypeMismatchError` / `InvalidPackagedDefinitionError` taxonomy.
+- No production dependency added; `pyproject.toml` was not modified.
+- `docs/ROADMAP.md`'s Attack rolls checkbox remains unchecked; this slice is
+  not a Roadmap mechanic completion.
+
+### Verification
+
+- Python 3.12.9 (repository `.venv`), pytest 9.1.1, mypy (version declared
+  in `pyproject.toml`'s `dev` extra).
+- `tests/domain/test_dice_parser.py`: 30 passed.
+- `tests/domain/test_weapon_definition.py`: 24 passed.
+- `tests/infrastructure/test_dice_engine.py`: 30 passed (unmodified,
+  regression-only).
+- `tests/infrastructure/test_packaged_definition_source.py`: 50 passed
+  (`--basetemp` pointed at a writable directory outside the default OS temp
+  root, which this sandbox denies).
+- `tests/packaging/test_installed_wheel_definitions.py`: 2 passed
+  (`PIP_CACHE_DIR` and `--basetemp` pointed at writable directories for the
+  same pre-existing sandbox reason as prior iterations).
+- Full `python -m pytest` (`--basetemp` as above): 705 passed.
+- `python -m mypy src/dnd_engine`: no issues in 68 source files.
+- `git diff --check`: reviewed as part of final diff review.
+- No commit, push, or pull request was performed.
