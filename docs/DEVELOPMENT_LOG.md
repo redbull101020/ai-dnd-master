@@ -2180,3 +2180,95 @@ contracts.
   targeting/visibility/cover.
 - Event persistence/application, State mutation orchestration, a combat
   system, and all rejected generic production abstractions.
+
+## 2026-08-28 — State Mutation Foundation (G5) acceptance obligations for the first Damage → HP consumer
+
+### Initial state
+
+- Continued on `claude/docs-state-mutation-foundation`, on top of the already
+  committed G5 canonical contract (`docs/ARCHITECTURE.md` §3.18, DEC-0032).
+  `§3.18` fixed the mutating-command lifecycle, read-only loaded-snapshot
+  input, transition-specific mutation scope, Event → State contract,
+  persistence ordering, save-failure semantics, and the exact MVP atomicity
+  boundary, but did not yet state what a first concrete Damage → HP slice
+  must actually prove to be accepted as evidence for that contract.
+
+### Documentation changes
+
+- Added a new `docs/ARCHITECTURE.md` §3.18 subsection, "Acceptance
+  obligations for the first Damage → HP consumer," fixing three groups of
+  executable obligations for that future slice: (A) Domain/concrete State
+  transition — determinism, no `DiceEngine`/`DefinitionSource`/persistence
+  I/O/new-Event/re-decided-rule during State application, only `current_hp`
+  changes while `id`/`definition_id`/`ability_scores`/`max_hp` are preserved,
+  and the resulting `CreatureState` still satisfies its existing invariants
+  (§3.2.1); (B) Application orchestration — no mutation of the loaded object
+  graph, a complete Event before State application, replacement (not
+  in-place) `CreatureState`/`StateSnapshot`, unrelated projections left
+  semantically unchanged, exactly one `StateStore.save()` call on the
+  successful path with the replacement snapshot, no `save()` on a
+  pre-Event/Event-application failure, save failures propagating per existing
+  `StateStoreError` boundary semantics (§12.9) without a successful
+  `ResolutionResult`, and a successful `ResolutionResult` only observable
+  after a successful save; (C) regression/architecture boundary — existing
+  read-only handlers still never call `save()`, no `state_changes` field, no
+  `EventStore`/runtime Event persistence/generic Event applier
+  registry/reducer/`UnitOfWork`/`TransactionManager`/`MutationContext`, no
+  new production dependency, and `StateStore`/`StateSnapshot` unchanged. A
+  closing "G6a boundary" paragraph records that this fixes obligations only,
+  not the `DamageCommand`/`DamageApplied` payload schema, resistances,
+  vulnerabilities, immunities, temporary HP, unconscious/death, healing,
+  critical damage, equipment, Attack → Damage orchestration, generic Effects,
+  or a generic modifier pipeline.
+- This is a concretization of the already-accepted DEC-0032, not a new
+  architectural decision: no new Decision Log entry was added, and DEC-0032's
+  existing text was left unmodified.
+- Added one short cross-reference sentence to the existing G5 paragraph in
+  `docs/ROADMAP.md`, noting that §3.18 also fixes the acceptance obligations
+  for the first Damage → HP slice. No new Roadmap checkbox was added, and the
+  paragraph's existing `Damage`/`HP` framing was left otherwise unchanged.
+- `CLAUDE.md` was re-read for drift against the new subsection; its existing
+  G5 bullet, deferred-abstractions block, and naming-trap rows already match
+  the concretized contract, so it was left unchanged.
+
+### Changed files
+
+- `docs/ARCHITECTURE.md` — new §3.18 "Acceptance obligations for the first
+  Damage → HP consumer" subsection (unnumbered `####` heading, no Table of
+  contents or Quick lookup table change needed).
+- `docs/ROADMAP.md` — one added cross-reference sentence in the existing G5
+  paragraph.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No production Python, test, rule, or campaign file was changed.
+- No `DamageCommand`, `DamageApplied` Event, Damage resolver, or Event
+  applier was implemented or schema-designed.
+- No `EventApplierRegistry`, `UnitOfWork`, `TransactionManager`,
+  `WorkingState`, `MutationContext`, `StateChange`, generic reducer, or
+  generic transaction coordinator was added.
+- `docs/DECISIONS.md` DEC-0032 was left unmodified; no new Decision Log entry
+  was added.
+- `StateStore`'s `load()`/`save()` signature, `StateSnapshot`'s schema, and
+  `ResolutionResult`'s fields are unchanged.
+- No new test was added for this documentation-only iteration.
+
+### Verification
+
+- The repository's own `.venv` (Python 3.12.9, pytest 9.1.1) was used
+  directly; `--basetemp` was pointed outside the default OS temp directory,
+  whose `pytest-of-redbu` folder was not writable in this environment.
+- Narrow `tests/architecture` suite, including the documentation-link and
+  `§N.N` cross-reference validator covering the new subsection's §3.2.1,
+  §12.9, and §3.6 references: 7 passed.
+- Full pytest suite: 805 passed. No production or test file was changed.
+- `git diff --check` passed.
+- `git status --short` showed only the tracked documentation files listed
+  above as modified.
+- No formatter, linter, or type checker is configured in the repository.
+- Diff written to `review.patch` in the repository root for review; not
+  committed. The prior G5 canonical-contract commit
+  (`e4acf06f5b0dae8d1d2d70bcebc624785bb26546`) was already committed and
+  pushed before this iteration started, so `review.patch` contains only this
+  iteration's changes.

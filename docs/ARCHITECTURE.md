@@ -3417,6 +3417,97 @@ post-crash recovery
 power-loss / fsync durability
 ```
 
+#### Acceptance obligations for the first Damage → HP consumer
+
+This subsection fixes the executable acceptance obligations that the first
+concrete Damage → HP mutation slice must demonstrate before the guarantees
+above stop being conceptual. It concretizes the decision already recorded in
+DEC-0032; it is not a new architectural decision. It does not fix the exact
+`DamageCommand`/`DamageApplied` Event payload schema and does not decide
+Damage mechanics — see the G6a boundary below.
+
+**A. Domain — concrete State transition.** The first concrete Damage → HP
+Event application must demonstrate:
+
+```text
+the same resolved Event applied to the same input CreatureState produces the same replacement CreatureState
+no DiceEngine call happens during State application
+no DefinitionSource call happens during State application
+no persistence I/O happens during State application
+no new authoritative Event is produced during State application
+no gameplay rule decision is re-made during State application
+only CreatureState.current_hp changes
+CreatureState.id, definition_id, ability_scores, and max_hp are preserved unchanged
+the resulting CreatureState satisfies its existing invariants (§3.2.1)
+```
+
+This does not require a generic `EventApplier` interface, Protocol, or
+registry; the exact Python shape of the first concrete application step is
+decided at implementation time, per "Event → State contract" above.
+
+**B. Application orchestration.** The future mutating Application handler
+must demonstrate:
+
+```text
+the object graph returned by StateStore.load() is not mutated
+a complete Event exists before State projection/application begins
+the affected CreatureState is replaced by a new object, never mutated in place
+a replacement StateSnapshot is constructed
+unrelated projections in the replacement snapshot remain semantically unchanged
+StateStore.save() is called exactly once on the successful mutating path
+StateStore.save() receives the replacement snapshot, not the originally loaded snapshot
+a processing/validation/rule-resolution failure occurring before Event construction does not call StateStore.save()
+an Event-application/invariant failure does not call StateStore.save()
+a StateStore.save() failure propagates outward per existing StateStoreError boundary semantics (§12.9)
+a StateStore.save() failure never results in a successful ResolutionResult
+a successful ResolutionResult only becomes observable after a successful StateStore.save() call
+```
+
+These are observable obligations on inputs, outputs, and call sequence —
+comparable to the existing spy-`StateStore`/call-order assertion style already
+used by `tests/application/test_attack_handler.py` — not a requirement on the
+internal statement order of the handler implementation.
+
+**C. Regression / architecture boundary.** The first mutation slice must also
+reconfirm, alongside its own Damage → HP-specific tests:
+
+```text
+existing read-only handlers (Ability Check, Character Saving Throw, Character Skill Check, Character unarmed Attack Roll) still never call StateStore.save()
+ResolutionResult has not gained a state_changes field
+no EventStore has been introduced
+no runtime Event persistence has been introduced
+no generic Event applier registry or generic reducer has been introduced
+no UnitOfWork, TransactionManager, or MutationContext has been introduced
+no new production dependency has been added
+StateStore's Protocol still exposes exactly load()/save()
+StateSnapshot's schema is not extended solely to support the mutation framework
+```
+
+**G6a boundary.** The first consumer after this foundation is a minimal
+`Damage → current_hp` evidence slice (tracked in `docs/ROADMAP.md` as
+`Damage`/`HP`). Fixing the acceptance obligations above does not fix, and does
+not imply a decision on:
+
+```text
+DamageCommand exact schema
+exact DamageApplied Event payload
+resistances
+vulnerabilities
+immunities
+temporary HP
+unconscious/death
+healing
+critical damage
+equipment
+Attack → Damage orchestration
+generic Effects
+generic modifier pipeline
+```
+
+These stay open for the Damage → HP implementation slice itself,
+evidence-driven, per the existing §3.6 rule against introducing future-phase
+abstractions ahead of a concrete consumer.
+
 ---
 
 ## 4. ID System

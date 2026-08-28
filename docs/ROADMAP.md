@@ -83,6 +83,9 @@ no Event applier. It is a documentation-only prerequisite gate positioned
 after the existing minimal read-only `Character unarmed Attack Roll → Monster`
 slice (§3.17) and before the first HP/Damage state-mutating slice, which
 remains the evidence checkpoint for the deferred abstractions §3.18 lists.
+§3.18 also fixes the executable acceptance obligations that the first Damage →
+HP slice must demonstrate at the Domain, Application, and regression-boundary
+level.
 
 ## Phase 3 — Combat
 
