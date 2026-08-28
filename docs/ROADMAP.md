@@ -60,7 +60,7 @@ Definition of Done Phase 1 не добавляются.
 
 ## Phase 2 — Basic Rules
 
-> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5)
+> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5) · [§3.19 Minimal Damage → HP mutation vertical slice (G6A)](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a)
 
 * [x] Ability checks
 * [ ] Proficiency
@@ -86,6 +86,17 @@ remains the evidence checkpoint for the deferred abstractions §3.18 lists.
 §3.18 also fixes the executable acceptance obligations that the first Damage →
 HP slice must demonstrate at the Domain, Application, and regression-boundary
 level.
+
+A first minimal `direct Damage → current_hp` production mutation slice (G6A,
+§3.19) is now implemented: `ApplyDamageCommand` → pure `resolve_damage` →
+`DamageApplied` V1 → concrete `CreatureState` applier → replacement
+`StateSnapshot` → `StateStore.save()`. It is concrete evidence that the G5
+contract works end-to-end for one consumer, and it does not check `HP` or
+`Damage` above — those stay unchecked because weapon rolls, `DamageType`
+mechanics, resistance/immunity/vulnerability, temporary HP, death/unconscious,
+Attack → Damage orchestration, and conditions remain unimplemented (§3.19
+"Explicit exclusions"). `Healing` also stays unchecked and is the next
+evidence checkpoint for re-evaluating a shared HP mutation primitive.
 
 ## Phase 3 — Combat
 

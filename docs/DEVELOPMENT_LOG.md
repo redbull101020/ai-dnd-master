@@ -2664,3 +2664,302 @@ contracts.
 - `review.patch` in the repository root was regenerated (`git diff >
   review.patch`) so it contains only the fresh, uncommitted Group 3 changes.
   Not committed, not pushed, no pull request opened.
+
+## 2026-08-28 — G6a Group 4: full verification + abstraction review + canonical documentation
+
+### Initial state
+
+- Group 1 (`928df81`), Group 2 (`5fad27c`), and Group 3 (`176d6a6`) were
+  already committed to `claude/g6a-minimal-damage-hp`: `ApplyDamageCommand`/
+  `ApplyDamagePayload`, the pure `resolve_damage`/`DamageResult` resolver, the
+  `DamageApplied` V1 `GameEvent` contract, the concrete
+  `apply_damage_applied_v1` Creature applier, and the `DamageHandler`
+  Application orchestrator — the first production gameplay handler path that
+  calls `StateStore.save()`. No canonical
+  documentation (`docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `README.md`, `CLAUDE.md`) had been updated for this
+  slice yet; the working tree was clean at the start of this iteration.
+- This iteration performs no production code change. It (1) reviews the
+  committed Group 1–3 production code for evidence that would justify any
+  deferred abstraction from §3.6/§3.18, (2) synchronizes canonical
+  documentation with the actually-implemented G6a behaviour, and (3) re-runs
+  the full verification suite against the already-committed code.
+
+### Abstraction review
+
+- Re-read `src/dnd_engine/domain/commands/damage.py`,
+  `src/dnd_engine/domain/rules/damage.py`,
+  `src/dnd_engine/domain/events/damage.py`, and
+  `src/dnd_engine/application/handlers/damage.py` end to end. Grepped
+  `src/` for `WorkingState`, `UnitOfWork`, `EventApplierRegistry`,
+  `TransactionManager`, `MutationContext`, `StateChange`, `EventStore`,
+  `state_changes`, `CommandBus`, `EventBus`, `dispatcher`, and generic
+  `*Registry` names — no match anywhere in `src/`.
+- Verdict: **KEEP CONCRETE.** `DamageHandler` is the only production
+  State-mutating consumer; `apply_damage_applied_v1` is the only production
+  Event applier. Structural similarity between `DamageHandler` and the four
+  existing read-only handlers (load snapshot, look up actor/target, resolve,
+  build Event, return `ResolutionResult`) is surface-level only — the
+  mutating handler's Event-application, replacement-`StateSnapshot`
+  construction, and `StateStore.save()` steps have no counterpart in any
+  read-only handler — and one production mutation consumer is not evidence
+  for a generic Event applier, `WorkingState`, a Creature replacement helper,
+  `UnitOfWork`, a transaction coordinator, `state_changes`, or generic
+  handler orchestration. No new production abstraction was introduced.
+  **Healing is recorded as the next evidence checkpoint** for re-evaluating a
+  shared HP mutation primitive, once it exists as a second concrete
+  HP-mutating consumer — not before.
+
+### Documentation changes
+
+- `docs/ARCHITECTURE.md`: added `### 3.19. Minimal Damage → HP mutation
+  vertical slice (G6A)` after §3.18, before `## 4. ID System` (the actual
+  tail of §3 on this branch — confirmed by reading the section list before
+  editing, not assumed). Documents implemented Scope, Explicit exclusions,
+  `ApplyDamageCommand`/`ApplyDamagePayload` (internal/Application-level
+  intent, not an external API promise), `DamageResult`'s formula invariant,
+  the exact `DamageApplied` V1 payload and its "Event carries the complete
+  resolved transition" property, the concrete
+  `CreatureState + DamageApplied V1 → replacement CreatureState` boundary,
+  the Errors taxonomy (existing `ErrorCode`s only, no new code; intrinsic/
+  integrity mismatches as `TypeError`/`ValueError`; `StateStoreError`
+  propagation), the `0 → 0` no-op case and its documented replay-detection
+  limitation (explicitly not described as exactly-once), the persistence
+  boundary (snapshot-authoritative, non-durable Event, no `EventStore`), and
+  the post-implementation Abstraction verdict (`KEEP CONCRETE`, Healing as
+  next checkpoint). Added the matching Quick-lookup row and Table-of-contents
+  entry.
+- `docs/DECISIONS.md`: appended `DEC-0033 — First concrete Damage → HP
+  mutation slice (G6A) stays concrete` (tail was DEC-0032 — confirmed by
+  reading the file before appending). Explains why direct already-resolved
+  Damage was chosen over Attack → Damage as the first mutation consumer, why
+  the Event stores both `previousHp` and `newHp`, why Event application
+  executes on the `CreatureState` Owner boundary while `DamageHandler` builds
+  the replacement `StateSnapshot`, why `0 → 0` is allowed without a replay
+  guarantee, and why `EventStore`/`state_changes`/`UnitOfWork`/generic
+  applier stay deferred. Did not edit DEC-0032.
+- `docs/ROADMAP.md`: added a factual note under Phase 2 recording that the
+  first minimal `direct Damage → current_hp` production mutation slice (G6A,
+  §3.19) is implemented and is concrete evidence for G5, without checking
+  `HP` or `Damage`. `Healing` stays unchecked. No Roadmap checkbox was
+  flipped.
+- `README.md`: reworded §4 "Events являются историей изменений" and
+  "Хранение данных" so they no longer imply Event → State application is
+  fully planned/deferred — they now name the one concrete `DamageApplied` →
+  `CreatureState.current_hp` projection plus snapshot persistence as
+  implemented, while durable Event history, `EventStore`, generic/serialized
+  Event dispatch, and recovery/replay stay listed as deferred. Updated the
+  Phase 2 summary near "Быстрый старт" to record that the minimal
+  `Damage → current_hp` slice exists while broad `Damage`/`HP` and combat
+  remain unimplemented.
+- `CLAUDE.md`: updated only the summary facts G6a actually changed — the
+  `Текущая фаза` G5 bullet now names §3.19 as its first concrete consumer;
+  added one new bullet to `Реализованные контракты Phase 2` describing the
+  implemented G6a slice (Command, resolver, Event, applier, handler, write
+  scope, `0 → 0` limitation, exclusions, Healing checkpoint); and updated
+  `Отложенные абстракции — не вводить` to record that one concrete Event
+  applier and one concrete mutating handler now exist for Damage → HP without
+  removing any item from the deferred list. No duplicate full Architecture
+  contract was added; every fact links back to §3.19/DEC-0033.
+
+### Verification
+
+- Environment: repository's own `.venv` (`Python 3.12.9`, `pytest 9.1.1`),
+  same as prior G6a iterations; `--basetemp` redirected into this session's
+  scratchpad directory (the default OS temp `pytest-of-redbu` folder remains
+  unwritable in this environment, as recorded in every prior iteration).
+- `tests/domain/test_damage.py` + `test_damage_command.py` +
+  `test_damage_event.py` + `test_damage_applier.py` +
+  `tests/application/test_damage_handler.py` +
+  `tests/integration/test_damage_real_adapters.py` together: **92 passed**
+  (24 + 17 + 20 + 23 + 7 + 1).
+- `tests/infrastructure/test_state_store.py` +
+  `tests/application/test_ability_check_handler.py` +
+  `tests/application/test_saving_throw_handler.py` +
+  `tests/application/test_skill_check_handler.py` +
+  `tests/application/test_attack_handler.py` (StateStore + read-only handler
+  regression): **69 passed**; every read-only handler success-path test still
+  asserts `store.save_calls == []`.
+- Full `python -m pytest`: **897 passed** — unchanged from the Group 3
+  baseline, confirming this iteration made no production or test code change.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 76 source
+  files` — unchanged file count from Group 3.
+- `git diff --check`: no whitespace errors.
+- `pyproject.toml`: no diff; `dependencies = []` unchanged; no new dev
+  dependency.
+- Forbidden-abstraction grep over `src/` for `WorkingState`, `UnitOfWork`,
+  `EventApplierRegistry`, `TransactionManager`, `MutationContext`,
+  `StateChange`, `EventStore`, `state_changes`, `CommandBus`, `EventBus`,
+  `dispatcher`, generic `*Registry`, `events.jsonl`: no match.
+  `StateStore` Protocol confirmed exactly `load()`/`save()`;
+  `ResolutionResult` confirmed to still have exactly `success`, `command_id`,
+  `outcome`, `events`, `errors`; `StateSnapshot` confirmed to still have
+  exactly `campaign`, `creatures`, `characters`.
+- `git status --short` showed exactly five modified, already-tracked files —
+  `CLAUDE.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md` — plus this `docs/DEVELOPMENT_LOG.md` entry; no `src/` or
+  `tests/` file changed, no untracked file, no production dependency
+  changed. Groups 1–3 are already in `HEAD` (`928df81`, `5fad27c`,
+  `176d6a6`) and are not part of this diff.
+- `review.patch` in the repository root was regenerated (`git diff >
+  review.patch`) so it contains only the fresh, uncommitted Group 4
+  documentation changes relative to the committed Group 3 `HEAD`. Not
+  committed, not pushed, no pull request opened, no merge.
+
+### Correction pass — stale current-status wording
+
+- A review of the first Group 4 documentation pass found that
+  `docs/ARCHITECTURE.md` §3.18 still read as if no mutation consumer existed,
+  contradicting the newly-added §3.19. This pass makes documentation-only
+  corrections; production Groups 1–3 remain unchanged and unreviewed by this
+  pass (approved as-is), and DEC-0032 was not edited (append-only log).
+- `docs/ARCHITECTURE.md` §3.18 fixes, without rewriting the G5 foundation
+  contract itself: the `Implementation status` line now reads "Canonical
+  foundation contract; first concrete consumer implemented in §3.19" instead
+  of claiming no mutating Command/applier/`save()` call exists; the write-scope,
+  "Rule resolution", "Event → State contract", and "Resolver ≠ State
+  application" passages that illustrated the future shape of Damage/
+  `DamageResult`/the first applier now point at the implemented §3.19
+  artifacts instead of describing them as hypothetical; "No production
+  state-mutating gameplay consumer exists yet" now names `DamageHandler`/
+  `apply_damage_applied_v1` as that consumer and points at §3.19's
+  post-implementation `KEEP CONCRETE` verdict as the reason the deferred list
+  still stands; and the "Acceptance obligations"/"G6a boundary" subsections
+  no longer say the exact `ApplyDamageCommand`/`DamageApplied` schema remains
+  open — they now point at §3.19/DEC-0033 as having fixed it, while
+  Attack → Damage, `DamageType` mechanics, healing, and the rest of the G6a
+  exclusion list stay open. The general, still-forward-looking language
+  describing the lifecycle for *any* future mutating Command (not
+  specifically Damage) was left as-is, since §3.18 remains the general
+  foundation for future consumers too, not a duplicate of §3.19.
+- `docs/ARCHITECTURE.md` §3.19: corrected "substituting the replacement
+  `CreatureState` for the original by identity" to "by stable Creature ID
+  (matching `creature.id == target.id`)" — matching the actual
+  `replacement_target if creature.id == target.id else creature` production
+  code in `DamageHandler`, not Python object identity. Corrected the Errors
+  section's closing sentence: an Event/State integrity mismatch propagating
+  as `TypeError`/`ValueError` is now described as an
+  application-integrity/programming-state failure in its own right, not as
+  an instance of §3.18's Infrastructure-level "Save failure semantics" (which
+  governs `StateStore.save()` failures specifically, a separate boundary).
+- `CLAUDE.md`: the G4b Weapon damage dice bullet's closing sentence — "Dagger/
+  weapon attacks, Damage, HP и generic dice DSL остаются deferred" —
+  contradicted the new G6A bullet immediately below it (which documents an
+  implemented direct-Damage → HP slice). Narrowed it to "Dagger/weapon
+  attacks, weapon-derived Damage / Attack → Damage orchestration, broad
+  HP/combat mechanics и generic dice DSL остаются deferred", which still
+  accurately excludes weapon-driven damage and combat while no longer
+  contradicting the implemented minimal slice.
+- No change to `docs/DECISIONS.md` (DEC-0032 untouched, DEC-0033 unedited),
+  `docs/ROADMAP.md` (`HP`/`Damage`/`Healing` still unchecked), the
+  `KEEP CONCRETE` verdict, EventStore/replay deferrals, or any G6a gameplay
+  semantics. No production Python or test file was read for edits in this
+  pass beyond the read-only re-scan needed to confirm the `by stable Creature
+  ID` wording matches `src/dnd_engine/application/handlers/damage.py`.
+
+### Re-verification after the correction pass
+
+- Environment unchanged: repository's own `.venv` (`Python 3.12.9`,
+  `pytest 9.1.1`), `--basetemp` redirected into this session's scratchpad
+  directory.
+- Damage-specific suite (`tests/domain/test_damage.py`,
+  `test_damage_command.py`, `test_damage_event.py`, `test_damage_applier.py`,
+  `tests/application/test_damage_handler.py`,
+  `tests/integration/test_damage_real_adapters.py`): **92 passed** —
+  unchanged, as expected for a documentation-only pass.
+- StateStore + read-only handler regression set: **69 passed** — unchanged.
+- Full `python -m pytest`: **897 passed** — unchanged from Group 3/the first
+  Group 4 pass.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 76 source
+  files` — unchanged.
+- `git diff --check`: no whitespace errors.
+- Re-scanned the corrected `docs/ARCHITECTURE.md`/`README.md`/`CLAUDE.md` for
+  the stale patterns named in the correction request ("no production
+  state-mutating consumer exists", "Damage/HP mutation is entirely
+  unimplemented", "the first Damage applier shape is still undecided", "exact
+  G6A Command/Event schema is still open") — no remaining match.
+- `git status --short`: the same five previously-modified tracked files
+  (`CLAUDE.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md` —
+  unchanged content, `docs/ROADMAP.md`) plus this
+  `docs/DEVELOPMENT_LOG.md` entry; still no `src/`/`tests/` change, no
+  untracked file, no production dependency change.
+- `review.patch` was regenerated again (`git diff > review.patch`) so it
+  contains the corrected Group 4 documentation changes relative to the
+  committed Group 3 `HEAD`. Not committed, not pushed, no pull request
+  opened, no merge.
+
+### Precision correction pass — evidence wording and "first save()" phrasing
+
+- Final review of the correction pass flagged two remaining precision issues,
+  both text-only; production Groups 1–3, tests, Roadmap status, and the
+  `KEEP CONCRETE` verdict itself were unchanged.
+- `docs/DECISIONS.md` DEC-0033: the Decision paragraph overstated the
+  relationship to DEC-0032 ("which DEC-0032 already established is
+  insufficient evidence") and stated a numeric two-consumer abstraction rule
+  ("can only be evaluated with real evidence from two concrete consumers").
+  Reworded so the insufficiency finding is attributed to the post-G6A review
+  recorded by DEC-0033/§3.19 itself — DEC-0032 deferred these abstractions
+  pending evidence, it did not pre-decide the outcome — and so Healing is
+  named as the next checkpoint because it is the first expected second
+  HP-mutating use case with materially related but different semantics, with
+  re-evaluation keyed to the actual common responsibilities/invariants/
+  differences the two implementations demonstrate, not to reaching a
+  consumer count of two.
+- `docs/DEVELOPMENT_LOG.md` (this Group 4 entry's own "Initial state"
+  paragraph) and `docs/ARCHITECTURE.md` §3.18's `Implementation status`
+  paragraph both said "the first production `StateStore.save()` call in the
+  repository's history" / "including the first production `StateStore.save()`
+  call" — overbroad, since it could be read as claiming the `StateStore`
+  adapter or its `save()` method did not previously exist, rather than that
+  no production gameplay handler had called it yet. Both reworded to "the
+  first production gameplay handler path/mutation path that calls
+  `StateStore.save()`". The distinct architectural claim that `DamageHandler`
+  is the first production state-mutating gameplay *consumer* (§3.18 "No
+  generic transaction framework") was left unchanged, per this review's
+  explicit instruction not to alter it.
+- Re-ran the Damage-specific suite + regression set (**161 passed**), full
+  `python -m pytest` (**897 passed**), `python -m mypy src/dnd_engine`
+  (`Success: no issues found in 76 source files`), and `git diff --check`
+  (clean) — all unchanged from the prior correction pass, confirming this is
+  a text-only change.
+- `review.patch` was regenerated a third time (`git diff > review.patch`) so
+  it contains the fully-corrected Group 4 documentation changes relative to
+  the committed Group 3 `HEAD`. Not committed, not pushed, no pull request
+  opened, no merge.
+
+### Final numeric-abstraction-threshold sweep
+
+- Final review flagged two remaining live numeric-abstraction-threshold
+  statements: `docs/ARCHITECTURE.md` §3.18 "No generic transaction framework"
+  still said "one consumer remains insufficient evidence ... until a second
+  concrete HP-mutating consumer ... actually exists", and `CLAUDE.md` still
+  said "одного production-consumer недостаточно, чтобы его пересматривать".
+  Both reworded to attribute the deferral to the post-G6A review finding no
+  stable shared mutation responsibility yet, with Healing named as the next
+  checkpoint for re-evaluation based on actual demonstrated
+  commonalities/differences — not a consumer-count rule.
+- Per the mandated post-fix patch scan, a third, previously-uncaught instance
+  of the same pattern was found in `docs/ARCHITECTURE.md` §3.19 "Abstraction
+  verdict": "One production mutation consumer is not sufficient evidence
+  for..." and "it is the first candidate second consumer of an HP-shaped
+  mutation ... and only once it exists as a concrete implementation should a
+  shared HP mutation primitive be re-evaluated — not before." This was not
+  one of the two locations named in the review request, but matches the same
+  forbidden pattern (a numeric consumer-count threshold), so it was reworded
+  with the same evidence-based framing used in §3.18/CLAUDE.md, to keep the
+  scan's "no live equivalent statements" confirmation actually true rather
+  than reporting a false negative.
+- Re-ran the Damage-specific suite + regression set (**161 passed**), full
+  `python -m pytest` (**897 passed**), `python -m mypy src/dnd_engine`
+  (`Success: no issues found in 76 source files`), and `git diff --check`
+  (clean).
+- Re-scanned the regenerated `review.patch` for `one consumer remains
+  insufficient`, `second concrete ... consumer` (as a requirement),
+  `одного production-consumer недостаточно`, and `two concrete consumers` (as
+  a threshold): the only remaining matches are inside this Development Log's
+  own "Precision correction pass" section, quoting the prior, already-fixed
+  wording for the record — clearly presented as corrected text, not a live
+  canonical claim.
+- `review.patch` was regenerated a fourth time (`git diff > review.patch`)
+  reflecting this sweep. Not committed, not pushed, no pull request opened,
+  no merge.
