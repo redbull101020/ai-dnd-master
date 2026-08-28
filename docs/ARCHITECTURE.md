@@ -52,6 +52,7 @@
 | Character Skill Check vertical slice | §3.14 |
 | Armor Class (minimal implementation) | §3.15 |
 | Definition access port (G4a, DefinitionSource) | §3.16 |
+| Character unarmed Attack Roll → Monster vertical slice | §3.17 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -102,6 +103,7 @@
   * [3.14. Minimal Phase 2 Character Skill Check vertical slice](#314-minimal-phase-2-character-skill-check-vertical-slice)
   * [3.15. Minimal Phase 2 Armor Class design](#315-minimal-phase-2-armor-class-design)
   * [3.16. Minimal Phase 2 Definition Access vertical slice (G4a)](#316-minimal-phase-2-definition-access-vertical-slice-g4a)
+  * [3.17. Minimal Phase 2 Character unarmed Attack Roll → Monster vertical slice](#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1264,17 +1266,14 @@ character.current_hp -= 10
 
 в API.
 
-Должно происходить:
+Для state-mutating use case должно происходить:
 
 ```text
-AttackCommand
-      ↓
-AttackResolver
-      ↓
-DamageApplied
-      ↓
-State mutation
+Command → Rule resolution → Event → State mutation
 ```
+
+Текущий read-only Attack slice (§3.17) заканчивается на `AttackResolved` V1 и
+не является примером State mutation.
 
 ---
 
@@ -1291,8 +1290,7 @@ Command — намерение выполнить игровое действи�
   "campaignId": "campaign_001",
   "actorId": "character_001",
   "payload": {
-    "targetId": "monster_001",
-    "weaponId": "item_001"
+    "targetId": "monster_001"
   }
 }
 ```
@@ -1362,10 +1360,11 @@ AttackCommand
 не означает:
 
 ```text
-AttackHit
+hit = true
 ```
 
-Он лишь просит Engine попытаться выполнить атаку.
+Он лишь просит Engine попытаться выполнить атаку; hit/miss фиксируется одним
+`AttackResolved` V1 (§3.17), а не отдельными Event types.
 
 ---
 
@@ -1581,8 +1580,9 @@ concrete Commands выявят реально повторяющееся пов�
 Все игровые действия должны проходить через один базовый pipeline:
 
 Implementation status: **Implemented** для read-only Ability Check, Character
-Saving Throw и Character Skill Check до Event и `ResolutionResult`; runtime
-Event persistence и mutating State projection — **Planned / Deferred**.
+Saving Throw, Character Skill Check и minimal Character unarmed Attack Roll →
+Monster до Event и `ResolutionResult`; runtime Event persistence и mutating
+State projection — **Planned / Deferred**.
 
 ```mermaid
 flowchart TD
@@ -1632,23 +1632,20 @@ flowchart TD
 Implementation status: **Planned / Deferred** до первого authoritative
 state-mutating command и отдельного State Mutation Foundation решения.
 
-Например:
+Будущая state-mutating Command может породить несколько Events:
 
 ```text
-AttackCommand
-```
-
-может породить:
-
-```text
-AttackResolved
-AttackHit
-DamageApplied
-CreatureDefeated
-QuestObjectiveUpdated
+Command
+    ↓
+Resolved Event
+    ↓
+State-changing Event(s)
 ```
 
 Но Engine должен либо успешно применить всю допустимую последовательность, либо вернуть failure без частично применённого результата.
+
+Текущий Attack slice (§3.17) не является таким use case: он создаёт только
+`AttackResolved` V1 и не применяет damage или State mutation.
 
 Концептуально:
 
@@ -2083,12 +2080,14 @@ failure, а не gameplay `EngineError`. `DiceEngine` Protocol и Phase 1
 Значения natural 1 и natural 20 здесь не интерпретируются как automatic
 failure, automatic success или critical result; такую семантику при
 необходимости определяет конкретная mechanic. Primitive теперь используется
-тремя implemented consumers: Ability Check (§3.10), Character Saving Throw
-(§3.13) и Character Skill Check (§3.14).
+четырьмя implemented consumers: Ability Check (§3.10), Character Saving Throw
+(§3.13), Character Skill Check (§3.14) и Character unarmed Attack Roll
+(§3.17). Только Attack из этих mechanics интерпретирует natural 1/20 как
+automatic miss/hit и critical result.
 
 Sources/cancellation advantage/disadvantage, Conditions, Effects, monster
-Saving Throws, monster Skill Checks, Attack Rolls и generic modifier/check frameworks
-остаются deferred.
+Saving Throws, monster Skill Checks, broader Attack Roll paths и generic
+modifier/check frameworks остаются deferred.
 
 ---
 
@@ -2374,8 +2373,9 @@ deferred. После третьего concrete handler duplication может б
 ### 3.15. Minimal Phase 2 Armor Class design
 
 Implementation status: **Implemented (minimal scope).** G4a prerequisite
-(§3.16), unarmored Character AC, and baseline Monster AC are implemented;
-Attack, Equipment, and runtime AC modifiers remain deferred.
+(§3.16), unarmored Character AC, baseline Monster AC, and the first concrete
+Attack consumer of baseline Monster AC (§3.17) are implemented. Equipment and
+runtime AC modifiers remain deferred.
 
 Этот раздел фиксирует реализованную minimal effective Armor Class (AC)
 boundary как canonical source of truth. Production implementation сохраняет
@@ -2533,9 +2533,10 @@ Definition-loading slice, вместе с тестами. Причина: нел
 #### G4a — обязательный pipeline gate перед AC IMPLEMENTATION
 
 **Status: G4a prerequisite и AC IMPLEMENTATION (unarmored Character AC и
-baseline Monster AC) implemented. Attack остаётся не реализован.** Roadmap AC
-отмечен выполненным только после production rule и regression proof обеих
-веток; Attack rolls остаётся unchecked (`docs/ROADMAP.md`).
+baseline Monster AC) implemented; minimal Character unarmed Attack → Monster
+consumer реализован отдельно в §3.17.** Roadmap AC отмечен выполненным только
+после production rule и regression proof обеих веток; broad Attack rolls
+остаётся unchecked (`docs/ROADMAP.md`).
 
 Согласованный pipeline фиксирован как:
 
@@ -2657,19 +2658,16 @@ consumes effective target AC
 ```
 
 Attack не владеет AC, не сохраняет AC и не должен самостоятельно становиться
-owner AC sources. Для будущего audit/event payload Attack может сохранить
-effective AC, реально использованный при resolution, но это audit fact, а не
-persisted target State. Точная Attack Event schema в этом slice не
-фиксируется.
+owner AC sources. Реализованный `AttackResolved` V1 (§3.17) сохраняет
+effective target AC, реально использованный при resolution, как audit fact,
+а не persisted target State.
 
-Архитектурное намерение для следующего Attack design: первый минимальный
-Attack slice должен оставаться совместимым с `Character unarmed attack →
-Monster target`, то есть с уже существующими `Strength` ability modifier,
-character proficiency bonus (§3.11), `D20Roll` / `resolve_d20_roll` (§3.12) и
-Monster baseline AC — без преждевременного введения `EquipmentState`,
-equipped weapon, weapon proficiency, weapon ability selection, Finesse,
-range, ammunition, weapon mastery или full inventory system. Attack
-Command/Result/Event в этом slice не реализуются и не детализируются.
+Первый минимальный Attack slice реализован как `Character unarmed attack →
+Monster target` (§3.17): он использует `Strength` ability modifier, character
+proficiency bonus (§3.11), `D20Roll` / `resolve_d20_roll` (§3.12) и Monster
+baseline AC без `EquipmentState`, equipped weapon, weapon proficiency, weapon
+ability selection, Finesse, range, ammunition, weapon mastery или full
+inventory system.
 
 #### Никаких новых abstractions
 
@@ -2695,8 +2693,9 @@ generic Definition registry/plugin framework
 ### 3.16. Minimal Phase 2 Definition Access vertical slice (G4a)
 
 Implementation status: **Implemented.** This is the G4a prerequisite required
-by §3.15/DEC-0028 before AC IMPLEMENTATION. It does not implement AC, Attack,
-or any State-mutating mechanic.
+by §3.15/DEC-0028 before AC IMPLEMENTATION. G4a itself did not implement AC,
+Attack, or any State-mutating mechanic; the first concrete Application
+consumer of this port is now the separate Attack slice in §3.17.
 
 #### Goal
 
@@ -2789,10 +2788,11 @@ DefinitionSourceError            (base)
   `DEFINITION_NOT_FOUND`, `RULE_VIOLATION`, a new `ErrorCode`, a silent
   fallback, or a return of the wrong object.
 
-No concrete Application consumer exists in this slice (no AC handler is
-implemented), so no generic exception → `EngineError` mapping function is
-added; this paragraph fixes the future Application policy so the eventual AC
-consumer follows it rather than choosing new semantics. Infrastructure/content
+G4a introduced no concrete Application consumer and no generic exception →
+`EngineError` mapping function. `AttackHandler` (§3.17) is the first concrete
+consumer and maps `DefinitionNotFoundError` to `DEFINITION_NOT_FOUND`, and
+`DefinitionTypeMismatchError` to `INVALID_STATE` with
+`field="definition_id"`, while keeping the mapping local. Infrastructure/content
 corruption (malformed JSON, unknown packaged Definition `type`, missing
 required packaged field, wrong primitive type, payload `id` mismatch, and
 similar) is a distinct Infrastructure-level `InvalidPackagedDefinitionError`
@@ -2824,8 +2824,295 @@ lookup, UTF-8 read, JSON parse, strict boundary validation (§12.25), actual
 Consistent with §3.6 and DEC-0027, this slice adds no `DefinitionRegistry`,
 repository/unit-of-work framework, service locator, DI container, plugin
 system, entry points, global singleton, or mutable catalog. `ArmorClassCommand`
-/ `Result` / `Event` / `Handler`, `AttackCommand`/resolver, and any AC or HP
-calculation remain out of scope; see §3.15.
+/ `Result` / `Event` / `Handler` and HP calculation remain out of scope for
+G4a. Current Attack contracts live separately in §3.17.
+
+---
+
+### 3.17. Minimal Phase 2 Character unarmed Attack Roll → Monster vertical slice
+
+Implementation status: **Implemented (intentionally narrow, read-only
+scope).** This section defines only `Character unarmed attack → Monster
+target`. It does not declare the broad Roadmap Attack Roll mechanic complete.
+
+#### Canonical lifecycle and supported path
+
+```text
+AttackCommand
+      ↓
+AttackHandler
+      ↓
+actor CreatureState + CharacterState lookup
+      ↓
+target CreatureState lookup
+      ↓
+Campaign ruleset identity
+      ↓
+DefinitionSource(expected_type=MonsterDefinition)
+      ↓
+MonsterDefinition.armor_class
+      ↓
+resolve_character_unarmed_attack(...)
+      ↓
+AttackResult
+      ↓
+AttackResolved V1
+      ↓
+ResolutionResult[AttackResult]
+```
+
+`AttackCommand` is the intent-level mechanic name. Its typed payload contains
+only the target runtime identity:
+
+```python
+@dataclass(frozen=True)
+class AttackPayload:
+    target_id: str
+
+
+@dataclass(frozen=True)
+class AttackCommand:
+    command_id: str
+    campaign_id: str
+    actor_id: str
+    payload: AttackPayload
+    type: Literal["AttackCommand"] = field(
+        init=False,
+        default="AttackCommand",
+    )
+```
+
+`AttackCommand` does not contain attack bonus, proficiency bonus, target AC,
+roll mode, weapon identity, or an ability choice. Player/API/AI intent
+currently supplies none of those values. Attack bonus, proficiency, AC, weapon,
+and ability selection are authoritative rule/State/Definition outputs;
+`roll_mode` remains a valid keyword-only effective resolver input described
+below.
+
+#### Actor attack calculation
+
+The implemented resolver is concrete and character-specific:
+
+```python
+def resolve_character_unarmed_attack(
+    command: AttackCommand,
+    creature: CreatureState,
+    character: CharacterState,
+    dice: DiceEngine,
+    *,
+    target_armor_class: int,
+    roll_mode: RollMode = RollMode.NORMAL,
+) -> AttackResult:
+    ...
+```
+
+`command.actor_id`, `creature.id`, and `character.id` must identify the same
+runtime entity. The calculation is fixed for this slice:
+
+```text
+ability = Ability.STRENGTH
+ability_modifier = ability_modifier(actor Strength)
+proficiency_bonus = character_proficiency_bonus(CharacterState.total_level)
+total = D20Roll.selected + ability_modifier + proficiency_bonus
+```
+
+The unarmed Character attack in this slice always receives Character
+proficiency. The bonus is derived from `CharacterState.total_level`; it is not
+a persisted State field. Weapon proficiency, proficiency source/provenance,
+and non-character proficiency policies are not inferred from this rule.
+
+#### d20 selection and Attack-owned natural semantics
+
+Attack reuses the existing `RollMode`, `D20Roll`, and `resolve_d20_roll()`
+contracts from §3.12. The production handler calls the resolver without an
+override, so its effective mode defaults to `RollMode.NORMAL`. `roll_mode` is
+not part of `AttackCommand`, and player/API/AI intent does not currently supply
+it; it remains a valid keyword-only effective input at the resolver boundary.
+
+`resolve_d20_roll()` only selects an effective d20 value. Interpretation of
+natural 1/20 belongs to the Attack mechanic and uses `D20Roll.selected`:
+
+```text
+D20Roll.selected == 1
+    → automatic miss
+    → critical_hit = false
+
+D20Roll.selected == 20
+    → automatic hit
+    → critical_hit = true
+
+otherwise
+    → hit = total >= target_armor_class
+    → critical_hit = false
+```
+
+The automatic result is based on `selected`, including future effective
+advantage/disadvantage selection, not on `DiceRoll.total` or on any discarded
+raw roll. `critical_hit` records the natural-20 Attack outcome only; critical
+damage is not implemented.
+
+#### Target Armor Class and typed Definition access
+
+The target must be an existing `CreatureState`. `AttackHandler` then uses:
+
+```text
+target CreatureState.definition_id
++ CampaignState.ruleset_id
++ CampaignState.ruleset_version
+        ↓
+DefinitionSource.get_definition(
+    expected_type=MonsterDefinition,
+)
+        ↓
+MonsterDefinition.armor_class
+```
+
+The baseline target AC is the immutable
+`MonsterDefinition.armor_class` fact defined by §3.15. Attack consumes that
+value; it does not own, calculate, or persist AC. The actual AC used for the
+resolution is recorded in `AttackResult` and `AttackResolved` V1 as an audit
+fact, not as target State.
+
+#### Result and Event V1
+
+The exact immutable result fields are:
+
+```python
+@dataclass(frozen=True)
+class AttackResult:
+    target_id: str
+    roll: D20Roll
+    ability: Ability
+    ability_modifier: int
+    proficiency_bonus: int
+    total: int
+    target_armor_class: int
+    hit: bool
+    critical_hit: bool
+```
+
+After successful processing, Application creates exactly one generic
+`GameEvent` with `type="AttackResolved"`, `version=1`, externally supplied
+event metadata, and this exact payload shape:
+
+```json
+{
+  "targetId": "monster_001",
+  "roll": {
+    "mode": "normal",
+    "rolls": [12],
+    "selected": 12
+  },
+  "ability": "strength",
+  "abilityModifier": 3,
+  "proficiencyBonus": 2,
+  "total": 17,
+  "targetArmorClass": 15,
+  "hit": true,
+  "criticalHit": false
+}
+```
+
+Hit, miss, and natural-20 critical outcomes all use the same
+`AttackResolved` V1 Event. No separate `AttackHit`, `AttackMissed`, or
+`CriticalHit` Event types are introduced. `ResolutionResult.success` still
+means processing/rule-resolution success; a resolved miss therefore returns
+`success=True`, an `AttackResult(hit=False, ...)`, and one `AttackResolved`
+Event.
+
+#### Read-only boundary
+
+This slice resolves and audits an Attack Roll but applies no consequences:
+
+```text
+no State mutation
+no StateStore.save()
+no damage resolution
+no current_hp / max_hp mutation
+no Event application
+no Event persistence
+```
+
+`AttackHandler` loads the snapshot, reads projections and Definition data,
+uses `DiceEngine`, requests Event metadata, and returns
+`ResolutionResult[AttackResult]`. It does not project the Event into State or
+persist either Event or State.
+
+#### Expected failures
+
+Application maps only the concrete expected lookup failures:
+
+| Failure | ErrorCode | `entity_id` | `field` |
+| --- | --- | --- | --- |
+| actor `CreatureState` missing | `ENTITY_NOT_FOUND` | `command.actor_id` | `None` |
+| actor exists without matching `CharacterState` | `INVALID_STATE` | `command.actor_id` | `"characters"` |
+| target `CreatureState` missing | `ENTITY_NOT_FOUND` | `command.payload.target_id` | `"target_id"` |
+| target Definition missing | `DEFINITION_NOT_FOUND` | `target.definition_id` | `"definition_id"` |
+| target Definition is not a `MonsterDefinition` | `INVALID_STATE` | `target.id` | `"definition_id"` |
+
+State-store, DiceEngine, metadata-provider, packaged-content, programming, and
+other Infrastructure failures are not automatically converted into gameplay
+`EngineError` values. Intrinsic invalid construction and mismatched resolver
+arguments retain their existing `TypeError`/`ValueError` boundary.
+
+#### Explicitly deferred scope
+
+This slice does not implement:
+
+```text
+damage or critical damage
+HP/current_hp mutation
+dagger or other weapon attacks
+equipment or inventory
+weapon proficiency
+Finesse
+range, reach, or ammunition
+Character targets
+Monster attacks
+spell attacks
+broader targeting, visibility, or cover
+```
+
+For that reason `docs/ROADMAP.md` intentionally keeps `[ ] Attack rolls`:
+the implemented `Character unarmed → Monster` path is a first vertical slice,
+not the broad Attack Roll Definition of Done.
+
+#### Post-Attack abstraction review: KEEP CONCRETE
+
+The checkpoint required by DEC-0027 was performed after the first concrete
+Attack Roll. Consumer count triggered the review; it did not require an
+abstraction. Verdict: **KEEP CONCRETE**. Existing shared primitives remain
+sufficient, and no new production abstraction is introduced.
+
+1. **Generic d20/check resolver — rejected.** Attack adds a target, target AC
+   comparison, and mechanic-owned natural 1/20 and critical semantics that
+   Ability Check, Saving Throw, and Skill Check do not share.
+2. **Character projection helper — rejected after threshold re-evaluation.**
+   Attack is the third character-specific consumer needing both
+   `CreatureState` and `CharacterState`, but `StateSnapshot` already owns the
+   projection identity invariant. Extraction would mainly shorten local
+   lookup/error code and would require a new wrapper/error abstraction without
+   adding policy.
+3. **Actor/target lookup helper — rejected.** Actor and target have different
+   lookup/error roles, and target lookup policy has only one concrete Attack
+   consumer.
+4. **Generic Definition-exception → EngineError mapper — rejected.** Attack is
+   the first concrete Application consumer of G4a semantic exceptions; one
+   consumer is insufficient evidence for a shared mapping boundary.
+5. **Handler success-tail helper — rejected.** Similar metadata/Event/result
+   construction is syntactic duplication. The first future mutating action
+   will have materially different Event application and persistence
+   orchestration semantics.
+6. **Proficiency abstraction — rejected.** Attack, Saving Throw, and Skill
+   proficiency memberships and authoritative sources differ materially;
+   Expertise, monster proficiency, and weapon proficiency cases remain absent.
+7. **`ModifierPipeline` / generic modifier framework — rejected.** Current
+   concrete calculations do not establish a stable composition policy or
+   ordering contract.
+
+This reaffirms DEC-0027: a consumer count is a review trigger, not an
+abstraction rule. Existing Ability Check, Character Saving Throw, and
+Character Skill Check production contracts remain unchanged.
 
 ---
 
@@ -3577,14 +3864,12 @@ Event не является командой, запросом или намер
 AttackCommand
       │
       ▼
-AttackResolved
-      │
-      ▼
-AttackHit
-      │
-      ▼
-DamageApplied
+AttackResolved V1
+  (hit / miss / critical_hit)
 ```
+
+Это точная реализованная Attack event boundary (§3.17); damage остаётся
+отдельной deferred mechanic.
 
 Каждый Event должен иметь одинаковый внешний envelope, независимо от того, относится он к Combat, World, Quest, Inventory или AI.
 
@@ -3661,8 +3946,6 @@ event_000003
 
 ```text
 AttackResolved
-AttackHit
-AttackMissed
 DamageApplied
 HealingApplied
 
@@ -3828,9 +4111,6 @@ Domain `None`. При десериализации отсутствующее п
 AttackResolved
         │
         ▼
-AttackHit
-        │
-        ▼
 DamageApplied
         │
         ▼
@@ -3847,18 +4127,18 @@ event_101 AttackResolved
        │
        └── causedBy: null
 
-event_102 AttackHit
+event_102 DamageApplied
        │
        └── causedBy: event_101
 
-event_103 DamageApplied
+event_103 CreatureDefeated
        │
        └── causedBy: event_102
-
-event_104 CreatureDefeated
-       │
-       └── causedBy: event_103
 ```
+
+`DamageApplied` and subsequent events in this causation example are future
+state-mutating mechanics; the implemented Attack slice currently emits only
+`event_101 AttackResolved`.
 
 Это позволяет восстановить цепочку причин.
 
@@ -3986,8 +4266,6 @@ PascalCase + past tense
 
 ```text
 AttackResolved
-AttackHit
-AttackMissed
 DamageApplied
 ItemAdded
 SpellCast
@@ -4055,8 +4333,7 @@ Command ещё не означает, что действие произойдё
   "actorId": "character_001",
 
   "payload": {
-    "targetId": "monster_001",
-    "weaponId": "item_001"
+    "targetId": "monster_001"
   }
 }
 ```
@@ -4185,8 +4462,7 @@ concrete typed immutable payload соответствующей Python Command (
   "type": "AttackCommand",
   "actorId": "character_001",
   "payload": {
-    "targetId": "monster_001",
-    "weaponId": "item_001"
+    "targetId": "monster_001"
   }
 }
 ```
@@ -4284,13 +4560,14 @@ AttackCommand
        ▼
 AttackResolver
        │
-       ├──────────────► AttackMissed
-       │
-       └──────────────► AttackHit
-                              │
-                              ▼
-                        DamageApplied
+       ▼
+AttackResolved V1
+  hit=false | hit=true
+  criticalHit=false | true
 ```
+
+В implemented slice это один Event для любого resolved gameplay outcome;
+damage и State mutation не входят в этот flow (§3.17).
 
 Одна Command может создать:
 
@@ -5149,8 +5426,9 @@ AI
 Все предыдущие контракты объединяются в единый pipeline:
 
 Implementation status: **Implemented** для read-only Ability Check, Character
-Saving Throw и Character Skill Check до Event и result; Event persistence и
-authoritative Event → State application — **Planned / Deferred**. Диаграмма
+Saving Throw, Character Skill Check и minimal Character unarmed Attack Roll →
+Monster до Event и result; Event persistence и authoritative Event → State
+application — **Planned / Deferred**. Диаграмма
 остаётся обязательным контрактом будущих mutating flows, а не заявлением о
 существующем replay subsystem.
 

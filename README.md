@@ -107,8 +107,10 @@ LLM отвечает за понимание намерения, поведен�
 По каноническому контракту состояние меняется только через события. Событие —
 факт, который уже произошёл; оно неизменяемо и не удаляется. Сейчас реализованы
 модель `GameEvent`, сериализация Event и read-only Ability Check, Character
-Saving Throw и Character Skill Check Events, но production Event Log и replay
-subsystem ещё нет.
+Saving Throw, Character Skill Check и narrow Character unarmed Attack Roll →
+Monster Events, но production Event Log и replay subsystem ещё нет. Attack
+slice фиксирует hit/miss/critical в одном `AttackResolved` V1, читает baseline
+Monster AC через typed Definition access и не применяет damage или HP mutation.
 Durable ordered Events, version-aware decoding и deterministic Event → State
 application в будущем позволят реализовать recovery/replay; текущий
 `state.json` пока нельзя восстановить из persisted Event history.
@@ -273,7 +275,10 @@ python -m mypy src/dnd_engine
 
 Runnable API появится на соответствующей фазе Roadmap; текущий Core repository
 проверяется установкой пакета и pytest. Phase 2 начата; read-only Ability Check,
-Character Saving Throw и Character Skill Check vertical slices реализованы.
+Character Saving Throw, Character Skill Check и narrow Character unarmed Attack
+Roll → Monster vertical slices реализованы. Последний является только
+read-only hit/miss/critical resolution без damage/HP mutation, а не готовой
+combat system; broad `Attack rolls` остаётся unchecked в Roadmap.
 
 ---
 
