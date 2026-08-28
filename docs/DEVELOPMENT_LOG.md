@@ -2272,3 +2272,92 @@ contracts.
   (`e4acf06f5b0dae8d1d2d70bcebc624785bb26546`) was already committed and
   pushed before this iteration started, so `review.patch` contains only this
   iteration's changes.
+
+## 2026-08-28 — G6a Group 1: ApplyDamage Command + DamageResult + pure resolver
+
+### Initial state
+
+- Branched `claude/g6a-minimal-damage-hp` from `origin/main` at
+  `c040c2992a2e1e1a87021c42439e8b81560d6181`, which already carried the G5
+  State Mutation Foundation canonical contract (§3.18, DEC-0032) and its
+  acceptance obligations for the future first Damage → HP consumer, but no
+  `ApplyDamageCommand`/`DamageResult` Python code, schema, or resolver.
+- This iteration implements only Group 1 of the G6a evidence slice: the pure
+  Domain contract `already-resolved positive damage amount → one target
+  CreatureState → DamageResult`. It does not implement `DamageApplied` Event,
+  Event application, an Application handler, or any `StateStore.save()`
+  mutation — those remain for later G6a groups.
+
+### Implementation
+
+- Added `src/dnd_engine/domain/commands/damage.py`: immutable
+  `ApplyDamagePayload` (`target_id: str`, `amount: int`, `amount >= 1`) and
+  immutable `ApplyDamageCommand` (`command_id`, `campaign_id`, `actor_id`,
+  `payload: ApplyDamagePayload`, fixed `type = "ApplyDamageCommand"`),
+  following the same intrinsic-invariant style as the existing
+  `AttackCommand`/`AttackPayload`. No `new_hp`, `damage_type`, `weapon_id`,
+  `attack_id`, `critical`, `source`, or `rolls` field was added.
+- Added `src/dnd_engine/domain/rules/damage.py`: immutable `DamageResult`
+  (`target_id`, `amount`, `previous_hp`, `new_hp`) that independently
+  enforces its own field types, `amount >= 1`, `previous_hp >= 0`, and the
+  canonical formula invariant `new_hp == max(0, previous_hp - amount)`; and
+  the pure `resolve_damage(command, target) -> DamageResult` resolver, which
+  validates concrete `ApplyDamageCommand`/`CreatureState` argument types,
+  validates `command.payload.target_id == target.id`, reads
+  `target.current_hp`, computes the clamped `new_hp`, and returns a
+  `DamageResult` without mutating `target`, calling `DiceEngine`, loading a
+  Definition, or performing I/O. Target lookup remains an Application-handler
+  concern, per §3.18's "Resolver ≠ State application" split.
+- Zero-HP input is accepted as ordinary input: a target already at
+  `current_hp = 0` with `amount > 0` resolves to a successful `DamageResult`
+  with `previous_hp = 0` and `new_hp = 0`; no death/unconscious semantics
+  were introduced. `DamageType` was intentionally left unused by this slice.
+
+### Changed files
+
+- `src/dnd_engine/domain/commands/damage.py` — new file.
+- `src/dnd_engine/domain/rules/damage.py` — new file.
+- `tests/domain/test_damage_command.py` — new file, narrow
+  `ApplyDamageCommand`/`ApplyDamagePayload` tests.
+- `tests/domain/test_damage.py` — new file, narrow `DamageResult`/
+  `resolve_damage` tests.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No `DamageApplied` Event, Event applier, or `StateSnapshot` replacement
+  logic.
+- No Application-level `DamageHandler`, `EventMetadataProvider` usage, or
+  `StateStore.save()` call.
+- No Attack → Damage orchestration, weapon damage dice, critical damage,
+  `DamageType` mechanics (resistance/immunity/vulnerability), temporary HP,
+  healing, death saves, or conditions.
+- No canonical `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `README.md`, or `CLAUDE.md` change: per this task's own
+  scope, the contract will be documented once full G6a production evidence
+  exists.
+- No production dependency was added or changed; `pyproject.toml` is
+  unmodified.
+
+### Verification
+
+- The repository's own `.venv` (Python 3.12.9, pytest 9.1.1) was used
+  directly; `--basetemp` was pointed outside the default OS temp directory,
+  whose `pytest-of-redbu` folder was not writable in this environment (same
+  pre-existing environment condition already recorded in the prior G5
+  iteration entry above).
+- Narrow new tests: `tests/domain/test_damage.py` (24 tests) and
+  `tests/domain/test_damage_command.py` (17 tests) — 41 passed.
+- Full pytest suite: 846 passed, with `--basetemp` redirected outside the
+  unwritable default temp directory (805 pre-existing, matching the prior G5
+  iteration's recorded full-suite baseline, plus the 41 new Group 1 tests);
+  no existing test was modified or removed.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 74 source
+  files`.
+- `git diff --check`: no whitespace errors.
+- `git status --short` showed `docs/DEVELOPMENT_LOG.md` modified plus the
+  four new Domain/test files marked intent-to-add solely so they are
+  included in `review.patch`; no other tracked file was modified, and no
+  production dependency changed.
+- Diff written to `review.patch` in the repository root for review; not
+  committed, not pushed, no pull request opened.
