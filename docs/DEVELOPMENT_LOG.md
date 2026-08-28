@@ -2963,3 +2963,20 @@ contracts.
 - `review.patch` was regenerated a fourth time (`git diff > review.patch`)
   reflecting this sweep. Not committed, not pushed, no pull request opened,
   no merge.
+
+## 2026-08-28 — G6B Group 1 minimal Healing Domain contract
+
+- Added immutable `ApplyHealingPayload` / `ApplyHealingCommand` Domain values
+  for an already-resolved positive direct-healing amount and a fixed
+  `ApplyHealingCommand` type.
+- Added immutable `HealingResult` with exact runtime type/range validation and
+  the intrinsic `new_hp == min(max_hp, previous_hp + amount)` invariant.
+- Added pure deterministic `resolve_healing(command, target)`, including
+  concrete input checks and target identity validation; it reads but does not
+  mutate `CreatureState`.
+- Added focused Domain tests for command validation, all required healing
+  boundary semantics, result invariants, determinism, and observational
+  non-mutation.
+- This Group 1 slice adds no Healing Event, Event applier, Application handler,
+  persistence, State schema change, shared HP abstraction, or dependency, and
+  does not mark G6B complete.
