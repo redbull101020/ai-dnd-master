@@ -1,0 +1,593 @@
+from copy import deepcopy
+from datetime import datetime, timezone
+
+import pytest
+
+from dnd_engine.application.handlers.attack import AttackHandler
+from dnd_engine.application.services.event_metadata import EventMetadata
+from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
+from dnd_engine.domain.definitions.monster import MonsterDefinition
+from dnd_engine.domain.errors import ErrorCode
+from dnd_engine.domain.services.definitions import (
+    DefinitionNotFoundError,
+    DefinitionTypeMismatchError,
+)
+from dnd_engine.domain.services.state_store import StateStoreError
+from dnd_engine.domain.state.campaign import CampaignState
+from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.creature import CreatureState
+from dnd_engine.domain.state.snapshot import StateSnapshot
+from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.d20 import RollMode
+from dnd_engine.domain.value_objects.dice_roll import DiceRoll
+from dnd_engine.infrastructure.definitions.packaged import (
+    InvalidPackagedDefinitionError,
+)
+
+
+FIXED_TIMESTAMP = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
+
+
+class SpyStateStore:
+    def __init__(self, snapshot: StateSnapshot, calls: list[str]) -> None:
+        self.snapshot = snapshot
+        self._calls = calls
+        self.load_calls: list[str] = []
+        self.save_calls: list[StateSnapshot] = []
+
+    def load(self, campaign_id: str) -> StateSnapshot:
+        self._calls.append("load")
+        self.load_calls.append(campaign_id)
+        return self.snapshot
+
+    def save(self, snapshot: StateSnapshot) -> None:
+        self._calls.append("save")
+        self.save_calls.append(snapshot)
+
+
+class FailingStateStore(SpyStateStore):
+    def load(self, campaign_id: str) -> StateSnapshot:
+        self._calls.append("load")
+        self.load_calls.append(campaign_id)
+        raise StateStoreError("state backend unavailable")
+
+
+class ScriptedDiceEngine:
+    def __init__(
+        self,
+        raw_roll: int,
+        calls: list[str],
+        *,
+        fail: bool = False,
+    ) -> None:
+        self._raw_roll = raw_roll
+        self._calls = calls
+        self._fail = fail
+        self.roll_calls: list[str] = []
+
+    def roll(self, expression: str) -> DiceRoll:
+        self._calls.append("dice")
+        self.roll_calls.append(expression)
+        if self._fail:
+            raise RuntimeError("dice unavailable")
+        return DiceRoll(
+            expression="1d20",
+            rolls=(self._raw_roll,),
+            total=self._raw_roll,
+        )
+
+
+class SpyDefinitionSource:
+    def __init__(
+        self,
+        definition: MonsterDefinition,
+        calls: list[str],
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self._definition = definition
+        self._calls = calls
+        self._error = error
+        self.get_calls: list[dict[str, object]] = []
+
+    def get_definition(
+        self,
+        *,
+        ruleset_id: str,
+        ruleset_version: str,
+        definition_id: str,
+        expected_type: type[MonsterDefinition],
+    ) -> MonsterDefinition:
+        self._calls.append("definition")
+        self.get_calls.append(
+            {
+                "ruleset_id": ruleset_id,
+                "ruleset_version": ruleset_version,
+                "definition_id": definition_id,
+                "expected_type": expected_type,
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return self._definition
+
+
+class FixedEventMetadataProvider:
+    def __init__(self, calls: list[str], *, fail: bool = False) -> None:
+        self._calls = calls
+        self._fail = fail
+        self.next_calls: list[str] = []
+
+    def next_metadata(self, campaign_id: str) -> EventMetadata:
+        self._calls.append("metadata")
+        self.next_calls.append(campaign_id)
+        if self._fail:
+            raise RuntimeError("metadata unavailable")
+        return EventMetadata(
+            event_id="event_000123",
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+
+def make_creature(
+    *,
+    creature_id: str,
+    definition_id: str,
+    strength: int = 10,
+    dexterity: int = 10,
+    current_hp: int = 20,
+    max_hp: int = 20,
+) -> CreatureState:
+    return CreatureState(
+        id=creature_id,
+        definition_id=definition_id,
+        ability_scores=AbilityScores(
+            strength=strength,
+            dexterity=dexterity,
+            constitution=10,
+            intelligence=10,
+            wisdom=10,
+            charisma=10,
+        ),
+        current_hp=current_hp,
+        max_hp=max_hp,
+    )
+
+
+def make_actor() -> CreatureState:
+    return make_creature(
+        creature_id="character_001",
+        definition_id="fighter",
+        strength=16,
+    )
+
+
+def make_target() -> CreatureState:
+    return make_creature(
+        creature_id="monster_001",
+        definition_id="goblin",
+        dexterity=30,
+        current_hp=7,
+        max_hp=7,
+    )
+
+
+def make_character(
+    *, character_id: str = "character_001", total_level: int = 5
+) -> CharacterState:
+    return CharacterState(
+        id=character_id,
+        total_level=total_level,
+        saving_throw_proficiencies=frozenset(),
+        skill_proficiencies=frozenset(),
+    )
+
+
+def make_monster_definition(*, armor_class: int = 15) -> MonsterDefinition:
+    return MonsterDefinition(
+        id="goblin",
+        version=1,
+        name="Goblin",
+        ability_scores=AbilityScores(
+            strength=8,
+            dexterity=14,
+            constitution=10,
+            intelligence=10,
+            wisdom=8,
+            charisma=8,
+        ),
+        armor_class=armor_class,
+    )
+
+
+def make_snapshot(
+    *,
+    creatures: tuple[CreatureState, ...] = (),
+    characters: tuple[CharacterState, ...] = (),
+) -> StateSnapshot:
+    return StateSnapshot(
+        campaign=CampaignState(
+            id="campaign_001",
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+        ),
+        creatures=creatures,
+        characters=characters,
+    )
+
+
+def make_command() -> AttackCommand:
+    return AttackCommand(
+        command_id="command_000001",
+        campaign_id="campaign_001",
+        actor_id="character_001",
+        payload=AttackPayload(target_id="monster_001"),
+    )
+
+
+def make_dependencies(
+    snapshot: StateSnapshot,
+    *,
+    raw_roll: int = 9,
+    monster_armor_class: int = 15,
+    definition_error: Exception | None = None,
+    dice_fail: bool = False,
+    metadata_fail: bool = False,
+) -> tuple[
+    SpyStateStore,
+    SpyDefinitionSource,
+    ScriptedDiceEngine,
+    FixedEventMetadataProvider,
+    list[str],
+]:
+    calls: list[str] = []
+    return (
+        SpyStateStore(snapshot, calls),
+        SpyDefinitionSource(
+            make_monster_definition(armor_class=monster_armor_class),
+            calls,
+            error=definition_error,
+        ),
+        ScriptedDiceEngine(raw_roll, calls, fail=dice_fail),
+        FixedEventMetadataProvider(calls, fail=metadata_fail),
+        calls,
+    )
+
+
+def handle_with(
+    store: SpyStateStore,
+    definitions: SpyDefinitionSource,
+    dice: ScriptedDiceEngine,
+    metadata: FixedEventMetadataProvider,
+):
+    return AttackHandler(
+        state_store=store,
+        definition_source=definitions,
+        dice=dice,
+        event_metadata_provider=metadata,
+    ).handle(make_command())
+
+
+def test_ordinary_hit_uses_exact_lookup_order_and_returns_consistent_event() -> None:
+    actor = make_actor()
+    character = make_character()
+    target = make_target()
+    snapshot = make_snapshot(
+        creatures=(
+            make_creature(creature_id="character_002", definition_id="wizard"),
+            target,
+            actor,
+        ),
+        characters=(
+            make_character(character_id="character_002", total_level=1),
+            character,
+        ),
+    )
+    before = deepcopy(snapshot)
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice", "metadata"]
+    assert store.load_calls == ["campaign_001"]
+    assert definitions.get_calls == [
+        {
+            "ruleset_id": "dnd_5e",
+            "ruleset_version": "5.1",
+            "definition_id": "goblin",
+            "expected_type": MonsterDefinition,
+        }
+    ]
+    assert dice.roll_calls == ["1d20"]
+    assert metadata.next_calls == ["campaign_001"]
+    assert store.save_calls == []
+    assert store.snapshot == before
+
+    assert result.success is True
+    assert result.command_id == "command_000001"
+    assert result.errors == ()
+    assert result.outcome is not None
+    outcome = result.outcome
+    assert outcome.target_id == "monster_001"
+    assert outcome.roll.mode is RollMode.NORMAL
+    assert outcome.roll.rolls == (9,)
+    assert outcome.ability_modifier == 3
+    assert outcome.proficiency_bonus == 3
+    assert outcome.total == 15
+    assert outcome.target_armor_class == 15
+    assert target.ability_scores.dexterity == 30
+    assert outcome.target_armor_class != 10 + 10
+    assert outcome.hit is True
+    assert outcome.critical_hit is False
+
+    assert len(result.events) == 1
+    event = result.events[0]
+    assert event.event_id == "event_000123"
+    assert event.command_id == result.command_id
+    assert event.type == "AttackResolved"
+    assert event.version == 1
+    assert event.campaign_id == "campaign_001"
+    assert event.timestamp == FIXED_TIMESTAMP
+    assert event.actor_id == "character_001"
+    assert event.caused_by is None
+    assert event.payload == {
+        "targetId": outcome.target_id,
+        "roll": {
+            "mode": outcome.roll.mode.value,
+            "rolls": outcome.roll.rolls,
+            "selected": outcome.roll.selected,
+        },
+        "ability": outcome.ability.value,
+        "abilityModifier": outcome.ability_modifier,
+        "proficiencyBonus": outcome.proficiency_bonus,
+        "total": outcome.total,
+        "targetArmorClass": outcome.target_armor_class,
+        "hit": outcome.hit,
+        "criticalHit": outcome.critical_hit,
+    }
+
+
+def test_non_default_monster_definition_armor_class_reaches_outcome_and_event() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=11,
+        monster_armor_class=17,
+    )
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.outcome is not None
+    assert result.outcome.total == 17
+    assert result.outcome.target_armor_class == 17
+    assert result.outcome.hit is True
+    assert result.events[0].payload["targetArmorClass"] == 17
+    assert calls == ["load", "definition", "dice", "metadata"]
+    assert store.save_calls == []
+
+
+@pytest.mark.parametrize(
+    ("raw_roll", "expected_hit", "expected_critical"),
+    [
+        (8, False, False),
+        (1, False, False),
+        (20, True, True),
+    ],
+)
+def test_gameplay_miss_natural_one_and_critical_are_successful_processing(
+    raw_roll: int,
+    expected_hit: bool,
+    expected_critical: bool,
+) -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, raw_roll=raw_roll
+    )
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert result.outcome is not None
+    assert result.outcome.hit is expected_hit
+    assert result.outcome.critical_hit is expected_critical
+    assert result.events[0].payload["hit"] is expected_hit
+    assert result.events[0].payload["criticalHit"] is expected_critical
+    assert result.errors == ()
+    assert calls == ["load", "definition", "dice", "metadata"]
+    assert store.save_calls == []
+
+
+def test_missing_actor_stops_before_target_definition_resolution() -> None:
+    snapshot = make_snapshot(
+        creatures=(
+            make_target(),
+            make_creature(creature_id="character_002", definition_id="wizard"),
+        ),
+        characters=(make_character(character_id="character_002"),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ENTITY_NOT_FOUND
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_missing_character_stops_before_target_definition_resolution() -> None:
+    snapshot = make_snapshot(creatures=(make_actor(), make_target()))
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_STATE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "characters"
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_missing_target_stops_before_definition_resolution() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(),),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ENTITY_NOT_FOUND
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field == "target_id"
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+@pytest.mark.parametrize(
+    ("definition_error", "expected_code", "expected_entity_id"),
+    [
+        (
+            DefinitionNotFoundError("missing definition"),
+            ErrorCode.DEFINITION_NOT_FOUND,
+            "goblin",
+        ),
+        (
+            DefinitionTypeMismatchError("wrong definition type"),
+            ErrorCode.INVALID_STATE,
+            "monster_001",
+        ),
+    ],
+)
+def test_semantic_definition_failures_map_without_resolution_side_effects(
+    definition_error: Exception,
+    expected_code: ErrorCode,
+    expected_entity_id: str,
+) -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, definition_error=definition_error
+    )
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is expected_code
+    assert result.errors[0].entity_id == expected_entity_id
+    assert result.errors[0].field == "definition_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_malformed_definition_adapter_failure_propagates() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        definition_error=InvalidPackagedDefinitionError(
+            "corrupt definition payload"
+        ),
+    )
+
+    with pytest.raises(InvalidPackagedDefinitionError, match="corrupt"):
+        handle_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_state_store_failure_propagates_before_all_other_dependencies() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+    failing_store = FailingStateStore(snapshot, calls)
+
+    with pytest.raises(StateStoreError, match="backend unavailable"):
+        handle_with(failing_store, definitions, dice, metadata)
+
+    assert calls == ["load"]
+    assert failing_store.load_calls == ["campaign_001"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert failing_store.save_calls == []
+    assert store.save_calls == []
+
+
+def test_dice_failure_propagates_before_metadata_request() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, dice_fail=True
+    )
+
+    with pytest.raises(RuntimeError, match="dice unavailable"):
+        handle_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice"]
+    assert definitions.get_calls != []
+    assert dice.roll_calls == ["1d20"]
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_metadata_failure_propagates_after_resolution_without_save() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, metadata_fail=True
+    )
+
+    with pytest.raises(RuntimeError, match="metadata unavailable"):
+        handle_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice", "metadata"]
+    assert dice.roll_calls == ["1d20"]
+    assert metadata.next_calls == ["campaign_001"]
+    assert store.save_calls == []
