@@ -3935,16 +3935,18 @@ from this review.
 ### 3.21. Condition State foundation (G6C1)
 
 Implementation status: **Implemented (State foundation, Domain mutation
-contract).** This section documents the persisted representation of
-Conditions — a closed `Condition` identity, the `CreatureState.conditions`
-membership field, and State schema V4 — together with the pure Domain
-mutation contract that produces new Condition membership: `ApplyConditionCommand`/
+contract, Application handlers, and persistence).** This section documents
+the persisted representation of Conditions — a closed `Condition` identity,
+the `CreatureState.conditions` membership field, and State schema V4 —
+together with the full authoritative mutation path that produces and
+persists new Condition membership: `ApplyConditionCommand`/
 `RemoveConditionCommand`, their resolvers, `ConditionApplied`/
-`ConditionRemoved` V1 Events, and concrete Creature appliers. It does not
-implement Application handlers, persistence orchestration, or any gameplay
-effect (e.g. Poisoned disadvantage). Those are separate, later,
-evidence-driven G6C groups; this section will be extended, not replaced, when
-they land.
+`ConditionRemoved` V1 Events, concrete Creature appliers, and the
+`ApplyConditionHandler`/`RemoveConditionHandler` Application handlers that
+orchestrate `StateStore.load`/`StateStore.save` around them. It does not
+implement any gameplay effect (e.g. Poisoned disadvantage) — that is a
+separate, later, evidence-driven G6C group; this section will be extended,
+not replaced, when it lands.
 
 #### Scope
 
@@ -3958,6 +3960,8 @@ ApplyConditionCommand / RemoveConditionCommand
 pure resolve_condition_application / resolve_condition_removal
 ConditionApplied V1 / ConditionRemoved V1 Events
 concrete Creature appliers (Event + CreatureState -> replacement CreatureState)
+ApplyConditionHandler / RemoveConditionHandler (Application layer)
+StateStore.save orchestration for Condition mutation, exactly once on success
 ```
 
 #### Explicit exclusions
@@ -3965,8 +3969,6 @@ concrete Creature appliers (Event + CreatureState -> replacement CreatureState)
 This slice does not implement, and does not imply a decision on:
 
 ```text
-ApplyConditionHandler / RemoveConditionHandler (Application layer)
-StateStore.save orchestration for Condition mutation
 Poisoned (or any other) gameplay effect
 RollMode / d20 interaction
 ModifierPipeline
@@ -3976,6 +3978,7 @@ condition source, duration, expiry, stacking, provenance
 Effect framework
 runtime allocation of condition_NNN IDs
 generic Event applier / generic mutation handler
+shared snapshot-replacement / replace_creature helper
 EventStore, UnitOfWork, WorkingState, state_changes
 ```
 
@@ -4232,13 +4235,110 @@ Only `conditions` changes; `id`, `definition_id`, `ability_scores`,
 `current_hp`, and `max_hp` are preserved. Neither applier re-decides gameplay
 rules or performs I/O.
 
+#### Application handlers and persistence
+
+```text
+ApplyConditionHandler(state_store: StateStore, event_metadata_provider: EventMetadataProvider)
+RemoveConditionHandler(state_store: StateStore, event_metadata_provider: EventMetadataProvider)
+```
+
+Both handlers (`src/dnd_engine/application/handlers/apply_condition.py`,
+`.../remove_condition.py`) follow the exact `DamageHandler`/`HealingHandler`
+lifecycle (§3.19, §3.20):
+
+```text
+StateStore.load
+-> actor lookup (command.actor_id against loaded creatures)
+-> target lookup (command.payload.target_id against loaded creatures)
+-> pure resolver (resolve_condition_application / resolve_condition_removal)
+-> EventMetadataProvider.next_metadata
+-> concrete Condition Event (build_condition_applied_v1 / build_condition_removed_v1)
+-> concrete Creature applier (apply_condition_applied_v1 / apply_condition_removed_v1)
+-> replacement creatures tuple, order preserved
+-> replacement StateSnapshot (campaign and characters reused unchanged)
+-> StateStore.save(replacement_snapshot), exactly once, on the success path only
+-> successful ResolutionResult
+```
+
+Dependencies are minimal — only `StateStore` and `EventMetadataProvider`, no
+`DiceEngine` or `DefinitionSource` — because this is a direct, already-
+resolved internal mutation slice, the same shape as Damage/Healing.
+
+**Actor/target lookup policy (direct internal slice, not a general Condition-
+source contract).** `command.actor_id` and `command.payload.target_id` are
+both looked up against the loaded `StateSnapshot.creatures`, in that order,
+mirroring the proven Damage/Healing convention exactly:
+
+```text
+missing actor  -> ErrorCode.ENTITY_NOT_FOUND, entity_id=actor_id,              field=None
+missing target -> ErrorCode.ENTITY_NOT_FOUND, entity_id=payload.target_id,     field="target_id"
+```
+
+Both failures return before `EventMetadataProvider.next_metadata` is called
+and before `StateStore.save` is invoked. Self-targeting (`actor_id ==
+payload.target_id`) is permitted — the same Creature can be both actor and
+target. This lookup policy is scoped to *this* direct-mutation slice; it is
+not a promise about how actor semantics will work for any future Condition
+source (e.g. a spell or trap triggering Condition application through a
+different Command shape).
+
+**Replacement State construction.** Exactly like G6A/G6B, the loaded object
+graph is never mutated. The handler builds a replacement `creatures` tuple
+(replacing only the target entry, preserving order) and a replacement
+`StateSnapshot` reusing `campaign` and `characters` unchanged from the loaded
+snapshot. This replacement-construction code is duplicated, inline, across
+`DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
+`RemoveConditionHandler` — no shared `replace_creature`/snapshot-replacement
+helper is extracted in this group, even though the duplication is now
+visible across four handlers. This is a deliberate evidence checkpoint: a
+later, separately evidenced abstraction-review group (not this one) decides
+whether that duplication has earned a shared helper.
+
+**Persistence.** `StateStore.save(replacement_snapshot)` is called exactly
+once, only on the success path; the persisted snapshot becomes the new
+authoritative current State the moment `save()` returns without raising. No
+`EventStore` and no `events.jsonl` write are introduced — Events remain
+in-memory `ResolutionResult` payloads only, exactly as in G6A/G6B.
+
+**Successful no-op is never short-circuited.** Applying an already-active
+Condition, or removing an already-absent one, still runs the complete
+lifecycle above — pure resolver, Event construction, applier, replacement
+snapshot, and exactly one `StateStore.save()` call — and returns a
+successful `ResolutionResult`. The handler does not detect the no-op case
+and skip any step.
+
+**Failure semantics**, mirroring G6A/G6B exactly: missing actor/target return
+a structured `ResolutionResult` failure with no metadata call and no save;
+resolver, Event-builder, applier, or Domain-invariant failures raise before
+`save()` is reached; `EventMetadataProvider` failures propagate before
+`save()`; `StateStore.save()` failures propagate to the caller, and no
+successful `ResolutionResult` is produced in that case. No rollback,
+retry, or compensating-write framework is introduced — a `save()` failure is
+simply not observably successful; the loaded snapshot and Creature objects
+the handler read from are left unchanged, since they were never mutated in
+place.
+
+**Production integration proof.** Beyond the handler-level unit tests (which
+use a call-recording `StateStore` double), `tests/integration/
+test_apply_condition_real_adapters.py`, `test_remove_condition_real_adapters.py`,
+and `test_condition_lifecycle_real_adapters.py` exercise both handlers
+against the real `FilesystemStateStore`/V4 serializer: apply `POISONED`,
+save, reload through a *fresh* `FilesystemStateStore` instance, and confirm
+`Condition.POISONED` is present; then remove it, save, reload again, and
+confirm it is absent. `tests/infrastructure/test_state_store.py::
+test_load_accepts_legacy_v3_with_empty_conditions` additionally proves the
+legacy V3-to-V4 `conditions` migration (§12.9) through the same real
+filesystem adapter path, not only through the isolated `StateSerializer`
+unit tests.
+
 #### Replay / no-op limitation
 
 Exactly like G6A's `0 -> 0` Damage and G6B's `maxHp -> maxHp` Healing
 (§3.19, §3.20), a canonical no-op Event —
 `ConditionApplied{previousActive: true, active: true}` or
 `ConditionRemoved{previousActive: false, active: false}` — can be re-applied
-to a Creature whose membership already matches, because no State revision,
+(or re-persisted, via `ApplyConditionHandler`/`RemoveConditionHandler`) to a
+Creature whose membership already matches, because no State revision,
 optimistic-concurrency token, or applied-Event-ID registry exists yet
 (§3.18's "Exact MVP atomicity boundary" already excludes replay/idempotency).
 This is not fixed here via `revision`, compare-and-swap, an `EventStore`, a
@@ -4247,17 +4347,21 @@ those remain deferred per §§3.6/3.18.
 
 #### Abstraction discipline
 
-Application handlers, `StateStore.save()` orchestration, and any gameplay
-effect remain unimplemented (see "Explicit exclusions" above); §3.6's
-deferred-orchestration list is unaffected. `ApplyConditionCommand`/
-`RemoveConditionCommand`, their resolvers, Events, and appliers are concrete,
-mirroring the existing per-mechanic Damage/Healing shape rather than
-introducing a generic Condition-mutation abstraction — there is still only
-one Condition value and two mutation directions, which is not new evidence
-for a shared framework. The persisted shape (this section's earlier State
-foundation content) and this pure mutation contract are fixed first; the
-Application/persistence orchestration is added by a later, separately
-evidenced G6C group.
+`ApplyConditionHandler`/`RemoveConditionHandler` are explicit, concrete
+Application handlers — not a generic `MutationHandler`, `ConditionMutation`
+base class, `EventApplierRegistry`, or any dispatcher from §3.6/§3.18's
+deferred list. They mirror `DamageHandler`/`HealingHandler` structurally,
+including the same inline (not extracted) replacement-snapshot construction
+described above. Any gameplay effect remains unimplemented (see "Explicit
+exclusions" above). `ApplyConditionCommand`/`RemoveConditionCommand`, their
+resolvers, Events, and appliers are likewise concrete, mirroring the existing
+per-mechanic Damage/Healing shape rather than introducing a generic
+Condition-mutation abstraction — there is still only one Condition value and
+two mutation directions, which is not new evidence for a shared framework.
+Four concrete handlers now share the same load/lookup/resolve/build/apply/
+replace/save shape; that repetition is evidence, not yet an abstraction —
+whether it justifies a shared helper is decided by a later, separately
+evidenced abstraction-review group, not introduced speculatively here.
 
 ---
 

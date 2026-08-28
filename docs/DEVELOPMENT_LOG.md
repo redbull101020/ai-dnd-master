@@ -3224,3 +3224,107 @@ contracts.
   Event applier, generic mutation handler, snapshot replacement helper,
   `EventStore`, `UnitOfWork`, `WorkingState`, `state_changes`, or new
   production dependency.
+
+## 2026-08-28 — G6C Group 3: Application handlers + authoritative persistence
+
+- Committed and pushed the reviewed Group 2 Domain mutation contract as
+  `732faecd6e1297d91202e01bc97bfef19ec53571` on `feat/g6c-conditions-foundation`;
+  confirmed local and `origin/feat/g6c-conditions-foundation` already matched
+  exactly (nothing new to commit) before starting Group 3 edits.
+- Added `ApplyConditionHandler`/`RemoveConditionHandler`
+  (`src/dnd_engine/application/handlers/apply_condition.py`/
+  `remove_condition.py`), each depending only on `StateStore` and
+  `EventMetadataProvider` (no `DiceEngine`/`DefinitionSource`), following the
+  exact `DamageHandler`/`HealingHandler` lifecycle (§3.19, §3.20):
+  `StateStore.load` → actor lookup → target lookup → pure resolver →
+  `EventMetadataProvider.next_metadata` → concrete Condition Event → concrete
+  Creature applier → replacement `creatures` tuple (order preserved) →
+  replacement `StateSnapshot` (`campaign`/`characters` reused unchanged) →
+  `StateStore.save()` exactly once on the success path → successful
+  `ResolutionResult`.
+- Actor/target lookup policy matches the proven Damage/Healing convention
+  exactly: missing actor → `ErrorCode.ENTITY_NOT_FOUND`, `entity_id=actor_id`,
+  `field=None`; missing target → `ErrorCode.ENTITY_NOT_FOUND`,
+  `entity_id=payload.target_id`, `field="target_id"`; both return before
+  `next_metadata`/`save()` are reached. Self-targeting is permitted.
+  Documented this explicitly in §3.21 as a direct-internal-slice policy, not
+  a promise about actor semantics for any future Condition source.
+- Confirmed and tested that Apply-already-active and Remove-already-absent
+  are never short-circuited: both still run the full lifecycle (resolver →
+  Event → applier → replacement snapshot → exactly one `save()`) and return a
+  successful `ResolutionResult`.
+- Did not extract a shared `replace_creature`/snapshot-replacement helper,
+  even though the same inline construction is now duplicated across
+  `DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
+  `RemoveConditionHandler` — a deliberate evidence checkpoint left for a
+  later, separately evidenced abstraction-review group, per the task's
+  explicit instruction not to extract in this group. No `EventStore` or
+  `events.jsonl` write was introduced; persisted `state.json` remains the
+  sole authoritative artifact.
+- Added `tests/application/test_apply_condition_handler.py` and
+  `test_remove_condition_handler.py` (10 tests each), covering: successful
+  lifecycle + persistence with ordering/identity assertions; successful
+  no-op (already-active / already-absent) still completing the full
+  lifecycle and calling `save()` once; missing actor / missing target
+  (`ENTITY_NOT_FOUND`, no metadata call, no save); resolver failure (raises,
+  call order stays exactly `["load"]`, no metadata call, no save);
+  Event-builder failure (raises, call order stays exactly
+  `["load", "metadata"]`, no save); applier/invariant failure (raises, no
+  save); `EventMetadataProvider` failure (raises, no save); and
+  `StateStore.save()` failure (propagates, attempted exactly once, no
+  successful result, original loaded Creature/snapshot left unchanged). The
+  resolver-failure and Event-builder-failure cases were added after review
+  flagged that the initial pass only covered applier/metadata/save failure,
+  leaving two links in the six-link failure chain (§3.21's Application
+  handlers subsection: resolver / Event-builder / applier / metadata / save,
+  each independently, since no shared handler abstraction exists to cover
+  them once) unproven; each handler got its own focused pair rather than a
+  shared parameterized cross-handler test helper.
+- Added `tests/integration/test_apply_condition_real_adapters.py` and
+  `test_remove_condition_real_adapters.py`, each driving the corresponding
+  handler against a real `FilesystemStateStore`, asserting the persisted
+  bytes changed, the raw JSON `conditions` array matches, a *fresh*
+  `FilesystemStateStore` instance reloads the expected membership, unrelated
+  creatures/characters are untouched, `save()` was called exactly once, and
+  no `events.jsonl`/temp artifacts are left behind. Added
+  `tests/integration/test_condition_lifecycle_real_adapters.py` as the
+  explicit end-to-end proof requested for this group: Apply `POISONED` →
+  save → fresh reload → present, then Remove `POISONED` → save → fresh
+  reload → absent, each step through its own fresh `FilesystemStateStore`
+  instance.
+- Added `tests/infrastructure/test_state_store.py::
+  test_load_accepts_legacy_v3_with_empty_conditions` as an additional real-
+  filesystem-adapter regression proof for the legacy V3→V4 `conditions`
+  migration (§12.9), since the existing real-store test file only exercised
+  legacy V1/V2 end-to-end; the isolated `StateSerializer` unit tests already
+  covered V1/V2/V3 thoroughly, so no further serializer-level tests were
+  added.
+- No Application handler, `StateStore.save()` call, or gameplay effect
+  remained outstanding for G6C1's mutation path after this group — only the
+  `Poisoned` gameplay effect (a separate, later G6C group) is still
+  unimplemented.
+- Extended canonical §3.21 in `docs/ARCHITECTURE.md` in place (updated
+  Implementation status, Scope, Explicit exclusions; added a new
+  "Application handlers and persistence" subsection covering the lifecycle,
+  actor/target policy, replacement-State construction, persistence,
+  no-op-not-short-circuited behavior, failure semantics, and the production
+  integration proof; extended Replay/no-op limitation and Abstraction
+  discipline) rather than adding a new section. Updated `CLAUDE.md`'s G6C1
+  bullet and the deferred-abstractions paragraph to describe the new
+  handlers and the intentionally-not-yet-extracted shared duplication.
+  `README.md` required no edit (no stale implemented-flow summary to fix).
+  Left broad Roadmap `[ ] Conditions` unchecked.
+- Verified on Python 3.12.13 / pytest 9.1.1: the new 24-test Group 3 suite
+  (2 handler files + 3 integration files + 1 legacy-migration regression
+  test) passed (`24 passed`), the full suite passed (`1234 passed`), and the
+  configured mypy check passed (`Success: no issues found in 89 source
+  files`). `git diff --check` reported no whitespace errors. (A pre-existing,
+  ACL-locked `%TEMP%\pytest-of-redbu` directory unrelated to this branch's
+  changes caused spurious `PermissionError` collection failures under the
+  default `tmp_path` base; resolved for verification by passing pytest a
+  fresh `--basetemp`, not by modifying any test or fixture.)
+- Introduced no generic `MutationHandler`, `EventApplierRegistry`,
+  `ConditionMutation` base class, `WorkingState`, `UnitOfWork`,
+  `TransactionManager`, `state_changes`, `EventStore`, or new production
+  dependency. Did not commit or push Group 3; per-task instruction, it stays
+  uncommitted pending review, captured in a fresh `review.patch`.
