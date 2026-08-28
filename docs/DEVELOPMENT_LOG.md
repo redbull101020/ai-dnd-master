@@ -2272,3 +2272,694 @@ contracts.
   (`e4acf06f5b0dae8d1d2d70bcebc624785bb26546`) was already committed and
   pushed before this iteration started, so `review.patch` contains only this
   iteration's changes.
+
+## 2026-08-28 — G6a Group 1: ApplyDamage Command + DamageResult + pure resolver
+
+### Initial state
+
+- Branched `claude/g6a-minimal-damage-hp` from `origin/main` at
+  `c040c2992a2e1e1a87021c42439e8b81560d6181`, which already carried the G5
+  State Mutation Foundation canonical contract (§3.18, DEC-0032) and its
+  acceptance obligations for the future first Damage → HP consumer, but no
+  `ApplyDamageCommand`/`DamageResult` Python code, schema, or resolver.
+- This iteration implements only Group 1 of the G6a evidence slice: the pure
+  Domain contract `already-resolved positive damage amount → one target
+  CreatureState → DamageResult`. It does not implement `DamageApplied` Event,
+  Event application, an Application handler, or any `StateStore.save()`
+  mutation — those remain for later G6a groups.
+
+### Implementation
+
+- Added `src/dnd_engine/domain/commands/damage.py`: immutable
+  `ApplyDamagePayload` (`target_id: str`, `amount: int`, `amount >= 1`) and
+  immutable `ApplyDamageCommand` (`command_id`, `campaign_id`, `actor_id`,
+  `payload: ApplyDamagePayload`, fixed `type = "ApplyDamageCommand"`),
+  following the same intrinsic-invariant style as the existing
+  `AttackCommand`/`AttackPayload`. No `new_hp`, `damage_type`, `weapon_id`,
+  `attack_id`, `critical`, `source`, or `rolls` field was added.
+- Added `src/dnd_engine/domain/rules/damage.py`: immutable `DamageResult`
+  (`target_id`, `amount`, `previous_hp`, `new_hp`) that independently
+  enforces its own field types, `amount >= 1`, `previous_hp >= 0`, and the
+  canonical formula invariant `new_hp == max(0, previous_hp - amount)`; and
+  the pure `resolve_damage(command, target) -> DamageResult` resolver, which
+  validates concrete `ApplyDamageCommand`/`CreatureState` argument types,
+  validates `command.payload.target_id == target.id`, reads
+  `target.current_hp`, computes the clamped `new_hp`, and returns a
+  `DamageResult` without mutating `target`, calling `DiceEngine`, loading a
+  Definition, or performing I/O. Target lookup remains an Application-handler
+  concern, per §3.18's "Resolver ≠ State application" split.
+- Zero-HP input is accepted as ordinary input: a target already at
+  `current_hp = 0` with `amount > 0` resolves to a successful `DamageResult`
+  with `previous_hp = 0` and `new_hp = 0`; no death/unconscious semantics
+  were introduced. `DamageType` was intentionally left unused by this slice.
+
+### Changed files
+
+- `src/dnd_engine/domain/commands/damage.py` — new file.
+- `src/dnd_engine/domain/rules/damage.py` — new file.
+- `tests/domain/test_damage_command.py` — new file, narrow
+  `ApplyDamageCommand`/`ApplyDamagePayload` tests.
+- `tests/domain/test_damage.py` — new file, narrow `DamageResult`/
+  `resolve_damage` tests.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No `DamageApplied` Event, Event applier, or `StateSnapshot` replacement
+  logic.
+- No Application-level `DamageHandler`, `EventMetadataProvider` usage, or
+  `StateStore.save()` call.
+- No Attack → Damage orchestration, weapon damage dice, critical damage,
+  `DamageType` mechanics (resistance/immunity/vulnerability), temporary HP,
+  healing, death saves, or conditions.
+- No canonical `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `README.md`, or `CLAUDE.md` change: per this task's own
+  scope, the contract will be documented once full G6a production evidence
+  exists.
+- No production dependency was added or changed; `pyproject.toml` is
+  unmodified.
+
+### Verification
+
+- The repository's own `.venv` (Python 3.12.9, pytest 9.1.1) was used
+  directly; `--basetemp` was pointed outside the default OS temp directory,
+  whose `pytest-of-redbu` folder was not writable in this environment (same
+  pre-existing environment condition already recorded in the prior G5
+  iteration entry above).
+- Narrow new tests: `tests/domain/test_damage.py` (24 tests) and
+  `tests/domain/test_damage_command.py` (17 tests) — 41 passed.
+- Full pytest suite: 846 passed, with `--basetemp` redirected outside the
+  unwritable default temp directory (805 pre-existing, matching the prior G5
+  iteration's recorded full-suite baseline, plus the 41 new Group 1 tests);
+  no existing test was modified or removed.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 74 source
+  files`.
+- `git diff --check`: no whitespace errors.
+- `git status --short` showed `docs/DEVELOPMENT_LOG.md` modified plus the
+  four new Domain/test files marked intent-to-add solely so they are
+  included in `review.patch`; no other tracked file was modified, and no
+  production dependency changed.
+- Diff written to `review.patch` in the repository root for review; not
+  committed, not pushed, no pull request opened.
+
+## 2026-08-28 — G6a Group 2: DamageApplied V1 Event contract
+
+### Initial state
+
+- Continued on `claude/g6a-minimal-damage-hp`, on top of the committed G6a
+  Group 1 iteration (`ApplyDamageCommand`, `ApplyDamagePayload`,
+  `DamageResult`, `resolve_damage`, commit
+  `928df81f9d7fe0426d4fe6428032918d4ec5090e`). No `DamageApplied` Event, Event
+  builder, Event application, Application handler, or `StateStore.save()`
+  mutation existed yet.
+- This iteration implements only Group 2 of the G6a evidence slice: the
+  concrete immutable `DamageApplied` V1 `GameEvent` contract, built from an
+  already-resolved `ApplyDamageCommand` + `DamageResult` pair plus supplied
+  Event metadata. It does not implement Event → State application, a
+  `DamageHandler`, `StateStore.save()`, or an `EventStore` — those remain for
+  later G6a groups.
+
+### Implementation
+
+- Added `src/dnd_engine/domain/events/damage.py`, following the same
+  concrete-Event style as `events/attack.py` and `events/saving_throw.py`:
+  - `DamageAppliedPayloadV1` (`target_id: str`, `amount: int`,
+    `previous_hp: int`, `new_hp: int`) — a frozen internal payload VO whose
+    `__post_init__` enforces only field runtime types (no `bool`-as-`int`
+    coercion). Unlike `AttackResolvedPayloadV1`/`SavingThrowResolvedPayloadV1`,
+    it does **not** re-derive or re-check the `new_hp == max(0, previous_hp -
+    amount)` formula: that rule invariant is already owned exclusively by
+    `DamageResult` (§3.18 "Resolver ≠ State application" / "Rule consistency
+    already belongs to the resolver's own Result type"), and this task's own
+    instructions called out not duplicating it here.
+  - `build_damage_applied_v1(*, event_id, timestamp, command, outcome) ->
+    GameEvent` — validates `command` is an `ApplyDamageCommand`, `outcome` is
+    a `DamageResult`, and that `outcome.target_id`/`outcome.amount` match
+    `command.payload.target_id`/`command.payload.amount`; then builds the
+    typed payload from `outcome` fields verbatim (no recomputation) and
+    returns a `GameEvent` with `type="DamageApplied"`, `version=1`,
+    `event_id`/`timestamp` taken from the supplied arguments (no clock read,
+    no ID generation), `command_id`/`campaign_id`/`actor_id` copied from
+    `command`, and `caused_by=None`.
+  - Canonical payload written to the Event is exactly `{"targetId",
+    "amount", "previousHp", "newHp"}` — no `damageType`, `weaponId`,
+    `attackId`, `critical`, `overkill`, `effectiveHpLoss`, `condition`, or
+    `stateChanges` field.
+- No changes to `GameEvent`, `EventSerializer`, or the Event Envelope: the
+  new Event round-trips through the existing generic `EventSerializer`
+  unchanged, with no Damage-specific serializer, deserializer registry, Event
+  type/version dispatcher, schema registry, or `EventStore` added.
+
+### Changed files
+
+- `src/dnd_engine/domain/events/damage.py` — new file.
+- `tests/domain/test_damage_event.py` — new file: canonical Event shape
+  (`type`, `version`, exact payload key set, `commandId`/`campaignId`/
+  `actorId` correlation, `causedBy is None`, timestamp passthrough), target
+  and amount correlation-mismatch rejection, wrong command/outcome type
+  rejection, generic-`EventSerializer` round-trip, Event/payload
+  immutability, and payload field-type rejection. No test asserts the
+  `new_hp` formula clamp as a builder-level rule, per this task's scope.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No Event → State application, replacement `CreatureState`/`StateSnapshot`
+  construction, or production `StateStore.save()` call.
+- No Application-level `DamageHandler` or `EventMetadataProvider` usage for
+  Damage.
+- No `EventStore`, filesystem Event persistence/append, or serialized Event
+  type/version dispatch — Event serialization is exercised only through the
+  existing generic `EventSerializer`, unchanged.
+- No Attack → Damage orchestration, `DamageType` mechanics
+  (resistance/immunity/vulnerability), healing, or generic Event applier/
+  registry/`UnitOfWork`.
+- No canonical `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `README.md`, or `CLAUDE.md` change: `DamageApplied` V1
+  exists as a runtime immutable Domain fact only — it is not yet applied to
+  State and not yet persisted as durable Event history, so the canonical
+  contract documentation is deferred to a later G6a group once fuller
+  production evidence exists.
+- No production dependency was added or changed; `pyproject.toml` is
+  unmodified.
+
+### Verification
+
+- The repository's own `.venv` (Python 3.12.9, pytest 9.1.1) was used
+  directly, with `--basetemp` redirected outside the default OS temp
+  directory (same pre-existing unwritable `pytest-of-redbu` condition
+  recorded in prior iteration entries).
+- Narrow new tests: `tests/domain/test_damage_event.py` (20 tests), run
+  together with `tests/domain/test_damage.py`, `tests/domain/
+  test_damage_command.py`, and `tests/domain/test_attack_event.py` for
+  pattern-consistency cross-checking — 91 passed.
+- Full pytest suite: 866 passed (846 pre-existing Group-1 baseline plus the
+  20 new Group 2 tests); no existing test was modified or removed.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 75 source
+  files`.
+- `git diff --check`: no whitespace errors (only expected LF/CRLF
+  line-ending notices from Git on the two new files).
+- `git status --short` showed `docs/DEVELOPMENT_LOG.md` modified plus the
+  two new Group 2 files (`src/dnd_engine/domain/events/damage.py`,
+  `tests/domain/test_damage_event.py`) marked intent-to-add solely so they
+  are included in `review.patch`; no other tracked file was modified, and no
+  production dependency changed. Group 1 is already in `HEAD`
+  (`928df81f9d7fe0426d4fe6428032918d4ec5090e`) and is not part of this diff.
+- `review.patch` in the repository root was regenerated (`git diff >
+  review.patch`) so it contains only the fresh, uncommitted Group 2 changes,
+  not the already-committed Group 1 content it previously held. Not
+  committed, not pushed, no pull request opened.
+
+## 2026-08-28 — G6a Group 3: Creature Event applier + DamageHandler + authoritative persistence
+
+### Initial state
+
+- Group 1 (`928df81`) and Group 2 (`5fad27c`) were already committed to
+  `claude/g6a-minimal-damage-hp`: the immutable `ApplyDamageCommand` /
+  `ApplyDamagePayload`, the pure `resolve_damage` resolver and its
+  `DamageResult`, and the concrete `DamageApplied` V1 `GameEvent` contract
+  (`build_damage_applied_v1`). No Event → State application, Application
+  handler, or `StateStore.save()` mutation existed yet — no production
+  gameplay code path had ever called `StateStore.save()`.
+- This iteration implements Group 3 of the G6a evidence slice: the first
+  concrete Event → `CreatureState` applier, the `DamageHandler` Application
+  orchestrator, and the first production authoritative mutation lifecycle
+  `ApplyDamageCommand → DamageResult → DamageApplied → CreatureState
+  replacement → StateSnapshot replacement → StateStore.save() → successful
+  ResolutionResult`, per §3.18 "Acceptance obligations for the first Damage →
+  HP consumer".
+
+### Implementation
+
+- Added `apply_damage_applied_v1(creature: CreatureState, event: GameEvent)
+  -> CreatureState` to the existing `src/dnd_engine/domain/events/damage.py`,
+  alongside `build_damage_applied_v1` rather than in a new generic mutation
+  module or inside `domain/state/creature.py` — placing it in
+  `domain/state/creature.py` would create a circular import
+  (`state/creature.py -> events/damage.py -> rules/damage.py ->
+  state/creature.py`), and co-locating the Event's builder and its applier in
+  one file keeps both directions of the same versioned `DamageApplied` V1
+  contract together without a new package. It: validates `creature` is a
+  `CreatureState` and `event` is a `GameEvent`; requires
+  `event.type == "DamageApplied"` and `event.version == 1`; requires the
+  payload to have exactly the four canonical keys (`targetId`, `amount`,
+  `previousHp`, `newHp`) and decodes them into the existing
+  `DamageAppliedPayloadV1` (reusing its field-type `__post_init__` checks, via
+  two small local `_payload_str`/`_payload_int` narrowing helpers so mypy
+  accepts the `JSONValue` → `str`/`int` narrowing); requires
+  `payload.targetId == creature.id` and `payload.previousHp ==
+  creature.current_hp`; and returns `dataclasses.replace(creature,
+  current_hp=payload.newHp)` — taking the already-resolved `newHp` verbatim,
+  never recomputing `max(0, previous_hp - amount)`. All rejections raise the
+  existing intrinsic `TypeError`/`ValueError` style and propagate directly;
+  no new `ErrorCode` and no gameplay `ResolutionResult(success=False)` is
+  involved, since a mismatch here is a State-application integrity failure,
+  not a gameplay outcome. The function calls no `DiceEngine`, no
+  `DefinitionSource`, no persistence I/O, reads no clock, allocates no Event
+  ID, and constructs no new authoritative Event — it only decides whether the
+  supplied Event may be projected onto the supplied Creature and, if so,
+  returns the replacement.
+- Added `src/dnd_engine/application/handlers/damage.py` with a concrete
+  `DamageHandler`, in the same explicit-handler style as `AttackHandler`
+  (`application/handlers/attack.py`). Constructor dependencies are exactly
+  `StateStore` and `EventMetadataProvider` — no `DiceEngine`,
+  `DefinitionSource`, `EventStore`, or dispatcher. `handle(command)`:
+  loads the snapshot; looks up the actor `CreatureState` by
+  `command.actor_id` (`ENTITY_NOT_FOUND`, `entity_id=command.actor_id`, no
+  `field`, if absent — actor is a required Command initiator even though
+  Damage does not use it for calculation); looks up the target
+  `CreatureState` by `command.payload.target_id` (`ENTITY_NOT_FOUND`,
+  `entity_id=command.payload.target_id`, `field="target_id"`, if absent);
+  calls the pure `resolve_damage(command, target)`; requests
+  `EventMetadataProvider.next_metadata`; builds the `DamageApplied` V1 Event
+  via `build_damage_applied_v1`; calls `apply_damage_applied_v1(target,
+  event)` to get the replacement target; builds a replacement `creatures`
+  tuple by substituting the replacement target in place (original ordering
+  and every other `CreatureState` object preserved by identity, no
+  `deepcopy()`); builds a replacement `StateSnapshot` reusing the loaded
+  `CampaignState` and `characters` tuple unchanged; calls
+  `StateStore.save(replacement_snapshot)` exactly once; and only then
+  returns `ResolutionResult(success=True, outcome=DamageResult, events=(event,),
+  errors=())`. Both failure branches (missing actor, missing target) return
+  before `EventMetadataProvider` or `StateStore.save()` are ever called. If
+  `StateStore.save()` raises `StateStoreError`, the exception propagates
+  unmodified — it is not mapped to an `EngineError`, no
+  `ResolutionResult(success=True, ...)` is constructed or returned, and there
+  is no retry or compensation.
+
+### Changed files
+
+- `src/dnd_engine/domain/events/damage.py` — added `apply_damage_applied_v1`
+  and its two private narrowing helpers, alongside the existing
+  `DamageAppliedPayloadV1`/`build_damage_applied_v1` from Group 2.
+- `src/dnd_engine/application/handlers/damage.py` — new file: `DamageHandler`.
+- `tests/domain/test_damage_applier.py` — new file (23 tests): deterministic
+  same-Event/same-Creature replacement, returned object identity vs. source
+  object non-mutation, exact preserved-field set
+  (`id`/`definition_id`/`ability_scores`/`max_hp`), resulting `CreatureState`
+  invariant satisfaction, rejection of wrong target/`previousHp`
+  mismatch/wrong Event type/wrong version/malformed payload (missing field,
+  unknown field, wrong runtime type per field), rejection of non-`CreatureState`/
+  non-`GameEvent` inputs, the documented `7 -> 4` replay-rejection case, the
+  `0 -> 0` no-op acceptance case with an explicit test (and comment) recording
+  that duplicate `0 -> 0` application is *not* detected — a narrow,
+  intentional limitation per docs/ARCHITECTURE.md §3.18 "Exact MVP atomicity
+  boundary", where replay is explicitly not guaranteed, not a bug — and a
+  static source-text check that the applier module names no `DiceEngine`,
+  `DefinitionSource`, `StateStore`, `open(`, or `Path(`.
+- `tests/application/test_damage_handler.py` — new file (7 tests), in the
+  existing Spy-`StateStore`/call-order-list style already used by
+  `tests/application/test_attack_handler.py`: full successful lifecycle
+  (`["load", "metadata", "save"]` call order; loaded snapshot/target
+  observationally unchanged after the call; saved snapshot is a new object
+  distinct from the loaded one; saved target is a new object with
+  `current_hp == 4`; unrelated creatures/actor/characters/campaign preserved
+  by identity; creature ordering preserved); missing-actor and missing-target
+  structured failures with no metadata request and no save; an
+  applier/invariant-failure case using a single targeted `monkeypatch.setattr`
+  on the already-imported `apply_damage_applied_v1` name inside the handler
+  module (no new injectable Protocol introduced for this) proving no save
+  happens when Event application fails; metadata-provider failure
+  propagating with no save; and `StateStore.save()` failure propagating as
+  `StateStoreError` with the loaded graph unchanged and `save()` attempted
+  exactly once.
+- `tests/integration/test_damage_real_adapters.py` — new file (1 test): a
+  real `FilesystemStateStore` seeded with `monster_001` at `current_hp=7,
+  max_hp=7` alongside an unrelated actor and an unrelated second monster; a
+  `DamageHandler` (no fakes except a fixed `EventMetadataProvider`) applies
+  `amount=3`; asserts the persisted `state.json` bytes actually changed,
+  `store.load("campaign_001")` reflects `current_hp == 4` for the target
+  while the actor/other-monster/`CharacterState`/`CampaignState` reload
+  unchanged, no `events.jsonl` or other file besides `state.json` exists in
+  the campaign directory afterward, and no leftover `.state-*.tmp` file
+  remains. A local `CountingStateStore` test-only wrapper delegates every
+  call to the real `FilesystemStateStore` and counts `save()` invocations, to
+  prove the handler calls `save()` exactly once through the observable store
+  seam without adding call-counting to the production adapter itself.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No `EventStore`, `events.jsonl` runtime append, or serialized Event
+  type/version dispatch — `DamageApplied` Events remain in-memory
+  `ResolutionResult` facts, not durable runtime history; the integration test
+  explicitly asserts no `events.jsonl` or other history artifact is created.
+- No generic `EventApplier` Protocol/registry, reducer, `UnitOfWork`,
+  `TransactionManager`, `WorkingState`, `MutationContext`, `StateChange`,
+  generic Creature repository, `replace_entity` helper, State revision,
+  optimistic locking, or retry — the applier is one concrete function and the
+  handler is one concrete class, per §3.18's explicit deferred-abstraction
+  list.
+- `StateStore` remains exactly `load()`/`save()`; `StateSnapshot`'s schema is
+  unchanged; `ResolutionResult` gained no new field.
+- Attack → Damage orchestration, `DamageType` mechanics
+  (resistance/immunity/vulnerability), healing, unconscious/death, critical
+  damage, and equipment remain entirely out of scope, per the G6a boundary in
+  §3.18.
+- No canonical `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `README.md`, or `CLAUDE.md` change: this Group 3 work is
+  reported as evidence for review, and canonical documentation is finalized
+  only in a later G6a group once the full slice is accepted.
+- No production dependency was added or changed; `pyproject.toml` is
+  unmodified.
+
+### Verification
+
+- The repository's own `.venv` (Python 3.12.9, pytest 9.1.1) was used
+  directly, with `--basetemp` redirected outside the default OS temp
+  directory (same pre-existing unwritable `pytest-of-redbu` condition
+  recorded in prior iteration entries).
+- Narrow new tests: `tests/domain/test_damage_applier.py` (23),
+  `tests/application/test_damage_handler.py` (7), and
+  `tests/integration/test_damage_real_adapters.py` (1), run together with
+  `tests/domain/test_damage.py`, `tests/domain/test_damage_command.py`,
+  `tests/domain/test_damage_event.py`, `tests/infrastructure/
+  test_state_store.py`, and all four existing read-only handler test modules
+  (`test_ability_check_handler.py`, `test_saving_throw_handler.py`,
+  `test_skill_check_handler.py`, `test_attack_handler.py`) for
+  regression/pattern-consistency cross-checking — 161 passed. The existing
+  read-only handler test suites already assert `store.save_calls == []` in
+  every one of their success-path tests (21 such assertions across the three
+  non-Attack handler test modules alone), which already discharges §3.18's
+  "existing read-only handlers still never call `StateStore.save()`"
+  obligation without duplicating new regression tests for it here.
+- Full pytest suite: 897 passed (866 pre-existing Group-1/Group-2 baseline
+  plus the 31 new Group 3 tests); no existing test was modified or removed.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 76 source
+  files`. (`mypy` is configured via `pyproject.toml` `[tool.mypy] files =
+  ["src/dnd_engine"]` and is not run over `tests/`, consistent with prior
+  iterations.)
+- `git diff --check`: no whitespace errors (only expected LF/CRLF
+  line-ending notices from Git on the new/modified files).
+- `git status --short` showed `docs/DEVELOPMENT_LOG.md` and
+  `src/dnd_engine/domain/events/damage.py` modified, plus the four new
+  Group 3 files (`src/dnd_engine/application/handlers/damage.py`,
+  `tests/application/test_damage_handler.py`,
+  `tests/domain/test_damage_applier.py`,
+  `tests/integration/test_damage_real_adapters.py`) marked intent-to-add
+  solely so they are included in `review.patch`; no other tracked file was
+  modified, and no production dependency changed. Group 1 and Group 2 are
+  already in `HEAD` (`928df81f9d7fe0426d4fe6428032918d4ec5090e`,
+  `5fad27c24668be538e52726ce556ef240a077bec`) and are not part of this diff.
+- `review.patch` in the repository root was regenerated (`git diff >
+  review.patch`) so it contains only the fresh, uncommitted Group 3 changes.
+  Not committed, not pushed, no pull request opened.
+
+## 2026-08-28 — G6a Group 4: full verification + abstraction review + canonical documentation
+
+### Initial state
+
+- Group 1 (`928df81`), Group 2 (`5fad27c`), and Group 3 (`176d6a6`) were
+  already committed to `claude/g6a-minimal-damage-hp`: `ApplyDamageCommand`/
+  `ApplyDamagePayload`, the pure `resolve_damage`/`DamageResult` resolver, the
+  `DamageApplied` V1 `GameEvent` contract, the concrete
+  `apply_damage_applied_v1` Creature applier, and the `DamageHandler`
+  Application orchestrator — the first production gameplay handler path that
+  calls `StateStore.save()`. No canonical
+  documentation (`docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `README.md`, `CLAUDE.md`) had been updated for this
+  slice yet; the working tree was clean at the start of this iteration.
+- This iteration performs no production code change. It (1) reviews the
+  committed Group 1–3 production code for evidence that would justify any
+  deferred abstraction from §3.6/§3.18, (2) synchronizes canonical
+  documentation with the actually-implemented G6a behaviour, and (3) re-runs
+  the full verification suite against the already-committed code.
+
+### Abstraction review
+
+- Re-read `src/dnd_engine/domain/commands/damage.py`,
+  `src/dnd_engine/domain/rules/damage.py`,
+  `src/dnd_engine/domain/events/damage.py`, and
+  `src/dnd_engine/application/handlers/damage.py` end to end. Grepped
+  `src/` for `WorkingState`, `UnitOfWork`, `EventApplierRegistry`,
+  `TransactionManager`, `MutationContext`, `StateChange`, `EventStore`,
+  `state_changes`, `CommandBus`, `EventBus`, `dispatcher`, and generic
+  `*Registry` names — no match anywhere in `src/`.
+- Verdict: **KEEP CONCRETE.** `DamageHandler` is the only production
+  State-mutating consumer; `apply_damage_applied_v1` is the only production
+  Event applier. Structural similarity between `DamageHandler` and the four
+  existing read-only handlers (load snapshot, look up actor/target, resolve,
+  build Event, return `ResolutionResult`) is surface-level only — the
+  mutating handler's Event-application, replacement-`StateSnapshot`
+  construction, and `StateStore.save()` steps have no counterpart in any
+  read-only handler — and one production mutation consumer is not evidence
+  for a generic Event applier, `WorkingState`, a Creature replacement helper,
+  `UnitOfWork`, a transaction coordinator, `state_changes`, or generic
+  handler orchestration. No new production abstraction was introduced.
+  **Healing is recorded as the next evidence checkpoint** for re-evaluating a
+  shared HP mutation primitive, once it exists as a second concrete
+  HP-mutating consumer — not before.
+
+### Documentation changes
+
+- `docs/ARCHITECTURE.md`: added `### 3.19. Minimal Damage → HP mutation
+  vertical slice (G6A)` after §3.18, before `## 4. ID System` (the actual
+  tail of §3 on this branch — confirmed by reading the section list before
+  editing, not assumed). Documents implemented Scope, Explicit exclusions,
+  `ApplyDamageCommand`/`ApplyDamagePayload` (internal/Application-level
+  intent, not an external API promise), `DamageResult`'s formula invariant,
+  the exact `DamageApplied` V1 payload and its "Event carries the complete
+  resolved transition" property, the concrete
+  `CreatureState + DamageApplied V1 → replacement CreatureState` boundary,
+  the Errors taxonomy (existing `ErrorCode`s only, no new code; intrinsic/
+  integrity mismatches as `TypeError`/`ValueError`; `StateStoreError`
+  propagation), the `0 → 0` no-op case and its documented replay-detection
+  limitation (explicitly not described as exactly-once), the persistence
+  boundary (snapshot-authoritative, non-durable Event, no `EventStore`), and
+  the post-implementation Abstraction verdict (`KEEP CONCRETE`, Healing as
+  next checkpoint). Added the matching Quick-lookup row and Table-of-contents
+  entry.
+- `docs/DECISIONS.md`: appended `DEC-0033 — First concrete Damage → HP
+  mutation slice (G6A) stays concrete` (tail was DEC-0032 — confirmed by
+  reading the file before appending). Explains why direct already-resolved
+  Damage was chosen over Attack → Damage as the first mutation consumer, why
+  the Event stores both `previousHp` and `newHp`, why Event application
+  executes on the `CreatureState` Owner boundary while `DamageHandler` builds
+  the replacement `StateSnapshot`, why `0 → 0` is allowed without a replay
+  guarantee, and why `EventStore`/`state_changes`/`UnitOfWork`/generic
+  applier stay deferred. Did not edit DEC-0032.
+- `docs/ROADMAP.md`: added a factual note under Phase 2 recording that the
+  first minimal `direct Damage → current_hp` production mutation slice (G6A,
+  §3.19) is implemented and is concrete evidence for G5, without checking
+  `HP` or `Damage`. `Healing` stays unchecked. No Roadmap checkbox was
+  flipped.
+- `README.md`: reworded §4 "Events являются историей изменений" and
+  "Хранение данных" so they no longer imply Event → State application is
+  fully planned/deferred — they now name the one concrete `DamageApplied` →
+  `CreatureState.current_hp` projection plus snapshot persistence as
+  implemented, while durable Event history, `EventStore`, generic/serialized
+  Event dispatch, and recovery/replay stay listed as deferred. Updated the
+  Phase 2 summary near "Быстрый старт" to record that the minimal
+  `Damage → current_hp` slice exists while broad `Damage`/`HP` and combat
+  remain unimplemented.
+- `CLAUDE.md`: updated only the summary facts G6a actually changed — the
+  `Текущая фаза` G5 bullet now names §3.19 as its first concrete consumer;
+  added one new bullet to `Реализованные контракты Phase 2` describing the
+  implemented G6a slice (Command, resolver, Event, applier, handler, write
+  scope, `0 → 0` limitation, exclusions, Healing checkpoint); and updated
+  `Отложенные абстракции — не вводить` to record that one concrete Event
+  applier and one concrete mutating handler now exist for Damage → HP without
+  removing any item from the deferred list. No duplicate full Architecture
+  contract was added; every fact links back to §3.19/DEC-0033.
+
+### Verification
+
+- Environment: repository's own `.venv` (`Python 3.12.9`, `pytest 9.1.1`),
+  same as prior G6a iterations; `--basetemp` redirected into this session's
+  scratchpad directory (the default OS temp `pytest-of-redbu` folder remains
+  unwritable in this environment, as recorded in every prior iteration).
+- `tests/domain/test_damage.py` + `test_damage_command.py` +
+  `test_damage_event.py` + `test_damage_applier.py` +
+  `tests/application/test_damage_handler.py` +
+  `tests/integration/test_damage_real_adapters.py` together: **92 passed**
+  (24 + 17 + 20 + 23 + 7 + 1).
+- `tests/infrastructure/test_state_store.py` +
+  `tests/application/test_ability_check_handler.py` +
+  `tests/application/test_saving_throw_handler.py` +
+  `tests/application/test_skill_check_handler.py` +
+  `tests/application/test_attack_handler.py` (StateStore + read-only handler
+  regression): **69 passed**; every read-only handler success-path test still
+  asserts `store.save_calls == []`.
+- Full `python -m pytest`: **897 passed** — unchanged from the Group 3
+  baseline, confirming this iteration made no production or test code change.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 76 source
+  files` — unchanged file count from Group 3.
+- `git diff --check`: no whitespace errors.
+- `pyproject.toml`: no diff; `dependencies = []` unchanged; no new dev
+  dependency.
+- Forbidden-abstraction grep over `src/` for `WorkingState`, `UnitOfWork`,
+  `EventApplierRegistry`, `TransactionManager`, `MutationContext`,
+  `StateChange`, `EventStore`, `state_changes`, `CommandBus`, `EventBus`,
+  `dispatcher`, generic `*Registry`, `events.jsonl`: no match.
+  `StateStore` Protocol confirmed exactly `load()`/`save()`;
+  `ResolutionResult` confirmed to still have exactly `success`, `command_id`,
+  `outcome`, `events`, `errors`; `StateSnapshot` confirmed to still have
+  exactly `campaign`, `creatures`, `characters`.
+- `git status --short` showed exactly five modified, already-tracked files —
+  `CLAUDE.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md` — plus this `docs/DEVELOPMENT_LOG.md` entry; no `src/` or
+  `tests/` file changed, no untracked file, no production dependency
+  changed. Groups 1–3 are already in `HEAD` (`928df81`, `5fad27c`,
+  `176d6a6`) and are not part of this diff.
+- `review.patch` in the repository root was regenerated (`git diff >
+  review.patch`) so it contains only the fresh, uncommitted Group 4
+  documentation changes relative to the committed Group 3 `HEAD`. Not
+  committed, not pushed, no pull request opened, no merge.
+
+### Correction pass — stale current-status wording
+
+- A review of the first Group 4 documentation pass found that
+  `docs/ARCHITECTURE.md` §3.18 still read as if no mutation consumer existed,
+  contradicting the newly-added §3.19. This pass makes documentation-only
+  corrections; production Groups 1–3 remain unchanged and unreviewed by this
+  pass (approved as-is), and DEC-0032 was not edited (append-only log).
+- `docs/ARCHITECTURE.md` §3.18 fixes, without rewriting the G5 foundation
+  contract itself: the `Implementation status` line now reads "Canonical
+  foundation contract; first concrete consumer implemented in §3.19" instead
+  of claiming no mutating Command/applier/`save()` call exists; the write-scope,
+  "Rule resolution", "Event → State contract", and "Resolver ≠ State
+  application" passages that illustrated the future shape of Damage/
+  `DamageResult`/the first applier now point at the implemented §3.19
+  artifacts instead of describing them as hypothetical; "No production
+  state-mutating gameplay consumer exists yet" now names `DamageHandler`/
+  `apply_damage_applied_v1` as that consumer and points at §3.19's
+  post-implementation `KEEP CONCRETE` verdict as the reason the deferred list
+  still stands; and the "Acceptance obligations"/"G6a boundary" subsections
+  no longer say the exact `ApplyDamageCommand`/`DamageApplied` schema remains
+  open — they now point at §3.19/DEC-0033 as having fixed it, while
+  Attack → Damage, `DamageType` mechanics, healing, and the rest of the G6a
+  exclusion list stay open. The general, still-forward-looking language
+  describing the lifecycle for *any* future mutating Command (not
+  specifically Damage) was left as-is, since §3.18 remains the general
+  foundation for future consumers too, not a duplicate of §3.19.
+- `docs/ARCHITECTURE.md` §3.19: corrected "substituting the replacement
+  `CreatureState` for the original by identity" to "by stable Creature ID
+  (matching `creature.id == target.id`)" — matching the actual
+  `replacement_target if creature.id == target.id else creature` production
+  code in `DamageHandler`, not Python object identity. Corrected the Errors
+  section's closing sentence: an Event/State integrity mismatch propagating
+  as `TypeError`/`ValueError` is now described as an
+  application-integrity/programming-state failure in its own right, not as
+  an instance of §3.18's Infrastructure-level "Save failure semantics" (which
+  governs `StateStore.save()` failures specifically, a separate boundary).
+- `CLAUDE.md`: the G4b Weapon damage dice bullet's closing sentence — "Dagger/
+  weapon attacks, Damage, HP и generic dice DSL остаются deferred" —
+  contradicted the new G6A bullet immediately below it (which documents an
+  implemented direct-Damage → HP slice). Narrowed it to "Dagger/weapon
+  attacks, weapon-derived Damage / Attack → Damage orchestration, broad
+  HP/combat mechanics и generic dice DSL остаются deferred", which still
+  accurately excludes weapon-driven damage and combat while no longer
+  contradicting the implemented minimal slice.
+- No change to `docs/DECISIONS.md` (DEC-0032 untouched, DEC-0033 unedited),
+  `docs/ROADMAP.md` (`HP`/`Damage`/`Healing` still unchecked), the
+  `KEEP CONCRETE` verdict, EventStore/replay deferrals, or any G6a gameplay
+  semantics. No production Python or test file was read for edits in this
+  pass beyond the read-only re-scan needed to confirm the `by stable Creature
+  ID` wording matches `src/dnd_engine/application/handlers/damage.py`.
+
+### Re-verification after the correction pass
+
+- Environment unchanged: repository's own `.venv` (`Python 3.12.9`,
+  `pytest 9.1.1`), `--basetemp` redirected into this session's scratchpad
+  directory.
+- Damage-specific suite (`tests/domain/test_damage.py`,
+  `test_damage_command.py`, `test_damage_event.py`, `test_damage_applier.py`,
+  `tests/application/test_damage_handler.py`,
+  `tests/integration/test_damage_real_adapters.py`): **92 passed** —
+  unchanged, as expected for a documentation-only pass.
+- StateStore + read-only handler regression set: **69 passed** — unchanged.
+- Full `python -m pytest`: **897 passed** — unchanged from Group 3/the first
+  Group 4 pass.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 76 source
+  files` — unchanged.
+- `git diff --check`: no whitespace errors.
+- Re-scanned the corrected `docs/ARCHITECTURE.md`/`README.md`/`CLAUDE.md` for
+  the stale patterns named in the correction request ("no production
+  state-mutating consumer exists", "Damage/HP mutation is entirely
+  unimplemented", "the first Damage applier shape is still undecided", "exact
+  G6A Command/Event schema is still open") — no remaining match.
+- `git status --short`: the same five previously-modified tracked files
+  (`CLAUDE.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md` —
+  unchanged content, `docs/ROADMAP.md`) plus this
+  `docs/DEVELOPMENT_LOG.md` entry; still no `src/`/`tests/` change, no
+  untracked file, no production dependency change.
+- `review.patch` was regenerated again (`git diff > review.patch`) so it
+  contains the corrected Group 4 documentation changes relative to the
+  committed Group 3 `HEAD`. Not committed, not pushed, no pull request
+  opened, no merge.
+
+### Precision correction pass — evidence wording and "first save()" phrasing
+
+- Final review of the correction pass flagged two remaining precision issues,
+  both text-only; production Groups 1–3, tests, Roadmap status, and the
+  `KEEP CONCRETE` verdict itself were unchanged.
+- `docs/DECISIONS.md` DEC-0033: the Decision paragraph overstated the
+  relationship to DEC-0032 ("which DEC-0032 already established is
+  insufficient evidence") and stated a numeric two-consumer abstraction rule
+  ("can only be evaluated with real evidence from two concrete consumers").
+  Reworded so the insufficiency finding is attributed to the post-G6A review
+  recorded by DEC-0033/§3.19 itself — DEC-0032 deferred these abstractions
+  pending evidence, it did not pre-decide the outcome — and so Healing is
+  named as the next checkpoint because it is the first expected second
+  HP-mutating use case with materially related but different semantics, with
+  re-evaluation keyed to the actual common responsibilities/invariants/
+  differences the two implementations demonstrate, not to reaching a
+  consumer count of two.
+- `docs/DEVELOPMENT_LOG.md` (this Group 4 entry's own "Initial state"
+  paragraph) and `docs/ARCHITECTURE.md` §3.18's `Implementation status`
+  paragraph both said "the first production `StateStore.save()` call in the
+  repository's history" / "including the first production `StateStore.save()`
+  call" — overbroad, since it could be read as claiming the `StateStore`
+  adapter or its `save()` method did not previously exist, rather than that
+  no production gameplay handler had called it yet. Both reworded to "the
+  first production gameplay handler path/mutation path that calls
+  `StateStore.save()`". The distinct architectural claim that `DamageHandler`
+  is the first production state-mutating gameplay *consumer* (§3.18 "No
+  generic transaction framework") was left unchanged, per this review's
+  explicit instruction not to alter it.
+- Re-ran the Damage-specific suite + regression set (**161 passed**), full
+  `python -m pytest` (**897 passed**), `python -m mypy src/dnd_engine`
+  (`Success: no issues found in 76 source files`), and `git diff --check`
+  (clean) — all unchanged from the prior correction pass, confirming this is
+  a text-only change.
+- `review.patch` was regenerated a third time (`git diff > review.patch`) so
+  it contains the fully-corrected Group 4 documentation changes relative to
+  the committed Group 3 `HEAD`. Not committed, not pushed, no pull request
+  opened, no merge.
+
+### Final numeric-abstraction-threshold sweep
+
+- Final review flagged two remaining live numeric-abstraction-threshold
+  statements: `docs/ARCHITECTURE.md` §3.18 "No generic transaction framework"
+  still said "one consumer remains insufficient evidence ... until a second
+  concrete HP-mutating consumer ... actually exists", and `CLAUDE.md` still
+  said "одного production-consumer недостаточно, чтобы его пересматривать".
+  Both reworded to attribute the deferral to the post-G6A review finding no
+  stable shared mutation responsibility yet, with Healing named as the next
+  checkpoint for re-evaluation based on actual demonstrated
+  commonalities/differences — not a consumer-count rule.
+- Per the mandated post-fix patch scan, a third, previously-uncaught instance
+  of the same pattern was found in `docs/ARCHITECTURE.md` §3.19 "Abstraction
+  verdict": "One production mutation consumer is not sufficient evidence
+  for..." and "it is the first candidate second consumer of an HP-shaped
+  mutation ... and only once it exists as a concrete implementation should a
+  shared HP mutation primitive be re-evaluated — not before." This was not
+  one of the two locations named in the review request, but matches the same
+  forbidden pattern (a numeric consumer-count threshold), so it was reworded
+  with the same evidence-based framing used in §3.18/CLAUDE.md, to keep the
+  scan's "no live equivalent statements" confirmation actually true rather
+  than reporting a false negative.
+- Re-ran the Damage-specific suite + regression set (**161 passed**), full
+  `python -m pytest` (**897 passed**), `python -m mypy src/dnd_engine`
+  (`Success: no issues found in 76 source files`), and `git diff --check`
+  (clean).
+- Re-scanned the regenerated `review.patch` for `one consumer remains
+  insufficient`, `second concrete ... consumer` (as a requirement),
+  `одного production-consumer недостаточно`, and `two concrete consumers` (as
+  a threshold): the only remaining matches are inside this Development Log's
+  own "Precision correction pass" section, quoting the prior, already-fixed
+  wording for the record — clearly presented as corrected text, not a live
+  canonical claim.
+- `review.patch` was regenerated a fourth time (`git diff > review.patch`)
+  reflecting this sweep. Not committed, not pushed, no pull request opened,
+  no merge.

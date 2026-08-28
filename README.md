@@ -108,12 +108,16 @@ LLM отвечает за понимание намерения, поведен�
 факт, который уже произошёл; оно неизменяемо и не удаляется. Сейчас реализованы
 модель `GameEvent`, сериализация Event и read-only Ability Check, Character
 Saving Throw, Character Skill Check и narrow Character unarmed Attack Roll →
-Monster Events, но production Event Log и replay subsystem ещё нет. Attack
-slice фиксирует hit/miss/critical в одном `AttackResolved` V1, читает baseline
-Monster AC через typed Definition access и не применяет damage или HP mutation.
-Durable ordered Events, version-aware decoding и deterministic Event → State
-application в будущем позволят реализовать recovery/replay; текущий
-`state.json` пока нельзя восстановить из persisted Event history.
+Monster Events. Attack slice фиксирует hit/miss/critical в одном
+`AttackResolved` V1, читает baseline Monster AC через typed Definition access
+и не применяет damage или HP mutation. Отдельно реализован первый minimal
+mutating slice: `DamageApplied` V1 применяется к одному `CreatureState.current_hp`
+через конкретный applier, и результат сохраняется через `StateStore.save()`
+(§3.19) — это одна конкретная Event → State projection, а не общий
+Event Log/replay subsystem. Durable ordered Event history, `EventStore`,
+version-aware decoding для произвольных Events и полноценный recovery/replay
+остаются deferred; текущий `state.json` по-прежнему нельзя восстановить из
+persisted Event history.
 
 ### 5. Определённость важнее удобства
 
@@ -219,14 +223,18 @@ Event Log  +  Materialized State
 
 * filesystem snapshot persistence в `state.json`;
 * immutable `GameEvent` model;
-* чистый `EventSerializer` без filesystem I/O.
+* чистый `EventSerializer` без filesystem I/O;
+* один конкретный `DamageApplied` V1 → `CreatureState.current_hp` Event → State
+  projection, за которой следует authoritative snapshot persistence через
+  `StateStore.save()` ([§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a)).
 
 **Planned / deferred:**
 
 * runtime `EventStore` и append в канонический потоковый формат
   `events/events.jsonl` ([§12.10](docs/ARCHITECTURE.md#1210-event-serialization));
-* authoritative persistence порядка Events;
-* Event → State projection, recovery и replay.
+* durable Event history и authoritative persistence порядка Events;
+* generic/serialized Event type/version dispatch для произвольных Events;
+* recovery и replay.
 
 Наличие пути `events/events.jsonl` в архитектуре или scaffold не означает, что
 работающий EventStore уже существует. На этапе MVP используется файловая
@@ -278,7 +286,12 @@ Runnable API появится на соответствующей фазе Roadm
 Character Saving Throw, Character Skill Check и narrow Character unarmed Attack
 Roll → Monster vertical slices реализованы. Последний является только
 read-only hit/miss/critical resolution без damage/HP mutation, а не готовой
-combat system; broad `Attack rolls` остаётся unchecked в Roadmap.
+combat system; broad `Attack rolls` остаётся unchecked в Roadmap. Отдельно
+реализован первый minimal state-mutating slice — direct `Damage → current_hp`
+(`ApplyDamageCommand` → `DamageApplied` V1 → `StateStore.save()`,
+[§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a)) —
+но broad `Damage`/`HP` и полноценная combat system по-прежнему unchecked в
+Roadmap.
 
 ---
 

@@ -54,6 +54,7 @@
 | Definition access port (G4a, DefinitionSource) | §3.16 |
 | Character unarmed Attack Roll → Monster vertical slice | §3.17 |
 | State Mutation Foundation (G5, mutating Command contract) | §3.18 |
+| Minimal Damage → HP mutation slice (G6A, `ApplyDamage`) | §3.19 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -106,6 +107,7 @@
   * [3.16. Minimal Phase 2 Definition Access vertical slice (G4a)](#316-minimal-phase-2-definition-access-vertical-slice-g4a)
   * [3.17. Minimal Phase 2 Character unarmed Attack Roll → Monster vertical slice](#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice)
   * [3.18. State Mutation Foundation (G5)](#318-state-mutation-foundation-g5)
+  * [3.19. Minimal Damage → HP mutation vertical slice (G6A)](#319-minimal-damage--hp-mutation-vertical-slice-g6a)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -3125,12 +3127,18 @@ Character Skill Check production contracts remain unchanged.
 
 ### 3.18. State Mutation Foundation (G5)
 
-Implementation status: **Canonical contract only.** No authoritative
-state-mutating Command, Event applier, or production `StateStore.save()` call
-exists yet. This section fixes the contract that the first authoritative
-state-mutating Command — the future Damage → HP slice — must follow. It does
-not implement Damage, HP mutation, or any Event applier, and it changes no
-Python contract.
+Implementation status: **Canonical foundation contract; first concrete
+consumer implemented in §3.19.** This section itself introduces no concrete
+Command, Event applier, or Application handler and changes no Python
+contract — it fixes the general contract that every authoritative
+state-mutating Command must follow. §3.19 documents the first concrete
+realization of that contract: `ApplyDamageCommand`,
+`resolve_damage`/`DamageResult`, `DamageApplied` V1,
+`apply_damage_applied_v1`, and `DamageHandler` — the first production
+gameplay mutation path that calls `StateStore.save()`. Where this section
+originally left the exact shape of that first consumer open, §3.19 is the
+concrete choice that was made — this section introduced no generic
+abstraction itself.
 
 This section is the "separate State Mutation Foundation decision" that §3.8
 Atomicity deferred to. It fixes the mutating-command lifecycle, mutation
@@ -3164,8 +3172,8 @@ StateStore.save(new_snapshot)
 expose successful ResolutionResult
 ```
 
-"Rule resolution" produces the concrete Domain outcome only (a future
-`DamageResult`, for example): the resolver does not construct Events, does
+"Rule resolution" produces the concrete Domain outcome only (the implemented
+`DamageResult`, §3.19, for example): the resolver does not construct Events, does
 not receive `EventMetadataProvider`, and does not read Event metadata.
 Application then constructs the complete ordered Event batch from that
 outcome together with authoritative Event metadata obtained through the
@@ -3216,8 +3224,8 @@ Python mutability of a State object is not a license for every transition to
 change every field. Each concrete State Owner transition has its own explicit
 mutation scope, reviewed alongside its Event contract (§10.4, §10.15).
 
-For the future Damage → HP consumer, the expected scope is fixed now so the
-first concrete applier has a canonical target:
+For the Damage → HP consumer (§3.19), this scope was fixed ahead of
+implementation, and the implemented applier respects exactly this target:
 
 ```text
 may change:
@@ -3265,20 +3273,21 @@ does not re-make a gameplay decision
 applies exactly the transition the resolved Event already expresses
 ```
 
-This foundation does not introduce production `EventApplierRegistry`, a
+This foundation itself introduces no production `EventApplierRegistry`, a
 generic reducer, a dispatcher, or a generic `EventApplier` Protocol solely to
-anticipate Damage. The exact Python shape of the first concrete applier (a
-plain function, a method, or another minimal form) is left open until the
-Damage → HP implementation slice.
+anticipate Damage. The exact Python shape of the first concrete applier was
+decided by the Damage → HP implementation slice: `apply_damage_applied_v1`
+(§3.19) is a plain function, not a generic interface or registry.
 
 #### Resolver ≠ State application
 
 A resolver is responsible for the gameplay decision; State application is
 responsible for the deterministic projection of an already-resolved Event.
 
-A future Damage resolver, for example, may determine requested damage,
-effective damage, previous HP, and new HP — the full gameplay decision. If
-the resolved Event already carries that decided result (for example the new
+The implemented Damage resolver (`resolve_damage`, §3.19), for example,
+determines previous HP and new HP — the full gameplay decision, via
+`DamageResult`. Because the resolved Event already carries that decided
+result (for example the new
 `current_hp` value), State application does not recompute clamping or any
 other rule; it only projects the value the Event already carries. State
 application may perform application-side integrity validation of whether an
@@ -3384,8 +3393,13 @@ generic State Owner repository
 generic transaction coordinator
 ```
 
-No production state-mutating gameplay consumer exists yet; the first Damage
-slice must supply real evidence before any of these are reconsidered.
+`DamageHandler`/`apply_damage_applied_v1` (§3.19) is the first production
+state-mutating gameplay consumer. The post-G6A abstraction review (§3.19,
+verdict `KEEP CONCRETE`) found no stable shared mutation responsibility that
+justifies any of these abstractions, so they remain deferred. Healing is the
+next meaningful evidence checkpoint; when it exists, the shared and differing
+responsibilities of the concrete Damage and Healing implementations should be
+reviewed again.
 
 #### Exact MVP atomicity boundary
 
@@ -3421,10 +3435,13 @@ power-loss / fsync durability
 
 This subsection fixes the executable acceptance obligations that the first
 concrete Damage → HP mutation slice must demonstrate before the guarantees
-above stop being conceptual. It concretizes the decision already recorded in
-DEC-0032; it is not a new architectural decision. It does not fix the exact
-`DamageCommand`/`DamageApplied` Event payload schema and does not decide
-Damage mechanics — see the G6a boundary below.
+above stop being conceptual; §3.19 records that the implemented
+`DamageHandler`/`apply_damage_applied_v1` slice satisfies them. It
+concretizes the decision already recorded in DEC-0032; it is not a new
+architectural decision. This subsection itself did not fix the exact
+`ApplyDamageCommand`/`DamageApplied` Event payload schema — that schema is
+fixed by §3.19/DEC-0033 — and it does not decide broader Damage mechanics;
+see the G6a boundary below.
 
 **A. Domain — concrete State transition.** The first concrete Damage → HP
 Event application must demonstrate:
@@ -3445,8 +3462,8 @@ This does not require a generic `EventApplier` interface, Protocol, or
 registry; the exact Python shape of the first concrete application step is
 decided at implementation time, per "Event → State contract" above.
 
-**B. Application orchestration.** The future mutating Application handler
-must demonstrate:
+**B. Application orchestration.** The mutating Application handler
+(`DamageHandler`, §3.19) must demonstrate:
 
 ```text
 the object graph returned by StateStore.load() is not mutated
@@ -3483,14 +3500,14 @@ StateStore's Protocol still exposes exactly load()/save()
 StateSnapshot's schema is not extended solely to support the mutation framework
 ```
 
-**G6a boundary.** The first consumer after this foundation is a minimal
-`Damage → current_hp` evidence slice (tracked in `docs/ROADMAP.md` as
-`Damage`/`HP`). Fixing the acceptance obligations above does not fix, and does
-not imply a decision on:
+**G6a boundary.** The first consumer after this foundation is the minimal
+`Damage → current_hp` evidence slice implemented in §3.19 (tracked in
+`docs/ROADMAP.md` as `Damage`/`HP`). §3.19/DEC-0033 fix the exact
+`ApplyDamageCommand`/`ApplyDamagePayload` schema and the exact `DamageApplied`
+V1 Event payload. Satisfying the acceptance obligations above did not,
+however, fix or imply a decision on:
 
 ```text
-DamageCommand exact schema
-exact DamageApplied Event payload
 resistances
 vulnerabilities
 immunities
@@ -3504,9 +3521,210 @@ generic Effects
 generic modifier pipeline
 ```
 
-These stay open for the Damage → HP implementation slice itself,
-evidence-driven, per the existing §3.6 rule against introducing future-phase
-abstractions ahead of a concrete consumer.
+These stay open, evidence-driven, per the existing §3.6 rule against
+introducing future-phase abstractions ahead of a concrete consumer; §3.19
+names Healing as the next evidence checkpoint.
+
+---
+
+### 3.19. Minimal Damage → HP mutation vertical slice (G6A)
+
+Implementation status: **Implemented.** This section documents the first
+concrete instance of the §3.18 State Mutation Foundation contract: a direct,
+already-resolved Damage amount applied to one existing `CreatureState`'s
+`current_hp`, persisted through `StateStore.save()`. It supersedes no
+guarantee in §3.18; it records which of §3.18's obligations this slice
+actually discharges and which remain conceptual for future consumers.
+
+#### Scope
+
+```text
+direct, already-resolved positive Damage amount (int >= 1)
+one existing CreatureState target
+CreatureState.current_hp only
+floor at zero
+exactly one DamageApplied V1 Event
+replacement State (CreatureState, creatures tuple, StateSnapshot)
+exactly one StateStore.save() call on the successful path
+```
+
+#### Explicit exclusions
+
+This slice does not implement, and does not imply a decision on:
+
+```text
+Attack → Damage orchestration
+weapon damage roll
+critical damage
+DamageType mechanics
+resistance / immunity / vulnerability
+temporary HP
+death / unconscious state
+healing
+conditions
+EventStore
+Event replay
+```
+
+These stay open for a later, separately evidenced slice, per §3.6/§3.18's
+rule against introducing future-phase behaviour ahead of a concrete consumer.
+
+#### Command contract
+
+```text
+ApplyDamageCommand(command_id, campaign_id, actor_id, payload)
+ApplyDamagePayload(target_id: str, amount: int)
+```
+
+`amount` is an exact `int >= 1`; there is no `new_hp`, `damage_type`,
+`weapon_id`, `attack_id`, `critical`, `source`, or `rolls` field. `amount` is
+already the fully resolved damage amount to apply — this Command carries no
+weapon roll, no modifier calculation, and no `DamageType`.
+
+This is the same Command Envelope shape used by every other Phase 2 Command
+(§3.3, §9.1): a boundary-validated, typed, immutable dataclass. It is
+currently only an internal/Application-level intent consumed directly by
+`DamageHandler` (§2.2) — it is not, by virtue of existing, a promise of an
+external API surface, a public HTTP endpoint, or an AI-facing tool call.
+Those remain separate, evidence-driven decisions for a later phase.
+
+#### `DamageResult`
+
+```text
+DamageResult(target_id: str, amount: int, previous_hp: int, new_hp: int)
+```
+
+`DamageResult` independently enforces the field types, `amount >= 1`,
+`previous_hp >= 0`, and the canonical formula invariant:
+
+```text
+new_hp == max(0, previous_hp - amount)
+```
+
+`resolve_damage(command, target) -> DamageResult` is a pure function: it does
+not mutate `target`, does not call `DiceEngine`, does not load a Definition,
+and performs no I/O. Target/actor lookup is an Application-handler concern
+(`DamageHandler`), not a resolver concern, per §3.18's "Resolver ≠ State
+application" split.
+
+#### `DamageApplied` V1
+
+Canonical payload, written exactly as:
+
+```text
+targetId
+amount
+previousHp
+newHp
+```
+
+No `damageType`, `weaponId`, `attackId`, `critical`, `overkill`,
+`effectiveHpLoss`, `condition`, or `stateChanges` field exists on this
+payload. The Event carries the complete already-resolved transition —
+`previousHp` and `newHp` both — so that State application (below) never has
+to recompute the clamp; the builder (`build_damage_applied_v1`) copies these
+fields verbatim from the already-validated `DamageResult` and does not
+re-derive the `max(0, previous_hp - amount)` formula itself. That formula
+invariant is owned exclusively by `DamageResult`.
+
+#### State application
+
+Concrete boundary, per §3.18's "Event → State contract":
+
+```text
+CreatureState + DamageApplied V1 → replacement CreatureState
+```
+
+`apply_damage_applied_v1(creature, event) -> CreatureState` requires
+`event.type == "DamageApplied"`, `event.version == 1`, the exact four-key
+payload shape, `payload.targetId == creature.id`, and
+`payload.previousHp == creature.current_hp`; it then returns
+`dataclasses.replace(creature, current_hp=payload.newHp)`. It takes the
+already-resolved `newHp` verbatim — it does not recompute the clamp, does not
+call `DiceEngine`, does not call `DefinitionSource`, performs no persistence
+I/O, reads no clock, allocates no Event ID, and produces no new authoritative
+Event.
+
+Application (`DamageHandler`) then builds the replacement `creatures` tuple
+by substituting the replacement `CreatureState` for the original by stable
+Creature ID (matching `creature.id == target.id`), and builds a replacement
+`StateSnapshot` reusing the loaded `CampaignState`
+and `characters` tuple unchanged. Only `CreatureState.current_hp` changes for
+this transition; `id`, `definition_id`, `ability_scores`, and `max_hp` are
+preserved, per §3.18's declared Damage → HP write scope.
+
+#### Errors
+
+```text
+missing actor CreatureState  → EngineError(code=ENTITY_NOT_FOUND, entity_id=actor_id)
+missing target CreatureState → EngineError(code=ENTITY_NOT_FOUND, entity_id=target_id, field="target_id")
+intrinsic malformed Command/Result (wrong type, amount < 1, formula mismatch) → TypeError / ValueError at construction
+Event/State integrity mismatch (wrong target, previousHp mismatch, wrong type/version, malformed payload) → propagating TypeError / ValueError, not a gameplay EngineError
+StateStore.save() failure → propagates unmodified through the existing StateStoreError boundary (§12.9)
+```
+
+No new `ErrorCode` value was introduced. An Event/State integrity mismatch is
+an application-integrity/programming-state failure, not a gameplay outcome,
+so this concrete slice lets the `TypeError`/`ValueError` propagate instead of
+converting it to `ResolutionResult(success=False, ...)`. This is a separate
+concern from `StateStore` failures: a `StateStore.save()` failure is an
+Infrastructure boundary failure governed by §3.18's "Save failure semantics"
+and §12.9, not an Event/State integrity mismatch.
+
+#### Zero HP and the replay limitation
+
+A target already at `current_hp = 0` receiving a positive `amount` resolves
+to a successful `0 → 0` transition: `DamageResult(previous_hp=0, new_hp=0)`
+and a `DamageApplied` Event with `previousHp = 0, newHp = 0` are produced and
+persisted normally. No death/unconscious semantics exist yet, so this is
+ordinary accepted input.
+
+`previousHp` protects **state-changing** transitions from stale/repeated
+application: re-applying a `DamageApplied` Event whose `previousHp` no longer
+matches the target's current `current_hp` (for example, a already-applied
+`7 → 4` Event re-applied to a Creature that is already at `4`) is rejected by
+`apply_damage_applied_v1` with a `ValueError`. But a **no-op** `0 → 0`
+transition cannot be distinguished this way: applying the same `0 → 0` Event
+twice succeeds twice, because `previousHp == 0 == creature.current_hp` holds
+both times. This is a documented, narrow limitation, not a bug: duplicate/
+replay detection for a no-op transition needs a deferred revision/idempotency/
+replay mechanism (§3.18 "Exact MVP atomicity boundary" already excludes
+replay, State revision/CAS, and exactly-once execution). This slice does not
+describe itself as providing an exactly-once guarantee.
+
+#### Persistence
+
+The persisted `StateSnapshot` remains the sole authoritative persisted
+representation of campaign State, per §3.18's "Snapshot-authoritative MVP".
+The in-memory `DamageApplied` Event returned on `ResolutionResult.events` is
+a non-durable runtime Domain fact: it is not appended to any file, there is
+no `events.jsonl` write, and no `EventStore` exists. `StateStore` remains
+exactly `load()`/`save()` (§12.9); `DamageHandler` calls `save()` exactly once
+on the successful path, after `DamageApplied` has already been built and
+applied, and only then returns a successful `ResolutionResult` — matching
+§3.18's canonical persistence ordering and its "return success, save later"
+prohibition.
+
+#### Abstraction verdict (post-implementation)
+
+Reviewed after Groups 1–3 landed this slice's production code
+(`ApplyDamageCommand`, `DamageResult`/`resolve_damage`, `DamageApplied` V1,
+`apply_damage_applied_v1`, `DamageHandler`): **KEEP CONCRETE.** This
+post-G6A abstraction review found no stable shared mutation responsibility
+that justifies a generic Event applier, `WorkingState`, a Creature
+replacement helper, `UnitOfWork`, a transaction coordinator, `state_changes`,
+or generic handler orchestration, so they remain deferred — the existing
+§3.6/§3.18 deferred-abstraction lists stand unchanged, and none of them
+gained a production implementation. A repeated shape across `DamageHandler`
+and the four existing read-only handlers (load snapshot, look up
+actor/target, resolve, build Event, return `ResolutionResult`) is surface
+similarity, not evidence: the mutating handler's Event-application and
+persistence steps have no counterpart in any read-only handler. **Healing is
+the next meaningful evidence checkpoint**: it is the first expected
+HP-mutating use case with materially related but different semantics
+(`current_hp` moving in the opposite direction, clamped at `max_hp` instead
+of `0`); when it exists, the shared and differing responsibilities of the
+concrete Damage and Healing implementations should be reviewed again.
 
 ---
 
