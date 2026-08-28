@@ -1,6 +1,6 @@
 # AI D&D Master — текущая схема потока данных
 
-> Состояние сверено с `redbull101020/ai-dnd-master`, ветка `main`, commit `bf1eb65cc60d551f406147697b39d9256b6237cf` (2026-08-27).
+> Состояние сверено с `redbull101020/ai-dnd-master`, ветка `feat/g6b-minimal-healing-hp`, commit `ff68523c042912cbc4f469d4fd3eeb68d79a19b4` (2026-08-28).
 >
 > Канонический источник контрактов проекта: `docs/ARCHITECTURE.md`.
 
@@ -92,8 +92,8 @@ flowchart TD
     EVT["GameEvent(s)"]
     META["EventMetadataProvider"]
 
-    APPLY["State Owner / Event projection<br/>planned for mutating actions"]
-    ELOG["EventStore / events.jsonl<br/>planned"]
+    APPLY["State Owner / Event projection<br/>Damage + Healing implemented"]
+    ELOG["EventStore / events.jsonl<br/>deferred"]
     SAVE["Persist updated State"]
 
     RR["ResolutionResult"]
@@ -150,6 +150,12 @@ flowchart TD
 
 `Application Handler` является оркестратором конкретного игрового действия. Уже существующие handlers сами загружают нужный `StateSnapshot` через `StateStore`, находят нужные сущности, вызывают Domain resolver и собирают `ResolutionResult`.
 
+Read-only handlers на этом заканчиваются. `DamageHandler` и
+`HealingHandler` дополнительно применяют свой concrete V1 Event к
+`CreatureState`, строят replacement `StateSnapshot` и вызывают
+`StateStore.save()` до возврата success. Durable EventStore в этом
+текущем пути нет.
+
 Поэтому более точная формулировка будущей интеграции с БД:
 
 ```text
@@ -184,7 +190,7 @@ Events → State Owner / projection → updated StateSnapshot → StateStore.sav
 | StateStore | persistence boundary для snapshot | campaign ID / `StateSnapshot` | `StateSnapshot` / сохранение | Хранит результат, но не принимает rule decisions |
 | GameEvent | immutable факт произошедшего | outcome + metadata | Event envelope | Сам ничего не мутирует |
 | State Owner / projection | единственное разрешённое применение Event к принадлежащему State | Event + current State | new/updated State | Да |
-| EventStore | durable ordered history | Event | persisted Event stream | Нет; только хранение истории |
+| EventStore (deferred) | durable ordered history | Event | persisted Event stream | Нет; только хранение истории |
 | ResolutionResult | результат обработки одной Command | outcome + events/errors | объект результата | Нет |
 | AI Context Projection | формирует минимальный контекст для AI | Result / Events / разрешённый State | AI context | Нет |
 | LLMProvider | intent interpretation / NPC behavior / narration | AI request/context | structured output или narration | Нет |
@@ -361,7 +367,10 @@ AbilityCheckCommand
 src/dnd_engine/domain/commands/
 ├── ability_check.py
 ├── saving_throw.py
-└── skill_check.py
+├── skill_check.py
+├── attack.py
+├── damage.py
+└── healing.py
 ```
 
 Command **не означает успех действия**. Он только выражает запрос выполнить действие по правилам.
@@ -453,6 +462,13 @@ canonical JSON Event envelope
 ```text
 src/dnd_engine/infrastructure/persistence/json/event_serializer.py
 ```
+
+Текущие gameplay Event types включают read-only
+`AbilityCheckResolved` V2, `SavingThrowResolved` V1, `SkillCheckResolved` V1,
+`AttackResolved` V1 и mutating `DamageApplied` V1 / `HealingApplied` V1.
+Generic serializer умеет преобразовать `GameEvent` в JSON и обратно,
+но runtime EventStore отсутствует, поэтому эти Events не
+записываются в durable history.
 
 ---
 
@@ -576,51 +592,38 @@ StateStore.save(...)
 
 ---
 
-## 6. Как будет выглядеть state-mutating действие
+## 6. Текущий state-mutating поток
 
-Например, будущая атака с уроном должна логически пройти так:
+Два minimal direct HP-mutation use case уже реализованы:
 
 ```mermaid
 flowchart LR
-    C["AttackCommand"]
-    H["Attack Handler"]
-    S["Load State"]
-    D["Load Definitions"]
-    R["Attack / Damage Rules"]
-    X["DiceEngine"]
-    E["Events"]
-    P["State Owner applies Events"]
-    ES["Append Event Log"]
-    SS["Save StateSnapshot"]
-    RR["ResolutionResult"]
-    AI["AI Narration"]
+    C["ApplyDamageCommand /<br/>ApplyHealingCommand"]
+    H["DamageHandler /<br/>HealingHandler"]
+    S["StateStore.load"]
+    R["resolve_damage /<br/>resolve_healing"]
+    E["DamageApplied V1 /<br/>HealingApplied V1"]
+    P["Concrete CreatureState<br/>Event applier"]
+    RS["Replacement StateSnapshot"]
+    SS["StateStore.save"]
+    RR["Successful ResolutionResult"]
 
     C --> H
     H --> S
-    H --> D
     S --> R
-    D --> R
-    R --> X
-    X --> R
     R --> E
     E --> P
-    E --> ES
-    P --> SS
-    E --> RR
-    RR --> AI
+    P --> RS
+    RS --> SS
+    SS --> RR
 ```
 
-Пример логической последовательности Events:
-
-```text
-AttackResolved
-    ↓
-AttackHit
-    ↓
-DamageApplied
-    ↓
-CreatureDefeated        # если HP дошёл до 0
-```
+Damage вычитает уже разрешённый amount и ограничивает
+`current_hp` нулём. Healing добавляет уже разрешённый amount и
+ограничивает его authoritative `max_hp`. Оба resolver'а остаются
+pure, а concrete Event applier проецирует уже рассчитанный `newHp`
+без повтора gameplay-формулы. Меняется только
+`CreatureState.current_hp`; loaded snapshot не мутируется.
 
 При этом Rule resolver не делает:
 
@@ -632,7 +635,11 @@ state.current_hp -= damage
 
 Authoritative mutation выполняет соответствующий State Owner при применении уже рассчитанных Events.
 
-**Важно:** полный runtime EventStore, ordered append и deterministic Event → State projection пока не реализованы. Они зафиксированы архитектурой как следующий необходимый механизм для mutating actions.
+**Важно:** concrete deterministic Event → `CreatureState` projections
+реализованы только для Damage и Healing. Generic Event dispatch/reducer,
+runtime EventStore, ordered append и replay остаются deferred. Текущий
+authoritative persisted representation — snapshot в `state.json`; returned Events
+остаются in-memory Domain facts и не образуют durable history.
 
 ---
 
@@ -741,6 +748,12 @@ json.dumps
     ↓
 atomic replace state.json
 ```
+
+`DamageHandler` и `HealingHandler` уже используют этот `save()` для
+replacement snapshot после concrete Event application. Поэтому
+`state.json` — текущее authoritative persisted State. Созданные
+`DamageApplied`/`HealingApplied` возвращаются в `ResolutionResult`,
+но не дописываются в `events/events.jsonl`.
 
 ### Позже
 
@@ -942,7 +955,10 @@ src/dnd_engine/
 │   ├── handlers/
 │   │   ├── ability_check.py
 │   │   ├── saving_throw.py
-│   │   └── skill_check.py
+│   │   ├── skill_check.py
+│   │   ├── attack.py
+│   │   ├── damage.py
+│   │   └── healing.py
 │   └── services/
 │       └── event_metadata.py
 │
@@ -950,7 +966,10 @@ src/dnd_engine/
 │   ├── commands/
 │   │   ├── ability_check.py
 │   │   ├── saving_throw.py
-│   │   └── skill_check.py
+│   │   ├── skill_check.py
+│   │   ├── attack.py
+│   │   ├── damage.py
+│   │   └── healing.py
 │   │
 │   ├── definitions/
 │   │   └── ... ItemDefinition / WeaponDefinition / MonsterDefinition
@@ -965,7 +984,10 @@ src/dnd_engine/
 │   │   ├── game_event.py
 │   │   ├── ability_check.py
 │   │   ├── saving_throw.py
-│   │   └── skill_check.py
+│   │   ├── skill_check.py
+│   │   ├── attack.py
+│   │   ├── damage.py
+│   │   └── healing.py
 │   │
 │   ├── rules/
 │   │   ├── ability.py
@@ -974,7 +996,10 @@ src/dnd_engine/
 │   │   ├── d20.py
 │   │   ├── proficiency.py
 │   │   ├── saving_throw.py
-│   │   └── skill_check.py
+│   │   ├── skill_check.py
+│   │   ├── attack.py
+│   │   ├── damage.py
+│   │   └── healing.py
 │   │
 │   ├── services/
 │   │   ├── state_store.py                    # StateStore port
@@ -1026,21 +1051,24 @@ src/dnd_engine/
 | Saving Throw read-only flow | Реализовано в коде и Architecture |
 | Skill Check read-only flow | Реализовано в коде и Architecture |
 | AC minimal rules | Реализовано |
+| Character unarmed Attack Roll → Monster read-only flow | Реализовано; Damage/HP не применяет |
+| Direct Damage → HP mutation | Реализовано: `ApplyDamageCommand → DamageApplied` V1 → replacement snapshot → `StateStore.save()` |
+| Direct Healing → HP mutation | Реализовано: `ApplyHealingCommand → HealingApplied` V1 → replacement snapshot → `StateStore.save()` |
 | Generic `GameEngine.execute(...)` | Намеренно не реализован |
 | FastAPI routes / WebSocket | Не реализовано; Phase 7 |
 | LLM provider integration | Не реализовано; Phase 6 |
 | Natural language → Commands | Не реализовано; Phase 6 |
 | AI Context Projection | Не реализовано; Phase 6 |
 | Runtime EventStore / ordered Event append | Не реализовано |
-| Deterministic Event → State projection | Не реализовано |
-| First authoritative state-mutating Command pipeline | Ещё не реализован |
+| Deterministic Event → State projection | Concrete Damage и Healing projections реализованы; generic dispatch/replay deferred |
+| Authoritative state-mutating Command pipeline | Два concrete consumer реализованы по §3.18; generic mutation framework не введён |
 | SQLite/PostgreSQL adapters | Не реализовано |
 
 ### Небольшое расхождение статуса Roadmap
 
 В текущем `docs/ROADMAP.md` пункты `Proficiency`, `Saving throws` и `Skills` всё ещё не отмечены галочками, хотя actual code, README и `docs/ARCHITECTURE.md` уже содержат proficiency foundation и read-only Saving Throw / Skill Check vertical slices.
 
-Для описания архитектуры выше использованы канонический `ARCHITECTURE.md` и фактический код текущего `main`; checkbox-состояние Roadmap здесь следует считать отдельным status/documentation drift, а не альтернативной архитектурой.
+Для описания архитектуры выше использованы канонический `ARCHITECTURE.md` и фактический код зафиксированного в header commit. Checkbox-состояние Roadmap имеет более широкую гранулярность: minimal Damage/Healing slices не закрывают broad `HP`, `Damage` и `Healing`.
 
 ---
 
@@ -1161,7 +1189,7 @@ Events фиксируют факты.
         ↓
 State Owners применяют факты к authoritative State.
         ↓
-Persistence сохраняет State и историю Events.
+StateStore сохраняет authoritative snapshot; durable Event history deferred.
         ↓
 AI получает только результат и разрешённый контекст.
         ↓

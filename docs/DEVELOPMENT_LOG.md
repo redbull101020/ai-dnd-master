@@ -2963,3 +2963,121 @@ contracts.
 - `review.patch` was regenerated a fourth time (`git diff > review.patch`)
   reflecting this sweep. Not committed, not pushed, no pull request opened,
   no merge.
+
+## 2026-08-28 — G6B Group 1 minimal Healing Domain contract
+
+- Added immutable `ApplyHealingPayload` / `ApplyHealingCommand` Domain values
+  for an already-resolved positive direct-healing amount and a fixed
+  `ApplyHealingCommand` type.
+- Added immutable `HealingResult` with exact runtime type/range validation and
+  the intrinsic `new_hp == min(max_hp, previous_hp + amount)` invariant.
+- Added pure deterministic `resolve_healing(command, target)`, including
+  concrete input checks and target identity validation; it reads but does not
+  mutate `CreatureState`.
+- Added focused Domain tests for command validation, all required healing
+  boundary semantics, result invariants, determinism, and observational
+  non-mutation.
+- This Group 1 slice adds no Healing Event, Event applier, Application handler,
+  persistence, State schema change, shared HP abstraction, or dependency, and
+  does not mark G6B complete.
+
+## 2026-08-28 — G6B Group 2 HealingApplied V1 and Creature applier
+
+- Added the immutable concrete `HealingApplied` V1 Event builder with the exact
+  `targetId`, `amount`, `previousHp`, `maxHp`, and `newHp` payload copied from
+  the validated `HealingResult`.
+- Added the concrete Creature-level `apply_healing_applied_v1` transition with
+  exact Event type/version/payload decoding, target/current-HP/max-HP integrity
+  checks, and replacement construction through `dataclasses.replace`.
+- Kept the Healing formula in the Group 1 resolver/`HealingResult`; the Event
+  builder and applier neither recalculate nor decide gameplay semantics.
+- Added focused Event, generic serializer round-trip, replacement, malformed
+  payload, integrity, no-op/replay-limitation, and forbidden-dependency tests.
+- This Group 2 slice adds no Application handler, StateSnapshot orchestration,
+  persistence, generic Event applier, shared HP helper, or dependency, and does
+  not mark G6B complete.
+
+## 2026-08-28 — G6B Group 3 HealingHandler and snapshot persistence
+
+- Added the concrete `HealingHandler` with the existing Damage sibling's
+  Creature actor/target lookup semantics and the ordered `load → resolve →
+  metadata → HealingApplied → apply → replacement snapshot → save → success`
+  lifecycle.
+- Kept loaded State read-only and constructed a replacement target, creatures
+  tuple, and `StateSnapshot`; campaign, Character projections, unrelated
+  Creatures, and tuple ordering remain unchanged.
+- Preserved the full-HP positive-healing no-op lifecycle: it still creates a
+  `HealingApplied` V1 Event, a replacement target/snapshot, calls
+  `StateStore.save()` exactly once, and only then returns success.
+- Preserved the existing metadata/applier/save failure boundaries: failures
+  propagate, no successful result is returned, and no retry, rollback, Event
+  persistence, or metadata-ID reuse is introduced.
+- Added focused Application tests and real-`FilesystemStateStore` integration
+  tests for normal `7 / 20 + 8 → 15 / 20` and capped
+  `18 / 20 + 10 → 20 / 20` persistence, including reload and artifact checks.
+- Verified the focused Healing suite (`111 passed`), Damage mutation
+  regressions (`92 passed`), the full suite (`1008 passed`), and configured
+  mypy (`Success: no issues found in 80 source files`).
+- This Group 3 slice adds no generic mutation abstraction, EventStore,
+  `state_changes`, transaction/replay/concurrency mechanism, StateStore or
+  StateSnapshot schema change, state schema-version change, or dependency; it
+  does not update the canonical G6B architecture/decision documentation.
+
+## 2026-08-28 — G6B Group 4 canonical contract and abstraction review
+
+- Reviewed the committed Damage and Healing Commands, resolvers/results,
+  Events, Creature appliers, handlers, and tests as two concrete authoritative
+  HP mutation consumers; no production Python changed in this group.
+- Compared ten candidates explicitly: shared current-HP transition,
+  replacement-Creature and snapshot helpers, stale-state/integrity helper,
+  generic Event applier and mutation handler, `WorkingState`,
+  `UnitOfWork`/`TransactionManager`, `ResolutionResult.state_changes`, and
+  `EventApplierRegistry`/generic reducer.
+- Recorded the overall verdict `KEEP CONCRETE`: Damage and Healing retain
+  different gameplay formulas, Healing additionally depends on authoritative
+  `max_hp`/`maxHp`, the remaining overlap is mostly syntax/sequencing, no third
+  mutation consumer exists, and the proposed indirection removes little or no
+  current complexity.
+- Added canonical §3.20, "Minimal Healing → HP mutation vertical slice
+  (G6B)", including exact Command/Result/Event/applier/handler contracts,
+  source-agnostic amount semantics, zero-HP/full-HP behavior, persistence and
+  failure ordering, no-op replay limitation, and the detailed abstraction
+  matrix; synchronized §3.18, §3.19, quick lookup, and table of contents.
+- Appended DEC-0034 with the G6B rationale and post-G6B abstraction decision,
+  and synchronized the deliberately duplicated implemented/deferred summary
+  in `CLAUDE.md`.
+- Left broad Roadmap `HP`, `Damage`, and `Healing` checkboxes unchanged and
+  introduced no EventStore, `state_changes`, transaction/replay framework,
+  schema/version change, production dependency, or generic mutation helper.
+- Verified all architecture tests (`7 passed`), including documentation
+  references, and checked the new §3.20 heading against its quick-lookup/TOC
+  anchor.
+
+## 2026-08-28 — G6B Group 5 documentation/status synchronization
+
+- Committed and pushed the separately reviewed Group 4 canonical-contract
+  changes as `ff68523c042912cbc4f469d4fd3eeb68d79a19b4` before starting this
+  documentation-only group.
+- Synchronized Phase 2 status in `docs/ROADMAP.md`, the project overview in
+  `README.md`, and `AI_DND_DATA_FLOW_CURRENT.md` with the implemented minimal
+  `ApplyDamageCommand` and `ApplyHealingCommand` mutation paths. The current
+  persisted authority remains the replacement `StateSnapshot` saved through
+  `StateStore`; runtime EventStore, durable Event history, and replay remain
+  deferred.
+- Confirmed that the Group 4 `CLAUDE.md` summary already names G6B §3.20,
+  `HealingApplied` V1, the Healing mutation path, full-HP no-op semantics, the
+  post-G6B `KEEP CONCRETE` verdict, and the remaining deferred abstractions;
+  no additional Group 5 edit was needed there.
+- Intentionally left the broad Roadmap `HP`, `Damage`, and `Healing`
+  checkboxes open: the direct slices do not implement healing
+  sources/resources, spells/items/potions, temporary HP,
+  death/unconscious/death saves, broader HP lifecycle, Attack → Damage,
+  resistance/immunity/vulnerability, or Conditions.
+- Verified on Python 3.12.13 / pytest 9.1.1: the six-file narrow Healing suite
+  passed (`111 passed`), the six-file Damage mutation regression suite passed
+  (`92 passed`), and the full suite passed (`1008 passed`) with pip cache
+  disabled for the isolated wheel-build tests. The configured mypy check
+  passed (`Success: no issues found in 80 source files`).
+- Introduced no production Python change, dependency, State schema/version
+  change, EventStore, runtime `events.jsonl` artifact, `state_changes` field,
+  generic mutation framework, or direct AI/API State mutation.

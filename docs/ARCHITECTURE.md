@@ -55,6 +55,7 @@
 | Character unarmed Attack Roll → Monster vertical slice | §3.17 |
 | State Mutation Foundation (G5, mutating Command contract) | §3.18 |
 | Minimal Damage → HP mutation slice (G6A, `ApplyDamage`) | §3.19 |
+| Minimal Healing → HP mutation slice (G6B, `ApplyHealing`) | §3.20 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -108,6 +109,7 @@
   * [3.17. Minimal Phase 2 Character unarmed Attack Roll → Monster vertical slice](#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice)
   * [3.18. State Mutation Foundation (G5)](#318-state-mutation-foundation-g5)
   * [3.19. Minimal Damage → HP mutation vertical slice (G6A)](#319-minimal-damage--hp-mutation-vertical-slice-g6a)
+  * [3.20. Minimal Healing → HP mutation vertical slice (G6B)](#320-minimal-healing--hp-mutation-vertical-slice-g6b)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -3127,18 +3129,15 @@ Character Skill Check production contracts remain unchanged.
 
 ### 3.18. State Mutation Foundation (G5)
 
-Implementation status: **Canonical foundation contract; first concrete
-consumer implemented in §3.19.** This section itself introduces no concrete
-Command, Event applier, or Application handler and changes no Python
+Implementation status: **Canonical foundation contract; two concrete
+consumers implemented in §§3.19–3.20.** This section itself introduced no
+concrete Command, Event applier, or Application handler and changed no Python
 contract — it fixes the general contract that every authoritative
 state-mutating Command must follow. §3.19 documents the first concrete
-realization of that contract: `ApplyDamageCommand`,
-`resolve_damage`/`DamageResult`, `DamageApplied` V1,
-`apply_damage_applied_v1`, and `DamageHandler` — the first production
-gameplay mutation path that calls `StateStore.save()`. Where this section
-originally left the exact shape of that first consumer open, §3.19 is the
-concrete choice that was made — this section introduced no generic
-abstraction itself.
+realization, Damage → HP; §3.20 documents the second, Healing → HP. Both use
+State Owner-specific Event application and a replacement `StateSnapshot`
+before `StateStore.save()`, and neither introduces a generic mutation
+abstraction.
 
 This section is the "separate State Mutation Foundation decision" that §3.8
 Atomicity deferred to. It fixes the mutating-command lifecycle, mutation
@@ -3224,8 +3223,8 @@ Python mutability of a State object is not a license for every transition to
 change every field. Each concrete State Owner transition has its own explicit
 mutation scope, reviewed alongside its Event contract (§10.4, §10.15).
 
-For the Damage → HP consumer (§3.19), this scope was fixed ahead of
-implementation, and the implemented applier respects exactly this target:
+For both implemented HP consumers (§§3.19–3.20), the transition-specific
+write scope is:
 
 ```text
 may change:
@@ -3238,7 +3237,10 @@ must be preserved:
     CreatureState.max_hp
 ```
 
-This fixes only the Damage → HP scope. `max_hp`, `ability_scores`, and other
+Healing additionally reads authoritative `max_hp`, records it as `maxHp`, and
+checks it during Event application, but still changes only `current_hp`.
+This fixes only the implemented Damage/Healing → HP scopes. `max_hp`,
+`ability_scores`, and other
 `CreatureState`/`CharacterState` fields are not declared globally immutable:
 a different future Creature transition (for example levelling, or a future
 `max_hp` change) may be granted its own write scope through its own design,
@@ -3393,13 +3395,12 @@ generic State Owner repository
 generic transaction coordinator
 ```
 
-`DamageHandler`/`apply_damage_applied_v1` (§3.19) is the first production
-state-mutating gameplay consumer. The post-G6A abstraction review (§3.19,
-verdict `KEEP CONCRETE`) found no stable shared mutation responsibility that
-justifies any of these abstractions, so they remain deferred. Healing is the
-next meaningful evidence checkpoint; when it exists, the shared and differing
-responsibilities of the concrete Damage and Healing implementations should be
-reviewed again.
+`DamageHandler`/`apply_damage_applied_v1` (§3.19) and
+`HealingHandler`/`apply_healing_applied_v1` (§3.20) are the two production
+state-mutating gameplay consumers. The post-G6B comparison in §3.20 reviewed
+their actual shared and differing responsibilities and retained the verdict
+`KEEP CONCRETE`; none of the deferred abstractions above gained a production
+implementation.
 
 #### Exact MVP atomicity boundary
 
@@ -3500,12 +3501,14 @@ StateStore's Protocol still exposes exactly load()/save()
 StateSnapshot's schema is not extended solely to support the mutation framework
 ```
 
-**G6a boundary.** The first consumer after this foundation is the minimal
+**G6A/G6B boundary.** The first consumer after this foundation is the minimal
 `Damage → current_hp` evidence slice implemented in §3.19 (tracked in
 `docs/ROADMAP.md` as `Damage`/`HP`). §3.19/DEC-0033 fix the exact
 `ApplyDamageCommand`/`ApplyDamagePayload` schema and the exact `DamageApplied`
-V1 Event payload. Satisfying the acceptance obligations above did not,
-however, fix or imply a decision on:
+V1 Event payload. The second consumer is the minimal Healing → `current_hp`
+slice implemented in §3.20; §3.20/DEC-0034 fix its exact contracts and record
+the post-G6B abstraction review. These two slices still do not fix or imply a
+decision on:
 
 ```text
 resistances
@@ -3513,7 +3516,6 @@ vulnerabilities
 immunities
 temporary HP
 unconscious/death
-healing
 critical damage
 equipment
 Attack → Damage orchestration
@@ -3522,8 +3524,7 @@ generic modifier pipeline
 ```
 
 These stay open, evidence-driven, per the existing §3.6 rule against
-introducing future-phase abstractions ahead of a concrete consumer; §3.19
-names Healing as the next evidence checkpoint.
+introducing future-phase abstractions ahead of a concrete consumer.
 
 ---
 
@@ -3719,12 +3720,207 @@ gained a production implementation. A repeated shape across `DamageHandler`
 and the four existing read-only handlers (load snapshot, look up
 actor/target, resolve, build Event, return `ResolutionResult`) is surface
 similarity, not evidence: the mutating handler's Event-application and
-persistence steps have no counterpart in any read-only handler. **Healing is
-the next meaningful evidence checkpoint**: it is the first expected
-HP-mutating use case with materially related but different semantics
-(`current_hp` moving in the opposite direction, clamped at `max_hp` instead
-of `0`); when it exists, the shared and differing responsibilities of the
-concrete Damage and Healing implementations should be reviewed again.
+persistence steps have no counterpart in any read-only handler. Healing was
+therefore selected as the next evidence checkpoint. That consumer now exists
+in §3.20, whose post-G6B review compares both concrete implementations and
+retains `KEEP CONCRETE` without revising the G6A contracts above.
+
+---
+
+### 3.20. Minimal Healing → HP mutation vertical slice (G6B)
+
+Implementation status: **Implemented.** This section documents the second
+concrete instance of §3.18: a direct, already-resolved, source-agnostic
+Healing amount applied to one existing `CreatureState.current_hp`, persisted
+through `StateStore.save()`. It does not broaden Healing into spells, items,
+resources, conditions, or any other source mechanic.
+
+#### Scope
+
+```text
+direct, already-resolved positive Healing amount (int >= 1)
+one existing CreatureState target
+CreatureState.current_hp only
+cap at authoritative CreatureState.max_hp
+zero-HP Healing allowed
+full-HP Healing is a successful no-op
+exactly one HealingApplied V1 Event
+replacement State (CreatureState, creatures tuple, StateSnapshot)
+exactly one StateStore.save() call on the successful path
+```
+
+The Command's `actor_id` and `payload.target_id` are both resolved as
+`CreatureState` values from `StateSnapshot.creatures`, matching the G6A
+Damage actor/target policy. Actor and target may be the same Creature. A
+separate `CharacterState` projection is not required by this slice.
+
+#### Explicit exclusions
+
+This slice does not introduce or decide:
+
+```text
+spell, item, feature, or rest source semantics
+healing dice or modifiers
+resource consumption
+temporary HP
+death / unconscious recovery rules
+conditions or effects
+maximum-HP mutation
+Definition lookup
+EventStore or Event replay
+UnitOfWork / transaction coordination
+generic mutation or Event-application framework
+```
+
+#### Command and result contracts
+
+```text
+ApplyHealingCommand(command_id, campaign_id, actor_id, payload)
+ApplyHealingPayload(target_id: str, amount: int)
+
+HealingResult(
+    target_id: str,
+    amount: int,
+    previous_hp: int,
+    max_hp: int,
+    new_hp: int,
+)
+```
+
+`amount` is an exact `int >= 1` and is already the source-agnostic Healing
+amount to resolve. The Command has no `spell_id`, `item_id`, `source`,
+`resource`, `dice`, `applied_amount`, or caller-supplied HP endpoint.
+
+`HealingResult` owns the intrinsic gameplay invariant:
+
+```text
+new_hp == min(max_hp, previous_hp + amount)
+```
+
+It also requires `max_hp >= 1` and `0 <= previous_hp <= max_hp`.
+`resolve_healing(command, target) -> HealingResult` is pure: it reads
+`target.current_hp` and `target.max_hp`, does not mutate the target, rolls no
+dice, loads no Definition, constructs no Event, and performs no I/O. Healing
+from zero HP is valid; broader life-state consequences are outside this
+slice.
+
+#### `HealingApplied` V1
+
+Canonical payload, written with exactly these fields:
+
+```text
+targetId
+amount
+previousHp
+maxHp
+newHp
+```
+
+`amount` records the already-resolved positive Healing input, while the two
+HP endpoints record the actual transition after the cap. There is no
+`appliedAmount`: for this contract the effective HP change is already
+derivable as `newHp - previousHp`, and storing another authoritative number
+would duplicate the same fact. `maxHp` is recorded because it is mutable
+authoritative State used by the Healing decision and is required to verify
+that the resolved Event is still applicable to the supplied Creature.
+
+`build_healing_applied_v1` checks Command/outcome correlation and copies the
+validated `HealingResult` values verbatim. It does not repeat
+`min(max_hp, previous_hp + amount)` and does not decide gameplay rules.
+
+#### State application
+
+Concrete State Owner boundary:
+
+```text
+CreatureState + HealingApplied V1 → replacement CreatureState
+```
+
+`apply_healing_applied_v1(creature, event)` requires Event type
+`HealingApplied`, version `1`, the exact five-key payload, matching
+`targetId`, matching `previousHp`, and matching `maxHp`. It then projects the
+already-resolved `newHp` through `dataclasses.replace`. It neither recomputes
+the Healing formula nor performs persistence or metadata work.
+
+Only `CreatureState.current_hp` may change. `id`, `definition_id`,
+`ability_scores`, and `max_hp` are preserved. Checking `maxHp` is an
+application-integrity guard, not a second owner of the Healing rule.
+
+#### Application lifecycle, errors, and persistence
+
+`HealingHandler` follows the canonical §3.18 lifecycle:
+
+```text
+StateStore.load
+    → actor Creature lookup
+    → target Creature lookup
+    → resolve_healing
+    → EventMetadataProvider
+    → HealingApplied V1
+    → apply_healing_applied_v1
+    → replacement creatures tuple
+    → replacement StateSnapshot
+    → StateStore.save exactly once
+    → successful ResolutionResult
+```
+
+The loaded snapshot and target remain unchanged; tuple ordering is preserved;
+the Campaign and Character projections are reused unchanged. Missing actor or
+target uses the same `ENTITY_NOT_FOUND` policy as `DamageHandler` (the target
+error has `field="target_id"`). Metadata, Event-application/invariant, and
+`StateStore.save()` failures propagate and prevent a successful result.
+Success is returned only after `save()` completes. No retry, rollback,
+metadata-ID reuse, Event persistence, or schema-version change is introduced.
+
+The persisted `StateSnapshot` remains authoritative current State. The
+returned `HealingApplied` Event is an in-memory Domain fact, not durable Event
+history. `HealingHandler` neither creates nor appends the canonical
+`events/events.jsonl`; a pre-existing empty scaffold file is permitted by
+DEC-0006 and does not make the Event durable or constitute an `EventStore`.
+No production `EventStore` implementation exists.
+
+#### Full-HP no-op and replay limitation
+
+A positive Healing amount applied at `current_hp == max_hp` resolves
+successfully with `previousHp == newHp == maxHp`. The complete lifecycle is
+still executed: a `HealingApplied` Event, replacement Creature, replacement
+snapshot, and exactly one `StateStore.save()` call are all required before
+success is returned. Skipping Event creation or persistence for this no-op is
+not permitted.
+
+As with G6A's `0 → 0` Damage, `previousHp` cannot detect duplicate application
+of a no-op `maxHp → maxHp` Event, and matching `maxHp` does not distinguish it
+either. Replay/idempotency, State revision/CAS, and exactly-once Command
+execution remain outside the §3.18 MVP boundary.
+
+#### Post-G6B Damage/Healing abstraction review
+
+Consumer count is a review trigger, not a reason to abstract. The two actual
+implementations were compared after both production paths and their tests
+existed. Damage owns `max(0, previous_hp - amount)`; Healing owns
+`min(max_hp, previous_hp + amount)`, reads mutable authoritative `max_hp`, and
+correlates `maxHp` during Event application. Gameplay math remains concrete
+and separate.
+
+| Candidate | Apparently shared behavior | Policy vs syntax and concrete differences | Removed complexity vs new coupling / evidence | Verdict |
+| --- | --- | --- | --- | --- |
+| Creature `current_hp` transition primitive | Project an Event-selected HP endpoint while preserving every other Creature fact. | Preservation is State Owner policy, but Damage supplies an endpoint derived with a zero floor and validates target/previous HP; Healing supplies an endpoint capped by mutable `max_hp` and also validates `maxHp`. Gameplay math cannot enter the primitive. | The narrow candidate would replace one `dataclasses.replace` line per applier with one helper call while coupling both Event paths to a new contract. There is no third mutation consumer; concrete code is cheaper. | `KEEP CONCRETE` |
+| Replacement-Creature helper | Construct a new Creature differing only in `current_hp`. | The construction itself is identical syntax; Damage/Healing decisions and correlation checks occur before it and remain different. No gameplay invariant would move into the helper. | It removes no decision and only wraps two existing direct calls. The extra name/import/call boundary is more indirection than the one-line syntax it hides; there is no third consumer. | `KEEP CONCRETE` |
+| Snapshot replacement helper | Preserve tuple order, replace one Creature by stable ID, and reuse Campaign/Character projections. | Today this orchestration syntax is the same in both handlers; the Damage and Healing outcomes/Events are different, but snapshot construction does not use their types. | It would remove roughly one small tuple/snapshot block per handler but must newly own missing, duplicate, replacement-ID, and future aggregate-shape semantics. With no third mutation consumer, local explicit code is clearer and less coupled. | `KEEP CONCRETE` |
+| Stale-state/application-integrity helper | Reject mismatched target/loaded State before projection. | Damage checks `targetId` and `previousHp`; Healing checks both plus authoritative `maxHp`. Event type/version, exact payload shape, decoded payload type, and error text remain Event-specific policy rather than one common invariant. | At most a few comparisons disappear; generic field extraction, callbacks, or a shared error contract appear. No third Event has the same integrity shape, so concrete checks are cheaper. | `KEEP CONCRETE` |
+| Generic Event applier | Validate a resolved Event and return replacement State. | Only the lifecycle is common. `DamageApplied` has four payload fields and no max-HP correlation; `HealingApplied` has five and requires it. Each applier has a different concrete Event contract even though both return `CreatureState`. | A Protocol/base function removes none of the decoding or integrity code and adds interface/dispatch coupling. No serialized/replay caller or third applier needs a generic boundary; direct typed functions are clearer. | `KEEP CONCRETE` |
+| Generic mutation handler | Load, look up actor/target, resolve, build/apply Event, replace snapshot, save, return. | Sequencing and actor/target policy are shared; resolver/result types, Event builders/payloads, appliers, error messages, and Damage/Healing math differ. | It could hide visible handler lines only by adding type parameters, resolver/builder/applier callbacks, error factories, and mutation-scope hooks. That framework makes save ordering harder to inspect and test. There is no third mutation handler; concrete orchestration is cheaper. | `KEEP CONCRETE` |
+| `WorkingState` | Represent isolated State before persistence. | Neither Damage nor Healing mutates a working graph; both build direct replacements from read-only input. There is no differing behavior for a wrapper to reconcile. | It removes zero current code or policy and adds a new State type/lifecycle plus conversion rules. No multi-step or third consumer needs it. | `KEEP CONCRETE` |
+| `UnitOfWork` / `TransactionManager` | Coordinate mutation and persistence/failure. | Damage and Healing each make one `StateStore.save()` call after Event application; neither has an EventStore or second transactional resource. Their save-failure policy is already the same §3.18 boundary. | A coordinator removes no store operation and introduces begin/commit/failure lifecycle and ownership questions. There is no multi-store or third transactional consumer. | `KEEP CONCRETE` |
+| `ResolutionResult.state_changes` | Expose the HP transition beside outcome and Event. | Damage already records its four-field transition Event; Healing records its five-field transition including `maxHp`. A generic diff would have to represent both and stay consistent with each concrete Event. | It removes nothing and creates a competing authoritative representation plus consistency/serialization rules. No UI or other consumer requires it. | `KEEP CONCRETE` |
+| `EventApplierRegistry` / generic reducer | Dispatch Event type/version to the applicable State transition. | Damage and Healing handlers already know and call their concrete V1 appliers; their payload decoding and integrity policies remain distinct. | A registry adds registration, lookup, unknown-type/version, and target-routing policy without removing applier logic. No persisted serialized-Event reader, replay path, or third dispatch consumer exists; direct calls are cheaper. | `KEEP CONCRETE` |
+
+Overall verdict: **KEEP CONCRETE.** The only plausible narrow owner-specific
+primitive — “expected `current_hp` → replacement `current_hp`, preserve every
+other Creature fact” — is currently identical to a single explicit
+`dataclasses.replace` call and does not justify its coupling. All deferred
+abstractions in §§3.6 and 3.18 remain deferred; no production refactor follows
+from this review.
 
 ---
 
