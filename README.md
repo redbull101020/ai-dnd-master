@@ -110,10 +110,11 @@ LLM отвечает за понимание намерения, поведен�
 Saving Throw, Character Skill Check и narrow Character unarmed Attack Roll →
 Monster Events. Attack slice фиксирует hit/miss/critical в одном
 `AttackResolved` V1, читает baseline Monster AC через typed Definition access
-и не применяет damage или HP mutation. Отдельно реализован первый minimal
-mutating slice: `DamageApplied` V1 применяется к одному `CreatureState.current_hp`
-через конкретный applier, и результат сохраняется через `StateStore.save()`
-(§3.19) — это одна конкретная Event → State projection, а не общий
+и не применяет damage или HP mutation. Отдельно реализованы два minimal
+mutating slice: `DamageApplied` V1 (§3.19) и `HealingApplied` V1 (§3.20)
+применяются к `CreatureState.current_hp` через свои concrete appliers,
+после чего replacement snapshot сохраняется через
+`StateStore.save()`. Это две конкретные Event → State projections, а не общий
 Event Log/replay subsystem. Durable ordered Event history, `EventStore`,
 version-aware decoding для произвольных Events и полноценный recovery/replay
 остаются deferred; текущий `state.json` по-прежнему нельзя восстановить из
@@ -224,9 +225,11 @@ Event Log  +  Materialized State
 * filesystem snapshot persistence в `state.json`;
 * immutable `GameEvent` model;
 * чистый `EventSerializer` без filesystem I/O;
-* один конкретный `DamageApplied` V1 → `CreatureState.current_hp` Event → State
-  projection, за которой следует authoritative snapshot persistence через
-  `StateStore.save()` ([§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a)).
+* concrete `DamageApplied` V1 и `HealingApplied` V1 →
+  `CreatureState.current_hp` Event → State projections, за которыми
+  следует authoritative snapshot persistence через `StateStore.save()`
+  ([§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
+  [§3.20](docs/ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b)).
 
 **Planned / deferred:**
 
@@ -287,11 +290,13 @@ Character Saving Throw, Character Skill Check и narrow Character unarmed Attack
 Roll → Monster vertical slices реализованы. Последний является только
 read-only hit/miss/critical resolution без damage/HP mutation, а не готовой
 combat system; broad `Attack rolls` остаётся unchecked в Roadmap. Отдельно
-реализован первый minimal state-mutating slice — direct `Damage → current_hp`
-(`ApplyDamageCommand` → `DamageApplied` V1 → `StateStore.save()`,
-[§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a)) —
-но broad `Damage`/`HP` и полноценная combat system по-прежнему unchecked в
-Roadmap.
+реализованы два minimal state-mutating slice: direct `Damage → current_hp`
+(`ApplyDamageCommand` → `DamageApplied` V1, [§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a))
+и direct `Healing → current_hp` (`ApplyHealingCommand` → `HealingApplied` V1,
+[§3.20](docs/ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b));
+оба строят replacement snapshot и вызывают `StateStore.save()` до
+успешного результата. Broad `HP`/`Damage`/`Healing` и полноценная
+combat system по-прежнему unchecked в Roadmap.
 
 ---
 

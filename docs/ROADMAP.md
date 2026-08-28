@@ -60,7 +60,7 @@ Definition of Done Phase 1 не добавляются.
 
 ## Phase 2 — Basic Rules
 
-> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5) · [§3.19 Minimal Damage → HP mutation vertical slice (G6A)](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a)
+> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5) · [§3.19 Minimal Damage → HP mutation vertical slice (G6A)](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a) · [§3.20 Minimal Healing → HP mutation vertical slice (G6B)](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b)
 
 * [x] Ability checks
 * [ ] Proficiency
@@ -74,29 +74,39 @@ Definition of Done Phase 1 не добавляются.
 * [ ] Healing
 * [ ] Conditions
 
-`State Mutation Foundation (G5)` (§3.18) fixes only the canonical contract for
-a future authoritative state-mutating Command — mutating-command lifecycle,
-read-only loaded-snapshot input, transition-specific mutation scope,
-Event → State application, persistence ordering, save-failure semantics, and
-the exact MVP atomicity boundary. It implements no Damage, no HP mutation, and
-no Event applier. It is a documentation-only prerequisite gate positioned
-after the existing minimal read-only `Character unarmed Attack Roll → Monster`
-slice (§3.17) and before the first HP/Damage state-mutating slice, which
-remains the evidence checkpoint for the deferred abstractions §3.18 lists.
-§3.18 also fixes the executable acceptance obligations that the first Damage →
-HP slice must demonstrate at the Domain, Application, and regression-boundary
-level.
+`State Mutation Foundation (G5)` (§3.18) fixes the canonical contract for
+authoritative state-mutating Commands: read-only loaded-snapshot input,
+transition-specific mutation scope, Event → State application, replacement
+State construction, persistence ordering, save-failure semantics, and the
+exact MVP atomicity boundary. Two concrete production consumers now implement
+that contract end-to-end.
 
-A first minimal `direct Damage → current_hp` production mutation slice (G6A,
-§3.19) is now implemented: `ApplyDamageCommand` → pure `resolve_damage` →
-`DamageApplied` V1 → concrete `CreatureState` applier → replacement
-`StateSnapshot` → `StateStore.save()`. It is concrete evidence that the G5
-contract works end-to-end for one consumer, and it does not check `HP` or
-`Damage` above — those stay unchecked because weapon rolls, `DamageType`
-mechanics, resistance/immunity/vulnerability, temporary HP, death/unconscious,
-Attack → Damage orchestration, and conditions remain unimplemented (§3.19
-"Explicit exclusions"). `Healing` also stays unchecked and is the next
-evidence checkpoint for re-evaluating a shared HP mutation primitive.
+G6A (§3.19) implements direct `Damage → current_hp`:
+
+```text
+ApplyDamageCommand → resolve_damage → DamageApplied V1
+→ concrete CreatureState applier → replacement StateSnapshot
+→ StateStore.save()
+```
+
+G6B (§3.20) implements the parallel minimal direct Healing slice:
+
+```text
+ApplyHealingCommand → resolve_healing → HealingApplied V1
+→ concrete CreatureState applier → replacement StateSnapshot
+→ StateStore.save()
+```
+
+The post-G6B comparison of both implementations retained the verdict
+`KEEP CONCRETE`: their gameplay math and integrity inputs remain distinct, and
+the shared syntax/sequencing does not justify a generic HP mutation primitive,
+Event applier, mutation handler, registry, or transaction abstraction.
+
+The broad `HP`, `Damage`, and `Healing` checkboxes intentionally remain open.
+These minimal direct slices do not implement healing sources/resources,
+spells/items/potions, temporary HP, death/unconscious/death saves, the broader
+HP lifecycle, Attack → Damage orchestration, resistance/immunity/vulnerability,
+or Conditions.
 
 ## Phase 3 — Combat
 

@@ -3052,3 +3052,32 @@ contracts.
 - Verified all architecture tests (`7 passed`), including documentation
   references, and checked the new §3.20 heading against its quick-lookup/TOC
   anchor.
+
+## 2026-08-28 — G6B Group 5 documentation/status synchronization
+
+- Committed and pushed the separately reviewed Group 4 canonical-contract
+  changes as `ff68523c042912cbc4f469d4fd3eeb68d79a19b4` before starting this
+  documentation-only group.
+- Synchronized Phase 2 status in `docs/ROADMAP.md`, the project overview in
+  `README.md`, and `AI_DND_DATA_FLOW_CURRENT.md` with the implemented minimal
+  `ApplyDamageCommand` and `ApplyHealingCommand` mutation paths. The current
+  persisted authority remains the replacement `StateSnapshot` saved through
+  `StateStore`; runtime EventStore, durable Event history, and replay remain
+  deferred.
+- Confirmed that the Group 4 `CLAUDE.md` summary already names G6B §3.20,
+  `HealingApplied` V1, the Healing mutation path, full-HP no-op semantics, the
+  post-G6B `KEEP CONCRETE` verdict, and the remaining deferred abstractions;
+  no additional Group 5 edit was needed there.
+- Intentionally left the broad Roadmap `HP`, `Damage`, and `Healing`
+  checkboxes open: the direct slices do not implement healing
+  sources/resources, spells/items/potions, temporary HP,
+  death/unconscious/death saves, broader HP lifecycle, Attack → Damage,
+  resistance/immunity/vulnerability, or Conditions.
+- Verified on Python 3.12.13 / pytest 9.1.1: the six-file narrow Healing suite
+  passed (`111 passed`), the six-file Damage mutation regression suite passed
+  (`92 passed`), and the full suite passed (`1008 passed`) with pip cache
+  disabled for the isolated wheel-build tests. The configured mypy check
+  passed (`Success: no issues found in 80 source files`).
+- Introduced no production Python change, dependency, State schema/version
+  change, EventStore, runtime `events.jsonl` artifact, `state_changes` field,
+  generic mutation framework, or direct AI/API State mutation.
