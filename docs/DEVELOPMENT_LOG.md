@@ -2980,3 +2980,19 @@ contracts.
 - This Group 1 slice adds no Healing Event, Event applier, Application handler,
   persistence, State schema change, shared HP abstraction, or dependency, and
   does not mark G6B complete.
+
+## 2026-08-28 — G6B Group 2 HealingApplied V1 and Creature applier
+
+- Added the immutable concrete `HealingApplied` V1 Event builder with the exact
+  `targetId`, `amount`, `previousHp`, `maxHp`, and `newHp` payload copied from
+  the validated `HealingResult`.
+- Added the concrete Creature-level `apply_healing_applied_v1` transition with
+  exact Event type/version/payload decoding, target/current-HP/max-HP integrity
+  checks, and replacement construction through `dataclasses.replace`.
+- Kept the Healing formula in the Group 1 resolver/`HealingResult`; the Event
+  builder and applier neither recalculate nor decide gameplay semantics.
+- Added focused Event, generic serializer round-trip, replacement, malformed
+  payload, integrity, no-op/replay-limitation, and forbidden-dependency tests.
+- This Group 2 slice adds no Application handler, StateSnapshot orchestration,
+  persistence, generic Event applier, shared HP helper, or dependency, and does
+  not mark G6B complete.
