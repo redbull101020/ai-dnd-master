@@ -1983,3 +1983,94 @@ contracts.
 - `python -m mypy src/dnd_engine`: no issues in 68 source files.
 - `git diff --check`: reviewed as part of final diff review.
 - No commit, push, or pull request was performed.
+
+## 2026-08-28 — Character unarmed Attack Roll → Monster canon and post-Attack review
+
+### Branch, base, and prerequisites
+
+- Documentation work was performed on
+  `codex/docs-attack-roll-unarmed-monster`, created from fetched
+  `origin/main` at `1f1a532`. The initial checkout was clean. Reviewed Attack
+  implementation was already present in repository history: Domain resolution
+  in `d8af001`, Application/integration in `7e8b931`, and both merged into
+  `origin/main`; no Attack source or test file was edited in this group.
+- Confirmed the implemented prerequisites: shared Ability/Proficiency/d20
+  rules, G4a typed `DefinitionSource`, Campaign ruleset identity, immutable
+  `MonsterDefinition.armor_class`, packaged SRD 5.1 Goblin data, minimal AC,
+  and G4b weapon damage-dice invariant.
+
+### Reviewed implementation and canonical documentation
+
+- Confirmed target-only immutable `AttackCommand`/`AttackPayload`, immutable
+  `AttackResult`, and concrete `resolve_character_unarmed_attack()`. The
+  resolver uses Strength, `ability_modifier()`, derived
+  `character_proficiency_bonus(CharacterState.total_level)`, and the shared
+  `resolve_d20_roll()` primitive; the production handler defaults to NORMAL.
+- Confirmed Attack-owned natural semantics over `D20Roll.selected`: natural 1
+  is an automatic miss, natural 20 is an automatic hit with
+  `critical_hit=true`, and other rolls compare total to target AC.
+- Confirmed `AttackHandler` loads matching actor `CreatureState` and
+  `CharacterState`, then target `CreatureState`; it dereferences
+  `target.definition_id` under Campaign `ruleset_id`/`ruleset_version` through
+  `DefinitionSource(expected_type=MonsterDefinition)` and reads
+  `MonsterDefinition.armor_class`. The real-adapter integration test exercises
+  `FilesystemStateStore`, `PackagedDefinitionSource`, seeded
+  `PythonDiceEngine`, and a test-only fixed `EventMetadataProvider` together.
+- Confirmed one `AttackResolved` V1 Event for hit, miss, or critical outcome;
+  it records the actual target AC used as an audit fact. No separate
+  `AttackHit`, `AttackMissed`, or `CriticalHit` Event exists.
+- Confirmed the read-only boundary: no State mutation, no `StateStore.save()`,
+  no Event application/persistence, no damage resolution, and no HP mutation.
+- Added canonical §3.17, updated Architecture navigation and stale illustrative
+  Attack examples, appended DEC-0031, and synchronized the reproduced current
+  state in `CLAUDE.md` and `README.md`.
+- Completed the DEC-0027 post-Attack abstraction checkpoint with verdict
+  **KEEP CONCRETE**. Rejected a generic d20/check resolver, Character
+  projection wrapper, actor/target lookup helper, generic Definition-exception
+  mapper, handler success-tail helper, proficiency abstraction, and
+  `ModifierPipeline`; consumer count remains a review trigger, not an
+  abstraction rule.
+- `docs/ROADMAP.md` was intentionally not modified. `[ ] Attack rolls`
+  remains unchecked because only Character unarmed → Monster is implemented,
+  not the broad weapon/Monster/spell/targeting Attack Roll mechanic.
+
+### Verification before documentation
+
+- Python 3.12.13 in an isolated temporary environment using the repository's
+  existing `.[dev]` dependencies; the repository `.venv` launcher pointed to
+  a missing Python installation and was not modified.
+- All Attack narrow tests (Domain Command/resolver/Event, Application handler,
+  and real-adapter integration): 100 passed.
+- `tests/architecture`: 7 passed.
+- First full-suite attempt: 803 passed and 2 packaging setup errors because
+  the sandbox denied the global pip wheel cache (`WinError 5`), not because of
+  source/test behavior. Re-run with `PIP_CACHE_DIR` and `--basetemp` in a
+  writable temporary directory: 805 passed.
+- `python -m mypy src/dnd_engine`: no issues in 72 source files.
+
+### Verification after documentation
+
+- Documentation-reference/architecture tests (`tests/architecture`): 7
+  passed, including 2 documentation-reference tests and 5 Domain dependency
+  tests.
+- All Attack narrow tests (Domain Command/resolver/Event, Application handler,
+  and real-adapter integration): 100 passed.
+- Full `python -m pytest` with writable `PIP_CACHE_DIR`/`--basetemp`: 805
+  passed.
+- `python -m mypy src/dnd_engine`: no issues in 72 source files.
+- Repository searches found no `StateStore.save()` call, HP/current_hp
+  mutation, damage implementation, weapon/equipment/inventory/range fields, or
+  forbidden Application/API/Infrastructure import in the Attack Domain and
+  handler files. `AttackPayload` contains only `target_id`.
+- `docs/ROADMAP.md` remains unchanged with `[ ] Attack rolls`.
+- `git diff --check`: exit code 0; only normal `core.autocrlf` LF→CRLF
+  working-copy advisories were emitted.
+
+### Explicitly deferred
+
+- Damage, critical damage, HP/current_hp mutation, dagger/weapon attacks,
+  equipment/inventory, weapon proficiency, Finesse, range/reach/ammunition,
+  Character targets, Monster attacks, spell attacks, and broader
+  targeting/visibility/cover.
+- Event persistence/application, State mutation orchestration, a combat
+  system, and all rejected generic production abstractions.
