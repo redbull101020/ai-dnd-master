@@ -1,9 +1,15 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from dnd_engine.domain.commands.damage import ApplyDamageCommand
 from dnd_engine.domain.events.game_event import GameEvent
 from dnd_engine.domain.rules.damage import DamageResult
+from dnd_engine.domain.state.creature import CreatureState
+
+
+_DAMAGE_APPLIED_V1_PAYLOAD_FIELDS = frozenset(
+    {"targetId", "amount", "previousHp", "newHp"}
+)
 
 
 @dataclass(frozen=True)
@@ -60,3 +66,45 @@ def build_damage_applied_v1(
             "newHp": payload.new_hp,
         },
     )
+
+
+def _payload_str(value: object, field_name: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"payload {field_name} must be a str")
+    return value
+
+
+def _payload_int(value: object, field_name: str) -> int:
+    if type(value) is not int:
+        raise TypeError(f"payload {field_name} must be an int")
+    return value
+
+
+def apply_damage_applied_v1(
+    creature: CreatureState,
+    event: GameEvent,
+) -> CreatureState:
+    if not isinstance(creature, CreatureState):
+        raise TypeError("creature must be a CreatureState")
+    if not isinstance(event, GameEvent):
+        raise TypeError("event must be a GameEvent")
+    if event.type != "DamageApplied":
+        raise ValueError("event type must be DamageApplied")
+    if event.version != 1:
+        raise ValueError("event version must be 1")
+    if event.payload.keys() != _DAMAGE_APPLIED_V1_PAYLOAD_FIELDS:
+        raise ValueError("DamageApplied V1 payload has unexpected fields")
+
+    decoded = DamageAppliedPayloadV1(
+        target_id=_payload_str(event.payload["targetId"], "targetId"),
+        amount=_payload_int(event.payload["amount"], "amount"),
+        previous_hp=_payload_int(event.payload["previousHp"], "previousHp"),
+        new_hp=_payload_int(event.payload["newHp"], "newHp"),
+    )
+
+    if decoded.target_id != creature.id:
+        raise ValueError("event targetId must match creature id")
+    if decoded.previous_hp != creature.current_hp:
+        raise ValueError("event previousHp must match creature current_hp")
+
+    return replace(creature, current_hp=decoded.new_hp)
