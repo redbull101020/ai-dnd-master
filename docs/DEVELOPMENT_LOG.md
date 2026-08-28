@@ -2361,3 +2361,111 @@ contracts.
   production dependency changed.
 - Diff written to `review.patch` in the repository root for review; not
   committed, not pushed, no pull request opened.
+
+## 2026-08-28 — G6a Group 2: DamageApplied V1 Event contract
+
+### Initial state
+
+- Continued on `claude/g6a-minimal-damage-hp`, on top of the committed G6a
+  Group 1 iteration (`ApplyDamageCommand`, `ApplyDamagePayload`,
+  `DamageResult`, `resolve_damage`, commit
+  `928df81f9d7fe0426d4fe6428032918d4ec5090e`). No `DamageApplied` Event, Event
+  builder, Event application, Application handler, or `StateStore.save()`
+  mutation existed yet.
+- This iteration implements only Group 2 of the G6a evidence slice: the
+  concrete immutable `DamageApplied` V1 `GameEvent` contract, built from an
+  already-resolved `ApplyDamageCommand` + `DamageResult` pair plus supplied
+  Event metadata. It does not implement Event → State application, a
+  `DamageHandler`, `StateStore.save()`, or an `EventStore` — those remain for
+  later G6a groups.
+
+### Implementation
+
+- Added `src/dnd_engine/domain/events/damage.py`, following the same
+  concrete-Event style as `events/attack.py` and `events/saving_throw.py`:
+  - `DamageAppliedPayloadV1` (`target_id: str`, `amount: int`,
+    `previous_hp: int`, `new_hp: int`) — a frozen internal payload VO whose
+    `__post_init__` enforces only field runtime types (no `bool`-as-`int`
+    coercion). Unlike `AttackResolvedPayloadV1`/`SavingThrowResolvedPayloadV1`,
+    it does **not** re-derive or re-check the `new_hp == max(0, previous_hp -
+    amount)` formula: that rule invariant is already owned exclusively by
+    `DamageResult` (§3.18 "Resolver ≠ State application" / "Rule consistency
+    already belongs to the resolver's own Result type"), and this task's own
+    instructions called out not duplicating it here.
+  - `build_damage_applied_v1(*, event_id, timestamp, command, outcome) ->
+    GameEvent` — validates `command` is an `ApplyDamageCommand`, `outcome` is
+    a `DamageResult`, and that `outcome.target_id`/`outcome.amount` match
+    `command.payload.target_id`/`command.payload.amount`; then builds the
+    typed payload from `outcome` fields verbatim (no recomputation) and
+    returns a `GameEvent` with `type="DamageApplied"`, `version=1`,
+    `event_id`/`timestamp` taken from the supplied arguments (no clock read,
+    no ID generation), `command_id`/`campaign_id`/`actor_id` copied from
+    `command`, and `caused_by=None`.
+  - Canonical payload written to the Event is exactly `{"targetId",
+    "amount", "previousHp", "newHp"}` — no `damageType`, `weaponId`,
+    `attackId`, `critical`, `overkill`, `effectiveHpLoss`, `condition`, or
+    `stateChanges` field.
+- No changes to `GameEvent`, `EventSerializer`, or the Event Envelope: the
+  new Event round-trips through the existing generic `EventSerializer`
+  unchanged, with no Damage-specific serializer, deserializer registry, Event
+  type/version dispatcher, schema registry, or `EventStore` added.
+
+### Changed files
+
+- `src/dnd_engine/domain/events/damage.py` — new file.
+- `tests/domain/test_damage_event.py` — new file: canonical Event shape
+  (`type`, `version`, exact payload key set, `commandId`/`campaignId`/
+  `actorId` correlation, `causedBy is None`, timestamp passthrough), target
+  and amount correlation-mismatch rejection, wrong command/outcome type
+  rejection, generic-`EventSerializer` round-trip, Event/payload
+  immutability, and payload field-type rejection. No test asserts the
+  `new_hp` formula clamp as a builder-level rule, per this task's scope.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No Event → State application, replacement `CreatureState`/`StateSnapshot`
+  construction, or production `StateStore.save()` call.
+- No Application-level `DamageHandler` or `EventMetadataProvider` usage for
+  Damage.
+- No `EventStore`, filesystem Event persistence/append, or serialized Event
+  type/version dispatch — Event serialization is exercised only through the
+  existing generic `EventSerializer`, unchanged.
+- No Attack → Damage orchestration, `DamageType` mechanics
+  (resistance/immunity/vulnerability), healing, or generic Event applier/
+  registry/`UnitOfWork`.
+- No canonical `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `README.md`, or `CLAUDE.md` change: `DamageApplied` V1
+  exists as a runtime immutable Domain fact only — it is not yet applied to
+  State and not yet persisted as durable Event history, so the canonical
+  contract documentation is deferred to a later G6a group once fuller
+  production evidence exists.
+- No production dependency was added or changed; `pyproject.toml` is
+  unmodified.
+
+### Verification
+
+- The repository's own `.venv` (Python 3.12.9, pytest 9.1.1) was used
+  directly, with `--basetemp` redirected outside the default OS temp
+  directory (same pre-existing unwritable `pytest-of-redbu` condition
+  recorded in prior iteration entries).
+- Narrow new tests: `tests/domain/test_damage_event.py` (20 tests), run
+  together with `tests/domain/test_damage.py`, `tests/domain/
+  test_damage_command.py`, and `tests/domain/test_attack_event.py` for
+  pattern-consistency cross-checking — 91 passed.
+- Full pytest suite: 866 passed (846 pre-existing Group-1 baseline plus the
+  20 new Group 2 tests); no existing test was modified or removed.
+- `python -m mypy src/dnd_engine`: `Success: no issues found in 75 source
+  files`.
+- `git diff --check`: no whitespace errors (only expected LF/CRLF
+  line-ending notices from Git on the two new files).
+- `git status --short` showed `docs/DEVELOPMENT_LOG.md` modified plus the
+  two new Group 2 files (`src/dnd_engine/domain/events/damage.py`,
+  `tests/domain/test_damage_event.py`) marked intent-to-add solely so they
+  are included in `review.patch`; no other tracked file was modified, and no
+  production dependency changed. Group 1 is already in `HEAD`
+  (`928df81f9d7fe0426d4fe6428032918d4ec5090e`) and is not part of this diff.
+- `review.patch` in the repository root was regenerated (`git diff >
+  review.patch`) so it contains only the fresh, uncommitted Group 2 changes,
+  not the already-committed Group 1 content it previously held. Not
+  committed, not pushed, no pull request opened.
