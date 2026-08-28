@@ -2996,3 +2996,29 @@ contracts.
 - This Group 2 slice adds no Application handler, StateSnapshot orchestration,
   persistence, generic Event applier, shared HP helper, or dependency, and does
   not mark G6B complete.
+
+## 2026-08-28 — G6B Group 3 HealingHandler and snapshot persistence
+
+- Added the concrete `HealingHandler` with the existing Damage sibling's
+  Creature actor/target lookup semantics and the ordered `load → resolve →
+  metadata → HealingApplied → apply → replacement snapshot → save → success`
+  lifecycle.
+- Kept loaded State read-only and constructed a replacement target, creatures
+  tuple, and `StateSnapshot`; campaign, Character projections, unrelated
+  Creatures, and tuple ordering remain unchanged.
+- Preserved the full-HP positive-healing no-op lifecycle: it still creates a
+  `HealingApplied` V1 Event, a replacement target/snapshot, calls
+  `StateStore.save()` exactly once, and only then returns success.
+- Preserved the existing metadata/applier/save failure boundaries: failures
+  propagate, no successful result is returned, and no retry, rollback, Event
+  persistence, or metadata-ID reuse is introduced.
+- Added focused Application tests and real-`FilesystemStateStore` integration
+  tests for normal `7 / 20 + 8 → 15 / 20` and capped
+  `18 / 20 + 10 → 20 / 20` persistence, including reload and artifact checks.
+- Verified the focused Healing suite (`111 passed`), Damage mutation
+  regressions (`92 passed`), the full suite (`1008 passed`), and configured
+  mypy (`Success: no issues found in 80 source files`).
+- This Group 3 slice adds no generic mutation abstraction, EventStore,
+  `state_changes`, transaction/replay/concurrency mechanism, StateStore or
+  StateSnapshot schema change, state schema-version change, or dependency; it
+  does not update the canonical G6B architecture/decision documentation.
