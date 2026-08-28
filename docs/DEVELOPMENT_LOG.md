@@ -931,6 +931,112 @@ contracts.
 - Full pytest suite on Python 3.12.13 / pytest 9.1.1: 317 passed.
 - `git diff --check` passed.
 
+## 2026-08-28 — State Mutation Foundation (G5) canonical contract (DEC-0032)
+
+### Initial state
+
+- Fetched `origin/main` and found the local `main` checkout stale by 35
+  commits (18 merged PRs, up to PR #53 `codex/docs-attack-roll-unarmed-monster`
+  at `1dcf6d7c43654703ef7ba5bf424c3cba9e942d1a`); local `main` was a clean
+  ancestor of `origin/main` with no unique commits, so it was fast-forwarded
+  before any other precondition check. Created
+  `claude/docs-state-mutation-foundation` directly from the fast-forwarded
+  `origin/main`.
+- After the fast-forward, all task preconditions matched: latest accepted
+  decision was DEC-0031, `docs/ARCHITECTURE.md` §3 ended at §3.17, §3.8
+  Atomicity was still `Planned / Deferred` pending "a separate State Mutation
+  Foundation decision," no production gameplay handler called
+  `StateStore.save()`, `StateStore` remained `load()`/`save()`-only,
+  `StateSnapshot` stayed a frozen container of mutable `CreatureState`/
+  `CharacterState` objects, and `ResolutionResult` had no `state_changes`
+  field.
+
+### Canonical contract changes
+
+- Added `docs/ARCHITECTURE.md` §3.18 State Mutation Foundation (G5): the
+  mutating-command lifecycle (`load snapshot → validate → resolve rules →
+  outcome → Event batch → apply to isolated replacement projection →
+  replacement StateSnapshot → StateStore.save → successful ResolutionResult`)
+  with read-only Commands' current no-op semantics preserved; loaded State as
+  read-only input with replacement/copy-on-write mutation (`deepcopy()`,
+  `WorkingState`, and frozen State dataclasses explicitly rejected);
+  transition-specific mutation scope, fixing the future Damage → HP scope to
+  `CreatureState.current_hp` only, preserving `id`/`definition_id`/
+  `ability_scores`/`max_hp` without declaring them globally immutable; the
+  Event → State application contract (no dice, Definitions, AI, persistence
+  I/O, clock, ID allocation, new Events, or re-decided gameplay per
+  application step) with no production `EventApplierRegistry`/generic
+  reducer/dispatcher; a three-way resolver/Application/State-application
+  separation (the resolver determines the outcome only and never receives
+  `EventMetadataProvider`; Application constructs the Event batch from that
+  outcome plus `EventMetadataProvider` metadata, matching the existing §2.2
+  handler pattern; State application projects an already-resolved Event);
+  persistence ordering forbidding "return success, save later" and using
+  "successfully persisted through `StateStore.save()`" rather than "durably
+  saved" language; save-failure semantics with no rollback/ID reuse; the
+  snapshot-authoritative MVP statement bounded by `FilesystemStateStore`'s
+  existing non-durability caveat (§12.9); EventStore and serialized Event
+  type/version dispatch staying deferred; `state_changes` staying absent; an
+  explicit no-generic-transaction-framework list (`UnitOfWork`,
+  `TransactionManager`, `WorkingState`, `MutationContext`, `StateChange`,
+  `EventApplierRegistry`, generic reducer, generic State Owner repository,
+  generic transaction coordinator); and the exact MVP atomicity
+  guarantee/non-guarantee boundary.
+- Updated §3.8 Atomicity to point at §3.18 instead of an unnamed future
+  decision, without changing its `Planned / Deferred` implementation status.
+- Added the §3.18 row to the Quick lookup table and the Table of contents.
+- Appended `docs/DECISIONS.md` DEC-0032 recording the same decision.
+- In `docs/ROADMAP.md`, inserted `[x] State Mutation Foundation (G5)` between
+  `[ ] Attack rolls` and `[ ] HP`, added a §3.18 link to the Phase 2 contracts
+  line, and added a clarifying note that G5 is documentation-only and sits
+  between the existing minimal Attack slice and the first HP/Damage
+  state-mutating slice. `Attack rolls`, `HP`, and `Damage` stay unchecked.
+- In `CLAUDE.md`, added a current-phase bullet for G5, replaced the blanket
+  "Event application to State is deferred" statement with the accurate
+  canonical-contract-exists-but-unimplemented statement, added the §3.18
+  deferred-abstractions block, and added two naming-trap rows
+  (`deepcopy()` and `state_changes`/UoW as a stand-in for concrete State
+  Owner-specific Event application).
+
+### Changed files
+
+- `docs/ARCHITECTURE.md` — new §3.18, §3.8 cross-reference update, Quick
+  lookup and Table of contents entries.
+- `docs/DECISIONS.md` — append-only DEC-0032.
+- `docs/ROADMAP.md` — Phase 2 checklist and contracts-line update.
+- `CLAUDE.md` — current-phase, deferred-abstractions, and naming-traps sync.
+- `docs/DEVELOPMENT_LOG.md` — this factual iteration entry.
+
+### Not implemented
+
+- No production Python, test, rule, or campaign file was changed.
+- No `EventApplierRegistry`, `UnitOfWork`, `TransactionManager`,
+  `WorkingState`, `MutationContext`, `StateChange`, generic reducer, or
+  generic transaction coordinator was added as production code.
+- No `Damage`, `HP` mutation, `Healing`, `EventStore`, Event persistence, or
+  replay was implemented.
+- `StateStore`'s `load()`/`save()` signature, `StateSnapshot`'s schema, and
+  `ResolutionResult`'s fields are unchanged.
+- `README.md` was read for contradictions against the new §3.18 contract;
+  none was found, so it was left unchanged.
+
+### Verification
+
+- The repository's own `.venv` (Python 3.12.9, pytest 9.1.1) was functional
+  and used directly; `--basetemp` was pointed outside the default OS temp
+  directory, whose `pytest-of-redbu` folder was not writable in this
+  environment.
+- Narrow `tests/architecture` suite, including the documentation-link and
+  `§N.N` cross-reference validator that now covers the new §3.18 anchor: 7
+  passed.
+- Full pytest suite: 805 passed. No production or test file was changed.
+- `git diff --check` passed.
+- `git status --short` showed only the tracked documentation files listed
+  above as modified.
+- No formatter, linter, or type checker is configured in the repository.
+- Diff written to `review.patch` in the repository root for review; not
+  committed.
+
 ## 2026-08-24 — Phase 2 Ability Check read-only vertical slice
 
 ### Initial state
