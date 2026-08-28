@@ -56,6 +56,7 @@
 | State Mutation Foundation (G5, mutating Command contract) | §3.18 |
 | Minimal Damage → HP mutation slice (G6A, `ApplyDamage`) | §3.19 |
 | Minimal Healing → HP mutation slice (G6B, `ApplyHealing`) | §3.20 |
+| Condition State foundation, persisted `CreatureState.conditions` (G6C1) | §3.21 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -110,6 +111,7 @@
   * [3.18. State Mutation Foundation (G5)](#318-state-mutation-foundation-g5)
   * [3.19. Minimal Damage → HP mutation vertical slice (G6A)](#319-minimal-damage--hp-mutation-vertical-slice-g6a)
   * [3.20. Minimal Healing → HP mutation vertical slice (G6B)](#320-minimal-healing--hp-mutation-vertical-slice-g6b)
+  * [3.21. Condition State foundation (G6C1)](#321-condition-state-foundation-g6c1)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1087,7 +1089,11 @@ class CreatureState:
     ability_scores: AbilityScores
     current_hp: int
     max_hp: int
+    conditions: frozenset[Condition] = frozenset()
 ```
+
+`conditions` — G6C1 addition (§3.21); полный contract, invariants и schema
+migration policy описаны там, а не здесь.
 
 Канонические имена HP:
 
@@ -1113,9 +1119,11 @@ Combat Engine, AI, API и другие подсистемы не мутирую�
 State Owner flow.
 
 В Phase 1 `CreatureState` не содержит skills, saving throw results, proficiency,
-conditions, effects, movement, position, initiative, turn resources, equipment
-или inventory. Зафиксированный ownership этих понятий не требует преждевременно
-добавлять их в минимальную модель.
+effects, movement, position, initiative, turn resources, equipment или
+inventory. Зафиксированный ownership этих понятий не требует преждевременно
+добавлять их в минимальную модель. `conditions` — единственное исключение,
+добавленное отдельным G6C1 slice (§3.21) как authoritative effective Condition
+membership; это не runtime Condition-instance entity и не Effect framework.
 
 State:
 
@@ -3924,6 +3932,186 @@ from this review.
 
 ---
 
+### 3.21. Condition State foundation (G6C1)
+
+Implementation status: **Implemented (State foundation only).** This section
+documents exactly the persisted representation of Conditions: a closed
+`Condition` identity, the `CreatureState.conditions` membership field, and
+State schema V4. It does not implement Apply/Remove Commands, Events,
+Application handlers, or any gameplay effect. Those are separate, later,
+evidence-driven G6C groups; this section will be extended, not replaced, when
+they land.
+
+#### Scope
+
+```text
+closed single-value Condition identity (POISONED)
+CreatureState.conditions: frozenset[Condition], default frozenset()
+State schema V4 (Creature-only change; Character schema unaffected)
+strict V4 encode/decode, deterministic write ordering
+backward-compatible V1/V2/V3 read (conditions = frozenset())
+```
+
+#### Explicit exclusions
+
+This slice does not implement, and does not imply a decision on:
+
+```text
+ApplyConditionCommand / RemoveConditionCommand
+ConditionApplied / ConditionRemoved Events
+Condition Application handlers
+Poisoned (or any other) gameplay effect
+RollMode / d20 interaction
+ModifierPipeline
+runtime ConditionState instance entity
+ConditionDefinition hierarchy
+condition source, duration, expiry, stacking, provenance
+Effect framework
+runtime allocation of condition_NNN IDs
+```
+
+These stay open for later G6C groups, per §3.6's rule against introducing
+future-phase behaviour ahead of a concrete consumer.
+
+#### `Condition` identity
+
+```python
+class Condition(StrEnum):
+    POISONED = "poisoned"
+```
+
+`Condition` (`src/dnd_engine/domain/value_objects/condition.py`) is a closed,
+identity-only Domain `StrEnum`, following the same pattern as `DamageType`
+(§3.1.1) and `Skill` (§1.2.2). It carries no Ability mapping, no mechanical
+effect, and no numeric data; §3.12's d20 semantics and every existing resolver
+remain untouched by this slice. Only `POISONED` is defined — the other 5e
+Conditions are not added ahead of a concrete consumer.
+
+#### `CreatureState.conditions`
+
+```text
+conditions: frozenset[Condition] = frozenset()
+```
+
+`conditions` is **authoritative effective Condition membership** for the
+current supported Condition set — the same kind of fact as
+`saving_throw_proficiencies`/`skill_proficiencies` on `CharacterState`
+(§3.2.4), not a collection of runtime Condition-instance objects. It belongs
+to `CreatureState`, not `CharacterState`, because Condition membership applies
+to any Creature (Character or Monster), matching the existing Creature/
+Character State Owner split (§10.4).
+
+Intrinsic `__post_init__` validation is strict and matches the existing
+`saving_throw_proficiencies`/`skill_proficiencies` pattern: `type(conditions)
+is frozenset`, and every member must be an actual `Condition`. `list`, `set`,
+`tuple`, `frozenset[str]`, and raw string values are rejected with
+`TypeError`, not coerced. The empty default preserves every existing
+`CreatureState(...)` call site across the Ability Check, Saving Throw, Skill
+Check, Attack, Damage, and Healing slices without modification. `current_hp`/
+`max_hp` invariants (§3.2.1) are unchanged by this addition.
+
+`CreatureState` remains a mutable, non-frozen dataclass (§3.2.1); `conditions`
+follows the same ownership rule as every other Creature field — only the
+Creature State Owner flow (Command → Resolver → Event → State application,
+§3.7) may change it. This slice adds no such flow: `conditions` is currently
+mutable only through direct construction/assignment in Domain/test code, not
+through any Command.
+
+#### Relationship to `condition_NNN` (§4.12/§4.13)
+
+The `condition_NNN` runtime ID format and the `poisoned` Definition ID were
+already reserved in the canonical ID registry before this slice. They remain
+reserved for a **possible future** stateful Condition-instance model —
+one with its own source, duration, and provenance lifecycle — if concrete
+mechanics ever require it. This slice does not allocate or use `condition_NNN`
+runtime IDs: `CreatureState.conditions` is a `frozenset` membership set keyed
+by `Condition` value, not a collection of ID-addressable instances.
+
+#### `StateSnapshot`
+
+`StateSnapshot`'s top-level shape (`campaign`, `creatures`, `characters`,
+§3.2.3) is unchanged. No `StateSnapshot.conditions` field or `ConditionState`
+aggregate is introduced; Condition membership is reached exclusively through
+`StateSnapshot.creatures[*].conditions`.
+
+#### State schema V4
+
+Schema versioning gains a fourth exact integer value. Semantics per version,
+by Creature/Character shape rather than by comparing only against the current
+`SCHEMA_VERSION` constant:
+
+```text
+V1: no Character projection;                                conditions = frozenset()
+V2: savingThrowProficiencies, no skillProficiencies;         conditions = frozenset()
+V3: savingThrowProficiencies + skillProficiencies;           conditions = frozenset()
+V4: same Character schema as V3 (unchanged);                 + Creature conditions
+```
+
+`LEGACY_SCHEMA_V3_VERSION = 3` is now an explicit constant alongside
+`LEGACY_SCHEMA_VERSION = 1` and `LEGACY_SCHEMA_V2_VERSION = 2`. `SCHEMA_VERSION`
+identifies the current writer (currently `4`), but no version-shape decision
+is keyed off comparing directly against it: `SCHEMA_V4_VERSION = 4` is a
+separate, fixed constant (`SCHEMA_VERSION = SCHEMA_V4_VERSION` today), and
+every place that decides "is this specifically V4" — the supported-schema-
+version set, the V4 Creature field set, and `conditions` decoding — compares
+against `SCHEMA_V4_VERSION`, never against `SCHEMA_VERSION`. Character
+decoding (including the `skillProficiencies` gate) is likewise keyed off
+`LEGACY_SCHEMA_V2_VERSION` ("is this V2") rather than the current writer.
+This matters because a future schema bump that only reassigns `SCHEMA_VERSION`
+to a new value must not silently stop already-persisted V3 or V4 payloads
+from decoding correctly; this exact failure mode was identified and closed
+while implementing this slice, not treated as hypothetical — a regression
+test (`test_v4_creature_shape_is_fixed_and_survives_future_schema_version_bump`)
+simulates a future `SCHEMA_VERSION` bump and asserts a historical V4 payload
+with `conditions` still decodes exactly.
+
+Canonical V4 Creature JSON:
+
+```json
+{
+  "id": "monster_001",
+  "definitionId": "goblin",
+  "abilityScores": { "...": "..." },
+  "currentHp": 7,
+  "maxHp": 7,
+  "conditions": ["poisoned"]
+}
+```
+
+The writer always emits `conditions`, including `[]` for empty membership,
+sorted deterministically by `Condition.value` (§12.9's existing sort-by-value
+convention for closed-set collections). The V1–V3 Creature shape has no
+`conditions` key at all — it is `unknown`/forbidden there, not merely
+optional, matching the existing strict-unknown-field policy (§12.25).
+
+Strict V4 Creature decoding:
+
+```text
+conditions must be a JSON list
+every entry must be an exact str
+every value must map to a known Condition
+duplicate entries forbidden
+unknown Condition values forbidden
+missing `conditions` forbidden for V4
+unknown Creature fields forbidden (unchanged policy)
+```
+
+V1/V2/V3 Creature decoding is unchanged except that `conditions` is now
+explicitly documented as absent from their fixed field set; reading any of
+these three legacy versions always yields `CreatureState.conditions ==
+frozenset()`, never invented membership.
+
+#### Abstraction discipline
+
+No Apply/Remove Command, Event, or Application handler is introduced by this
+slice (see "Explicit exclusions" above); §3.6's deferred-orchestration list is
+unaffected. This is a State-only foundation slice, analogous in spirit to how
+§3.2.4's `CharacterState`/`skill_proficiencies` shipped ahead of any Skill
+Check mechanic — the persisted shape is fixed first, and the mutation/gameplay
+contract is added by a later, separately evidenced G6C group.
+
+---
+
 ## 4. ID System
 
 ID являются частью архитектурного контракта.
@@ -4496,6 +4684,14 @@ State:
 condition_001
 condition_002
 ```
+
+G6C1 (§3.21) implemented persisted Condition **membership** on
+`CreatureState.conditions: frozenset[Condition]`, keyed directly by
+`Condition` value — no `condition_NNN` runtime ID is allocated or used by that
+membership set. `condition_NNN` remains reserved here for a **possible
+future** stateful Condition-instance model with its own source/duration/
+provenance lifecycle, introduced only if concrete mechanics actually require
+it.
 
 ---
 
@@ -6695,11 +6891,11 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Каноническая current V3 schema:
+filesystem I/O. Каноническая current V4 schema:
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "campaignId": "campaign_001",
   "state": {
     "campaign": {
@@ -6720,7 +6916,8 @@ filesystem I/O. Каноническая current V3 schema:
           "charisma": 8
         },
         "currentHp": 28,
-        "maxHp": 28
+        "maxHp": 28,
+        "conditions": []
       }
     ],
     "characters": [
@@ -6741,29 +6938,50 @@ filesystem I/O. Каноническая current V3 schema:
 }
 ```
 
-JSON использует camelCase. Writer всегда выпускает `schemaVersion: 3` и exact
-V3 state fields `campaign`, `creatures`, `characters`, включая
-`"characters": []` для пустой collection. Creatures и Characters сортируются
-по runtime ID, `savingThrowProficiencies` — по `Ability.value`, а
-`skillProficiencies` — по `Skill.value`. Пустые membership сериализуются как
-JSON arrays `[]`.
+JSON использует camelCase. Writer всегда выпускает `schemaVersion: 4` и exact
+V4 state fields `campaign`, `creatures`, `characters`, включая
+`"characters": []` для пустой collection и `"conditions": []` для пустого
+Creature Condition membership (§3.21). Creatures и Characters сортируются по
+runtime ID, `savingThrowProficiencies` — по `Ability.value`,
+`skillProficiencies` — по `Skill.value`, а `conditions` — по `Condition.value`.
+Пустые membership сериализуются как JSON arrays `[]`.
 
-Reader принимает три точные схемы: legacy V1 с state fields `campaign` и
-`creatures`, legacy V2 с обязательным дополнительным `characters`, и current
-V3. Поле `characters` в V1 является unknown и запрещено. Успешное чтение V1
-создаёт `StateSnapshot.characters=()` и не придумывает level или proficiency
-defaults. V2 Character entry сохраняет exact legacy fields `id`, `totalLevel`
-и `savingThrowProficiencies`; reader мигрирует его в canonical
-`CharacterState` с `skill_proficiencies=frozenset()`.
+Reader принимает четыре точные схемы: legacy V1 с state fields `campaign` и
+`creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
+обязательным дополнительным `skillProficiencies`, и current V4. Поле
+`characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
+`StateSnapshot.characters=()` и не придумывает level или proficiency defaults.
+V2 Character entry сохраняет exact legacy fields `id`, `totalLevel` и
+`savingThrowProficiencies`; reader мигрирует его в canonical `CharacterState`
+с `skill_proficiencies=frozenset()`. V1–V3 Creature entries не содержат поле
+`conditions` — оно unknown и запрещено для этих трёх версий; успешное чтение
+любой из них создаёт `CreatureState.conditions == frozenset()` без выдумывания
+membership.
 
-Для всех трёх версий required fields и JSON primitive/container types точны;
-unknown fields, defaults, type coercion, несовпадение outer `campaignId` с
-`state.campaign.id`, невалидные Domain values и duplicate IDs запрещены. V2 и
-V3 дополнительно требуют, чтобы каждый Character ID ссылался на существующий
-Creature ID. V3 Character entry содержит exact fields `id`, `totalLevel`,
-`savingThrowProficiencies` и `skillProficiencies`; duplicate serialized
-abilities и skills запрещены до преобразования списков в соответствующие
-`frozenset`.
+Для всех четырёх версий required fields и JSON primitive/container types
+точны; unknown fields, defaults, type coercion, несовпадение outer
+`campaignId` с `state.campaign.id`, невалидные Domain values и duplicate IDs
+запрещены. V2, V3 и V4 дополнительно требуют, чтобы каждый Character ID
+ссылался на существующий Creature ID. V3 и V4 Character entry содержит
+identical exact fields `id`, `totalLevel`, `savingThrowProficiencies` и
+`skillProficiencies` — Character schema не менялась в V4; duplicate
+serialized abilities и skills запрещены до преобразования списков в
+соответствующие `frozenset`. V4 Creature entry дополнительно требует
+`conditions`: JSON list точных строк, каждая — известное значение `Condition`,
+без дубликатов; malformed non-list, unknown-value и duplicate-value payloads
+отклоняются (§3.21).
+
+Character decoding (включая ветку, читающую `skillProficiencies`) определяется
+явным сравнением с `LEGACY_SCHEMA_V2_VERSION`, а не сравнением только с
+текущим `SCHEMA_VERSION` — это защищает V3-чтение при будущих schema bump'ах.
+Симметрично, V4 Creature field set и `conditions` decoding определяются
+сравнением с отдельной fixed-identity константой `SCHEMA_V4_VERSION`, а не с
+мутируемым `SCHEMA_VERSION`: `SCHEMA_VERSION = SCHEMA_V4_VERSION` сегодня, но
+эти два имени не взаимозаменяемы — `SCHEMA_VERSION` обозначает current writer
+и используется только при записи, тогда как historical V4 read semantics
+зафиксированы на `SCHEMA_V4_VERSION` независимо от того, останется ли V4
+current writer в будущем (§3.21 фиксирует эту regression-защиту как часть
+G6C1).
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -6787,10 +7005,11 @@ revision fields и file/process/distributed locks отсутствуют.
 EventStore, replay и transaction ordering между Event persistence и State
 projection отложены до отдельного будущего решения.
 
-Текущая V3 schema содержит `CampaignState`, collection `CreatureState` и
-character-specific collection `CharacterState`. По мере появления следующих
-State domains snapshot schema должна расширяться отдельным версионируемым
-контрактом, не превращая `CampaignState` в God Object.
+Текущая V4 schema содержит `CampaignState`, collection `CreatureState`
+(включая `conditions`, §3.21) и character-specific collection `CharacterState`.
+По мере появления следующих State domains snapshot schema должна расширяться
+отдельным версионируемым контрактом, не превращая `CampaignState` в God
+Object.
 
 Snapshot не содержит:
 
@@ -6933,7 +7152,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -6964,11 +7183,11 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 3`; writer выпускает
-только V3. Reader также принимает exact legacy integer `schemaVersion = 1` и
-`schemaVersion = 2`. Другие значения запрещены, а `bool` не считается integer
-version. Это версия storage schema, а не revision текущего State и не механизм
-concurrency control.
+Current State schema — exact integer `schemaVersion = 4`; writer выпускает
+только V4. Reader также принимает exact legacy integer `schemaVersion = 1`,
+`schemaVersion = 2` и `schemaVersion = 3`. Другие значения запрещены, а `bool`
+не считается integer version. Это версия storage schema, а не revision
+текущего State и не механизм concurrency control.
 
 ---
 

@@ -3081,3 +3081,78 @@ contracts.
 - Introduced no production Python change, dependency, State schema/version
   change, EventStore, runtime `events.jsonl` artifact, `state_changes` field,
   generic mutation framework, or direct AI/API State mutation.
+
+## 2026-08-28 — G6C Group 1: Condition State foundation
+
+- Branched `feat/g6c-conditions-foundation` from `origin/main` at
+  `0dbe090745e8f58d41ea075e14d0871eab9a8723` (the merged G6B tip, DEC-0034).
+- Added a closed, identity-only Domain `StrEnum` `Condition` with exactly one
+  member, `POISONED = "poisoned"`
+  (`src/dnd_engine/domain/value_objects/condition.py`), following the
+  existing `DamageType`/`Skill` pattern; no other 5e Condition was added.
+- Added `CreatureState.conditions: frozenset[Condition] = frozenset()` with
+  strict `__post_init__` validation (`type(...) is frozenset`, every member
+  an actual `Condition`, no coercion from `list`/`set`/`tuple`/
+  `frozenset[str]`/raw strings), mirroring
+  `CharacterState.saving_throw_proficiencies`/`skill_proficiencies`. The
+  empty default preserves every existing `CreatureState(...)` call site;
+  `current_hp`/`max_hp` invariants are unchanged.
+- Bumped `StateSerializer` to schema V4 as the current writer: added explicit
+  `LEGACY_SCHEMA_V3_VERSION = 3`, a V4-only `conditions` Creature field
+  (strict JSON list of known, non-duplicate `Condition` values, sorted by
+  `Condition.value`, always emitted including `[]`), and kept V1–V3 Creature
+  decoding forbidding `conditions` and always producing
+  `CreatureState.conditions == frozenset()`.
+- Closed a concrete regression found while implementing the bump: Character
+  `skillProficiencies` decoding was gated by `schema_version == SCHEMA_VERSION`,
+  which would have silently stopped V3 payloads from decoding their Character
+  projection once `SCHEMA_VERSION` became `4`. Changed the gate to
+  `schema_version != LEGACY_SCHEMA_V2_VERSION` so V3 and V4 both decode the
+  unchanged Character schema; added a dedicated regression test asserting a
+  realistic V3 payload with non-empty `skillProficiencies` still decodes that
+  membership exactly under the V4 implementation, with
+  `CreatureState.conditions == frozenset()`.
+- Review of Group 1 found the identical trap reintroduced one level down: the
+  new V4 Creature field set and `conditions` decoding were both gated by
+  `schema_version == SCHEMA_VERSION`, so a future `SCHEMA_VERSION` bump would
+  have silently misread already-persisted V4 Creature payloads as pre-V4 and
+  rejected their `conditions` field as unknown. Fixed by introducing a
+  separate fixed constant `SCHEMA_V4_VERSION = 4` (`SCHEMA_VERSION =
+  SCHEMA_V4_VERSION`); the supported-schema-version set, the V4 Creature
+  field set, and `conditions` decoding now all compare against
+  `SCHEMA_V4_VERSION`, never against the mutable `SCHEMA_VERSION`, which
+  remains only the "current writer" pointer used when serializing. Added
+  `test_v4_creature_shape_is_fixed_and_survives_future_schema_version_bump`,
+  which monkeypatches `SCHEMA_VERSION` to a hypothetical future value and
+  asserts a historical V4 payload with `conditions` still decodes exactly —
+  this test fails against the pre-fix code. Updated §3.21/§12.9 and DEC-0035
+  in place (not yet committed) to describe the fixed-identity design instead
+  of the original comparison-against-`SCHEMA_VERSION` description.
+- `StateSnapshot`'s top-level shape (`campaign`/`creatures`/`characters`) is
+  unchanged; no `StateSnapshot.conditions` field or `ConditionState` aggregate
+  was added. No Apply/Remove Command, Event, Application handler, or
+  `Poisoned` gameplay effect was implemented — those remain later G6C groups.
+- Documented the slice as new canonical §3.21 in `docs/ARCHITECTURE.md`,
+  including the explicit clarification that `condition_NNN` (§4.12/§4.13)
+  remains reserved for a possible future stateful Condition-instance model
+  and is not allocated by this membership set; synchronized §3.2.1, §12.9,
+  and §12.12. Appended DEC-0035 with the full rationale. Updated `CLAUDE.md`'s
+  Phase 2 summary, current-phase bullet list, serialization schema-version
+  fact, and naming-traps table to match.
+- Left broad Roadmap `[ ] Conditions` unchecked; `README.md` required no edit
+  (it had no stale schema-version or Creature-field text), and
+  `AI_DND_DATA_FLOW_CURRENT.md`'s `schemaVersion: 3` example/summary row were
+  updated to V4 with `conditions` in the example payload, since that text
+  would otherwise become factually stale.
+- Verified on Python 3.12.13 / pytest 9.1.1: the narrow five-file Condition
+  suite passed (`184 passed`), the full suite passed (`1062 passed`), and the
+  configured mypy check passed (`Success: no issues found in 81 source
+  files`). `git diff --check` reported no whitespace errors. Manually
+  confirmed the new regression test fails against the pre-fix code (reverting
+  the two `SCHEMA_V4_VERSION` decode-gate comparisons back to `SCHEMA_VERSION`
+  reproduces `ValueError: unknown creature fields: ['conditions']`), then
+  restored the fix.
+- Introduced no Apply/Remove Command, Event, handler, `Poisoned` behavior,
+  Effect framework, `ConditionState`/`ConditionDefinition` hierarchy,
+  `condition_instance_id`, runtime `condition_NNN` allocation, new production
+  dependency, or `StateSnapshot` shape change.

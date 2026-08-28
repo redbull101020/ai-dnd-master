@@ -4,6 +4,7 @@ import pytest
 
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.condition import Condition
 
 
 CANONICAL_FIELDS = (
@@ -12,13 +13,13 @@ CANONICAL_FIELDS = (
     "ability_scores",
     "current_hp",
     "max_hp",
+    "conditions",
 )
 
 FUTURE_PHASE_FIELDS = (
     "skills",
     "saving_throws",
     "proficiency",
-    "conditions",
     "effects",
     "movement",
     "speed",
@@ -54,14 +55,18 @@ def creature_state(
     *,
     current_hp: int = 7,
     max_hp: int = 7,
+    conditions: frozenset[Condition] | None = None,
 ) -> CreatureState:
-    return CreatureState(
-        id="monster_001",
-        definition_id="goblin",
-        ability_scores=goblin_scores(),
-        current_hp=current_hp,
-        max_hp=max_hp,
-    )
+    kwargs: dict[str, object] = {
+        "id": "monster_001",
+        "definition_id": "goblin",
+        "ability_scores": goblin_scores(),
+        "current_hp": current_hp,
+        "max_hp": max_hp,
+    }
+    if conditions is not None:
+        kwargs["conditions"] = conditions
+    return CreatureState(**kwargs)  # type: ignore[arg-type]
 
 
 def test_creature_state_accepts_canonical_fields() -> None:
@@ -172,3 +177,56 @@ def test_creature_state_does_not_include_future_phase_fields() -> None:
     canonical_fields = {field.name for field in fields(CreatureState)}
 
     assert canonical_fields.isdisjoint(FUTURE_PHASE_FIELDS)
+
+
+def test_creature_state_defaults_to_empty_conditions() -> None:
+    creature = creature_state()
+
+    assert creature.conditions == frozenset()
+    assert type(creature.conditions) is frozenset
+
+
+def test_creature_state_accepts_valid_condition_membership() -> None:
+    creature = creature_state(conditions=frozenset({Condition.POISONED}))
+
+    assert creature.conditions == frozenset({Condition.POISONED})
+
+
+def test_creature_state_conditions_is_mutable_attribute() -> None:
+    creature = creature_state()
+
+    creature.conditions = frozenset({Condition.POISONED})
+
+    assert creature.conditions == frozenset({Condition.POISONED})
+
+
+@pytest.mark.parametrize(
+    "conditions",
+    [
+        [Condition.POISONED],
+        {Condition.POISONED},
+        (Condition.POISONED,),
+    ],
+)
+def test_creature_state_rejects_non_frozenset_conditions(
+    conditions: object,
+) -> None:
+    with pytest.raises(TypeError):
+        creature_state(conditions=conditions)  # type: ignore[arg-type]
+
+
+def test_creature_state_rejects_string_condition_values() -> None:
+    with pytest.raises(TypeError):
+        creature_state(conditions=frozenset({"poisoned"}))  # type: ignore[arg-type]
+
+
+def test_creature_state_preserves_hp_invariants_with_conditions() -> None:
+    creature = creature_state(
+        current_hp=3,
+        max_hp=7,
+        conditions=frozenset({Condition.POISONED}),
+    )
+
+    assert creature.current_hp == 3
+    assert creature.max_hp == 7
+    assert creature.conditions == frozenset({Condition.POISONED})
