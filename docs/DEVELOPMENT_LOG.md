@@ -3022,3 +3022,33 @@ contracts.
   `state_changes`, transaction/replay/concurrency mechanism, StateStore or
   StateSnapshot schema change, state schema-version change, or dependency; it
   does not update the canonical G6B architecture/decision documentation.
+
+## 2026-08-28 — G6B Group 4 canonical contract and abstraction review
+
+- Reviewed the committed Damage and Healing Commands, resolvers/results,
+  Events, Creature appliers, handlers, and tests as two concrete authoritative
+  HP mutation consumers; no production Python changed in this group.
+- Compared ten candidates explicitly: shared current-HP transition,
+  replacement-Creature and snapshot helpers, stale-state/integrity helper,
+  generic Event applier and mutation handler, `WorkingState`,
+  `UnitOfWork`/`TransactionManager`, `ResolutionResult.state_changes`, and
+  `EventApplierRegistry`/generic reducer.
+- Recorded the overall verdict `KEEP CONCRETE`: Damage and Healing retain
+  different gameplay formulas, Healing additionally depends on authoritative
+  `max_hp`/`maxHp`, the remaining overlap is mostly syntax/sequencing, no third
+  mutation consumer exists, and the proposed indirection removes little or no
+  current complexity.
+- Added canonical §3.20, "Minimal Healing → HP mutation vertical slice
+  (G6B)", including exact Command/Result/Event/applier/handler contracts,
+  source-agnostic amount semantics, zero-HP/full-HP behavior, persistence and
+  failure ordering, no-op replay limitation, and the detailed abstraction
+  matrix; synchronized §3.18, §3.19, quick lookup, and table of contents.
+- Appended DEC-0034 with the G6B rationale and post-G6B abstraction decision,
+  and synchronized the deliberately duplicated implemented/deferred summary
+  in `CLAUDE.md`.
+- Left broad Roadmap `HP`, `Damage`, and `Healing` checkboxes unchanged and
+  introduced no EventStore, `state_changes`, transaction/replay framework,
+  schema/version change, production dependency, or generic mutation helper.
+- Verified all architecture tests (`7 passed`), including documentation
+  references, and checked the new §3.20 heading against its quick-lookup/TOC
+  anchor.
