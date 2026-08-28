@@ -40,7 +40,7 @@
 * Первый read-only Ability Check vertical slice Phase 2 реализован.
 * Minimal read-only Character unarmed Attack Roll → Monster slice (§3.17) реализован; broad Roadmap Attack rolls остаётся incomplete.
 * State Mutation Foundation (G5, §3.18) зафиксирован как canonical contract для authoritative state-mutating Commands; реализованы два concrete consumer: minimal Damage → HP (G6A, §3.19) и minimal Healing → HP (G6B, §3.20). Оба используют concrete Creature Event application, replacement `StateSnapshot` и `StateStore.save()` до success; post-G6B abstraction verdict — `KEEP CONCRETE`. Broad Roadmap `HP`/`Damage`/`Healing` остаются incomplete.
-* Condition State foundation, G6C1 (§3.21): closed single-value `Condition` (`POISONED`) и persisted `CreatureState.conditions: frozenset[Condition]` с empty default. State schema V4 — current writer; V1–V3 остаются legacy read-only. Apply/Remove Commands, Events, handlers и `Poisoned` gameplay-эффект не реализованы. Broad Roadmap `Conditions` остаётся incomplete.
+* Condition State foundation, G6C1 (§3.21, DEC-0035/DEC-0036): closed single-value `Condition` (`POISONED`) и persisted `CreatureState.conditions: frozenset[Condition]` с empty default. State schema V4 — current writer; V1–V3 остаются legacy read-only. Pure Domain mutation contract реализован: `ApplyConditionCommand`/`RemoveConditionCommand` (payload `target_id`, `condition`), pure `resolve_condition_application`/`resolve_condition_removal` (`ConditionApplicationResult`/`ConditionRemovalResult`, `active` intrinsically `True`/`False`), `ConditionApplied`/`ConditionRemoved` V1 Events (`targetId`, `condition`, `previousActive`, `active`) и concrete Creature appliers `apply_condition_applied_v1`/`apply_condition_removed_v1`, меняющие только `conditions` через `dataclasses.replace`. Apply already-active / Remove already-absent — successful no-op, не `RULE_VIOLATION`, Event всё равно строится. Application handlers, `StateStore.save()` orchestration и `Poisoned` gameplay-эффект не реализованы. Broad Roadmap `Conditions` остаётся incomplete.
 
 Актуальный статус — в `docs/ROADMAP.md`; при расхождении с этим списком выигрывает Roadmap.
 
@@ -178,9 +178,12 @@ exact MVP atomicity boundary — зафиксирован в §3.18. Concrete Ev
 (G6B, §3.20). Они не образуют generic `EventApplierRegistry`/reducer:
 post-G6B review сравнил shared `current_hp` projection, Creature/snapshot
 replacement, stale-state checks и generic orchestration candidates и сохранил
-verdict `KEEP CONCRETE`. Список выше остаётся в силе. EventStore, Event
-persistence/runtime-append в JSONL, serialized Event type/version dispatch и
-replay остаются отдельно deferred (§12.10, §3.18).
+verdict `KEEP CONCRETE`. Concrete Condition appliers (`apply_condition_applied_v1`/
+`apply_condition_removed_v1`, G6C1 §3.21, DEC-0036) следуют тому же concrete
+integrity-check shape без mutating handler/persistence — это Group 3 отдельно.
+Список выше остаётся в силе. EventStore, Event persistence/runtime-append в
+JSONL, serialized Event type/version dispatch и replay остаются отдельно
+deferred (§12.10, §3.18).
 
 Первый vertical slice Phase 2 использует explicit Application handler и прямой
 вызов конкретного Domain resolver. Общая orchestration abstraction появляется

@@ -3934,11 +3934,15 @@ from this review.
 
 ### 3.21. Condition State foundation (G6C1)
 
-Implementation status: **Implemented (State foundation only).** This section
-documents exactly the persisted representation of Conditions: a closed
-`Condition` identity, the `CreatureState.conditions` membership field, and
-State schema V4. It does not implement Apply/Remove Commands, Events,
-Application handlers, or any gameplay effect. Those are separate, later,
+Implementation status: **Implemented (State foundation, Domain mutation
+contract).** This section documents the persisted representation of
+Conditions — a closed `Condition` identity, the `CreatureState.conditions`
+membership field, and State schema V4 — together with the pure Domain
+mutation contract that produces new Condition membership: `ApplyConditionCommand`/
+`RemoveConditionCommand`, their resolvers, `ConditionApplied`/
+`ConditionRemoved` V1 Events, and concrete Creature appliers. It does not
+implement Application handlers, persistence orchestration, or any gameplay
+effect (e.g. Poisoned disadvantage). Those are separate, later,
 evidence-driven G6C groups; this section will be extended, not replaced, when
 they land.
 
@@ -3950,6 +3954,10 @@ CreatureState.conditions: frozenset[Condition], default frozenset()
 State schema V4 (Creature-only change; Character schema unaffected)
 strict V4 encode/decode, deterministic write ordering
 backward-compatible V1/V2/V3 read (conditions = frozenset())
+ApplyConditionCommand / RemoveConditionCommand
+pure resolve_condition_application / resolve_condition_removal
+ConditionApplied V1 / ConditionRemoved V1 Events
+concrete Creature appliers (Event + CreatureState -> replacement CreatureState)
 ```
 
 #### Explicit exclusions
@@ -3957,9 +3965,8 @@ backward-compatible V1/V2/V3 read (conditions = frozenset())
 This slice does not implement, and does not imply a decision on:
 
 ```text
-ApplyConditionCommand / RemoveConditionCommand
-ConditionApplied / ConditionRemoved Events
-Condition Application handlers
+ApplyConditionHandler / RemoveConditionHandler (Application layer)
+StateStore.save orchestration for Condition mutation
 Poisoned (or any other) gameplay effect
 RollMode / d20 interaction
 ModifierPipeline
@@ -3968,6 +3975,8 @@ ConditionDefinition hierarchy
 condition source, duration, expiry, stacking, provenance
 Effect framework
 runtime allocation of condition_NNN IDs
+generic Event applier / generic mutation handler
+EventStore, UnitOfWork, WorkingState, state_changes
 ```
 
 These stay open for later G6C groups, per §3.6's rule against introducing
@@ -4101,14 +4110,154 @@ explicitly documented as absent from their fixed field set; reading any of
 these three legacy versions always yields `CreatureState.conditions ==
 frozenset()`, never invented membership.
 
+#### Commands
+
+```text
+ApplyConditionCommand(command_id, campaign_id, actor_id, payload)
+ApplyConditionPayload(target_id: str, condition: Condition)
+
+RemoveConditionCommand(command_id, campaign_id, actor_id, payload)
+RemoveConditionPayload(target_id: str, condition: Condition)
+```
+
+Both follow the existing frozen-dataclass Command Envelope shape (§3.3, §9.1)
+used by `ApplyDamageCommand`/`ApplyHealingCommand`: an immutable typed
+dataclass with a fixed `type` literal and a concrete typed payload.
+`condition` is an actual `Condition` — never coerced from a string — checked
+by the payload's own `__post_init__`. Neither payload carries `source`,
+`duration`, `save_dc`, `spell_id`, `item_id`, `feature_id`, `stacks`, or
+`condition_instance_id`; like `ApplyDamageCommand`/`ApplyHealingCommand`, this
+is currently only an internal/Application-level intent, not a promise of a
+public API/AI-facing surface.
+
+#### Results / resolvers
+
+```text
+ConditionApplicationResult(target_id, condition, previous_active, active)
+ConditionRemovalResult(target_id, condition, previous_active, active)
+
+resolve_condition_application(command, target) -> ConditionApplicationResult
+resolve_condition_removal(command, target) -> ConditionRemovalResult
+```
+
+Two concrete result types were kept — no existing shared "membership
+transition" type was found — matching the same per-mechanic split already
+used for `DamageResult`/`HealingResult`. `active` is intrinsically fixed by
+each type's own `__post_init__`: `ConditionApplicationResult.active` must be
+`True`; `ConditionRemovalResult.active` must be `False`. `target_id` is an
+exact `str`, `condition` an actual `Condition`, and `previous_active`/`active`
+exact `bool` (no truthy/`int` coercion). Both resolvers are pure: they read
+`command.payload.condition in target.conditions` for `previous_active`, do
+not mutate `target`, perform no I/O, call no `DiceEngine`, do no Definition
+lookup, and decide no duration/source/stacking. Target correlation is checked
+the same way as the existing Damage/Healing resolvers —
+`command.payload.target_id != target.id` raises `ValueError` — before any
+membership is read.
+
+#### Successful no-op semantics
+
+Applying an already-active Condition, or removing an already-absent one, is a
+**successful** result, not a `RULE_VIOLATION`:
+
+```text
+apply already-active   -> previous_active=True,  active=True   (successful)
+remove already-absent  -> previous_active=False, active=False  (successful)
+```
+
+This is not optimized away anywhere on the Domain Event path: the resolver
+still returns a normal result, and the builder below still constructs a full
+Event for it.
+
+#### Events
+
+```text
+ConditionApplied V1:  { targetId, condition, previousActive, active }
+ConditionRemoved V1:  { targetId, condition, previousActive, active }
+```
+
+Example (`ConditionApplied` V1):
+
+```json
+{
+  "targetId": "monster_001",
+  "condition": "poisoned",
+  "previousActive": false,
+  "active": true
+}
+```
+
+`build_condition_applied_v1`/`build_condition_removed_v1` follow the existing
+`build_damage_applied_v1`/`build_healing_applied_v1` shape: they check
+Command/outcome correlation (`target_id`, `condition`) and copy the
+already-resolved result verbatim — they do not re-decide membership. No
+`previousConditions`, `newConditions`, `stateChanges`, `conditionInstanceId`,
+`source`, or `duration` field exists. Both Event payload dataclasses
+(`ConditionAppliedPayloadV1`/`ConditionRemovedPayloadV1`) enforce the same
+fixed `active` invariant as their Result counterparts, so a malformed Event
+with the opposite endpoint (`ConditionApplied` with `active=false`, or
+`ConditionRemoved` with `active=true`) cannot even be constructed — this
+covers both the builder path and raw/decoded payload reconstruction in the
+applier below. Both Events reuse the existing generic `GameEvent` envelope
+and `EventMetadataProvider` injection model (§2.2, §3.10); no new Event base
+type is introduced.
+
+#### Concrete Creature appliers
+
+```text
+apply_condition_applied_v1(creature, event) -> CreatureState
+apply_condition_removed_v1(creature, event) -> CreatureState
+```
+
+Each applier follows the existing `apply_damage_applied_v1`/
+`apply_healing_applied_v1` integrity-check shape (§3.19, §3.20) before
+projecting a replacement: exact Event `type`, `version == 1`, exact payload
+key set, `targetId` decoded and matched against `creature.id`, `condition`
+decoded to a known `Condition` (unknown values rejected), `previousActive`/
+`active` decoded as exact `bool`, the Event's own fixed `active` invariant
+(enforced by its payload dataclass), and — the Condition-specific integrity
+check — `previousActive == (condition in creature.conditions)`. A mismatch
+here (`previousActive != (condition in creature.conditions)`) is a stale/
+integrity failure, raised as `ValueError`, not a gameplay `EngineError`,
+matching the existing G6A/G6B `previousHp`-mismatch policy.
+
+The applier then projects the endpoint and returns a replacement
+`CreatureState` via `dataclasses.replace`:
+
+```text
+Apply:  conditions=creature.conditions | {condition}
+Remove: conditions=creature.conditions - {condition}
+```
+
+Only `conditions` changes; `id`, `definition_id`, `ability_scores`,
+`current_hp`, and `max_hp` are preserved. Neither applier re-decides gameplay
+rules or performs I/O.
+
+#### Replay / no-op limitation
+
+Exactly like G6A's `0 -> 0` Damage and G6B's `maxHp -> maxHp` Healing
+(§3.19, §3.20), a canonical no-op Event —
+`ConditionApplied{previousActive: true, active: true}` or
+`ConditionRemoved{previousActive: false, active: false}` — can be re-applied
+to a Creature whose membership already matches, because no State revision,
+optimistic-concurrency token, or applied-Event-ID registry exists yet
+(§3.18's "Exact MVP atomicity boundary" already excludes replay/idempotency).
+This is not fixed here via `revision`, compare-and-swap, an `EventStore`, a
+processed-command registry, or a generic Event-application registry — all of
+those remain deferred per §§3.6/3.18.
+
 #### Abstraction discipline
 
-No Apply/Remove Command, Event, or Application handler is introduced by this
-slice (see "Explicit exclusions" above); §3.6's deferred-orchestration list is
-unaffected. This is a State-only foundation slice, analogous in spirit to how
-§3.2.4's `CharacterState`/`skill_proficiencies` shipped ahead of any Skill
-Check mechanic — the persisted shape is fixed first, and the mutation/gameplay
-contract is added by a later, separately evidenced G6C group.
+Application handlers, `StateStore.save()` orchestration, and any gameplay
+effect remain unimplemented (see "Explicit exclusions" above); §3.6's
+deferred-orchestration list is unaffected. `ApplyConditionCommand`/
+`RemoveConditionCommand`, their resolvers, Events, and appliers are concrete,
+mirroring the existing per-mechanic Damage/Healing shape rather than
+introducing a generic Condition-mutation abstraction — there is still only
+one Condition value and two mutation directions, which is not new evidence
+for a shared framework. The persisted shape (this section's earlier State
+foundation content) and this pure mutation contract are fixed first; the
+Application/persistence orchestration is added by a later, separately
+evidenced G6C group.
 
 ---
 

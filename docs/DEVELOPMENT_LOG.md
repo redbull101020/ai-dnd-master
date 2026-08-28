@@ -3156,3 +3156,71 @@ contracts.
   Effect framework, `ConditionState`/`ConditionDefinition` hierarchy,
   `condition_instance_id`, runtime `condition_NNN` allocation, new production
   dependency, or `StateSnapshot` shape change.
+
+## 2026-08-28 — G6C Group 2: Apply/Remove Domain mutation
+
+- Committed and pushed the reviewed Group 1 State foundation (including the
+  `SCHEMA_V4_VERSION` fixed-identity fix) as
+  `00dd4ef19d3af231322a9bba55d69516381f4f7d` on
+  `feat/g6c-conditions-foundation`; confirmed `origin/main` had not advanced
+  past the branch's base SHA before committing.
+- Added `ApplyConditionCommand`/`ApplyConditionPayload`
+  (`src/dnd_engine/domain/commands/apply_condition.py`) and
+  `RemoveConditionCommand`/`RemoveConditionPayload`
+  (`.../remove_condition.py`), each an immutable Command Envelope with
+  payload `(target_id: str, condition: Condition)` and no `source`/
+  `duration`/`save_dc`/`spell_id`/`item_id`/`feature_id`/`stacks`/
+  `condition_instance_id`, matching the existing `ApplyDamageCommand`/
+  `ApplyHealingCommand` shape.
+- Added two concrete result types, `ConditionApplicationResult`/
+  `ConditionRemovalResult` (`domain/rules/apply_condition.py`/
+  `remove_condition.py`), each `(target_id, condition, previous_active,
+  active)`; `active` is intrinsically fixed by each type's own
+  `__post_init__` (`True` for Application, `False` for Removal — a Result
+  with the opposite endpoint cannot be constructed). Pure resolvers
+  `resolve_condition_application`/`resolve_condition_removal` compute
+  `previous_active = condition in target.conditions`, perform no mutation/
+  I/O/dice/Definition lookup, and use the same target-identity correlation
+  check as `resolve_damage`/`resolve_healing`. Confirmed and tested that
+  applying an already-active Condition, or removing an already-absent one,
+  is an explicit successful no-op, not `RULE_VIOLATION`.
+- Added `ConditionApplied`/`ConditionRemoved` V1 Events
+  (`domain/events/apply_condition.py`/`remove_condition.py`) with payload
+  exactly `{targetId, condition, previousActive, active}`;
+  `build_condition_applied_v1`/`build_condition_removed_v1` check Command/
+  outcome correlation and copy the resolved result verbatim, matching
+  `build_damage_applied_v1`/`build_healing_applied_v1`. Confirmed the no-op
+  case still produces a complete Event (never short-circuited).
+- Added concrete Creature appliers `apply_condition_applied_v1`/
+  `apply_condition_removed_v1`, following the existing `apply_damage_applied_v1`/
+  `apply_healing_applied_v1` integrity-check shape (exact Event type/
+  version/payload keys, decoded `targetId`/`condition`/`previousActive`/
+  `active`, `targetId == creature.id`, and the Condition-specific
+  `previousActive == (condition in creature.conditions)` check — a mismatch
+  raises `ValueError`, not a gameplay `EngineError`) before projecting
+  `conditions | {condition}` (Apply) or `conditions - {condition}` (Remove)
+  through `dataclasses.replace`; only `conditions` changes. Demonstrated and
+  documented, mirroring G6A/G6B, that a canonical no-op Event can be
+  re-applied to a Creature whose membership already matches without being
+  detected as a duplicate — not fixed via revision/CAS/EventStore here.
+- No Application handler, `StateStore.save()` call, or gameplay effect was
+  implemented — those remain Group 3 (persistence) and Group 4 (`Poisoned`).
+- Extended canonical §3.21 in `docs/ARCHITECTURE.md` in place (Commands,
+  Results/resolvers, successful no-op semantics, Events, concrete Creature
+  appliers, replay/no-op limitation, updated Explicit exclusions/Abstraction
+  discipline) rather than adding a new section, since this is still the
+  same G6C1 State-and-mutation-foundation slice. Appended DEC-0036 with the
+  full rationale. Updated `CLAUDE.md`'s G6C1 bullet and the deferred-
+  abstractions paragraph to name the new concrete Condition appliers.
+- Left broad Roadmap `[ ] Conditions` unchecked.
+- Verified on Python 3.12.13 / pytest 9.1.1: the new eight-file Group 2
+  domain suite passed (`148 passed`), the full suite passed
+  (`1210 passed`), and the configured mypy check passed (`Success: no
+  issues found in 87 source files`). `git diff --check` reported no
+  whitespace errors.
+- Introduced no `ApplyConditionHandler`/`RemoveConditionHandler`,
+  `StateStore.save()` flow, filesystem integration, `Poisoned` d20 effect,
+  `RollMode` condition rules, `ModifierPipeline`, Effect framework, generic
+  Event applier, generic mutation handler, snapshot replacement helper,
+  `EventStore`, `UnitOfWork`, `WorkingState`, `state_changes`, or new
+  production dependency.
