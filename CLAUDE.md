@@ -39,6 +39,7 @@
 * **Phase 2 — Basic Rules: текущая.**
 * Первый read-only Ability Check vertical slice Phase 2 реализован.
 * Minimal read-only Character unarmed Attack Roll → Monster slice (§3.17) реализован; broad Roadmap Attack rolls остаётся incomplete.
+* State Mutation Foundation (G5, §3.18) зафиксирован как canonical contract для будущего authoritative state-mutating Command; Damage/HP mutation и Event applier не реализованы.
 
 Актуальный статус — в `docs/ROADMAP.md`; при расхождении с этим списком выигрывает Roadmap.
 
@@ -151,8 +152,28 @@ transaction coordinator
 GameContext implementation
 ```
 
-Отложены также EventStore, Event persistence/runtime-append в JSONL, применение
-Events к State, replay и transaction/UoW.
+§3.18 State Mutation Foundation (G5) дополнительно запрещает вводить для State
+mutation:
+
+```text
+UnitOfWork
+TransactionManager
+WorkingState
+MutationContext
+StateChange
+EventApplierRegistry
+generic reducer
+generic State Owner repository
+generic transaction coordinator
+```
+
+Канонический контракт применения Events к State — loaded snapshot как
+read-only input, replacement/copy-on-write вместо in-place мутации,
+transition-specific mutation scope, save ordering, save-failure semantics и
+exact MVP atomicity boundary — зафиксирован в §3.18. Production Event applier,
+Damage и HP mutation по-прежнему не реализованы. EventStore, Event
+persistence/runtime-append в JSONL, serialized Event type/version dispatch и
+replay остаются отдельно deferred (§12.10, §3.18).
 
 Первый vertical slice Phase 2 использует explicit Application handler и прямой
 вызов конкретного Domain resolver. Общая orchestration abstraction появляется
@@ -270,6 +291,8 @@ Event immutable: после записи не редактируется и не
 | `AbilityCheckSucceeded` / `AbilityCheckFailed` | один `AbilityCheckResolved`, исход в `payload.succeeded` |
 | `ruleset_version = "5.2.1"` для `dnd_5e` | `dnd_5e` = SRD 5.1; канонический `ruleset_version = "5.1"` (§4.6) |
 | `rules/dnd_5e/...json` как источник Definition data | packaged resource `src/dnd_engine/resources/rulesets/...` (§12.26) |
+| `deepcopy()` loaded State перед мутацией | replacement/copy-on-write construction нового State object (§3.18) |
+| `state_changes`/UoW как решение задачи «применить Event к State» | конкретное State Owner-specific применение Event + §3.18 mutation scope |
 
 `DamageType` — ровно тринадцать значений, расширять нельзя:
 

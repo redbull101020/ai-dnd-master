@@ -53,6 +53,7 @@
 | Armor Class (minimal implementation) | §3.15 |
 | Definition access port (G4a, DefinitionSource) | §3.16 |
 | Character unarmed Attack Roll → Monster vertical slice | §3.17 |
+| State Mutation Foundation (G5, mutating Command contract) | §3.18 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -104,6 +105,7 @@
   * [3.15. Minimal Phase 2 Armor Class design](#315-minimal-phase-2-armor-class-design)
   * [3.16. Minimal Phase 2 Definition Access vertical slice (G4a)](#316-minimal-phase-2-definition-access-vertical-slice-g4a)
   * [3.17. Minimal Phase 2 Character unarmed Attack Roll → Monster vertical slice](#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice)
+  * [3.18. State Mutation Foundation (G5)](#318-state-mutation-foundation-g5)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1630,7 +1632,12 @@ flowchart TD
 Одна Command является одной логической транзакцией.
 
 Implementation status: **Planned / Deferred** до первого authoritative
-state-mutating command и отдельного State Mutation Foundation решения.
+state-mutating command. §3.18 State Mutation Foundation (G5) теперь фиксирует
+канонический mutating-command lifecycle, persistence ordering и exact MVP
+atomicity boundary, которые этот раздел откладывал на «отдельное State
+Mutation Foundation решение»; сам authoritative state-mutating Command
+по-прежнему не реализован, и гарантии §3.18 остаются conceptual до первого
+Damage → HP slice.
 
 Будущая state-mutating Command может породить несколько Events:
 
@@ -3113,6 +3120,393 @@ sufficient, and no new production abstraction is introduced.
 This reaffirms DEC-0027: a consumer count is a review trigger, not an
 abstraction rule. Existing Ability Check, Character Saving Throw, and
 Character Skill Check production contracts remain unchanged.
+
+---
+
+### 3.18. State Mutation Foundation (G5)
+
+Implementation status: **Canonical contract only.** No authoritative
+state-mutating Command, Event applier, or production `StateStore.save()` call
+exists yet. This section fixes the contract that the first authoritative
+state-mutating Command — the future Damage → HP slice — must follow. It does
+not implement Damage, HP mutation, or any Event applier, and it changes no
+Python contract.
+
+This section is the "separate State Mutation Foundation decision" that §3.8
+Atomicity deferred to. It fixes the mutating-command lifecycle, mutation
+scope, Event → State contract, persistence ordering, and exact MVP atomicity
+boundary; §3.8 keeps the general Atomicity statement.
+
+#### Mutating Command lifecycle
+
+The canonical `Command → Validation → Rule Engine → Result → Events → State
+update → Persistence → Narration` flow (README, CLAUDE.md, §11) is unchanged.
+For a future authoritative state-mutating Command it resolves to exactly this
+ordered flow:
+
+```text
+load authoritative StateSnapshot
+        ↓
+validate Command / resolve references
+        ↓
+resolve gameplay rules without State mutation
+        ↓
+produce concrete gameplay outcome
+        ↓
+construct complete ordered Event batch
+        ↓
+apply resolved Events to an isolated replacement State projection
+        ↓
+construct and validate replacement StateSnapshot
+        ↓
+StateStore.save(new_snapshot)
+        ↓
+expose successful ResolutionResult
+```
+
+"Rule resolution" produces the concrete Domain outcome only (a future
+`DamageResult`, for example): the resolver does not construct Events, does
+not receive `EventMetadataProvider`, and does not read Event metadata.
+Application then constructs the complete ordered Event batch from that
+outcome together with authoritative Event metadata obtained through the
+existing `EventMetadataProvider` seam (§2.2, §3.10) — the same division
+already used by the implemented Ability Check, Character Saving Throw,
+Character Skill Check, and Character unarmed Attack Roll handlers. The
+application-level `ResolutionResult` wraps the outcome and the Events only
+after the replacement snapshot has been successfully persisted through
+`StateStore.save()` (see Persistence ordering below). Resolver, Event
+construction, and the final `ResolutionResult` are three separate steps with
+three separate owners.
+
+Existing read-only Commands — Ability Check (§3.10), Character Saving Throw
+(§3.13), Character Skill Check (§3.14), and Character unarmed Attack Roll
+(§3.17) — keep their current semantics unchanged: an Event may be created,
+State projection is a no-op, and `StateStore.save()` is never called.
+
+#### Loaded snapshot is read-only input
+
+Application must treat every State object obtained through `StateStore.load()`
+as read-only authoritative input for the current Command transaction.
+In-place mutation of the loaded object graph is forbidden — including calling
+a setter or assigning a field on a loaded `CreatureState`/`CharacterState` —
+even though both remain Python-mutable dataclasses.
+
+Authoritative mutation is expressed through replacement / copy-on-write
+construction, not in-place mutation:
+
+```text
+loaded CreatureState
+        ↓
+replacement CreatureState (new instance, only the changed field(s) differ)
+        ↓
+replacement creatures tuple
+        ↓
+replacement StateSnapshot
+```
+
+`deepcopy()` is not part of this contract: a replacement object is built
+directly (for example via `dataclasses.replace(...)` or an equivalent
+explicit constructor call) from the fields the Event actually changes, not by
+cloning the loaded graph and mutating the clone. No `WorkingState` wrapper
+type is introduced, and existing State dataclasses do not become frozen.
+
+#### State Owner + transition-specific write scope
+
+Python mutability of a State object is not a license for every transition to
+change every field. Each concrete State Owner transition has its own explicit
+mutation scope, reviewed alongside its Event contract (§10.4, §10.15).
+
+For the future Damage → HP consumer, the expected scope is fixed now so the
+first concrete applier has a canonical target:
+
+```text
+may change:
+    CreatureState.current_hp
+
+must be preserved:
+    CreatureState.id
+    CreatureState.definition_id
+    CreatureState.ability_scores
+    CreatureState.max_hp
+```
+
+This fixes only the Damage → HP scope. `max_hp`, `ability_scores`, and other
+`CreatureState`/`CharacterState` fields are not declared globally immutable:
+a different future Creature transition (for example levelling, or a future
+`max_hp` change) may be granted its own write scope through its own design,
+documented and reviewed alongside that transition's concrete Event contract.
+A new Decision Log entry is required only when that design actually
+introduces or changes a substantial architectural contract, per the existing
+`AGENTS.md` change-authorisation process — not automatically for every future
+transition.
+
+#### Event → State contract
+
+General contract: a resolved concrete Event is applied by a State
+Owner-specific deterministic function that returns a replacement State
+object.
+
+```text
+resolved concrete Event → State Owner-specific deterministic application → replacement State
+```
+
+Event application:
+
+```text
+does not roll dice
+does not call DiceEngine
+does not load Definitions
+does not call the AI layer
+does not perform persistence I/O
+does not read the clock
+does not create Event IDs
+does not generate new authoritative Events
+does not re-make a gameplay decision
+applies exactly the transition the resolved Event already expresses
+```
+
+This foundation does not introduce production `EventApplierRegistry`, a
+generic reducer, a dispatcher, or a generic `EventApplier` Protocol solely to
+anticipate Damage. The exact Python shape of the first concrete applier (a
+plain function, a method, or another minimal form) is left open until the
+Damage → HP implementation slice.
+
+#### Resolver ≠ State application
+
+A resolver is responsible for the gameplay decision; State application is
+responsible for the deterministic projection of an already-resolved Event.
+
+A future Damage resolver, for example, may determine requested damage,
+effective damage, previous HP, and new HP — the full gameplay decision. If
+the resolved Event already carries that decided result (for example the new
+`current_hp` value), State application does not recompute clamping or any
+other rule; it only projects the value the Event already carries. State
+application may perform application-side integrity validation of whether an
+Event is applicable to the loaded State (for example, that the Event's target
+Creature ID matches the State object being updated), but it does not repeat
+rule resolution.
+
+#### Persistence ordering
+
+Canonical mutating ordering:
+
+```text
+outcome → Events → replacement State → invariants → replacement StateSnapshot → StateStore.save → successful ResolutionResult
+```
+
+A successful mutating Command's result must not become externally observable
+before `StateStore.save()` has returned successfully. The "return success,
+save later" model is forbidden: Application does not return
+`ResolutionResult(success=True, ...)` and perform `save()` afterward, and does
+not expose the outcome or Events to a caller before `save()` succeeds.
+`StateStore`'s `load()`/`save()` API (§12.9) is not extended with a
+transaction method for this contract.
+
+#### Save failure semantics
+
+If `StateStore.save(new_snapshot)` raises `StateStoreError` or another
+Infrastructure failure:
+
+```text
+the original loaded State graph remains unchanged
+no successful ResolutionResult is returned
+the in-memory Events that were constructed are not durable Event history
+the Infrastructure failure is not automatically converted into a gameplay EngineError
+no rollback framework is introduced
+```
+
+If Event metadata (an Event ID, a timestamp) was already allocated through
+`EventMetadataProvider` before the save failure, that allocation is not
+reused and no rollback/reuse mechanism is designed for it. ID gaps are an
+accepted consequence of this MVP; ID reuse is never introduced to close them.
+
+#### Snapshot-authoritative MVP
+
+For this MVP, the persisted `StateSnapshot` is accepted as the authoritative
+persisted representation of current campaign State. Events produced by
+current `ResolutionResult`s are:
+
+```text
+immutable Domain facts
+not durable runtime history until a future EventStore exists
+not described as recoverable or replayable history
+```
+
+`FilesystemStateStore` is not described as fully crash-durable. §12.9 already
+states that its atomic same-directory temporary-file replacement via
+`os.replace` is single-file replacement, not a durability guarantee across
+multiple files or across an arbitrary crash; this contract adds no fsync
+semantics, power-loss durability, or crash recovery on top of that. The
+persisted snapshot is described as an `authoritative persisted snapshot`, not
+with an expanded durability guarantee.
+
+#### EventStore remains deferred
+
+EventStore is not implemented as part of this foundation. Pairing
+`EventStore.append(events)` with `StateStore.save(snapshot)` without a shared
+transaction design would create an inconsistency window — Events durably
+appended with no matching State save, or a State save with no matching
+durable Events — that this MVP does not attempt to close. A durable
+EventStore, replay, and recovery are designed separately, evidence-driven,
+once a concrete consumer needs them (§12.10).
+
+#### Serialized Event dispatch remains deferred
+
+Reading a persisted Event back and dispatching on its `type`/`version` to
+reconstruct or apply it remains deferred until a concrete EventStore/replay/
+serialized-Event-reader consumer exists. This foundation does not introduce
+an Event registry, a schema registry, or a deserializer dispatcher for that
+purpose.
+
+#### `state_changes` remains absent
+
+`ResolutionResult` (§3.5) stays exactly `success`, `command_id`, `outcome`,
+`events`, `errors`. A resolved Event is the authoritative Domain fact for a
+transition; a generic `state_changes` field would be a second, competing
+representation of the same transition and is not introduced. If a structured
+diff is ever needed for UI or debugging, it is designed later as a derived
+projection with a concrete consumer, not introduced ahead of one. This section
+changes no field of the production `ResolutionResult`.
+
+#### No generic transaction framework
+
+Explicitly deferred, in addition to the existing §3.6 list:
+
+```text
+UnitOfWork
+TransactionManager
+WorkingState
+MutationContext
+StateChange
+EventApplierRegistry
+generic reducer
+generic State Owner repository
+generic transaction coordinator
+```
+
+No production state-mutating gameplay consumer exists yet; the first Damage
+slice must supply real evidence before any of these are reconsidered.
+
+#### Exact MVP atomicity boundary
+
+This clarifies §3.8 Atomicity for the current single-snapshot, single-writer
+MVP. Guaranteed:
+
+```text
+loaded authoritative State is not mutated
+the replacement is built in isolation from the loaded State
+persisted authoritative State does not change before save()
+the replacement snapshot is saved by exactly one StateStore.save() call
+a successful ResolutionResult is returned only after a successful save
+```
+
+Not guaranteed:
+
+```text
+atomic EventStore + StateStore transaction
+distributed transaction
+multi-store transaction
+concurrency control
+optimistic locking
+State revision / compare-and-swap
+replay
+rollback after a successful save
+exactly-once Command execution
+retry deduplication
+post-crash recovery
+power-loss / fsync durability
+```
+
+#### Acceptance obligations for the first Damage → HP consumer
+
+This subsection fixes the executable acceptance obligations that the first
+concrete Damage → HP mutation slice must demonstrate before the guarantees
+above stop being conceptual. It concretizes the decision already recorded in
+DEC-0032; it is not a new architectural decision. It does not fix the exact
+`DamageCommand`/`DamageApplied` Event payload schema and does not decide
+Damage mechanics — see the G6a boundary below.
+
+**A. Domain — concrete State transition.** The first concrete Damage → HP
+Event application must demonstrate:
+
+```text
+the same resolved Event applied to the same input CreatureState produces the same replacement CreatureState
+no DiceEngine call happens during State application
+no DefinitionSource call happens during State application
+no persistence I/O happens during State application
+no new authoritative Event is produced during State application
+no gameplay rule decision is re-made during State application
+only CreatureState.current_hp changes
+CreatureState.id, definition_id, ability_scores, and max_hp are preserved unchanged
+the resulting CreatureState satisfies its existing invariants (§3.2.1)
+```
+
+This does not require a generic `EventApplier` interface, Protocol, or
+registry; the exact Python shape of the first concrete application step is
+decided at implementation time, per "Event → State contract" above.
+
+**B. Application orchestration.** The future mutating Application handler
+must demonstrate:
+
+```text
+the object graph returned by StateStore.load() is not mutated
+a complete Event exists before State projection/application begins
+the affected CreatureState is replaced by a new object, never mutated in place
+a replacement StateSnapshot is constructed
+unrelated projections in the replacement snapshot remain semantically unchanged
+StateStore.save() is called exactly once on the successful mutating path
+StateStore.save() receives the replacement snapshot, not the originally loaded snapshot
+a processing/validation/rule-resolution failure occurring before Event construction does not call StateStore.save()
+an Event-application/invariant failure does not call StateStore.save()
+a StateStore.save() failure propagates outward per existing StateStoreError boundary semantics (§12.9)
+a StateStore.save() failure never results in a successful ResolutionResult
+a successful ResolutionResult only becomes observable after a successful StateStore.save() call
+```
+
+These are observable obligations on inputs, outputs, and call sequence —
+comparable to the existing spy-`StateStore`/call-order assertion style already
+used by `tests/application/test_attack_handler.py` — not a requirement on the
+internal statement order of the handler implementation.
+
+**C. Regression / architecture boundary.** The first mutation slice must also
+reconfirm, alongside its own Damage → HP-specific tests:
+
+```text
+existing read-only handlers (Ability Check, Character Saving Throw, Character Skill Check, Character unarmed Attack Roll) still never call StateStore.save()
+ResolutionResult has not gained a state_changes field
+no EventStore has been introduced
+no runtime Event persistence has been introduced
+no generic Event applier registry or generic reducer has been introduced
+no UnitOfWork, TransactionManager, or MutationContext has been introduced
+no new production dependency has been added
+StateStore's Protocol still exposes exactly load()/save()
+StateSnapshot's schema is not extended solely to support the mutation framework
+```
+
+**G6a boundary.** The first consumer after this foundation is a minimal
+`Damage → current_hp` evidence slice (tracked in `docs/ROADMAP.md` as
+`Damage`/`HP`). Fixing the acceptance obligations above does not fix, and does
+not imply a decision on:
+
+```text
+DamageCommand exact schema
+exact DamageApplied Event payload
+resistances
+vulnerabilities
+immunities
+temporary HP
+unconscious/death
+healing
+critical damage
+equipment
+Attack → Damage orchestration
+generic Effects
+generic modifier pipeline
+```
+
+These stay open for the Damage → HP implementation slice itself,
+evidence-driven, per the existing §3.6 rule against introducing future-phase
+abstractions ahead of a concrete consumer.
 
 ---
 

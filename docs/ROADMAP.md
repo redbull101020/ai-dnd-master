@@ -60,7 +60,7 @@ Definition of Done Phase 1 не добавляются.
 
 ## Phase 2 — Basic Rules
 
-> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope)
+> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5)
 
 * [x] Ability checks
 * [ ] Proficiency
@@ -68,10 +68,24 @@ Definition of Done Phase 1 не добавляются.
 * [ ] Skills
 * [x] AC
 * [ ] Attack rolls
+* [x] State Mutation Foundation (G5)
 * [ ] HP
 * [ ] Damage
 * [ ] Healing
 * [ ] Conditions
+
+`State Mutation Foundation (G5)` (§3.18) fixes only the canonical contract for
+a future authoritative state-mutating Command — mutating-command lifecycle,
+read-only loaded-snapshot input, transition-specific mutation scope,
+Event → State application, persistence ordering, save-failure semantics, and
+the exact MVP atomicity boundary. It implements no Damage, no HP mutation, and
+no Event applier. It is a documentation-only prerequisite gate positioned
+after the existing minimal read-only `Character unarmed Attack Roll → Monster`
+slice (§3.17) and before the first HP/Damage state-mutating slice, which
+remains the evidence checkpoint for the deferred abstractions §3.18 lists.
+§3.18 also fixes the executable acceptance obligations that the first Damage →
+HP slice must demonstrate at the Domain, Application, and regression-boundary
+level.
 
 ## Phase 3 — Combat
 
