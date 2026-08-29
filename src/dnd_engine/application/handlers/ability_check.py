@@ -7,6 +7,9 @@ from dnd_engine.domain.rules.ability_check import (
     AbilityCheckResult,
     resolve_ability_check,
 )
+from dnd_engine.domain.rules.condition_roll_mode import (
+    ability_check_roll_mode_from_conditions,
+)
 from dnd_engine.domain.services.dice import DiceEngine
 from dnd_engine.domain.services.state_store import StateStore
 
@@ -52,7 +55,13 @@ class AbilityCheckHandler:
                 ),
             )
 
-        outcome = resolve_ability_check(command, creature, self._dice)
+        roll_mode = ability_check_roll_mode_from_conditions(creature.conditions)
+        outcome = resolve_ability_check(
+            command,
+            creature,
+            self._dice,
+            roll_mode=roll_mode,
+        )
         metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
         event = build_ability_check_resolved_v2(
             event_id=metadata.event_id,

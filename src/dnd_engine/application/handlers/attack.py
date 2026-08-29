@@ -8,6 +8,9 @@ from dnd_engine.domain.rules.attack import (
     AttackResult,
     resolve_character_unarmed_attack,
 )
+from dnd_engine.domain.rules.condition_roll_mode import (
+    attack_roll_mode_from_conditions,
+)
 from dnd_engine.domain.services.definitions import (
     DefinitionNotFoundError,
     DefinitionSource,
@@ -146,12 +149,14 @@ class AttackHandler:
             )
 
         target_armor_class = monster_definition.armor_class
+        roll_mode = attack_roll_mode_from_conditions(actor_creature.conditions)
         outcome = resolve_character_unarmed_attack(
             command,
             actor_creature,
             actor_character,
             self._dice,
             target_armor_class=target_armor_class,
+            roll_mode=roll_mode,
         )
         metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
         event = build_attack_resolved_v1(

@@ -1,4 +1,7 @@
 from dnd_engine.application.services.event_metadata import EventMetadataProvider
+from dnd_engine.application.services.state_snapshot import (
+    replace_creature_in_snapshot,
+)
 from dnd_engine.domain.commands.damage import ApplyDamageCommand
 from dnd_engine.domain.errors import EngineError, ErrorCode
 from dnd_engine.domain.events.damage import (
@@ -8,7 +11,6 @@ from dnd_engine.domain.events.damage import (
 from dnd_engine.domain.resolution import ResolutionResult
 from dnd_engine.domain.rules.damage import DamageResult, resolve_damage
 from dnd_engine.domain.services.state_store import StateStore
-from dnd_engine.domain.state.snapshot import StateSnapshot
 
 
 class DamageHandler:
@@ -83,14 +85,8 @@ class DamageHandler:
         )
 
         replacement_target = apply_damage_applied_v1(target, event)
-        replacement_creatures = tuple(
-            replacement_target if creature.id == target.id else creature
-            for creature in snapshot.creatures
-        )
-        replacement_snapshot = StateSnapshot(
-            campaign=snapshot.campaign,
-            creatures=replacement_creatures,
-            characters=snapshot.characters,
+        replacement_snapshot = replace_creature_in_snapshot(
+            snapshot, replacement_target
         )
 
         self._state_store.save(replacement_snapshot)

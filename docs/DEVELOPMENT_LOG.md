@@ -3081,3 +3081,397 @@ contracts.
 - Introduced no production Python change, dependency, State schema/version
   change, EventStore, runtime `events.jsonl` artifact, `state_changes` field,
   generic mutation framework, or direct AI/API State mutation.
+
+## 2026-08-28 — G6C Group 1: Condition State foundation
+
+- Branched `feat/g6c-conditions-foundation` from `origin/main` at
+  `0dbe090745e8f58d41ea075e14d0871eab9a8723` (the merged G6B tip, DEC-0034).
+- Added a closed, identity-only Domain `StrEnum` `Condition` with exactly one
+  member, `POISONED = "poisoned"`
+  (`src/dnd_engine/domain/value_objects/condition.py`), following the
+  existing `DamageType`/`Skill` pattern; no other 5e Condition was added.
+- Added `CreatureState.conditions: frozenset[Condition] = frozenset()` with
+  strict `__post_init__` validation (`type(...) is frozenset`, every member
+  an actual `Condition`, no coercion from `list`/`set`/`tuple`/
+  `frozenset[str]`/raw strings), mirroring
+  `CharacterState.saving_throw_proficiencies`/`skill_proficiencies`. The
+  empty default preserves every existing `CreatureState(...)` call site;
+  `current_hp`/`max_hp` invariants are unchanged.
+- Bumped `StateSerializer` to schema V4 as the current writer: added explicit
+  `LEGACY_SCHEMA_V3_VERSION = 3`, a V4-only `conditions` Creature field
+  (strict JSON list of known, non-duplicate `Condition` values, sorted by
+  `Condition.value`, always emitted including `[]`), and kept V1–V3 Creature
+  decoding forbidding `conditions` and always producing
+  `CreatureState.conditions == frozenset()`.
+- Closed a concrete regression found while implementing the bump: Character
+  `skillProficiencies` decoding was gated by `schema_version == SCHEMA_VERSION`,
+  which would have silently stopped V3 payloads from decoding their Character
+  projection once `SCHEMA_VERSION` became `4`. Changed the gate to
+  `schema_version != LEGACY_SCHEMA_V2_VERSION` so V3 and V4 both decode the
+  unchanged Character schema; added a dedicated regression test asserting a
+  realistic V3 payload with non-empty `skillProficiencies` still decodes that
+  membership exactly under the V4 implementation, with
+  `CreatureState.conditions == frozenset()`.
+- Review of Group 1 found the identical trap reintroduced one level down: the
+  new V4 Creature field set and `conditions` decoding were both gated by
+  `schema_version == SCHEMA_VERSION`, so a future `SCHEMA_VERSION` bump would
+  have silently misread already-persisted V4 Creature payloads as pre-V4 and
+  rejected their `conditions` field as unknown. Fixed by introducing a
+  separate fixed constant `SCHEMA_V4_VERSION = 4` (`SCHEMA_VERSION =
+  SCHEMA_V4_VERSION`); the supported-schema-version set, the V4 Creature
+  field set, and `conditions` decoding now all compare against
+  `SCHEMA_V4_VERSION`, never against the mutable `SCHEMA_VERSION`, which
+  remains only the "current writer" pointer used when serializing. Added
+  `test_v4_creature_shape_is_fixed_and_survives_future_schema_version_bump`,
+  which monkeypatches `SCHEMA_VERSION` to a hypothetical future value and
+  asserts a historical V4 payload with `conditions` still decodes exactly —
+  this test fails against the pre-fix code. Updated §3.21/§12.9 and DEC-0035
+  in place (not yet committed) to describe the fixed-identity design instead
+  of the original comparison-against-`SCHEMA_VERSION` description.
+- `StateSnapshot`'s top-level shape (`campaign`/`creatures`/`characters`) is
+  unchanged; no `StateSnapshot.conditions` field or `ConditionState` aggregate
+  was added. No Apply/Remove Command, Event, Application handler, or
+  `Poisoned` gameplay effect was implemented — those remain later G6C groups.
+- Documented the slice as new canonical §3.21 in `docs/ARCHITECTURE.md`,
+  including the explicit clarification that `condition_NNN` (§4.12/§4.13)
+  remains reserved for a possible future stateful Condition-instance model
+  and is not allocated by this membership set; synchronized §3.2.1, §12.9,
+  and §12.12. Appended DEC-0035 with the full rationale. Updated `CLAUDE.md`'s
+  Phase 2 summary, current-phase bullet list, serialization schema-version
+  fact, and naming-traps table to match.
+- Left broad Roadmap `[ ] Conditions` unchecked; `README.md` required no edit
+  (it had no stale schema-version or Creature-field text), and
+  `AI_DND_DATA_FLOW_CURRENT.md`'s `schemaVersion: 3` example/summary row were
+  updated to V4 with `conditions` in the example payload, since that text
+  would otherwise become factually stale.
+- Verified on Python 3.12.13 / pytest 9.1.1: the narrow five-file Condition
+  suite passed (`184 passed`), the full suite passed (`1062 passed`), and the
+  configured mypy check passed (`Success: no issues found in 81 source
+  files`). `git diff --check` reported no whitespace errors. Manually
+  confirmed the new regression test fails against the pre-fix code (reverting
+  the two `SCHEMA_V4_VERSION` decode-gate comparisons back to `SCHEMA_VERSION`
+  reproduces `ValueError: unknown creature fields: ['conditions']`), then
+  restored the fix.
+- Introduced no Apply/Remove Command, Event, handler, `Poisoned` behavior,
+  Effect framework, `ConditionState`/`ConditionDefinition` hierarchy,
+  `condition_instance_id`, runtime `condition_NNN` allocation, new production
+  dependency, or `StateSnapshot` shape change.
+
+## 2026-08-28 — G6C Group 2: Apply/Remove Domain mutation
+
+- Committed and pushed the reviewed Group 1 State foundation (including the
+  `SCHEMA_V4_VERSION` fixed-identity fix) as
+  `00dd4ef19d3af231322a9bba55d69516381f4f7d` on
+  `feat/g6c-conditions-foundation`; confirmed `origin/main` had not advanced
+  past the branch's base SHA before committing.
+- Added `ApplyConditionCommand`/`ApplyConditionPayload`
+  (`src/dnd_engine/domain/commands/apply_condition.py`) and
+  `RemoveConditionCommand`/`RemoveConditionPayload`
+  (`.../remove_condition.py`), each an immutable Command Envelope with
+  payload `(target_id: str, condition: Condition)` and no `source`/
+  `duration`/`save_dc`/`spell_id`/`item_id`/`feature_id`/`stacks`/
+  `condition_instance_id`, matching the existing `ApplyDamageCommand`/
+  `ApplyHealingCommand` shape.
+- Added two concrete result types, `ConditionApplicationResult`/
+  `ConditionRemovalResult` (`domain/rules/apply_condition.py`/
+  `remove_condition.py`), each `(target_id, condition, previous_active,
+  active)`; `active` is intrinsically fixed by each type's own
+  `__post_init__` (`True` for Application, `False` for Removal — a Result
+  with the opposite endpoint cannot be constructed). Pure resolvers
+  `resolve_condition_application`/`resolve_condition_removal` compute
+  `previous_active = condition in target.conditions`, perform no mutation/
+  I/O/dice/Definition lookup, and use the same target-identity correlation
+  check as `resolve_damage`/`resolve_healing`. Confirmed and tested that
+  applying an already-active Condition, or removing an already-absent one,
+  is an explicit successful no-op, not `RULE_VIOLATION`.
+- Added `ConditionApplied`/`ConditionRemoved` V1 Events
+  (`domain/events/apply_condition.py`/`remove_condition.py`) with payload
+  exactly `{targetId, condition, previousActive, active}`;
+  `build_condition_applied_v1`/`build_condition_removed_v1` check Command/
+  outcome correlation and copy the resolved result verbatim, matching
+  `build_damage_applied_v1`/`build_healing_applied_v1`. Confirmed the no-op
+  case still produces a complete Event (never short-circuited).
+- Added concrete Creature appliers `apply_condition_applied_v1`/
+  `apply_condition_removed_v1`, following the existing `apply_damage_applied_v1`/
+  `apply_healing_applied_v1` integrity-check shape (exact Event type/
+  version/payload keys, decoded `targetId`/`condition`/`previousActive`/
+  `active`, `targetId == creature.id`, and the Condition-specific
+  `previousActive == (condition in creature.conditions)` check — a mismatch
+  raises `ValueError`, not a gameplay `EngineError`) before projecting
+  `conditions | {condition}` (Apply) or `conditions - {condition}` (Remove)
+  through `dataclasses.replace`; only `conditions` changes. Demonstrated and
+  documented, mirroring G6A/G6B, that a canonical no-op Event can be
+  re-applied to a Creature whose membership already matches without being
+  detected as a duplicate — not fixed via revision/CAS/EventStore here.
+- No Application handler, `StateStore.save()` call, or gameplay effect was
+  implemented — those remain Group 3 (persistence) and Group 4 (`Poisoned`).
+- Extended canonical §3.21 in `docs/ARCHITECTURE.md` in place (Commands,
+  Results/resolvers, successful no-op semantics, Events, concrete Creature
+  appliers, replay/no-op limitation, updated Explicit exclusions/Abstraction
+  discipline) rather than adding a new section, since this is still the
+  same G6C1 State-and-mutation-foundation slice. Appended DEC-0036 with the
+  full rationale. Updated `CLAUDE.md`'s G6C1 bullet and the deferred-
+  abstractions paragraph to name the new concrete Condition appliers.
+- Left broad Roadmap `[ ] Conditions` unchecked.
+- Verified on Python 3.12.13 / pytest 9.1.1: the new eight-file Group 2
+  domain suite passed (`148 passed`), the full suite passed
+  (`1210 passed`), and the configured mypy check passed (`Success: no
+  issues found in 87 source files`). `git diff --check` reported no
+  whitespace errors.
+- Introduced no `ApplyConditionHandler`/`RemoveConditionHandler`,
+  `StateStore.save()` flow, filesystem integration, `Poisoned` d20 effect,
+  `RollMode` condition rules, `ModifierPipeline`, Effect framework, generic
+  Event applier, generic mutation handler, snapshot replacement helper,
+  `EventStore`, `UnitOfWork`, `WorkingState`, `state_changes`, or new
+  production dependency.
+
+## 2026-08-28 — G6C Group 3: Application handlers + authoritative persistence
+
+- Committed and pushed the reviewed Group 2 Domain mutation contract as
+  `732faecd6e1297d91202e01bc97bfef19ec53571` on `feat/g6c-conditions-foundation`;
+  confirmed local and `origin/feat/g6c-conditions-foundation` already matched
+  exactly (nothing new to commit) before starting Group 3 edits.
+- Added `ApplyConditionHandler`/`RemoveConditionHandler`
+  (`src/dnd_engine/application/handlers/apply_condition.py`/
+  `remove_condition.py`), each depending only on `StateStore` and
+  `EventMetadataProvider` (no `DiceEngine`/`DefinitionSource`), following the
+  exact `DamageHandler`/`HealingHandler` lifecycle (§3.19, §3.20):
+  `StateStore.load` → actor lookup → target lookup → pure resolver →
+  `EventMetadataProvider.next_metadata` → concrete Condition Event → concrete
+  Creature applier → replacement `creatures` tuple (order preserved) →
+  replacement `StateSnapshot` (`campaign`/`characters` reused unchanged) →
+  `StateStore.save()` exactly once on the success path → successful
+  `ResolutionResult`.
+- Actor/target lookup policy matches the proven Damage/Healing convention
+  exactly: missing actor → `ErrorCode.ENTITY_NOT_FOUND`, `entity_id=actor_id`,
+  `field=None`; missing target → `ErrorCode.ENTITY_NOT_FOUND`,
+  `entity_id=payload.target_id`, `field="target_id"`; both return before
+  `next_metadata`/`save()` are reached. Self-targeting is permitted.
+  Documented this explicitly in §3.21 as a direct-internal-slice policy, not
+  a promise about actor semantics for any future Condition source.
+- Confirmed and tested that Apply-already-active and Remove-already-absent
+  are never short-circuited: both still run the full lifecycle (resolver →
+  Event → applier → replacement snapshot → exactly one `save()`) and return a
+  successful `ResolutionResult`.
+- Did not extract a shared `replace_creature`/snapshot-replacement helper,
+  even though the same inline construction is now duplicated across
+  `DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
+  `RemoveConditionHandler` — a deliberate evidence checkpoint left for a
+  later, separately evidenced abstraction-review group, per the task's
+  explicit instruction not to extract in this group. No `EventStore` or
+  `events.jsonl` write was introduced; persisted `state.json` remains the
+  sole authoritative artifact.
+- Added `tests/application/test_apply_condition_handler.py` and
+  `test_remove_condition_handler.py` (10 tests each), covering: successful
+  lifecycle + persistence with ordering/identity assertions; successful
+  no-op (already-active / already-absent) still completing the full
+  lifecycle and calling `save()` once; missing actor / missing target
+  (`ENTITY_NOT_FOUND`, no metadata call, no save); resolver failure (raises,
+  call order stays exactly `["load"]`, no metadata call, no save);
+  Event-builder failure (raises, call order stays exactly
+  `["load", "metadata"]`, no save); applier/invariant failure (raises, no
+  save); `EventMetadataProvider` failure (raises, no save); and
+  `StateStore.save()` failure (propagates, attempted exactly once, no
+  successful result, original loaded Creature/snapshot left unchanged). The
+  resolver-failure and Event-builder-failure cases were added after review
+  flagged that the initial pass only covered applier/metadata/save failure,
+  leaving two links in the six-link failure chain (§3.21's Application
+  handlers subsection: resolver / Event-builder / applier / metadata / save,
+  each independently, since no shared handler abstraction exists to cover
+  them once) unproven; each handler got its own focused pair rather than a
+  shared parameterized cross-handler test helper.
+- Added `tests/integration/test_apply_condition_real_adapters.py` and
+  `test_remove_condition_real_adapters.py`, each driving the corresponding
+  handler against a real `FilesystemStateStore`, asserting the persisted
+  bytes changed, the raw JSON `conditions` array matches, a *fresh*
+  `FilesystemStateStore` instance reloads the expected membership, unrelated
+  creatures/characters are untouched, `save()` was called exactly once, and
+  no `events.jsonl`/temp artifacts are left behind. Added
+  `tests/integration/test_condition_lifecycle_real_adapters.py` as the
+  explicit end-to-end proof requested for this group: Apply `POISONED` →
+  save → fresh reload → present, then Remove `POISONED` → save → fresh
+  reload → absent, each step through its own fresh `FilesystemStateStore`
+  instance.
+- Added `tests/infrastructure/test_state_store.py::
+  test_load_accepts_legacy_v3_with_empty_conditions` as an additional real-
+  filesystem-adapter regression proof for the legacy V3→V4 `conditions`
+  migration (§12.9), since the existing real-store test file only exercised
+  legacy V1/V2 end-to-end; the isolated `StateSerializer` unit tests already
+  covered V1/V2/V3 thoroughly, so no further serializer-level tests were
+  added.
+- No Application handler, `StateStore.save()` call, or gameplay effect
+  remained outstanding for G6C1's mutation path after this group — only the
+  `Poisoned` gameplay effect (a separate, later G6C group) is still
+  unimplemented.
+- Extended canonical §3.21 in `docs/ARCHITECTURE.md` in place (updated
+  Implementation status, Scope, Explicit exclusions; added a new
+  "Application handlers and persistence" subsection covering the lifecycle,
+  actor/target policy, replacement-State construction, persistence,
+  no-op-not-short-circuited behavior, failure semantics, and the production
+  integration proof; extended Replay/no-op limitation and Abstraction
+  discipline) rather than adding a new section. Updated `CLAUDE.md`'s G6C1
+  bullet and the deferred-abstractions paragraph to describe the new
+  handlers and the intentionally-not-yet-extracted shared duplication.
+  `README.md` required no edit (no stale implemented-flow summary to fix).
+  Left broad Roadmap `[ ] Conditions` unchecked.
+- Verified on Python 3.12.13 / pytest 9.1.1: the new 24-test Group 3 suite
+  (2 handler files + 3 integration files + 1 legacy-migration regression
+  test) passed (`24 passed`), the full suite passed (`1234 passed`), and the
+  configured mypy check passed (`Success: no issues found in 89 source
+  files`). `git diff --check` reported no whitespace errors. (A pre-existing,
+  ACL-locked `%TEMP%\pytest-of-redbu` directory unrelated to this branch's
+  changes caused spurious `PermissionError` collection failures under the
+  default `tmp_path` base; resolved for verification by passing pytest a
+  fresh `--basetemp`, not by modifying any test or fixture.)
+- Introduced no generic `MutationHandler`, `EventApplierRegistry`,
+  `ConditionMutation` base class, `WorkingState`, `UnitOfWork`,
+  `TransactionManager`, `state_changes`, `EventStore`, or new production
+  dependency. Did not commit or push Group 3; per-task instruction, it stays
+  uncommitted pending review, captured in a fresh `review.patch`.
+
+## 2026-08-29 — G6C Group 4 / G6C2: minimal Poisoned roll behavior
+
+- Verified the reviewed Group 3 diff as the isolated commit after Group 2,
+  confirmed `git diff --check` clean, explicitly pushed the branch
+  (`Everything up-to-date`), and confirmed the tracked worktree clean before
+  starting G6C2. Group 3 SHA:
+  `564698db214508c31340b6007d23926072d855de`.
+- Added two narrow pure Domain policies in
+  `domain.rules.condition_roll_mode`: one derives Ability Check roll mode from
+  Condition membership and one derives Attack Roll mode. Both return
+  `DISADVANTAGE` for `Condition.POISONED` and `NORMAL` otherwise. No generic
+  Condition-to-mode mapping or roll-mode combiner was added.
+- Wired `AbilityCheckHandler` and `SkillCheckHandler` to the shared
+  ability-check Condition policy, and `AttackHandler` to the attack-roll
+  policy after its existing actor/Character/target/Definition lookups. The
+  unchanged resolvers still receive effective keyword-only `roll_mode` and
+  call `resolve_d20_roll()`. Attack reads attacker Conditions, not target
+  Conditions. `SavingThrowHandler` was not changed.
+- Added handler proofs using scripted `17, 6` rolls for poisoned Ability,
+  Skill, and Attack consumers: each performs exactly two independent
+  `dice.roll("1d20")` calls, records ordered `(17, 6)`, selects `6`, and writes
+  the same `DISADVANTAGE` D20Roll in its final Event. Added an Attack negative
+  proof that a poisoned target does not disadvantage an unpoisoned attacker.
+- Added the required production Saving Throw negative proof: a poisoned actor
+  follows the real handler path, remains `RollMode.NORMAL`, performs exactly
+  one `dice.roll("1d20")`, and records that one-roll D20Roll in
+  `SavingThrowResolved`.
+- Added a real `FilesystemStateStore` lifecycle proof: persist initially
+  unpoisoned actor -> Apply `POISONED` -> fresh later AbilityCheckHandler load
+  with two-roll disadvantage -> Remove `POISONED` -> fresh later
+  AbilityCheckHandler load with one-roll NORMAL. This proves authoritative
+  mutation persistence drives later read-only rule behavior.
+- Added canonical §3.22 and DEC-0037, updated the G6C status text in Roadmap
+  and the reproduced facts in `CLAUDE.md`. Broad `[ ] Conditions`, Attack,
+  Skills, and Proficiency statuses remain unchanged. README required no edit.
+- Focused Domain/handler/persistence test checkpoint passed: `54 passed` on
+  Python 3.12.13 / pytest 9.1.1. Full-suite and configured-check results are
+  recorded after final verification below.
+- Final verification passed: full pytest `1248 passed`; configured mypy
+  `Success: no issues found in 90 source files`. The full suite used a fresh
+  basetemp and pip cache outside the checkout so its installed-wheel fixture
+  could build offline without recursively copying the repository-local temp
+  directory or writing to the sandbox-blocked default pip cache. No formatter
+  or linter is configured in `pyproject.toml`.
+- Introduced no other Condition, poison damage, duration/source, immunity,
+  save-to-remove behavior, generic Effects, modifier pipeline, advantage/
+  disadvantage source framework, pairwise RollMode combiner, EventStore,
+  UnitOfWork, or snapshot helper extraction.
+
+## 2026-08-29 — G6C Group 4 review correction: persisted pre-Apply baseline
+
+- Extended the existing real `FilesystemStateStore` lifecycle test before
+  any mutation: after persisting an initially unpoisoned Creature, a fresh
+  `AbilityCheckHandler` with its own new `FilesystemStateStore` instance now
+  loads the empty Condition membership, performs exactly one
+  `dice.roll("1d20")`, and records a NORMAL `D20Roll` with the exact scripted
+  roll in both the outcome and final Event payload.
+- The same test then continues through the already-covered Apply `POISONED`
+  -> fresh two-roll DISADVANTAGE check -> Remove `POISONED` -> fresh one-roll
+  NORMAL check. No production code, Domain policy contract, handler wiring,
+  canonical behavior contract, or Group 5 scope changed in this review
+  correction.
+- Review verification passed on Python 3.12.13 / pytest 9.1.1: the corrected
+  integration test passed (`1 passed`), the focused Group 4 suite remained
+  `54 passed`, the full suite remained `1248 passed`, and configured mypy
+  remained clean (`Success: no issues found in 90 source files`). Test counts
+  are unchanged because the baseline was added inside the existing integration
+  test rather than as a new test function.
+
+## 2026-08-29 — G6C Group 5: evidence-based post-G6C abstraction review
+
+- Verified the reviewed and pushed Group 4 as isolated commit
+  `a62b9c4649c0f21cce163779df496ef4d034a342`, with branch HEAD matching the
+  remote and a clean tracked worktree before Group 5 edits.
+- Compared `DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
+  `RemoveConditionHandler`. All four duplicated the same complete
+  owner/Application snapshot policy: replace one Creature by stable ID,
+  preserve tuple order, reuse Campaign and Character projections, and leave
+  the loaded snapshot untouched. Extracted only
+  `replace_creature_in_snapshot()` under Application services. It requires
+  exactly one existing matching ID, raises rather than silently appending a
+  missing target, and preserves the exact characters tuple identity.
+- Migrated the four mutation handlers to the helper without changing their
+  resolver, Event, applier, error, metadata, persistence, or result contracts.
+  Added focused helper proofs for order/projection identity/copy-on-write,
+  missing-ID failure, and boundary types; the existing four handler suites
+  provide regression coverage. Focused verification: `38 passed`.
+- Compared the four concrete Event appliers and retained `KEEP CONCRETE`:
+  Damage, Healing, and Condition payload decoding/correlation policies differ,
+  and no serialized replay/dispatch consumer exists. Generic mutation-handler
+  orchestration also stays concrete because it would require callbacks,
+  generics, error factories, or policy hooks. Ability/Attack Condition policies
+  remain narrow; Skill reuse and Saving Throw exclusion are unchanged.
+- Canonized the review in §3.23 and DEC-0038, updated current §3.19–§3.22
+  references, `CLAUDE.md`, the now-stale README flow text, and
+  `AI_DND_DATA_FLOW_CURRENT.md`. Broad Roadmap `Conditions` and all other broad
+  mechanic statuses remain unchanged.
+- Full verification passed on Python 3.12.13 / pytest 9.1.1: `1251 passed`,
+  covering legacy V1–V3 reads, V4 Conditions, mutation/no-op persistence,
+  Poisoned positive/negative consumers, later NORMAL restoration, Damage,
+  Healing, and all previous read-only mechanics. Configured mypy passed:
+  `Success: no issues found in 91 source files`. No formatter or linter is
+  configured.
+- Introduced no generic Event applier/registry/reducer, mutation handler,
+  `ConditionEffectRegistry`, Effect Engine, `ModifierPipeline`, `RollContext`,
+  `has_condition`, pairwise RollMode combiner, `WorkingState`, `UnitOfWork`,
+  `TransactionManager`, `MutationContext`, `state_changes`, EventStore,
+  revision/CAS, runtime Condition entity/source/duration/stacking, production
+  dependency, or AI/API/UI State mutation path. Group 5 remains uncommitted
+  and unpushed pending review.
+
+## 2026-08-29 — G6C Group 5 review correction: current data-flow sync
+
+- Updated only documentation after review; the approved snapshot helper, four
+  handlers, helper tests, Event appliers, and Condition policies were not
+  changed.
+- Replaced the stale G6B branch/commit header and Damage/Healing-only mutation
+  descriptions in `AI_DND_DATA_FLOW_CURRENT.md`. The current flow now records
+  all four mutation handlers and concrete Events/appliers, replacement
+  Creature → §3.23 Application helper → replacement snapshot → exactly one
+  successful-path `StateStore.save()`, plus the helper's explicit non-gameplay,
+  non-owner, non-persistence, non-reducer boundary. EventStore/replay remain
+  deferred.
+- Synchronized §3.19 Damage and §3.20 Healing lifecycle prose with the §3.23
+  helper without changing their gameplay, Event, no-op, ordering, or
+  persistence guarantees. Corrected DEC-0038's affected Architecture range to
+  §§3.19–3.23 and included the Current Data Flow document.
+- Documentation reference tests passed (`2 passed`). Full pytest and mypy were
+  intentionally not repeated because no Python code or tests changed. Group 5
+  remains uncommitted and unpushed pending final re-review.
+
+## 2026-08-29 — G6C Group 5 final re-review: stale wording cleanup
+
+- Updated documentation only. §3.18 now describes Damage/Healing as the first
+  two production mutation consumers at the historical post-G6B checkpoint and
+  records that G6C later added Apply/Remove Condition while §3.23 supersedes
+  only the snapshot-helper verdict.
+- Replaced §3.21's stale inline present-tense snapshot construction with the
+  current concrete Condition applier → replacement Creature → §3.23 helper →
+  replacement snapshot → save flow, retaining the original inline form only
+  as historical evidence context. Updated the top `CLAUDE.md` Foundation
+  summary to call Damage/Healing the first two HP-mutation consumers rather
+  than the current total.
+- Production code and tests were unchanged. Documentation reference tests
+  passed (`2 passed`); full pytest/mypy were not repeated. Group 5 remains
+  uncommitted and unpushed pending review.

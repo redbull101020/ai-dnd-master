@@ -18,6 +18,7 @@ from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.condition import Condition
 from dnd_engine.domain.value_objects.d20 import RollMode
 from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 from dnd_engine.infrastructure.definitions.packaged import (
@@ -58,9 +59,10 @@ class ScriptedDiceEngine:
         raw_roll: int,
         calls: list[str],
         *,
+        additional_rolls: tuple[int, ...] = (),
         fail: bool = False,
     ) -> None:
-        self._raw_roll = raw_roll
+        self._raw_rolls = iter((raw_roll, *additional_rolls))
         self._calls = calls
         self._fail = fail
         self.roll_calls: list[str] = []
@@ -70,10 +72,11 @@ class ScriptedDiceEngine:
         self.roll_calls.append(expression)
         if self._fail:
             raise RuntimeError("dice unavailable")
+        raw_roll = next(self._raw_rolls)
         return DiceRoll(
             expression="1d20",
-            rolls=(self._raw_roll,),
-            total=self._raw_roll,
+            rolls=(raw_roll,),
+            total=raw_roll,
         )
 
 
@@ -137,6 +140,7 @@ def make_creature(
     dexterity: int = 10,
     current_hp: int = 20,
     max_hp: int = 20,
+    conditions: frozenset[Condition] = frozenset(),
 ) -> CreatureState:
     return CreatureState(
         id=creature_id,
@@ -151,14 +155,18 @@ def make_creature(
         ),
         current_hp=current_hp,
         max_hp=max_hp,
+        conditions=conditions,
     )
 
 
-def make_actor() -> CreatureState:
+def make_actor(
+    *, conditions: frozenset[Condition] = frozenset()
+) -> CreatureState:
     return make_creature(
         creature_id="character_001",
         definition_id="fighter",
         strength=16,
+        conditions=conditions,
     )
 
 
@@ -229,6 +237,7 @@ def make_dependencies(
     snapshot: StateSnapshot,
     *,
     raw_roll: int = 9,
+    additional_rolls: tuple[int, ...] = (),
     monster_armor_class: int = 15,
     definition_error: Exception | None = None,
     dice_fail: bool = False,
@@ -248,7 +257,12 @@ def make_dependencies(
             calls,
             error=definition_error,
         ),
-        ScriptedDiceEngine(raw_roll, calls, fail=dice_fail),
+        ScriptedDiceEngine(
+            raw_roll,
+            calls,
+            additional_rolls=additional_rolls,
+            fail=dice_fail,
+        ),
         FixedEventMetadataProvider(calls, fail=metadata_fail),
         calls,
     )
@@ -345,6 +359,64 @@ def test_ordinary_hit_uses_exact_lookup_order_and_returns_consistent_event() -> 
         "hit": outcome.hit,
         "criticalHit": outcome.critical_hit,
     }
+
+
+def test_poisoned_attacker_rolls_attack_with_disadvantage() -> None:
+    snapshot = make_snapshot(
+        creatures=(
+            make_actor(conditions=frozenset({Condition.POISONED})),
+            make_target(),
+        ),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=17,
+        additional_rolls=(6,),
+    )
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice", "dice", "metadata"]
+    assert dice.roll_calls == ["1d20", "1d20"]
+    assert result.outcome is not None
+    assert result.outcome.roll.mode is RollMode.DISADVANTAGE
+    assert result.outcome.roll.rolls == (17, 6)
+    assert result.outcome.roll.selected == 6
+    assert result.events[0].payload["roll"] == {
+        "mode": "disadvantage",
+        "rolls": (17, 6),
+        "selected": 6,
+    }
+    assert store.save_calls == []
+
+
+def test_poisoned_target_does_not_disadvantage_unpoisoned_attacker() -> None:
+    poisoned_target = make_creature(
+        creature_id="monster_001",
+        definition_id="goblin",
+        dexterity=30,
+        current_hp=7,
+        max_hp=7,
+        conditions=frozenset({Condition.POISONED}),
+    )
+    snapshot = make_snapshot(
+        creatures=(make_actor(), poisoned_target),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=17,
+    )
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice", "metadata"]
+    assert dice.roll_calls == ["1d20"]
+    assert result.outcome is not None
+    assert result.outcome.roll.mode is RollMode.NORMAL
+    assert result.outcome.roll.rolls == (17,)
+    assert result.outcome.roll.selected == 17
 
 
 def test_non_default_monster_definition_armor_class_reaches_outcome_and_event() -> None:

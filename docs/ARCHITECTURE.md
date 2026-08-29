@@ -56,6 +56,9 @@
 | State Mutation Foundation (G5, mutating Command contract) | §3.18 |
 | Minimal Damage → HP mutation slice (G6A, `ApplyDamage`) | §3.19 |
 | Minimal Healing → HP mutation slice (G6B, `ApplyHealing`) | §3.20 |
+| Condition State foundation, persisted `CreatureState.conditions` (G6C1) | §3.21 |
+| Minimal Poisoned behavior for checks and attacks (G6C2) | §3.22 |
+| Post-G6C abstraction review and snapshot replacement helper | §3.23 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -110,6 +113,9 @@
   * [3.18. State Mutation Foundation (G5)](#318-state-mutation-foundation-g5)
   * [3.19. Minimal Damage → HP mutation vertical slice (G6A)](#319-minimal-damage--hp-mutation-vertical-slice-g6a)
   * [3.20. Minimal Healing → HP mutation vertical slice (G6B)](#320-minimal-healing--hp-mutation-vertical-slice-g6b)
+  * [3.21. Condition State foundation (G6C1)](#321-condition-state-foundation-g6c1)
+  * [3.22. Minimal Poisoned behavior (G6C2)](#322-minimal-poisoned-behavior-g6c2)
+  * [3.23. Post-G6C abstraction review](#323-post-g6c-abstraction-review)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1087,7 +1093,11 @@ class CreatureState:
     ability_scores: AbilityScores
     current_hp: int
     max_hp: int
+    conditions: frozenset[Condition] = frozenset()
 ```
+
+`conditions` — G6C1 addition (§3.21); полный contract, invariants и schema
+migration policy описаны там, а не здесь.
 
 Канонические имена HP:
 
@@ -1113,9 +1123,11 @@ Combat Engine, AI, API и другие подсистемы не мутирую�
 State Owner flow.
 
 В Phase 1 `CreatureState` не содержит skills, saving throw results, proficiency,
-conditions, effects, movement, position, initiative, turn resources, equipment
-или inventory. Зафиксированный ownership этих понятий не требует преждевременно
-добавлять их в минимальную модель.
+effects, movement, position, initiative, turn resources, equipment или
+inventory. Зафиксированный ownership этих понятий не требует преждевременно
+добавлять их в минимальную модель. `conditions` — единственное исключение,
+добавленное отдельным G6C1 slice (§3.21) как authoritative effective Condition
+membership; это не runtime Condition-instance entity и не Effect framework.
 
 State:
 
@@ -1804,8 +1816,11 @@ def resolve_ability_check(
 
 `roll_mode` — keyword-only effective rule result и не входит в
 `AbilityCheckPayload`, `AbilityCheckCommand`, Command Envelope, API DTO или AI
-input. Пока production source advantage/disadvantage отсутствует, Application
-handler вызывает resolver без этого аргумента и получает `RollMode.NORMAL`.
+input. G6C2 (§3.22) adds the first production source: Application reads the
+already-loaded actor's authoritative Condition membership, asks the pure
+ability-check Condition policy for effective mode, and passes that result to
+the resolver. Without `Condition.POISONED`, that policy returns
+`RollMode.NORMAL`.
 
 Resolver выполняет только rule resolution, не мутирует `CreatureState` и
 получает physical d20 result через `resolve_d20_roll(dice, roll_mode)` (§3.12).
@@ -2096,9 +2111,11 @@ failure, automatic success или critical result; такую семантику
 (§3.17). Только Attack из этих mechanics интерпретирует natural 1/20 как
 automatic miss/hit и critical result.
 
-Sources/cancellation advantage/disadvantage, Conditions, Effects, monster
-Saving Throws, monster Skill Checks, broader Attack Roll paths и generic
-modifier/check frameworks остаются deferred.
+The first production source, Poisoned disadvantage for Ability/Skill Checks
+and Attack Rolls, is specified in §3.22. Representation and cancellation of
+multiple independent advantage/disadvantage sources, other Condition/Effect
+sources, monster Saving Throws, monster Skill Checks, broader Attack Roll
+paths, and generic modifier/check frameworks remain deferred.
 
 ---
 
@@ -2234,10 +2251,12 @@ successful `ResolutionResult` с `outcome.succeeded is False` и одним Even
 Slice read-only: `StateStore.save()` не вызывается, Event не применяется к
 State и runtime Event persistence не выполняется.
 
-Monster Saving Throws и их proficiency source, Death Saving Throws,
-Conditions/Effects и aggregation/cancellation advantage sources, generic
-modifier/check abstractions, resolver registry, EventStore, replay и State
-mutation остаются deferred.
+Poisoned explicitly does not affect this Saving Throw slice (§3.22):
+`SavingThrowHandler` invokes no Condition roll-mode policy and retains the
+resolver's NORMAL default. Monster Saving Throws and their proficiency source,
+Death Saving Throws, other Condition/Effect sources, aggregation/cancellation
+of advantage sources, generic modifier/check abstractions, resolver registry,
+EventStore, replay, and State mutation remain deferred.
 
 ---
 
@@ -2323,6 +2342,11 @@ succeeded = total >= dc
 Resolver переиспользует `ability_modifier()`,
 `character_proficiency_bonus()` и `resolve_d20_roll()`. Natural 1 не является
 automatic failure, natural 20 не является automatic success.
+
+G6C2 (§3.22) makes the current Character Skill Check a positive Poisoned
+consumer by reusing the ability-check Condition policy in Application. The
+resolver contract is unchanged: it receives the resulting effective
+`roll_mode` and does not look up Condition membership itself.
 
 Immutable result сохраняет и Skill, и фактически использованную Ability:
 
@@ -2935,10 +2959,13 @@ and non-character proficiency policies are not inferred from this rule.
 #### d20 selection and Attack-owned natural semantics
 
 Attack reuses the existing `RollMode`, `D20Roll`, and `resolve_d20_roll()`
-contracts from §3.12. The production handler calls the resolver without an
-override, so its effective mode defaults to `RollMode.NORMAL`. `roll_mode` is
-not part of `AttackCommand`, and player/API/AI intent does not currently supply
-it; it remains a valid keyword-only effective input at the resolver boundary.
+contracts from §3.12. G6C2 (§3.22) makes the production handler derive
+effective mode from the attacker's authoritative Condition membership through
+the pure attack-roll Condition policy after the existing lookup sequence, then
+pass it to the resolver. The target's Conditions do not affect this mode.
+Without `Condition.POISONED`, the policy returns `RollMode.NORMAL`.
+`roll_mode` is not part of `AttackCommand`, and player/API/AI intent does not
+supply it; it remains a keyword-only effective input at the resolver boundary.
 
 `resolve_d20_roll()` only selects an effective d20 value. Interpretation of
 natural 1/20 belongs to the Attack mechanic and uses `D20Roll.selected`:
@@ -3396,11 +3423,13 @@ generic transaction coordinator
 ```
 
 `DamageHandler`/`apply_damage_applied_v1` (§3.19) and
-`HealingHandler`/`apply_healing_applied_v1` (§3.20) are the two production
-state-mutating gameplay consumers. The post-G6B comparison in §3.20 reviewed
-their actual shared and differing responsibilities and retained the verdict
-`KEEP CONCRETE`; none of the deferred abstractions above gained a production
-implementation.
+`HealingHandler`/`apply_healing_applied_v1` (§3.20) were the first two
+production state-mutating gameplay consumers at the post-G6B review. That
+comparison reviewed their actual shared and differing responsibilities and
+retained the verdict `KEEP CONCRETE`. G6C later added
+`ApplyConditionHandler`/`RemoveConditionHandler`; §3.23 supersedes only the
+snapshot-replacement-helper verdict. None of the other deferred abstractions
+above gained a production implementation.
 
 #### Exact MVP atomicity boundary
 
@@ -3646,12 +3675,22 @@ call `DiceEngine`, does not call `DefinitionSource`, performs no persistence
 I/O, reads no clock, allocates no Event ID, and produces no new authoritative
 Event.
 
-Application (`DamageHandler`) then builds the replacement `creatures` tuple
-by substituting the replacement `CreatureState` for the original by stable
-Creature ID (matching `creature.id == target.id`), and builds a replacement
-`StateSnapshot` reusing the loaded `CampaignState`
-and `characters` tuple unchanged. Only `CreatureState.current_hp` changes for
-this transition; `id`, `definition_id`, `ability_scores`, and `max_hp` are
+Application (`DamageHandler`) passes the replacement `CreatureState` returned
+by the concrete Event applier to the narrow §3.23 Application helper:
+
+```text
+apply_damage_applied_v1
+    → replacement CreatureState
+    → replace_creature_in_snapshot(snapshot, replacement)
+    → replacement StateSnapshot
+    → StateStore.save exactly once
+```
+
+The helper substitutes exactly one Creature by stable ID, preserves the
+`creatures` tuple order, and reuses the loaded `CampaignState` and
+`characters` tuple unchanged. It does not own or repeat Damage gameplay or
+Event-application policy. Only `CreatureState.current_hp` changes for this
+transition; `id`, `definition_id`, `ability_scores`, and `max_hp` are
 preserved, per §3.18's declared Damage → HP write scope.
 
 #### Errors
@@ -3702,9 +3741,9 @@ a non-durable runtime Domain fact: it is not appended to any file, there is
 no `events.jsonl` write, and no `EventStore` exists. `StateStore` remains
 exactly `load()`/`save()` (§12.9); `DamageHandler` calls `save()` exactly once
 on the successful path, after `DamageApplied` has already been built and
-applied, and only then returns a successful `ResolutionResult` — matching
-§3.18's canonical persistence ordering and its "return success, save later"
-prohibition.
+applied and §3.23's helper has returned the replacement snapshot, and only
+then returns a successful `ResolutionResult` — matching §3.18's canonical
+persistence ordering and its "return success, save later" prohibition.
 
 #### Abstraction verdict (post-implementation)
 
@@ -3858,17 +3897,20 @@ StateStore.load
     → EventMetadataProvider
     → HealingApplied V1
     → apply_healing_applied_v1
-    → replacement creatures tuple
+    → replacement CreatureState
+    → §3.23 replace_creature_in_snapshot(snapshot, replacement)
     → replacement StateSnapshot
     → StateStore.save exactly once
     → successful ResolutionResult
 ```
 
-The loaded snapshot and target remain unchanged; tuple ordering is preserved;
-the Campaign and Character projections are reused unchanged. Missing actor or
-target uses the same `ENTITY_NOT_FOUND` policy as `DamageHandler` (the target
-error has `field="target_id"`). Metadata, Event-application/invariant, and
-`StateStore.save()` failures propagate and prevent a successful result.
+The loaded snapshot and target remain unchanged; §3.23's helper preserves tuple
+ordering and reuses the Campaign and Character projections unchanged. The
+helper receives the already-applied replacement Creature and owns no Healing
+gameplay/Event policy. Missing actor or target uses the same `ENTITY_NOT_FOUND`
+policy as `DamageHandler` (the target error has `field="target_id"`). Metadata,
+Event-application/invariant, and `StateStore.save()` failures propagate and
+prevent a successful result.
 Success is returned only after `save()` completes. No retry, rollback,
 metadata-ID reuse, Event persistence, or schema-version change is introduced.
 
@@ -3920,7 +3962,631 @@ primitive — “expected `current_hp` → replacement `current_hp`, preserve ev
 other Creature fact” — is currently identical to a single explicit
 `dataclasses.replace` call and does not justify its coupling. All deferred
 abstractions in §§3.6 and 3.18 remain deferred; no production refactor follows
-from this review.
+from this review. This was the evidence available after G6B; §3.23 supersedes
+only the snapshot-helper verdict after two further production mutation
+handlers established the same aggregate-replacement policy. Every gameplay,
+Event-applier, generic-handler, registry, and transaction verdict remains in
+force.
+
+---
+
+### 3.21. Condition State foundation (G6C1)
+
+Implementation status: **Implemented (State foundation, Domain mutation
+contract, Application handlers, and persistence).** This section documents
+the persisted representation of Conditions — a closed `Condition` identity,
+the `CreatureState.conditions` membership field, and State schema V4 —
+together with the full authoritative mutation path that produces and
+persists new Condition membership: `ApplyConditionCommand`/
+`RemoveConditionCommand`, their resolvers, `ConditionApplied`/
+`ConditionRemoved` V1 Events, concrete Creature appliers, and the
+`ApplyConditionHandler`/`RemoveConditionHandler` Application handlers that
+orchestrate `StateStore.load`/`StateStore.save` around them. It does not
+implement gameplay effects itself. The first such behavior, Poisoned
+disadvantage for Ability Checks and Attack Rolls, is a separate G6C2 contract
+in §3.22.
+
+#### Scope
+
+```text
+closed single-value Condition identity (POISONED)
+CreatureState.conditions: frozenset[Condition], default frozenset()
+State schema V4 (Creature-only change; Character schema unaffected)
+strict V4 encode/decode, deterministic write ordering
+backward-compatible V1/V2/V3 read (conditions = frozenset())
+ApplyConditionCommand / RemoveConditionCommand
+pure resolve_condition_application / resolve_condition_removal
+ConditionApplied V1 / ConditionRemoved V1 Events
+concrete Creature appliers (Event + CreatureState -> replacement CreatureState)
+ApplyConditionHandler / RemoveConditionHandler (Application layer)
+StateStore.save orchestration for Condition mutation, exactly once on success
+```
+
+#### Explicit exclusions
+
+This G6C1 foundation does not implement, and does not imply a decision on:
+
+```text
+Condition gameplay effects beyond the separately implemented G6C2 behavior (§3.22)
+ModifierPipeline
+runtime ConditionState instance entity
+ConditionDefinition hierarchy
+condition source, duration, expiry, stacking, provenance
+Effect framework
+runtime allocation of condition_NNN IDs
+generic Event applier / generic mutation handler
+shared snapshot-replacement / replace_creature helper
+EventStore, UnitOfWork, WorkingState, state_changes
+```
+
+These stay open for later G6C groups, per §3.6's rule against introducing
+future-phase behaviour ahead of a concrete consumer.
+
+#### `Condition` identity
+
+```python
+class Condition(StrEnum):
+    POISONED = "poisoned"
+```
+
+`Condition` (`src/dnd_engine/domain/value_objects/condition.py`) is a closed,
+identity-only Domain `StrEnum`, following the same pattern as `DamageType`
+(§3.1.1) and `Skill` (§1.2.2). It carries no Ability mapping, no mechanical
+effect, and no numeric data; §3.12's d20 semantics and every existing resolver
+remain untouched by this slice. Only `POISONED` is defined — the other 5e
+Conditions are not added ahead of a concrete consumer.
+
+#### `CreatureState.conditions`
+
+```text
+conditions: frozenset[Condition] = frozenset()
+```
+
+`conditions` is **authoritative effective Condition membership** for the
+current supported Condition set — the same kind of fact as
+`saving_throw_proficiencies`/`skill_proficiencies` on `CharacterState`
+(§3.2.4), not a collection of runtime Condition-instance objects. It belongs
+to `CreatureState`, not `CharacterState`, because Condition membership applies
+to any Creature (Character or Monster), matching the existing Creature/
+Character State Owner split (§10.4).
+
+Intrinsic `__post_init__` validation is strict and matches the existing
+`saving_throw_proficiencies`/`skill_proficiencies` pattern: `type(conditions)
+is frozenset`, and every member must be an actual `Condition`. `list`, `set`,
+`tuple`, `frozenset[str]`, and raw string values are rejected with
+`TypeError`, not coerced. The empty default preserves every existing
+`CreatureState(...)` call site across the Ability Check, Saving Throw, Skill
+Check, Attack, Damage, and Healing slices without modification. `current_hp`/
+`max_hp` invariants (§3.2.1) are unchanged by this addition.
+
+`CreatureState` remains a mutable, non-frozen dataclass (§3.2.1); `conditions`
+follows the same ownership rule as every other Creature field — only the
+Creature State Owner flow (Command → Resolver → Event → State application,
+§3.7) may change it. This slice adds no such flow: `conditions` is currently
+mutable only through direct construction/assignment in Domain/test code, not
+through any Command.
+
+#### Relationship to `condition_NNN` (§4.12/§4.13)
+
+The `condition_NNN` runtime ID format and the `poisoned` Definition ID were
+already reserved in the canonical ID registry before this slice. They remain
+reserved for a **possible future** stateful Condition-instance model —
+one with its own source, duration, and provenance lifecycle — if concrete
+mechanics ever require it. This slice does not allocate or use `condition_NNN`
+runtime IDs: `CreatureState.conditions` is a `frozenset` membership set keyed
+by `Condition` value, not a collection of ID-addressable instances.
+
+#### `StateSnapshot`
+
+`StateSnapshot`'s top-level shape (`campaign`, `creatures`, `characters`,
+§3.2.3) is unchanged. No `StateSnapshot.conditions` field or `ConditionState`
+aggregate is introduced; Condition membership is reached exclusively through
+`StateSnapshot.creatures[*].conditions`.
+
+#### State schema V4
+
+Schema versioning gains a fourth exact integer value. Semantics per version,
+by Creature/Character shape rather than by comparing only against the current
+`SCHEMA_VERSION` constant:
+
+```text
+V1: no Character projection;                                conditions = frozenset()
+V2: savingThrowProficiencies, no skillProficiencies;         conditions = frozenset()
+V3: savingThrowProficiencies + skillProficiencies;           conditions = frozenset()
+V4: same Character schema as V3 (unchanged);                 + Creature conditions
+```
+
+`LEGACY_SCHEMA_V3_VERSION = 3` is now an explicit constant alongside
+`LEGACY_SCHEMA_VERSION = 1` and `LEGACY_SCHEMA_V2_VERSION = 2`. `SCHEMA_VERSION`
+identifies the current writer (currently `4`), but no version-shape decision
+is keyed off comparing directly against it: `SCHEMA_V4_VERSION = 4` is a
+separate, fixed constant (`SCHEMA_VERSION = SCHEMA_V4_VERSION` today), and
+every place that decides "is this specifically V4" — the supported-schema-
+version set, the V4 Creature field set, and `conditions` decoding — compares
+against `SCHEMA_V4_VERSION`, never against `SCHEMA_VERSION`. Character
+decoding (including the `skillProficiencies` gate) is likewise keyed off
+`LEGACY_SCHEMA_V2_VERSION` ("is this V2") rather than the current writer.
+This matters because a future schema bump that only reassigns `SCHEMA_VERSION`
+to a new value must not silently stop already-persisted V3 or V4 payloads
+from decoding correctly; this exact failure mode was identified and closed
+while implementing this slice, not treated as hypothetical — a regression
+test (`test_v4_creature_shape_is_fixed_and_survives_future_schema_version_bump`)
+simulates a future `SCHEMA_VERSION` bump and asserts a historical V4 payload
+with `conditions` still decodes exactly.
+
+Canonical V4 Creature JSON:
+
+```json
+{
+  "id": "monster_001",
+  "definitionId": "goblin",
+  "abilityScores": { "...": "..." },
+  "currentHp": 7,
+  "maxHp": 7,
+  "conditions": ["poisoned"]
+}
+```
+
+The writer always emits `conditions`, including `[]` for empty membership,
+sorted deterministically by `Condition.value` (§12.9's existing sort-by-value
+convention for closed-set collections). The V1–V3 Creature shape has no
+`conditions` key at all — it is `unknown`/forbidden there, not merely
+optional, matching the existing strict-unknown-field policy (§12.25).
+
+Strict V4 Creature decoding:
+
+```text
+conditions must be a JSON list
+every entry must be an exact str
+every value must map to a known Condition
+duplicate entries forbidden
+unknown Condition values forbidden
+missing `conditions` forbidden for V4
+unknown Creature fields forbidden (unchanged policy)
+```
+
+V1/V2/V3 Creature decoding is unchanged except that `conditions` is now
+explicitly documented as absent from their fixed field set; reading any of
+these three legacy versions always yields `CreatureState.conditions ==
+frozenset()`, never invented membership.
+
+#### Commands
+
+```text
+ApplyConditionCommand(command_id, campaign_id, actor_id, payload)
+ApplyConditionPayload(target_id: str, condition: Condition)
+
+RemoveConditionCommand(command_id, campaign_id, actor_id, payload)
+RemoveConditionPayload(target_id: str, condition: Condition)
+```
+
+Both follow the existing frozen-dataclass Command Envelope shape (§3.3, §9.1)
+used by `ApplyDamageCommand`/`ApplyHealingCommand`: an immutable typed
+dataclass with a fixed `type` literal and a concrete typed payload.
+`condition` is an actual `Condition` — never coerced from a string — checked
+by the payload's own `__post_init__`. Neither payload carries `source`,
+`duration`, `save_dc`, `spell_id`, `item_id`, `feature_id`, `stacks`, or
+`condition_instance_id`; like `ApplyDamageCommand`/`ApplyHealingCommand`, this
+is currently only an internal/Application-level intent, not a promise of a
+public API/AI-facing surface.
+
+#### Results / resolvers
+
+```text
+ConditionApplicationResult(target_id, condition, previous_active, active)
+ConditionRemovalResult(target_id, condition, previous_active, active)
+
+resolve_condition_application(command, target) -> ConditionApplicationResult
+resolve_condition_removal(command, target) -> ConditionRemovalResult
+```
+
+Two concrete result types were kept — no existing shared "membership
+transition" type was found — matching the same per-mechanic split already
+used for `DamageResult`/`HealingResult`. `active` is intrinsically fixed by
+each type's own `__post_init__`: `ConditionApplicationResult.active` must be
+`True`; `ConditionRemovalResult.active` must be `False`. `target_id` is an
+exact `str`, `condition` an actual `Condition`, and `previous_active`/`active`
+exact `bool` (no truthy/`int` coercion). Both resolvers are pure: they read
+`command.payload.condition in target.conditions` for `previous_active`, do
+not mutate `target`, perform no I/O, call no `DiceEngine`, do no Definition
+lookup, and decide no duration/source/stacking. Target correlation is checked
+the same way as the existing Damage/Healing resolvers —
+`command.payload.target_id != target.id` raises `ValueError` — before any
+membership is read.
+
+#### Successful no-op semantics
+
+Applying an already-active Condition, or removing an already-absent one, is a
+**successful** result, not a `RULE_VIOLATION`:
+
+```text
+apply already-active   -> previous_active=True,  active=True   (successful)
+remove already-absent  -> previous_active=False, active=False  (successful)
+```
+
+This is not optimized away anywhere on the Domain Event path: the resolver
+still returns a normal result, and the builder below still constructs a full
+Event for it.
+
+#### Events
+
+```text
+ConditionApplied V1:  { targetId, condition, previousActive, active }
+ConditionRemoved V1:  { targetId, condition, previousActive, active }
+```
+
+Example (`ConditionApplied` V1):
+
+```json
+{
+  "targetId": "monster_001",
+  "condition": "poisoned",
+  "previousActive": false,
+  "active": true
+}
+```
+
+`build_condition_applied_v1`/`build_condition_removed_v1` follow the existing
+`build_damage_applied_v1`/`build_healing_applied_v1` shape: they check
+Command/outcome correlation (`target_id`, `condition`) and copy the
+already-resolved result verbatim — they do not re-decide membership. No
+`previousConditions`, `newConditions`, `stateChanges`, `conditionInstanceId`,
+`source`, or `duration` field exists. Both Event payload dataclasses
+(`ConditionAppliedPayloadV1`/`ConditionRemovedPayloadV1`) enforce the same
+fixed `active` invariant as their Result counterparts, so a malformed Event
+with the opposite endpoint (`ConditionApplied` with `active=false`, or
+`ConditionRemoved` with `active=true`) cannot even be constructed — this
+covers both the builder path and raw/decoded payload reconstruction in the
+applier below. Both Events reuse the existing generic `GameEvent` envelope
+and `EventMetadataProvider` injection model (§2.2, §3.10); no new Event base
+type is introduced.
+
+#### Concrete Creature appliers
+
+```text
+apply_condition_applied_v1(creature, event) -> CreatureState
+apply_condition_removed_v1(creature, event) -> CreatureState
+```
+
+Each applier follows the existing `apply_damage_applied_v1`/
+`apply_healing_applied_v1` integrity-check shape (§3.19, §3.20) before
+projecting a replacement: exact Event `type`, `version == 1`, exact payload
+key set, `targetId` decoded and matched against `creature.id`, `condition`
+decoded to a known `Condition` (unknown values rejected), `previousActive`/
+`active` decoded as exact `bool`, the Event's own fixed `active` invariant
+(enforced by its payload dataclass), and — the Condition-specific integrity
+check — `previousActive == (condition in creature.conditions)`. A mismatch
+here (`previousActive != (condition in creature.conditions)`) is a stale/
+integrity failure, raised as `ValueError`, not a gameplay `EngineError`,
+matching the existing G6A/G6B `previousHp`-mismatch policy.
+
+The applier then projects the endpoint and returns a replacement
+`CreatureState` via `dataclasses.replace`:
+
+```text
+Apply:  conditions=creature.conditions | {condition}
+Remove: conditions=creature.conditions - {condition}
+```
+
+Only `conditions` changes; `id`, `definition_id`, `ability_scores`,
+`current_hp`, and `max_hp` are preserved. Neither applier re-decides gameplay
+rules or performs I/O.
+
+#### Application handlers and persistence
+
+```text
+ApplyConditionHandler(state_store: StateStore, event_metadata_provider: EventMetadataProvider)
+RemoveConditionHandler(state_store: StateStore, event_metadata_provider: EventMetadataProvider)
+```
+
+Both handlers (`src/dnd_engine/application/handlers/apply_condition.py`,
+`.../remove_condition.py`) follow the exact `DamageHandler`/`HealingHandler`
+lifecycle (§3.19, §3.20):
+
+```text
+StateStore.load
+-> actor lookup (command.actor_id against loaded creatures)
+-> target lookup (command.payload.target_id against loaded creatures)
+-> pure resolver (resolve_condition_application / resolve_condition_removal)
+-> EventMetadataProvider.next_metadata
+-> concrete Condition Event (build_condition_applied_v1 / build_condition_removed_v1)
+-> concrete Creature applier (apply_condition_applied_v1 / apply_condition_removed_v1)
+-> replacement creatures tuple, order preserved
+-> replacement StateSnapshot (campaign and characters reused unchanged)
+-> StateStore.save(replacement_snapshot), exactly once, on the success path only
+-> successful ResolutionResult
+```
+
+Dependencies are minimal — only `StateStore` and `EventMetadataProvider`, no
+`DiceEngine` or `DefinitionSource` — because this is a direct, already-
+resolved internal mutation slice, the same shape as Damage/Healing.
+
+**Actor/target lookup policy (direct internal slice, not a general Condition-
+source contract).** `command.actor_id` and `command.payload.target_id` are
+both looked up against the loaded `StateSnapshot.creatures`, in that order,
+mirroring the proven Damage/Healing convention exactly:
+
+```text
+missing actor  -> ErrorCode.ENTITY_NOT_FOUND, entity_id=actor_id,              field=None
+missing target -> ErrorCode.ENTITY_NOT_FOUND, entity_id=payload.target_id,     field="target_id"
+```
+
+Both failures return before `EventMetadataProvider.next_metadata` is called
+and before `StateStore.save` is invoked. Self-targeting (`actor_id ==
+payload.target_id`) is permitted — the same Creature can be both actor and
+target. This lookup policy is scoped to *this* direct-mutation slice; it is
+not a promise about how actor semantics will work for any future Condition
+source (e.g. a spell or trap triggering Condition application through a
+different Command shape).
+
+**Replacement State construction.** Exactly like G6A/G6B, the loaded object
+graph is never mutated. The current Condition mutation flow is:
+
+```text
+concrete Condition Event applier
+    → replacement CreatureState
+    → §3.23 replace_creature_in_snapshot(snapshot, replacement)
+    → replacement StateSnapshot
+    → StateStore.save(...)
+```
+
+The helper preserves Creature tuple order and reuses `campaign` and
+`characters` unchanged; it owns no gameplay or Event policy. Historically,
+G6C1 deliberately kept this construction inline across `DamageHandler`,
+`HealingHandler`, `ApplyConditionHandler`, and `RemoveConditionHandler` as the
+evidence checkpoint that the later post-G6C review in §3.23 resolved.
+
+**Persistence.** `StateStore.save(replacement_snapshot)` is called exactly
+once, only on the success path; the persisted snapshot becomes the new
+authoritative current State the moment `save()` returns without raising. No
+`EventStore` and no `events.jsonl` write are introduced — Events remain
+in-memory `ResolutionResult` payloads only, exactly as in G6A/G6B.
+
+**Successful no-op is never short-circuited.** Applying an already-active
+Condition, or removing an already-absent one, still runs the complete
+lifecycle above — pure resolver, Event construction, applier, replacement
+snapshot, and exactly one `StateStore.save()` call — and returns a
+successful `ResolutionResult`. The handler does not detect the no-op case
+and skip any step.
+
+**Failure semantics**, mirroring G6A/G6B exactly: missing actor/target return
+a structured `ResolutionResult` failure with no metadata call and no save;
+resolver, Event-builder, applier, or Domain-invariant failures raise before
+`save()` is reached; `EventMetadataProvider` failures propagate before
+`save()`; `StateStore.save()` failures propagate to the caller, and no
+successful `ResolutionResult` is produced in that case. No rollback,
+retry, or compensating-write framework is introduced — a `save()` failure is
+simply not observably successful; the loaded snapshot and Creature objects
+the handler read from are left unchanged, since they were never mutated in
+place.
+
+**Production integration proof.** Beyond the handler-level unit tests (which
+use a call-recording `StateStore` double), `tests/integration/
+test_apply_condition_real_adapters.py`, `test_remove_condition_real_adapters.py`,
+and `test_condition_lifecycle_real_adapters.py` exercise both handlers
+against the real `FilesystemStateStore`/V4 serializer: apply `POISONED`,
+save, reload through a *fresh* `FilesystemStateStore` instance, and confirm
+`Condition.POISONED` is present; then remove it, save, reload again, and
+confirm it is absent. `tests/infrastructure/test_state_store.py::
+test_load_accepts_legacy_v3_with_empty_conditions` additionally proves the
+legacy V3-to-V4 `conditions` migration (§12.9) through the same real
+filesystem adapter path, not only through the isolated `StateSerializer`
+unit tests.
+
+#### Replay / no-op limitation
+
+Exactly like G6A's `0 -> 0` Damage and G6B's `maxHp -> maxHp` Healing
+(§3.19, §3.20), a canonical no-op Event —
+`ConditionApplied{previousActive: true, active: true}` or
+`ConditionRemoved{previousActive: false, active: false}` — can be re-applied
+(or re-persisted, via `ApplyConditionHandler`/`RemoveConditionHandler`) to a
+Creature whose membership already matches, because no State revision,
+optimistic-concurrency token, or applied-Event-ID registry exists yet
+(§3.18's "Exact MVP atomicity boundary" already excludes replay/idempotency).
+This is not fixed here via `revision`, compare-and-swap, an `EventStore`, a
+processed-command registry, or a generic Event-application registry — all of
+those remain deferred per §§3.6/3.18.
+
+#### Abstraction discipline
+
+`ApplyConditionHandler`/`RemoveConditionHandler` are explicit, concrete
+Application handlers — not a generic `MutationHandler`, `ConditionMutation`
+base class, `EventApplierRegistry`, or any dispatcher from §3.6/§3.18's
+deferred list. They mirror `DamageHandler`/`HealingHandler` structurally,
+including the same replacement-snapshot construction policy described above,
+now implemented by the narrow §3.23 Application helper. Gameplay behavior
+remains outside this G6C1 foundation; the
+implemented Poisoned consumers are specified separately in §3.22.
+`ApplyConditionCommand`/`RemoveConditionCommand`, their
+resolvers, Events, and appliers are likewise concrete, mirroring the existing
+per-mechanic Damage/Healing shape rather than introducing a generic
+Condition-mutation abstraction — there is still only one Condition value and
+two mutation directions, which is not new evidence for a shared framework.
+Four concrete handlers retain their explicit load/lookup/resolve/build/apply/
+save orchestration. §3.23 extracts only their identical snapshot-replacement
+policy; the broader sequence remains concrete.
+
+---
+
+### 3.22. Minimal Poisoned behavior (G6C2)
+
+Implementation status: **Implemented.** This slice gives the persisted
+`Condition.POISONED` membership from §3.21 exactly one authoritative dnd_5e
+gameplay behavior:
+
+```text
+Poisoned -> disadvantage on Ability Checks
+Poisoned -> disadvantage on Attack Rolls
+```
+
+In the implemented engine this means:
+
+```text
+AbilityCheck -> DISADVANTAGE
+SkillCheck   -> DISADVANTAGE (a concrete Ability Check mechanic)
+Attack       -> DISADVANTAGE
+SavingThrow  -> NORMAL unless a future non-Poisoned source says otherwise
+```
+
+No other Poisoned mechanic is implied or implemented.
+
+#### Domain policy and Application responsibility
+
+Two narrow pure Domain policies in
+`domain.rules.condition_roll_mode` own the mechanic-specific interpretation:
+
+```python
+def ability_check_roll_mode_from_conditions(
+    conditions: frozenset[Condition],
+) -> RollMode: ...
+
+def attack_roll_mode_from_conditions(
+    conditions: frozenset[Condition],
+) -> RollMode: ...
+```
+
+Each returns `RollMode.DISADVANTAGE` when `Condition.POISONED` is present and
+`RollMode.NORMAL` otherwise. There is deliberately no generic
+`Condition -> RollMode` mapping: the effect depends on mechanic context.
+Character Skill Check reuses `ability_check_roll_mode_from_conditions`
+because the current Skill Check is a concrete Ability Check mechanic; there
+is no separate Skill-only Poisoned rule. Saving Throw calls neither policy.
+
+Application may read authoritative `CreatureState.conditions`, but contains
+no standalone gameplay branch for Poisoned. After the existing State lookups,
+each positive consumer asks the appropriate Domain policy for the effective
+mode and passes it to the unchanged resolver boundary:
+
+```text
+AbilityCheckHandler:
+actor Creature.conditions
+-> ability-check Condition policy
+-> resolve_ability_check(..., roll_mode=effective_mode)
+
+SkillCheckHandler:
+actor Creature.conditions
+-> same ability-check Condition policy
+-> resolve_character_skill_check(..., roll_mode=effective_mode)
+
+AttackHandler:
+attacker Creature.conditions
+-> attack-roll Condition policy
+-> resolve_character_unarmed_attack(..., roll_mode=effective_mode)
+```
+
+For Attack, the Condition source is the attacker (`actor_creature`), never
+the target. Existing actor/Character/target/Definition lookup order, Monster
+AC lookup, and natural 1/20 semantics remain unchanged. `SavingThrowHandler`
+continues calling `resolve_character_saving_throw(...)` without a Poisoned
+mode application, so the resolver's existing `RollMode.NORMAL` default is
+used.
+
+#### Existing resolver and Event boundary
+
+Resolver contracts do not change. Ability Check, Character Skill Check,
+Character Saving Throw, and Character unarmed Attack resolvers still receive
+an already-effective `RollMode` and delegate physical selection to
+`resolve_d20_roll()` (§3.12). Commands, Command/API payloads, UI, and AI do
+not supply `roll_mode` and do not become authoritative rule sources.
+
+For Poisoned Ability/Skill/Attack, `resolve_d20_roll()` performs two
+independent `dice.roll("1d20")` calls, keeps ordered raw rolls, and selects
+the lower value. Existing Event writers continue copying the actual
+`D20Roll`: `mode="disadvantage"`, both ordered rolls, and the selected lower
+value. A Poisoned Saving Throw performs one actual `dice.roll("1d20")` and
+records `mode="normal"`.
+
+#### Persisted State to later rule proof
+
+The production integration path is proven through the real
+`FilesystemStateStore`:
+
+```text
+initial unpoisoned persisted Creature
+-> ApplyConditionCommand(POISONED) -> save
+-> fresh later AbilityCheckHandler load -> two rolls / DISADVANTAGE
+-> RemoveConditionCommand(POISONED) -> save
+-> fresh later AbilityCheckHandler load -> one roll / NORMAL
+```
+
+Thus `CreatureState.conditions` is authoritative behavior-driving State, not
+a decorative serialized field. Read-only roll handlers still do not save
+State.
+
+#### Aggregation checkpoint and explicit exclusions
+
+Poisoned is currently the only real production advantage/disadvantage source.
+This slice therefore introduces no `combine_roll_modes`, pairwise combiner,
+`RollContext`, `RollModifier`, `AdvantageSource`, modifier pipeline, effect
+registry/resolver, or generic Condition-effect hierarchy. When a second real
+source appears, the design checkpoint is to represent the **presence of
+independent advantage and disadvantage sources first**, and only then derive
+the final `RollMode`; pairwise combination of already-collapsed modes is not
+the planned scaling model.
+
+Also excluded: every other Condition, poison damage, duration/source,
+immunity, a Saving Throw to remove Poisoned, and any Poisoned effect beyond
+the three positive consumers above. EventStore, UnitOfWork, snapshot-helper
+extraction, and broader Attack/Skills/Proficiency completion were outside this
+slice. The later snapshot-helper decision is isolated in §3.23 and does not
+change any Poisoned policy.
+
+---
+
+### 3.23. Post-G6C abstraction review
+
+This review compares the four implemented authoritative mutation handlers
+(`DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
+`RemoveConditionHandler`), their four concrete Event appliers, and the
+read-only Poisoned consumers after G6C. It adds no gameplay feature.
+
+#### Extracted Application snapshot policy
+
+`application.services.state_snapshot.replace_creature_in_snapshot(snapshot,
+replacement)` is the one abstraction earned by current production evidence.
+All four mutation handlers previously duplicated the same owner/Application
+policy after their concrete Event applier returned a replacement
+`CreatureState`:
+
+```text
+loaded StateSnapshot + replacement CreatureState
+-> require replacement.id to match exactly one existing CreatureState
+-> replace that entry without changing creatures tuple order
+-> reuse the identical CampaignState projection
+-> reuse the identical characters tuple and CharacterState projections
+-> return a new StateSnapshot; do not mutate the loaded snapshot
+```
+
+`StateSnapshot` already rejects duplicate Creature IDs, so the helper's
+exactly-one check principally makes the missing-target case explicit: an
+unknown replacement ID raises `ValueError` and is never silently appended.
+The helper also validates its two boundary types. It does not locate an actor
+or target, authorize a State owner, resolve gameplay, build/decode/apply an
+Event, choose a mutation field, call `StateStore`, coordinate persistence, or
+dispatch by mechanic/Event type. It is an Application helper, not a Domain
+gameplay rule and not Infrastructure.
+
+#### Evidence review verdicts
+
+| Candidate | Actual production evidence | Verdict |
+| --- | --- | --- |
+| One-Creature snapshot replacement | Four handlers repeated the identical stable-ID replacement, tuple-order preservation, Campaign/Character projection preservation, and copy-on-write policy. The helper removes the whole duplicated tuple/snapshot block and gives missing-ID behavior one explicit contract. | `EXTRACT` — only `replace_creature_in_snapshot` |
+| Creature field mutation primitive | Damage/Healing project `current_hp`; Apply/Remove project Condition membership. Their transition decisions and preserved-field proofs remain applier-specific. A shared primitive would only wrap `dataclasses.replace`. | `KEEP CONCRETE` |
+| Generic Event applier / base / Protocol | Payloads and integrity checks differ: Damage correlates target/previous HP, Healing additionally correlates `maxHp`, and Condition Events decode membership endpoints and Condition identity. No serialized replay/dispatch consumer exists. | `KEEP CONCRETE` |
+| Generic mutation handler | Only the visible sequence is shared. Resolver/result/Event types, actor/target errors, builders, appliers, and mutation policy differ; abstraction requires callbacks, type parameters, error factories, or policy hooks. | `KEEP CONCRETE` |
+| Generic Condition/effect/mechanic policy | Ability Check and Attack intentionally use separate mechanic-specific policies; Skill reuses Ability Check and Saving Throw is the negative boundary. One Poisoned effect does not evidence a registry, effect engine, modifier pipeline, roll context, or generic dispatch. | `KEEP NARROW` |
+| Direct `has_condition` helper | Current policies need only Python membership and such a helper would merely rename `in`. | `KEEP CONCRETE` |
+| `WorkingState`, `MutationContext`, `UnitOfWork`, `TransactionManager`, or `state_changes` | Every mutation still produces one replacement snapshot and performs one `StateStore.save()`; there is no multi-resource transaction or intermediate working graph. | `DEFER` |
+| `EventStore`, `EventApplierRegistry`, generic reducer, replay | Events are returned in memory; no durable append, serialized dispatch, replay, or recovery caller exists. | `DEFER` |
+| State revision/CAS/idempotency | No concrete concurrent-write or replay mechanism is introduced by G6C; the documented successful-no-op limitation is unchanged. | `DEFER` |
+| Advantage/disadvantage source aggregation | Poisoned remains the only production source. A second source must first evidence representation of independent advantage/disadvantage sources before final `RollMode` derivation. | `DEFER` |
+
+The helper is therefore the only new production abstraction from this review.
+The four handlers and four Event appliers remain concrete. The existing
+`StateStore.load(campaign_id)` / `save(snapshot)` boundary, persistence
+ordering, successful no-op behavior, read-only Condition-consumer boundaries,
+and AI/API/UI non-authority remain unchanged. Broad Roadmap `Conditions`,
+Attack, Skills, Proficiency, HP, Damage, and Healing statuses do not change.
 
 ---
 
@@ -4496,6 +5162,14 @@ State:
 condition_001
 condition_002
 ```
+
+G6C1 (§3.21) implemented persisted Condition **membership** on
+`CreatureState.conditions: frozenset[Condition]`, keyed directly by
+`Condition` value — no `condition_NNN` runtime ID is allocated or used by that
+membership set. `condition_NNN` remains reserved here for a **possible
+future** stateful Condition-instance model with its own source/duration/
+provenance lifecycle, introduced only if concrete mechanics actually require
+it.
 
 ---
 
@@ -6695,11 +7369,11 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Каноническая current V3 schema:
+filesystem I/O. Каноническая current V4 schema:
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "campaignId": "campaign_001",
   "state": {
     "campaign": {
@@ -6720,7 +7394,8 @@ filesystem I/O. Каноническая current V3 schema:
           "charisma": 8
         },
         "currentHp": 28,
-        "maxHp": 28
+        "maxHp": 28,
+        "conditions": []
       }
     ],
     "characters": [
@@ -6741,29 +7416,50 @@ filesystem I/O. Каноническая current V3 schema:
 }
 ```
 
-JSON использует camelCase. Writer всегда выпускает `schemaVersion: 3` и exact
-V3 state fields `campaign`, `creatures`, `characters`, включая
-`"characters": []` для пустой collection. Creatures и Characters сортируются
-по runtime ID, `savingThrowProficiencies` — по `Ability.value`, а
-`skillProficiencies` — по `Skill.value`. Пустые membership сериализуются как
-JSON arrays `[]`.
+JSON использует camelCase. Writer всегда выпускает `schemaVersion: 4` и exact
+V4 state fields `campaign`, `creatures`, `characters`, включая
+`"characters": []` для пустой collection и `"conditions": []` для пустого
+Creature Condition membership (§3.21). Creatures и Characters сортируются по
+runtime ID, `savingThrowProficiencies` — по `Ability.value`,
+`skillProficiencies` — по `Skill.value`, а `conditions` — по `Condition.value`.
+Пустые membership сериализуются как JSON arrays `[]`.
 
-Reader принимает три точные схемы: legacy V1 с state fields `campaign` и
-`creatures`, legacy V2 с обязательным дополнительным `characters`, и current
-V3. Поле `characters` в V1 является unknown и запрещено. Успешное чтение V1
-создаёт `StateSnapshot.characters=()` и не придумывает level или proficiency
-defaults. V2 Character entry сохраняет exact legacy fields `id`, `totalLevel`
-и `savingThrowProficiencies`; reader мигрирует его в canonical
-`CharacterState` с `skill_proficiencies=frozenset()`.
+Reader принимает четыре точные схемы: legacy V1 с state fields `campaign` и
+`creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
+обязательным дополнительным `skillProficiencies`, и current V4. Поле
+`characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
+`StateSnapshot.characters=()` и не придумывает level или proficiency defaults.
+V2 Character entry сохраняет exact legacy fields `id`, `totalLevel` и
+`savingThrowProficiencies`; reader мигрирует его в canonical `CharacterState`
+с `skill_proficiencies=frozenset()`. V1–V3 Creature entries не содержат поле
+`conditions` — оно unknown и запрещено для этих трёх версий; успешное чтение
+любой из них создаёт `CreatureState.conditions == frozenset()` без выдумывания
+membership.
 
-Для всех трёх версий required fields и JSON primitive/container types точны;
-unknown fields, defaults, type coercion, несовпадение outer `campaignId` с
-`state.campaign.id`, невалидные Domain values и duplicate IDs запрещены. V2 и
-V3 дополнительно требуют, чтобы каждый Character ID ссылался на существующий
-Creature ID. V3 Character entry содержит exact fields `id`, `totalLevel`,
-`savingThrowProficiencies` и `skillProficiencies`; duplicate serialized
-abilities и skills запрещены до преобразования списков в соответствующие
-`frozenset`.
+Для всех четырёх версий required fields и JSON primitive/container types
+точны; unknown fields, defaults, type coercion, несовпадение outer
+`campaignId` с `state.campaign.id`, невалидные Domain values и duplicate IDs
+запрещены. V2, V3 и V4 дополнительно требуют, чтобы каждый Character ID
+ссылался на существующий Creature ID. V3 и V4 Character entry содержит
+identical exact fields `id`, `totalLevel`, `savingThrowProficiencies` и
+`skillProficiencies` — Character schema не менялась в V4; duplicate
+serialized abilities и skills запрещены до преобразования списков в
+соответствующие `frozenset`. V4 Creature entry дополнительно требует
+`conditions`: JSON list точных строк, каждая — известное значение `Condition`,
+без дубликатов; malformed non-list, unknown-value и duplicate-value payloads
+отклоняются (§3.21).
+
+Character decoding (включая ветку, читающую `skillProficiencies`) определяется
+явным сравнением с `LEGACY_SCHEMA_V2_VERSION`, а не сравнением только с
+текущим `SCHEMA_VERSION` — это защищает V3-чтение при будущих schema bump'ах.
+Симметрично, V4 Creature field set и `conditions` decoding определяются
+сравнением с отдельной fixed-identity константой `SCHEMA_V4_VERSION`, а не с
+мутируемым `SCHEMA_VERSION`: `SCHEMA_VERSION = SCHEMA_V4_VERSION` сегодня, но
+эти два имени не взаимозаменяемы — `SCHEMA_VERSION` обозначает current writer
+и используется только при записи, тогда как historical V4 read semantics
+зафиксированы на `SCHEMA_V4_VERSION` независимо от того, останется ли V4
+current writer в будущем (§3.21 фиксирует эту regression-защиту как часть
+G6C1).
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -6787,10 +7483,11 @@ revision fields и file/process/distributed locks отсутствуют.
 EventStore, replay и transaction ordering между Event persistence и State
 projection отложены до отдельного будущего решения.
 
-Текущая V3 schema содержит `CampaignState`, collection `CreatureState` и
-character-specific collection `CharacterState`. По мере появления следующих
-State domains snapshot schema должна расширяться отдельным версионируемым
-контрактом, не превращая `CampaignState` в God Object.
+Текущая V4 schema содержит `CampaignState`, collection `CreatureState`
+(включая `conditions`, §3.21) и character-specific collection `CharacterState`.
+По мере появления следующих State domains snapshot schema должна расширяться
+отдельным версионируемым контрактом, не превращая `CampaignState` в God
+Object.
 
 Snapshot не содержит:
 
@@ -6933,7 +7630,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -6964,11 +7661,11 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 3`; writer выпускает
-только V3. Reader также принимает exact legacy integer `schemaVersion = 1` и
-`schemaVersion = 2`. Другие значения запрещены, а `bool` не считается integer
-version. Это версия storage schema, а не revision текущего State и не механизм
-concurrency control.
+Current State schema — exact integer `schemaVersion = 4`; writer выпускает
+только V4. Reader также принимает exact legacy integer `schemaVersion = 1`,
+`schemaVersion = 2` и `schemaVersion = 3`. Другие значения запрещены, а `bool`
+не считается integer version. Это версия storage schema, а не revision
+текущего State и не механизм concurrency control.
 
 ---
 

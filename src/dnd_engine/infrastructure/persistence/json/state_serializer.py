@@ -6,12 +6,20 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.condition import Condition
 from dnd_engine.domain.value_objects.skill import Skill
 
 
 LEGACY_SCHEMA_VERSION = 1
 LEGACY_SCHEMA_V2_VERSION = 2
-SCHEMA_VERSION = 3
+LEGACY_SCHEMA_V3_VERSION = 3
+# Fixed identity of the V4 Creature shape (exact fields, `conditions`
+# decoding). Historical V4 semantics must not be keyed off mutable
+# SCHEMA_VERSION: once a future schema bump moves SCHEMA_VERSION past 4,
+# `schema_version == SCHEMA_VERSION` would stop matching legacy V4 payloads
+# and silently mis-decode them as pre-V4 (§3.21, DEC-0035).
+SCHEMA_V4_VERSION = 4
+SCHEMA_VERSION = SCHEMA_V4_VERSION
 
 _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
@@ -24,6 +32,7 @@ _CREATURE_FIELDS = {
     "currentHp",
     "maxHp",
 }
+_V4_CREATURE_FIELDS = _CREATURE_FIELDS | {"conditions"}
 _V2_CHARACTER_FIELDS = {
     "id",
     "totalLevel",
@@ -105,6 +114,12 @@ def _validate_creature(creature: CreatureState) -> None:
         raise ValueError("creature.max_hp must be at least 1")
     if not 0 <= current_hp <= max_hp:
         raise ValueError("creature.current_hp must be between 0 and max_hp")
+    if type(creature.conditions) is not frozenset:
+        raise TypeError("creature conditions must be a frozenset")
+    if not all(
+        isinstance(condition, Condition) for condition in creature.conditions
+    ):
+        raise TypeError("creature conditions must contain only Condition values")
 
 
 def _validate_character(character: CharacterState) -> None:
@@ -151,6 +166,13 @@ def _serialize_creature(creature: CreatureState) -> dict[str, object]:
         "abilityScores": _serialize_ability_scores(creature.ability_scores),
         "currentHp": creature.current_hp,
         "maxHp": creature.max_hp,
+        "conditions": [
+            condition.value
+            for condition in sorted(
+                creature.conditions,
+                key=lambda condition: condition.value,
+            )
+        ],
     }
 
 
@@ -229,7 +251,8 @@ class StateSerializer:
         if schema_version not in {
             LEGACY_SCHEMA_VERSION,
             LEGACY_SCHEMA_V2_VERSION,
-            SCHEMA_VERSION,
+            LEGACY_SCHEMA_V3_VERSION,
+            SCHEMA_V4_VERSION,
         }:
             raise ValueError(f"unsupported schemaVersion: {schema_version}")
 
@@ -260,7 +283,11 @@ class StateSerializer:
         if type(creatures_data) is not list:
             raise TypeError("state.creatures must be a list")
         creatures = tuple(
-            StateSerializer._deserialize_creature(creature_data, index)
+            StateSerializer._deserialize_creature(
+                creature_data,
+                index,
+                schema_version,
+            )
             for index, creature_data in enumerate(creatures_data)
         )
         if schema_version == LEGACY_SCHEMA_VERSION:
@@ -284,9 +311,18 @@ class StateSerializer:
         )
 
     @staticmethod
-    def _deserialize_creature(data: object, index: int) -> CreatureState:
+    def _deserialize_creature(
+        data: object,
+        index: int,
+        schema_version: int,
+    ) -> CreatureState:
         creature = _require_mapping(data, f"state.creatures[{index}]")
-        _require_exact_fields(creature, _CREATURE_FIELDS, "creature")
+        creature_fields = (
+            _V4_CREATURE_FIELDS
+            if schema_version == SCHEMA_V4_VERSION
+            else _CREATURE_FIELDS
+        )
+        _require_exact_fields(creature, creature_fields, "creature")
 
         ability_data = _require_mapping(
             creature["abilityScores"],
@@ -309,6 +345,29 @@ class StateSerializer:
             wisdom=_require_int(ability_data["wisdom"], "wisdom"),
             charisma=_require_int(ability_data["charisma"], "charisma"),
         )
+
+        conditions: list[Condition] = []
+        if schema_version == SCHEMA_V4_VERSION:
+            conditions_data = creature["conditions"]
+            if type(conditions_data) is not list:
+                raise TypeError(
+                    f"state.creatures[{index}].conditions must be a list"
+                )
+            for condition_index, value in enumerate(conditions_data):
+                condition_value = _require_str(
+                    value,
+                    f"state.creatures[{index}].conditions[{condition_index}]",
+                )
+                try:
+                    condition = Condition(condition_value)
+                except ValueError as error:
+                    raise ValueError(
+                        f"invalid condition: {condition_value!r}"
+                    ) from error
+                if condition in conditions:
+                    raise ValueError("conditions must not contain duplicates")
+                conditions.append(condition)
+
         return CreatureState(
             id=_require_str(creature["id"], "creature.id"),
             definition_id=_require_str(
@@ -317,6 +376,7 @@ class StateSerializer:
             ability_scores=ability_scores,
             current_hp=_require_int(creature["currentHp"], "creature.currentHp"),
             max_hp=_require_int(creature["maxHp"], "creature.maxHp"),
+            conditions=frozenset(conditions),
         )
 
     @staticmethod
@@ -367,8 +427,11 @@ class StateSerializer:
                 )
             proficiencies.append(ability)
 
+        # V1 has no Character projection at all; V2 predates skillProficiencies.
+        # V3 and V4 share the same Character schema (§3.2.4 is unaffected by
+        # the V4 Creature-only schema bump), so both decode skillProficiencies.
         skill_proficiencies: list[Skill] = []
-        if schema_version == SCHEMA_VERSION:
+        if schema_version != LEGACY_SCHEMA_V2_VERSION:
             skill_proficiencies_data = character["skillProficiencies"]
             if type(skill_proficiencies_data) is not list:
                 raise TypeError(

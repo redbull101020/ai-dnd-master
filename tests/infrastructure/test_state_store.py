@@ -124,6 +124,36 @@ def legacy_v2_data() -> dict[str, object]:
     return data
 
 
+def legacy_v3_data() -> dict[str, object]:
+    data = valid_data()
+    data["schemaVersion"] = 3
+    data["state"]["creatures"] = [  # type: ignore[index]
+        {
+            "id": "character_001",
+            "definitionId": "fighter",
+            "abilityScores": {
+                "strength": 16,
+                "dexterity": 12,
+                "constitution": 14,
+                "intelligence": 10,
+                "wisdom": 10,
+                "charisma": 8,
+            },
+            "currentHp": 28,
+            "maxHp": 28,
+        }
+    ]
+    data["state"]["characters"] = [  # type: ignore[index]
+        {
+            "id": "character_001",
+            "totalLevel": 5,
+            "savingThrowProficiencies": ["constitution", "strength"],
+            "skillProficiencies": ["athletics", "perception"],
+        }
+    ]
+    return data
+
+
 def test_state_store_errors_have_stable_hierarchy() -> None:
     assert issubclass(StateNotFoundError, StateStoreError)
     assert issubclass(InvalidStateSnapshotError, StateStoreError)
@@ -141,7 +171,7 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 3
+    assert data["schemaVersion"] == 4
     assert data["state"]["characters"] == []
 
 
@@ -165,6 +195,24 @@ def test_load_accepts_legacy_v2_with_empty_skill_membership(
     loaded = FilesystemStateStore(tmp_path).load("campaign_001")
 
     assert loaded.characters[0].skill_proficiencies == frozenset()
+
+
+def test_load_accepts_legacy_v3_with_empty_conditions(
+    tmp_path: Path,
+) -> None:
+    """G6C1 Group 3 regression: a real, on-disk legacy V3 snapshot (predating
+    the Creature `conditions` field) must still load through the production
+    FilesystemStateStore/V4 serializer path with empty condition membership,
+    not just through the isolated StateSerializer unit tests."""
+    state_path = tmp_path / "campaign_001" / "state.json"
+    write_json(state_path, legacy_v3_data())
+
+    loaded = FilesystemStateStore(tmp_path).load("campaign_001")
+
+    assert loaded.creatures[0].conditions == frozenset()
+    assert loaded.characters[0].skill_proficiencies == frozenset(
+        {Skill.ATHLETICS, Skill.PERCEPTION}
+    )
 
 
 def test_save_load_v3_preserves_character_state(tmp_path: Path) -> None:
@@ -237,7 +285,7 @@ def test_invalid_snapshot_json_raises_invalid_snapshot(tmp_path: Path) -> None:
 
 def test_unsupported_schema_version_raises_invalid_snapshot(tmp_path: Path) -> None:
     data = valid_data()
-    data["schemaVersion"] = 4
+    data["schemaVersion"] = 5
     write_json(tmp_path / "campaign_001" / "state.json", data)
 
     with pytest.raises(InvalidStateSnapshotError):

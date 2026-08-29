@@ -1,37 +1,37 @@
 from dnd_engine.application.services.event_metadata import EventMetadataProvider
-from dnd_engine.domain.commands.skill_check import SkillCheckCommand
+from dnd_engine.application.services.state_snapshot import (
+    replace_creature_in_snapshot,
+)
+from dnd_engine.domain.commands.apply_condition import ApplyConditionCommand
 from dnd_engine.domain.errors import EngineError, ErrorCode
-from dnd_engine.domain.events.skill_check import build_skill_check_resolved_v1
+from dnd_engine.domain.events.apply_condition import (
+    apply_condition_applied_v1,
+    build_condition_applied_v1,
+)
 from dnd_engine.domain.resolution import ResolutionResult
-from dnd_engine.domain.rules.condition_roll_mode import (
-    ability_check_roll_mode_from_conditions,
+from dnd_engine.domain.rules.apply_condition import (
+    ConditionApplicationResult,
+    resolve_condition_application,
 )
-from dnd_engine.domain.rules.skill_check import (
-    SkillCheckResult,
-    resolve_character_skill_check,
-)
-from dnd_engine.domain.services.dice import DiceEngine
 from dnd_engine.domain.services.state_store import StateStore
 
 
-class SkillCheckHandler:
+class ApplyConditionHandler:
     def __init__(
         self,
         *,
         state_store: StateStore,
-        dice: DiceEngine,
         event_metadata_provider: EventMetadataProvider,
     ) -> None:
         self._state_store = state_store
-        self._dice = dice
         self._event_metadata_provider = event_metadata_provider
 
     def handle(
-        self,
-        command: SkillCheckCommand,
-    ) -> ResolutionResult[SkillCheckResult]:
+        self, command: ApplyConditionCommand
+    ) -> ResolutionResult[ConditionApplicationResult]:
         snapshot = self._state_store.load(command.campaign_id)
-        creature = next(
+
+        actor = next(
             (
                 candidate
                 for candidate in snapshot.creatures
@@ -40,7 +40,7 @@ class SkillCheckHandler:
             None,
         )
 
-        if creature is None:
+        if actor is None:
             return ResolutionResult(
                 success=False,
                 command_id=command.command_id,
@@ -49,22 +49,22 @@ class SkillCheckHandler:
                 errors=(
                     EngineError(
                         code=ErrorCode.ENTITY_NOT_FOUND,
-                        message="Skill Check actor was not found.",
+                        message="Condition application actor was not found.",
                         entity_id=command.actor_id,
                     ),
                 ),
             )
 
-        character = next(
+        target = next(
             (
                 candidate
-                for candidate in snapshot.characters
-                if candidate.id == command.actor_id
+                for candidate in snapshot.creatures
+                if candidate.id == command.payload.target_id
             ),
             None,
         )
 
-        if character is None:
+        if target is None:
             return ResolutionResult(
                 success=False,
                 command_id=command.command_id,
@@ -72,29 +72,29 @@ class SkillCheckHandler:
                 events=(),
                 errors=(
                     EngineError(
-                        code=ErrorCode.INVALID_STATE,
-                        message="Skill Check actor has no CharacterState.",
-                        entity_id=command.actor_id,
-                        field="characters",
+                        code=ErrorCode.ENTITY_NOT_FOUND,
+                        message="Condition application target was not found.",
+                        entity_id=command.payload.target_id,
+                        field="target_id",
                     ),
                 ),
             )
 
-        roll_mode = ability_check_roll_mode_from_conditions(creature.conditions)
-        outcome = resolve_character_skill_check(
-            command,
-            creature,
-            character,
-            self._dice,
-            roll_mode=roll_mode,
-        )
+        outcome = resolve_condition_application(command, target)
         metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
-        event = build_skill_check_resolved_v1(
+        event = build_condition_applied_v1(
             event_id=metadata.event_id,
             timestamp=metadata.timestamp,
             command=command,
             outcome=outcome,
         )
+
+        replacement_target = apply_condition_applied_v1(target, event)
+        replacement_snapshot = replace_creature_in_snapshot(
+            snapshot, replacement_target
+        )
+
+        self._state_store.save(replacement_snapshot)
 
         return ResolutionResult(
             success=True,
