@@ -15,6 +15,7 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.condition import Condition
 from dnd_engine.domain.value_objects.d20 import RollMode
 from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 
@@ -43,17 +44,18 @@ class FailingStateStore(SpyStateStore):
 
 
 class ScriptedDiceEngine:
-    def __init__(self, raw_roll: int) -> None:
-        self._roll = DiceRoll(
-            expression="1d20",
-            rolls=(raw_roll,),
-            total=raw_roll,
-        )
+    def __init__(self, raw_roll: int, *additional_rolls: int) -> None:
+        self._raw_rolls = iter((raw_roll, *additional_rolls))
         self.calls: list[str] = []
 
     def roll(self, expression: str) -> DiceRoll:
         self.calls.append(expression)
-        return self._roll
+        raw_roll = next(self._raw_rolls)
+        return DiceRoll(
+            expression="1d20",
+            rolls=(raw_roll,),
+            total=raw_roll,
+        )
 
 
 class FixedEventMetadataProvider:
@@ -72,6 +74,7 @@ def make_creature(
     *,
     creature_id: str = "character_001",
     strength: int = 14,
+    conditions: frozenset[Condition] = frozenset(),
 ) -> CreatureState:
     return CreatureState(
         id=creature_id,
@@ -86,6 +89,7 @@ def make_creature(
         ),
         current_hp=18,
         max_hp=20,
+        conditions=conditions,
     )
 
 
@@ -171,6 +175,30 @@ def test_successful_gameplay_check_orchestrates_read_only_result_and_event() -> 
         "modifier": result.outcome.modifier,
         "total": result.outcome.total,
         "succeeded": result.outcome.succeeded,
+    }
+    assert store.save_calls == []
+
+
+def test_poisoned_actor_rolls_ability_check_with_disadvantage() -> None:
+    actor = make_creature(conditions=frozenset({Condition.POISONED}))
+    store = SpyStateStore(make_snapshot(actor))
+    dice = ScriptedDiceEngine(17, 6)
+
+    result = make_handler(
+        state_store=store,
+        dice=dice,
+        metadata_provider=FixedEventMetadataProvider(),
+    ).handle(make_command())
+
+    assert dice.calls == ["1d20", "1d20"]
+    assert result.outcome is not None
+    assert result.outcome.roll.mode is RollMode.DISADVANTAGE
+    assert result.outcome.roll.rolls == (17, 6)
+    assert result.outcome.roll.selected == 6
+    assert result.events[0].payload["roll"] == {
+        "mode": "disadvantage",
+        "rolls": (17, 6),
+        "selected": 6,
     }
     assert store.save_calls == []
 

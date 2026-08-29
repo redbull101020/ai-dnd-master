@@ -3328,3 +3328,72 @@ contracts.
   `TransactionManager`, `state_changes`, `EventStore`, or new production
   dependency. Did not commit or push Group 3; per-task instruction, it stays
   uncommitted pending review, captured in a fresh `review.patch`.
+
+## 2026-08-29 — G6C Group 4 / G6C2: minimal Poisoned roll behavior
+
+- Verified the reviewed Group 3 diff as the isolated commit after Group 2,
+  confirmed `git diff --check` clean, explicitly pushed the branch
+  (`Everything up-to-date`), and confirmed the tracked worktree clean before
+  starting G6C2. Group 3 SHA:
+  `564698db214508c31340b6007d23926072d855de`.
+- Added two narrow pure Domain policies in
+  `domain.rules.condition_roll_mode`: one derives Ability Check roll mode from
+  Condition membership and one derives Attack Roll mode. Both return
+  `DISADVANTAGE` for `Condition.POISONED` and `NORMAL` otherwise. No generic
+  Condition-to-mode mapping or roll-mode combiner was added.
+- Wired `AbilityCheckHandler` and `SkillCheckHandler` to the shared
+  ability-check Condition policy, and `AttackHandler` to the attack-roll
+  policy after its existing actor/Character/target/Definition lookups. The
+  unchanged resolvers still receive effective keyword-only `roll_mode` and
+  call `resolve_d20_roll()`. Attack reads attacker Conditions, not target
+  Conditions. `SavingThrowHandler` was not changed.
+- Added handler proofs using scripted `17, 6` rolls for poisoned Ability,
+  Skill, and Attack consumers: each performs exactly two independent
+  `dice.roll("1d20")` calls, records ordered `(17, 6)`, selects `6`, and writes
+  the same `DISADVANTAGE` D20Roll in its final Event. Added an Attack negative
+  proof that a poisoned target does not disadvantage an unpoisoned attacker.
+- Added the required production Saving Throw negative proof: a poisoned actor
+  follows the real handler path, remains `RollMode.NORMAL`, performs exactly
+  one `dice.roll("1d20")`, and records that one-roll D20Roll in
+  `SavingThrowResolved`.
+- Added a real `FilesystemStateStore` lifecycle proof: persist initially
+  unpoisoned actor -> Apply `POISONED` -> fresh later AbilityCheckHandler load
+  with two-roll disadvantage -> Remove `POISONED` -> fresh later
+  AbilityCheckHandler load with one-roll NORMAL. This proves authoritative
+  mutation persistence drives later read-only rule behavior.
+- Added canonical §3.22 and DEC-0037, updated the G6C status text in Roadmap
+  and the reproduced facts in `CLAUDE.md`. Broad `[ ] Conditions`, Attack,
+  Skills, and Proficiency statuses remain unchanged. README required no edit.
+- Focused Domain/handler/persistence test checkpoint passed: `54 passed` on
+  Python 3.12.13 / pytest 9.1.1. Full-suite and configured-check results are
+  recorded after final verification below.
+- Final verification passed: full pytest `1248 passed`; configured mypy
+  `Success: no issues found in 90 source files`. The full suite used a fresh
+  basetemp and pip cache outside the checkout so its installed-wheel fixture
+  could build offline without recursively copying the repository-local temp
+  directory or writing to the sandbox-blocked default pip cache. No formatter
+  or linter is configured in `pyproject.toml`.
+- Introduced no other Condition, poison damage, duration/source, immunity,
+  save-to-remove behavior, generic Effects, modifier pipeline, advantage/
+  disadvantage source framework, pairwise RollMode combiner, EventStore,
+  UnitOfWork, or snapshot helper extraction.
+
+## 2026-08-29 — G6C Group 4 review correction: persisted pre-Apply baseline
+
+- Extended the existing real `FilesystemStateStore` lifecycle test before
+  any mutation: after persisting an initially unpoisoned Creature, a fresh
+  `AbilityCheckHandler` with its own new `FilesystemStateStore` instance now
+  loads the empty Condition membership, performs exactly one
+  `dice.roll("1d20")`, and records a NORMAL `D20Roll` with the exact scripted
+  roll in both the outcome and final Event payload.
+- The same test then continues through the already-covered Apply `POISONED`
+  -> fresh two-roll DISADVANTAGE check -> Remove `POISONED` -> fresh one-roll
+  NORMAL check. No production code, Domain policy contract, handler wiring,
+  canonical behavior contract, or Group 5 scope changed in this review
+  correction.
+- Review verification passed on Python 3.12.13 / pytest 9.1.1: the corrected
+  integration test passed (`1 passed`), the focused Group 4 suite remained
+  `54 passed`, the full suite remained `1248 passed`, and configured mypy
+  remained clean (`Success: no issues found in 90 source files`). Test counts
+  are unchanged because the baseline was added inside the existing integration
+  test rather than as a new test function.

@@ -16,6 +16,8 @@ from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.condition import Condition
+from dnd_engine.domain.value_objects.d20 import RollMode
 from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 
 
@@ -77,7 +79,11 @@ class FixedEventMetadataProvider:
         )
 
 
-def make_creature(*, creature_id: str = "character_001") -> CreatureState:
+def make_creature(
+    *,
+    creature_id: str = "character_001",
+    conditions: frozenset[Condition] = frozenset(),
+) -> CreatureState:
     return CreatureState(
         id=creature_id,
         definition_id="fighter",
@@ -91,6 +97,7 @@ def make_creature(*, creature_id: str = "character_001") -> CreatureState:
         ),
         current_hp=20,
         max_hp=20,
+        conditions=conditions,
     )
 
 
@@ -171,6 +178,36 @@ def test_successful_proficient_save_returns_v1_event_without_saving_state() -> N
     assert event.version == 1
     assert event.payload["abilityModifier"] == 2
     assert event.payload["proficiencyBonus"] == 3
+
+
+def test_poisoned_actor_saving_throw_stays_normal_with_one_actual_roll() -> None:
+    store = SpyStateStore(
+        make_snapshot(
+            creatures=(
+                make_creature(conditions=frozenset({Condition.POISONED})),
+            ),
+            characters=(make_character(),),
+        )
+    )
+    dice = ScriptedDiceEngine(17)
+
+    result = make_handler(
+        store,
+        dice,
+        FixedEventMetadataProvider(),
+    ).handle(make_command())
+
+    assert dice.calls == ["1d20"]
+    assert result.outcome is not None
+    assert result.outcome.roll.mode is RollMode.NORMAL
+    assert result.outcome.roll.rolls == (17,)
+    assert result.outcome.roll.selected == 17
+    assert result.events[0].payload["roll"] == {
+        "mode": "normal",
+        "rolls": (17,),
+        "selected": 17,
+    }
+    assert store.save_calls == []
 
 
 def test_failed_gameplay_save_is_successful_processing() -> None:

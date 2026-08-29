@@ -60,7 +60,7 @@ Definition of Done Phase 1 не добавляются.
 
 ## Phase 2 — Basic Rules
 
-> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5) · [§3.19 Minimal Damage → HP mutation vertical slice (G6A)](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a) · [§3.20 Minimal Healing → HP mutation vertical slice (G6B)](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b) · [§3.21 Condition State foundation (G6C1)](ARCHITECTURE.md#321-condition-state-foundation-g6c1)
+> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5) · [§3.19 Minimal Damage → HP mutation vertical slice (G6A)](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a) · [§3.20 Minimal Healing → HP mutation vertical slice (G6B)](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b) · [§3.21 Condition State foundation (G6C1)](ARCHITECTURE.md#321-condition-state-foundation-g6c1) · [§3.22 Minimal Poisoned behavior (G6C2)](ARCHITECTURE.md#322-minimal-poisoned-behavior-g6c2)
 
 * [x] Ability checks
 * [ ] Proficiency
@@ -109,8 +109,7 @@ HP lifecycle, Attack → Damage orchestration, resistance/immunity/vulnerability
 or Conditions.
 
 G6C1 (§3.21) implements the parallel Condition State foundation and its full
-direct mutation path — State representation through persistence, but not any
-gameplay effect:
+direct mutation path — State representation through persistence:
 
 ```text
 ApplyConditionCommand → resolve_condition_application → ConditionApplied V1
@@ -123,10 +122,17 @@ RemoveConditionCommand → resolve_condition_removal → ConditionRemoved V1
 and State schema V4 landed in Group 1; the pure Domain mutation contract
 landed in Group 2; `ApplyConditionHandler`/`RemoveConditionHandler` and their
 `StateStore.save()` orchestration — proven end-to-end against the real
-`FilesystemStateStore` — landed in Group 3. The `[ ] Conditions` checkbox
-intentionally remains open: no `Poisoned` (or any other) gameplay effect,
-`RollMode`/d20 interaction, Effect framework, or stateful Condition-instance
-model is implemented.
+`FilesystemStateStore` — landed in Group 3.
+
+G6C2 (§3.22) makes that membership behavior-driving State for exactly one
+Condition interpretation: `POISONED` produces disadvantage for Ability Checks,
+Character Skill Checks (through the shared ability-check Condition policy),
+and Attack Rolls; Saving Throws remain NORMAL. Application reads authoritative
+actor Condition membership and passes a mechanic-specific Domain policy's
+effective mode into the unchanged resolver boundary. No generic effect or
+advantage/disadvantage aggregation framework was introduced. The `[ ]
+Conditions` checkbox intentionally remains open: all other Conditions and all
+other Poisoned mechanics remain unimplemented.
 
 ## Phase 3 — Combat
 

@@ -3,6 +3,9 @@ from dnd_engine.domain.commands.skill_check import SkillCheckCommand
 from dnd_engine.domain.errors import EngineError, ErrorCode
 from dnd_engine.domain.events.skill_check import build_skill_check_resolved_v1
 from dnd_engine.domain.resolution import ResolutionResult
+from dnd_engine.domain.rules.condition_roll_mode import (
+    ability_check_roll_mode_from_conditions,
+)
 from dnd_engine.domain.rules.skill_check import (
     SkillCheckResult,
     resolve_character_skill_check,
@@ -77,11 +80,13 @@ class SkillCheckHandler:
                 ),
             )
 
+        roll_mode = ability_check_roll_mode_from_conditions(creature.conditions)
         outcome = resolve_character_skill_check(
             command,
             creature,
             character,
             self._dice,
+            roll_mode=roll_mode,
         )
         metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
         event = build_skill_check_resolved_v1(

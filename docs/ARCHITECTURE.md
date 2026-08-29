@@ -57,6 +57,7 @@
 | Minimal Damage → HP mutation slice (G6A, `ApplyDamage`) | §3.19 |
 | Minimal Healing → HP mutation slice (G6B, `ApplyHealing`) | §3.20 |
 | Condition State foundation, persisted `CreatureState.conditions` (G6C1) | §3.21 |
+| Minimal Poisoned behavior for checks and attacks (G6C2) | §3.22 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -112,6 +113,7 @@
   * [3.19. Minimal Damage → HP mutation vertical slice (G6A)](#319-minimal-damage--hp-mutation-vertical-slice-g6a)
   * [3.20. Minimal Healing → HP mutation vertical slice (G6B)](#320-minimal-healing--hp-mutation-vertical-slice-g6b)
   * [3.21. Condition State foundation (G6C1)](#321-condition-state-foundation-g6c1)
+  * [3.22. Minimal Poisoned behavior (G6C2)](#322-minimal-poisoned-behavior-g6c2)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1812,8 +1814,11 @@ def resolve_ability_check(
 
 `roll_mode` — keyword-only effective rule result и не входит в
 `AbilityCheckPayload`, `AbilityCheckCommand`, Command Envelope, API DTO или AI
-input. Пока production source advantage/disadvantage отсутствует, Application
-handler вызывает resolver без этого аргумента и получает `RollMode.NORMAL`.
+input. G6C2 (§3.22) adds the first production source: Application reads the
+already-loaded actor's authoritative Condition membership, asks the pure
+ability-check Condition policy for effective mode, and passes that result to
+the resolver. Without `Condition.POISONED`, that policy returns
+`RollMode.NORMAL`.
 
 Resolver выполняет только rule resolution, не мутирует `CreatureState` и
 получает physical d20 result через `resolve_d20_roll(dice, roll_mode)` (§3.12).
@@ -2104,9 +2109,11 @@ failure, automatic success или critical result; такую семантику
 (§3.17). Только Attack из этих mechanics интерпретирует natural 1/20 как
 automatic miss/hit и critical result.
 
-Sources/cancellation advantage/disadvantage, Conditions, Effects, monster
-Saving Throws, monster Skill Checks, broader Attack Roll paths и generic
-modifier/check frameworks остаются deferred.
+The first production source, Poisoned disadvantage for Ability/Skill Checks
+and Attack Rolls, is specified in §3.22. Representation and cancellation of
+multiple independent advantage/disadvantage sources, other Condition/Effect
+sources, monster Saving Throws, monster Skill Checks, broader Attack Roll
+paths, and generic modifier/check frameworks remain deferred.
 
 ---
 
@@ -2242,10 +2249,12 @@ successful `ResolutionResult` с `outcome.succeeded is False` и одним Even
 Slice read-only: `StateStore.save()` не вызывается, Event не применяется к
 State и runtime Event persistence не выполняется.
 
-Monster Saving Throws и их proficiency source, Death Saving Throws,
-Conditions/Effects и aggregation/cancellation advantage sources, generic
-modifier/check abstractions, resolver registry, EventStore, replay и State
-mutation остаются deferred.
+Poisoned explicitly does not affect this Saving Throw slice (§3.22):
+`SavingThrowHandler` invokes no Condition roll-mode policy and retains the
+resolver's NORMAL default. Monster Saving Throws and their proficiency source,
+Death Saving Throws, other Condition/Effect sources, aggregation/cancellation
+of advantage sources, generic modifier/check abstractions, resolver registry,
+EventStore, replay, and State mutation remain deferred.
 
 ---
 
@@ -2331,6 +2340,11 @@ succeeded = total >= dc
 Resolver переиспользует `ability_modifier()`,
 `character_proficiency_bonus()` и `resolve_d20_roll()`. Natural 1 не является
 automatic failure, natural 20 не является automatic success.
+
+G6C2 (§3.22) makes the current Character Skill Check a positive Poisoned
+consumer by reusing the ability-check Condition policy in Application. The
+resolver contract is unchanged: it receives the resulting effective
+`roll_mode` and does not look up Condition membership itself.
 
 Immutable result сохраняет и Skill, и фактически использованную Ability:
 
@@ -2943,10 +2957,13 @@ and non-character proficiency policies are not inferred from this rule.
 #### d20 selection and Attack-owned natural semantics
 
 Attack reuses the existing `RollMode`, `D20Roll`, and `resolve_d20_roll()`
-contracts from §3.12. The production handler calls the resolver without an
-override, so its effective mode defaults to `RollMode.NORMAL`. `roll_mode` is
-not part of `AttackCommand`, and player/API/AI intent does not currently supply
-it; it remains a valid keyword-only effective input at the resolver boundary.
+contracts from §3.12. G6C2 (§3.22) makes the production handler derive
+effective mode from the attacker's authoritative Condition membership through
+the pure attack-roll Condition policy after the existing lookup sequence, then
+pass it to the resolver. The target's Conditions do not affect this mode.
+Without `Condition.POISONED`, the policy returns `RollMode.NORMAL`.
+`roll_mode` is not part of `AttackCommand`, and player/API/AI intent does not
+supply it; it remains a keyword-only effective input at the resolver boundary.
 
 `resolve_d20_roll()` only selects an effective d20 value. Interpretation of
 natural 1/20 belongs to the Attack mechanic and uses `D20Roll.selected`:
@@ -3944,9 +3961,9 @@ persists new Condition membership: `ApplyConditionCommand`/
 `ConditionRemoved` V1 Events, concrete Creature appliers, and the
 `ApplyConditionHandler`/`RemoveConditionHandler` Application handlers that
 orchestrate `StateStore.load`/`StateStore.save` around them. It does not
-implement any gameplay effect (e.g. Poisoned disadvantage) — that is a
-separate, later, evidence-driven G6C group; this section will be extended,
-not replaced, when it lands.
+implement gameplay effects itself. The first such behavior, Poisoned
+disadvantage for Ability Checks and Attack Rolls, is a separate G6C2 contract
+in §3.22.
 
 #### Scope
 
@@ -3966,11 +3983,10 @@ StateStore.save orchestration for Condition mutation, exactly once on success
 
 #### Explicit exclusions
 
-This slice does not implement, and does not imply a decision on:
+This G6C1 foundation does not implement, and does not imply a decision on:
 
 ```text
-Poisoned (or any other) gameplay effect
-RollMode / d20 interaction
+Condition gameplay effects beyond the separately implemented G6C2 behavior (§3.22)
 ModifierPipeline
 runtime ConditionState instance entity
 ConditionDefinition hierarchy
@@ -4352,8 +4368,9 @@ Application handlers — not a generic `MutationHandler`, `ConditionMutation`
 base class, `EventApplierRegistry`, or any dispatcher from §3.6/§3.18's
 deferred list. They mirror `DamageHandler`/`HealingHandler` structurally,
 including the same inline (not extracted) replacement-snapshot construction
-described above. Any gameplay effect remains unimplemented (see "Explicit
-exclusions" above). `ApplyConditionCommand`/`RemoveConditionCommand`, their
+described above. Gameplay behavior remains outside this G6C1 foundation; the
+implemented Poisoned consumers are specified separately in §3.22.
+`ApplyConditionCommand`/`RemoveConditionCommand`, their
 resolvers, Events, and appliers are likewise concrete, mirroring the existing
 per-mechanic Damage/Healing shape rather than introducing a generic
 Condition-mutation abstraction — there is still only one Condition value and
@@ -4362,6 +4379,130 @@ Four concrete handlers now share the same load/lookup/resolve/build/apply/
 replace/save shape; that repetition is evidence, not yet an abstraction —
 whether it justifies a shared helper is decided by a later, separately
 evidenced abstraction-review group, not introduced speculatively here.
+
+---
+
+### 3.22. Minimal Poisoned behavior (G6C2)
+
+Implementation status: **Implemented.** This slice gives the persisted
+`Condition.POISONED` membership from §3.21 exactly one authoritative dnd_5e
+gameplay behavior:
+
+```text
+Poisoned -> disadvantage on Ability Checks
+Poisoned -> disadvantage on Attack Rolls
+```
+
+In the implemented engine this means:
+
+```text
+AbilityCheck -> DISADVANTAGE
+SkillCheck   -> DISADVANTAGE (a concrete Ability Check mechanic)
+Attack       -> DISADVANTAGE
+SavingThrow  -> NORMAL unless a future non-Poisoned source says otherwise
+```
+
+No other Poisoned mechanic is implied or implemented.
+
+#### Domain policy and Application responsibility
+
+Two narrow pure Domain policies in
+`domain.rules.condition_roll_mode` own the mechanic-specific interpretation:
+
+```python
+def ability_check_roll_mode_from_conditions(
+    conditions: frozenset[Condition],
+) -> RollMode: ...
+
+def attack_roll_mode_from_conditions(
+    conditions: frozenset[Condition],
+) -> RollMode: ...
+```
+
+Each returns `RollMode.DISADVANTAGE` when `Condition.POISONED` is present and
+`RollMode.NORMAL` otherwise. There is deliberately no generic
+`Condition -> RollMode` mapping: the effect depends on mechanic context.
+Character Skill Check reuses `ability_check_roll_mode_from_conditions`
+because the current Skill Check is a concrete Ability Check mechanic; there
+is no separate Skill-only Poisoned rule. Saving Throw calls neither policy.
+
+Application may read authoritative `CreatureState.conditions`, but contains
+no standalone gameplay branch for Poisoned. After the existing State lookups,
+each positive consumer asks the appropriate Domain policy for the effective
+mode and passes it to the unchanged resolver boundary:
+
+```text
+AbilityCheckHandler:
+actor Creature.conditions
+-> ability-check Condition policy
+-> resolve_ability_check(..., roll_mode=effective_mode)
+
+SkillCheckHandler:
+actor Creature.conditions
+-> same ability-check Condition policy
+-> resolve_character_skill_check(..., roll_mode=effective_mode)
+
+AttackHandler:
+attacker Creature.conditions
+-> attack-roll Condition policy
+-> resolve_character_unarmed_attack(..., roll_mode=effective_mode)
+```
+
+For Attack, the Condition source is the attacker (`actor_creature`), never
+the target. Existing actor/Character/target/Definition lookup order, Monster
+AC lookup, and natural 1/20 semantics remain unchanged. `SavingThrowHandler`
+continues calling `resolve_character_saving_throw(...)` without a Poisoned
+mode application, so the resolver's existing `RollMode.NORMAL` default is
+used.
+
+#### Existing resolver and Event boundary
+
+Resolver contracts do not change. Ability Check, Character Skill Check,
+Character Saving Throw, and Character unarmed Attack resolvers still receive
+an already-effective `RollMode` and delegate physical selection to
+`resolve_d20_roll()` (§3.12). Commands, Command/API payloads, UI, and AI do
+not supply `roll_mode` and do not become authoritative rule sources.
+
+For Poisoned Ability/Skill/Attack, `resolve_d20_roll()` performs two
+independent `dice.roll("1d20")` calls, keeps ordered raw rolls, and selects
+the lower value. Existing Event writers continue copying the actual
+`D20Roll`: `mode="disadvantage"`, both ordered rolls, and the selected lower
+value. A Poisoned Saving Throw performs one actual `dice.roll("1d20")` and
+records `mode="normal"`.
+
+#### Persisted State to later rule proof
+
+The production integration path is proven through the real
+`FilesystemStateStore`:
+
+```text
+initial unpoisoned persisted Creature
+-> ApplyConditionCommand(POISONED) -> save
+-> fresh later AbilityCheckHandler load -> two rolls / DISADVANTAGE
+-> RemoveConditionCommand(POISONED) -> save
+-> fresh later AbilityCheckHandler load -> one roll / NORMAL
+```
+
+Thus `CreatureState.conditions` is authoritative behavior-driving State, not
+a decorative serialized field. Read-only roll handlers still do not save
+State.
+
+#### Aggregation checkpoint and explicit exclusions
+
+Poisoned is currently the only real production advantage/disadvantage source.
+This slice therefore introduces no `combine_roll_modes`, pairwise combiner,
+`RollContext`, `RollModifier`, `AdvantageSource`, modifier pipeline, effect
+registry/resolver, or generic Condition-effect hierarchy. When a second real
+source appears, the design checkpoint is to represent the **presence of
+independent advantage and disadvantage sources first**, and only then derive
+the final `RollMode`; pairwise combination of already-collapsed modes is not
+the planned scaling model.
+
+Also excluded: every other Condition, poison damage, duration/source,
+immunity, a Saving Throw to remove Poisoned, and any Poisoned effect beyond
+the three positive consumers above. EventStore, UnitOfWork, snapshot-helper
+extraction, and broader Attack/Skills/Proficiency completion remain outside
+this slice.
 
 ---
 
