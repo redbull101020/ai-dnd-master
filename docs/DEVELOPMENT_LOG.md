@@ -3397,3 +3397,81 @@ contracts.
   remained clean (`Success: no issues found in 90 source files`). Test counts
   are unchanged because the baseline was added inside the existing integration
   test rather than as a new test function.
+
+## 2026-08-29 — G6C Group 5: evidence-based post-G6C abstraction review
+
+- Verified the reviewed and pushed Group 4 as isolated commit
+  `a62b9c4649c0f21cce163779df496ef4d034a342`, with branch HEAD matching the
+  remote and a clean tracked worktree before Group 5 edits.
+- Compared `DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
+  `RemoveConditionHandler`. All four duplicated the same complete
+  owner/Application snapshot policy: replace one Creature by stable ID,
+  preserve tuple order, reuse Campaign and Character projections, and leave
+  the loaded snapshot untouched. Extracted only
+  `replace_creature_in_snapshot()` under Application services. It requires
+  exactly one existing matching ID, raises rather than silently appending a
+  missing target, and preserves the exact characters tuple identity.
+- Migrated the four mutation handlers to the helper without changing their
+  resolver, Event, applier, error, metadata, persistence, or result contracts.
+  Added focused helper proofs for order/projection identity/copy-on-write,
+  missing-ID failure, and boundary types; the existing four handler suites
+  provide regression coverage. Focused verification: `38 passed`.
+- Compared the four concrete Event appliers and retained `KEEP CONCRETE`:
+  Damage, Healing, and Condition payload decoding/correlation policies differ,
+  and no serialized replay/dispatch consumer exists. Generic mutation-handler
+  orchestration also stays concrete because it would require callbacks,
+  generics, error factories, or policy hooks. Ability/Attack Condition policies
+  remain narrow; Skill reuse and Saving Throw exclusion are unchanged.
+- Canonized the review in §3.23 and DEC-0038, updated current §3.19–§3.22
+  references, `CLAUDE.md`, the now-stale README flow text, and
+  `AI_DND_DATA_FLOW_CURRENT.md`. Broad Roadmap `Conditions` and all other broad
+  mechanic statuses remain unchanged.
+- Full verification passed on Python 3.12.13 / pytest 9.1.1: `1251 passed`,
+  covering legacy V1–V3 reads, V4 Conditions, mutation/no-op persistence,
+  Poisoned positive/negative consumers, later NORMAL restoration, Damage,
+  Healing, and all previous read-only mechanics. Configured mypy passed:
+  `Success: no issues found in 91 source files`. No formatter or linter is
+  configured.
+- Introduced no generic Event applier/registry/reducer, mutation handler,
+  `ConditionEffectRegistry`, Effect Engine, `ModifierPipeline`, `RollContext`,
+  `has_condition`, pairwise RollMode combiner, `WorkingState`, `UnitOfWork`,
+  `TransactionManager`, `MutationContext`, `state_changes`, EventStore,
+  revision/CAS, runtime Condition entity/source/duration/stacking, production
+  dependency, or AI/API/UI State mutation path. Group 5 remains uncommitted
+  and unpushed pending review.
+
+## 2026-08-29 — G6C Group 5 review correction: current data-flow sync
+
+- Updated only documentation after review; the approved snapshot helper, four
+  handlers, helper tests, Event appliers, and Condition policies were not
+  changed.
+- Replaced the stale G6B branch/commit header and Damage/Healing-only mutation
+  descriptions in `AI_DND_DATA_FLOW_CURRENT.md`. The current flow now records
+  all four mutation handlers and concrete Events/appliers, replacement
+  Creature → §3.23 Application helper → replacement snapshot → exactly one
+  successful-path `StateStore.save()`, plus the helper's explicit non-gameplay,
+  non-owner, non-persistence, non-reducer boundary. EventStore/replay remain
+  deferred.
+- Synchronized §3.19 Damage and §3.20 Healing lifecycle prose with the §3.23
+  helper without changing their gameplay, Event, no-op, ordering, or
+  persistence guarantees. Corrected DEC-0038's affected Architecture range to
+  §§3.19–3.23 and included the Current Data Flow document.
+- Documentation reference tests passed (`2 passed`). Full pytest and mypy were
+  intentionally not repeated because no Python code or tests changed. Group 5
+  remains uncommitted and unpushed pending final re-review.
+
+## 2026-08-29 — G6C Group 5 final re-review: stale wording cleanup
+
+- Updated documentation only. §3.18 now describes Damage/Healing as the first
+  two production mutation consumers at the historical post-G6B checkpoint and
+  records that G6C later added Apply/Remove Condition while §3.23 supersedes
+  only the snapshot-helper verdict.
+- Replaced §3.21's stale inline present-tense snapshot construction with the
+  current concrete Condition applier → replacement Creature → §3.23 helper →
+  replacement snapshot → save flow, retaining the original inline form only
+  as historical evidence context. Updated the top `CLAUDE.md` Foundation
+  summary to call Damage/Healing the first two HP-mutation consumers rather
+  than the current total.
+- Production code and tests were unchanged. Documentation reference tests
+  passed (`2 passed`); full pytest/mypy were not repeated. Group 5 remains
+  uncommitted and unpushed pending review.

@@ -110,11 +110,13 @@ LLM отвечает за понимание намерения, поведен�
 Saving Throw, Character Skill Check и narrow Character unarmed Attack Roll →
 Monster Events. Attack slice фиксирует hit/miss/critical в одном
 `AttackResolved` V1, читает baseline Monster AC через typed Definition access
-и не применяет damage или HP mutation. Отдельно реализованы два minimal
-mutating slice: `DamageApplied` V1 (§3.19) и `HealingApplied` V1 (§3.20)
-применяются к `CreatureState.current_hp` через свои concrete appliers,
-после чего replacement snapshot сохраняется через
-`StateStore.save()`. Это две конкретные Event → State projections, а не общий
+и не применяет damage или HP mutation. Отдельно реализованы minimal
+mutating slices: `DamageApplied` V1 (§3.19) и `HealingApplied` V1 (§3.20)
+применяются к `CreatureState.current_hp`, а `ConditionApplied`/
+`ConditionRemoved` V1 (§3.21) — к `CreatureState.conditions`, каждый через
+свой concrete applier. Четыре handlers используют узкий §3.23 Application
+helper для immutable replacement одного Creature в snapshot, после чего
+вызывают `StateStore.save()`. Это concrete Event → State projections, а не общий
 Event Log/replay subsystem. Durable ordered Event history, `EventStore`,
 version-aware decoding для произвольных Events и полноценный recovery/replay
 остаются deferred; текущий `state.json` по-прежнему нельзя восстановить из
@@ -290,13 +292,14 @@ Character Saving Throw, Character Skill Check и narrow Character unarmed Attack
 Roll → Monster vertical slices реализованы. Последний является только
 read-only hit/miss/critical resolution без damage/HP mutation, а не готовой
 combat system; broad `Attack rolls` остаётся unchecked в Roadmap. Отдельно
-реализованы два minimal state-mutating slice: direct `Damage → current_hp`
+реализованы minimal state-mutating slices: direct `Damage → current_hp`
 (`ApplyDamageCommand` → `DamageApplied` V1, [§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a))
 и direct `Healing → current_hp` (`ApplyHealingCommand` → `HealingApplied` V1,
 [§3.20](docs/ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b));
-оба строят replacement snapshot и вызывают `StateStore.save()` до
-успешного результата. Broad `HP`/`Damage`/`Healing` и полноценная
-combat system по-прежнему unchecked в Roadmap.
+а также Apply/Remove Condition membership (§3.21). Все четыре concrete
+handlers строят replacement snapshot через узкий §3.23 helper и вызывают
+`StateStore.save()` до успешного результата. Broad `HP`/`Damage`/`Healing`/
+`Conditions` и полноценная combat system по-прежнему unchecked в Roadmap.
 
 ---
 

@@ -1,6 +1,6 @@
 # AI D&D Master — текущая схема потока данных
 
-> Состояние сверено с `redbull101020/ai-dnd-master`, ветка `feat/g6b-minimal-healing-hp`, commit `ff68523c042912cbc4f469d4fd3eeb68d79a19b4` (2026-08-28).
+> Состояние сверено с текущей веткой `feat/g6c-conditions-foundation` после реализации G6C.
 >
 > Канонический источник контрактов проекта: `docs/ARCHITECTURE.md`.
 
@@ -92,7 +92,8 @@ flowchart TD
     EVT["GameEvent(s)"]
     META["EventMetadataProvider"]
 
-    APPLY["State Owner / Event projection<br/>Damage + Healing implemented"]
+    APPLY["Concrete Creature Event applier<br/>Damage / Healing / Conditions"]
+    REPLACE["replace_creature_in_snapshot<br/>narrow Application helper"]
     ELOG["EventStore / events.jsonl<br/>deferred"]
     SAVE["Persist updated State"]
 
@@ -130,7 +131,8 @@ flowchart TD
 
     EVT --> APPLY
     EVT --> ELOG
-    APPLY --> SAVE
+    APPLY --> REPLACE
+    REPLACE --> SAVE
     SAVE --> SS
 
     OUT --> RR
@@ -150,11 +152,15 @@ flowchart TD
 
 `Application Handler` является оркестратором конкретного игрового действия. Уже существующие handlers сами загружают нужный `StateSnapshot` через `StateStore`, находят нужные сущности, вызывают Domain resolver и собирают `ResolutionResult`.
 
-Read-only handlers на этом заканчиваются. `DamageHandler` и
-`HealingHandler` дополнительно применяют свой concrete V1 Event к
-`CreatureState`, строят replacement `StateSnapshot` и вызывают
-`StateStore.save()` до возврата success. Durable EventStore в этом
-текущем пути нет.
+Read-only handlers на этом заканчиваются. `DamageHandler`, `HealingHandler`,
+`ApplyConditionHandler` и `RemoveConditionHandler` дополнительно применяют
+свой concrete V1 Event к `CreatureState`. Полученный replacement Creature
+передаётся в узкий Application helper
+`replace_creature_in_snapshot(snapshot, replacement)`, который возвращает
+replacement `StateSnapshot`; затем handler вызывает `StateStore.save()` ровно
+один раз на successful path. Helper не является gameplay resolver, Event
+applier, State Owner, persistence layer или generic reducer. Durable
+EventStore/replay в текущем пути отсутствуют.
 
 Поэтому более точная формулировка будущей интеграции с БД:
 
@@ -371,7 +377,9 @@ src/dnd_engine/domain/commands/
 ├── skill_check.py
 ├── attack.py
 ├── damage.py
-└── healing.py
+├── healing.py
+├── apply_condition.py
+└── remove_condition.py
 ```
 
 Command **не означает успех действия**. Он только выражает запрос выполнить действие по правилам.
@@ -466,7 +474,8 @@ src/dnd_engine/infrastructure/persistence/json/event_serializer.py
 
 Текущие gameplay Event types включают read-only
 `AbilityCheckResolved` V2, `SavingThrowResolved` V1, `SkillCheckResolved` V1,
-`AttackResolved` V1 и mutating `DamageApplied` V1 / `HealingApplied` V1.
+`AttackResolved` V1 и mutating `DamageApplied` V1 / `HealingApplied` V1 /
+`ConditionApplied` V1 / `ConditionRemoved` V1.
 Generic serializer умеет преобразовать `GameEvent` в JSON и обратно,
 но runtime EventStore отсутствует, поэтому эти Events не
 записываются в durable history.
@@ -518,6 +527,7 @@ sequenceDiagram
     participant Caller as API / caller
     participant H as AbilityCheckHandler
     participant SS as StateStore
+    participant CP as ability-check Condition policy
     participant R as resolve_ability_check
     participant D as DiceEngine
     participant M as EventMetadataProvider
@@ -526,7 +536,9 @@ sequenceDiagram
     H->>SS: load(campaignId)
     SS-->>H: StateSnapshot
     H->>H: find actor CreatureState
-    H->>R: command + creature + dice
+    H->>CP: actor conditions
+    CP-->>H: effective RollMode
+    H->>R: command + creature + dice + roll_mode
     R->>D: d20 roll
     D-->>R: D20Roll
     R-->>H: AbilityCheckResult
@@ -555,6 +567,9 @@ src/dnd_engine/domain/rules/ability.py
 
 src/dnd_engine/domain/rules/d20.py
     resolve_d20_roll(...)
+
+src/dnd_engine/domain/rules/condition_roll_mode.py
+    ability_check_roll_mode_from_conditions(...)
 
 src/dnd_engine/domain/services/dice.py
     DiceEngine Protocol
@@ -595,16 +610,18 @@ StateStore.save(...)
 
 ## 6. Текущий state-mutating поток
 
-Два minimal direct HP-mutation use case уже реализованы:
+Четыре concrete mutation handlers уже реализованы:
 
 ```mermaid
 flowchart LR
-    C["ApplyDamageCommand /<br/>ApplyHealingCommand"]
-    H["DamageHandler /<br/>HealingHandler"]
+    C["ApplyDamageCommand / ApplyHealingCommand /<br/>ApplyConditionCommand / RemoveConditionCommand"]
+    H["DamageHandler / HealingHandler /<br/>ApplyConditionHandler / RemoveConditionHandler"]
     S["StateStore.load"]
-    R["resolve_damage /<br/>resolve_healing"]
-    E["DamageApplied V1 /<br/>HealingApplied V1"]
+    R["Concrete Domain resolver"]
+    E["DamageApplied / HealingApplied /<br/>ConditionApplied / ConditionRemoved V1"]
     P["Concrete CreatureState<br/>Event applier"]
+    RP["replacement CreatureState"]
+    SH["replace_creature_in_snapshot<br/>(snapshot, replacement)"]
     RS["Replacement StateSnapshot"]
     SS["StateStore.save"]
     RR["Successful ResolutionResult"]
@@ -614,7 +631,9 @@ flowchart LR
     S --> R
     R --> E
     E --> P
-    P --> RS
+    P --> RP
+    RP --> SH
+    SH --> RS
     RS --> SS
     SS --> RR
 ```
@@ -623,8 +642,17 @@ Damage вычитает уже разрешённый amount и ограничи
 `current_hp` нулём. Healing добавляет уже разрешённый amount и
 ограничивает его authoritative `max_hp`. Оба resolver'а остаются
 pure, а concrete Event applier проецирует уже рассчитанный `newHp`
-без повтора gameplay-формулы. Меняется только
-`CreatureState.current_hp`; loaded snapshot не мутируется.
+без повтора gameplay-формулы. Apply/Remove Condition аналогично используют
+свои pure resolvers и concrete appliers для authoritative
+`CreatureState.conditions`. Каждый concrete applier возвращает replacement
+`CreatureState` и не выполняет persistence.
+
+Затем narrow Application helper
+`replace_creature_in_snapshot(snapshot, replacement)` заменяет ровно одного
+существующего Creature по stable ID, сохраняет порядок tuple и Campaign/
+Character projections и возвращает replacement `StateSnapshot`, не мутируя
+loaded snapshot. Helper не решает gameplay, не применяет Event, не является
+State Owner/persistence layer и не выполняет generic dispatch/reduction.
 
 При этом Rule resolver не делает:
 
@@ -637,8 +665,9 @@ state.current_hp -= damage
 Authoritative mutation выполняет соответствующий State Owner при применении уже рассчитанных Events.
 
 **Важно:** concrete deterministic Event → `CreatureState` projections
-реализованы только для Damage и Healing. Generic Event dispatch/reducer,
-runtime EventStore, ordered append и replay остаются deferred. Текущий
+реализованы для Damage, Healing, Condition Apply и Condition Remove. Generic
+Event dispatch/reducer, runtime EventStore, ordered append и replay остаются
+deferred. Текущий
 authoritative persisted representation — snapshot в `state.json`; returned Events
 остаются in-memory Domain facts и не образуют durable history.
 
@@ -750,11 +779,13 @@ json.dumps
 atomic replace state.json
 ```
 
-`DamageHandler` и `HealingHandler` уже используют этот `save()` для
-replacement snapshot после concrete Event application. Поэтому
-`state.json` — текущее authoritative persisted State. Созданные
-`DamageApplied`/`HealingApplied` возвращаются в `ResolutionResult`,
-но не дописываются в `events/events.jsonl`.
+`DamageHandler`, `HealingHandler`, `ApplyConditionHandler` и
+`RemoveConditionHandler` используют этот `save()` ровно один раз на successful
+path для replacement snapshot после concrete Event application и вызова
+`replace_creature_in_snapshot(...)`. Поэтому `state.json` — текущее
+authoritative persisted State. Созданные `DamageApplied`, `HealingApplied`,
+`ConditionApplied` и `ConditionRemoved` возвращаются в `ResolutionResult`, но
+не дописываются в `events/events.jsonl`.
 
 ### Позже
 
@@ -959,9 +990,12 @@ src/dnd_engine/
 │   │   ├── skill_check.py
 │   │   ├── attack.py
 │   │   ├── damage.py
-│   │   └── healing.py
+│   │   ├── healing.py
+│   │   ├── apply_condition.py
+│   │   └── remove_condition.py
 │   └── services/
-│       └── event_metadata.py
+│       ├── event_metadata.py
+│       └── state_snapshot.py                 # narrow replacement helper
 │
 ├── domain/
 │   ├── commands/
@@ -970,7 +1004,9 @@ src/dnd_engine/
 │   │   ├── skill_check.py
 │   │   ├── attack.py
 │   │   ├── damage.py
-│   │   └── healing.py
+│   │   ├── healing.py
+│   │   ├── apply_condition.py
+│   │   └── remove_condition.py
 │   │
 │   ├── definitions/
 │   │   └── ... ItemDefinition / WeaponDefinition / MonsterDefinition
@@ -988,7 +1024,9 @@ src/dnd_engine/
 │   │   ├── skill_check.py
 │   │   ├── attack.py
 │   │   ├── damage.py
-│   │   └── healing.py
+│   │   ├── healing.py
+│   │   ├── apply_condition.py
+│   │   └── remove_condition.py
 │   │
 │   ├── rules/
 │   │   ├── ability.py
@@ -1000,7 +1038,10 @@ src/dnd_engine/
 │   │   ├── skill_check.py
 │   │   ├── attack.py
 │   │   ├── damage.py
-│   │   └── healing.py
+│   │   ├── healing.py
+│   │   ├── apply_condition.py
+│   │   ├── remove_condition.py
+│   │   └── condition_roll_mode.py
 │   │
 │   ├── services/
 │   │   ├── state_store.py                    # StateStore port
@@ -1037,7 +1078,7 @@ src/dnd_engine/
 
 ## 13. Что уже реализовано, а что пока только спроектировано
 
-| Часть потока | Статус на указанном commit |
+| Часть потока | Текущий статус |
 | --- | --- |
 | `Definitions / State / Commands / Events` separation | Реализовано и канонизировано |
 | `CampaignState`, `CreatureState`, `CharacterState`, `StateSnapshot` | Реализовано |
@@ -1053,23 +1094,25 @@ src/dnd_engine/
 | Skill Check read-only flow | Реализовано в коде и Architecture |
 | AC minimal rules | Реализовано |
 | Character unarmed Attack Roll → Monster read-only flow | Реализовано; Damage/HP не применяет |
-| Direct Damage → HP mutation | Реализовано: `ApplyDamageCommand → DamageApplied` V1 → replacement snapshot → `StateStore.save()` |
-| Direct Healing → HP mutation | Реализовано: `ApplyHealingCommand → HealingApplied` V1 → replacement snapshot → `StateStore.save()` |
+| Direct Damage → HP mutation | Реализовано: `ApplyDamageCommand → DamageApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
+| Direct Healing → HP mutation | Реализовано: `ApplyHealingCommand → HealingApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
+| Apply/Remove Condition membership | Реализовано: concrete Commands/Events/appliers → §3.23 snapshot helper → `StateStore.save()` |
+| Poisoned read-only behavior | Ability Check, Skill Check и Attack используют disadvantage; Saving Throw не затронут и остаётся NORMAL |
 | Generic `GameEngine.execute(...)` | Намеренно не реализован |
 | FastAPI routes / WebSocket | Не реализовано; Phase 7 |
 | LLM provider integration | Не реализовано; Phase 6 |
 | Natural language → Commands | Не реализовано; Phase 6 |
 | AI Context Projection | Не реализовано; Phase 6 |
 | Runtime EventStore / ordered Event append | Не реализовано |
-| Deterministic Event → State projection | Concrete Damage и Healing projections реализованы; generic dispatch/replay deferred |
-| Authoritative state-mutating Command pipeline | Два concrete consumer реализованы по §3.18; generic mutation framework не введён |
+| Deterministic Event → State projection | Concrete Damage, Healing, Condition Apply/Remove projections реализованы; generic dispatch/replay deferred |
+| Authoritative state-mutating Command pipeline | Четыре concrete consumers реализованы по §3.18; общий только narrow §3.23 snapshot helper, generic mutation framework не введён |
 | SQLite/PostgreSQL adapters | Не реализовано |
 
 ### Небольшое расхождение статуса Roadmap
 
 В текущем `docs/ROADMAP.md` пункты `Proficiency`, `Saving throws` и `Skills` всё ещё не отмечены галочками, хотя actual code, README и `docs/ARCHITECTURE.md` уже содержат proficiency foundation и read-only Saving Throw / Skill Check vertical slices.
 
-Для описания архитектуры выше использованы канонический `ARCHITECTURE.md` и фактический код зафиксированного в header commit. Checkbox-состояние Roadmap имеет более широкую гранулярность: minimal Damage/Healing slices не закрывают broad `HP`, `Damage` и `Healing`.
+Для описания архитектуры выше использованы канонический `ARCHITECTURE.md` и фактический код текущей ветки. Checkbox-состояние Roadmap имеет более широкую гранулярность: minimal Damage/Healing/Condition slices не закрывают broad `HP`, `Damage`, `Healing` и `Conditions`.
 
 ---
 

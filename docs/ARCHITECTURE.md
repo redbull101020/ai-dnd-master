@@ -58,6 +58,7 @@
 | Minimal Healing → HP mutation slice (G6B, `ApplyHealing`) | §3.20 |
 | Condition State foundation, persisted `CreatureState.conditions` (G6C1) | §3.21 |
 | Minimal Poisoned behavior for checks and attacks (G6C2) | §3.22 |
+| Post-G6C abstraction review and snapshot replacement helper | §3.23 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -114,6 +115,7 @@
   * [3.20. Minimal Healing → HP mutation vertical slice (G6B)](#320-minimal-healing--hp-mutation-vertical-slice-g6b)
   * [3.21. Condition State foundation (G6C1)](#321-condition-state-foundation-g6c1)
   * [3.22. Minimal Poisoned behavior (G6C2)](#322-minimal-poisoned-behavior-g6c2)
+  * [3.23. Post-G6C abstraction review](#323-post-g6c-abstraction-review)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -3421,11 +3423,13 @@ generic transaction coordinator
 ```
 
 `DamageHandler`/`apply_damage_applied_v1` (§3.19) and
-`HealingHandler`/`apply_healing_applied_v1` (§3.20) are the two production
-state-mutating gameplay consumers. The post-G6B comparison in §3.20 reviewed
-their actual shared and differing responsibilities and retained the verdict
-`KEEP CONCRETE`; none of the deferred abstractions above gained a production
-implementation.
+`HealingHandler`/`apply_healing_applied_v1` (§3.20) were the first two
+production state-mutating gameplay consumers at the post-G6B review. That
+comparison reviewed their actual shared and differing responsibilities and
+retained the verdict `KEEP CONCRETE`. G6C later added
+`ApplyConditionHandler`/`RemoveConditionHandler`; §3.23 supersedes only the
+snapshot-replacement-helper verdict. None of the other deferred abstractions
+above gained a production implementation.
 
 #### Exact MVP atomicity boundary
 
@@ -3671,12 +3675,22 @@ call `DiceEngine`, does not call `DefinitionSource`, performs no persistence
 I/O, reads no clock, allocates no Event ID, and produces no new authoritative
 Event.
 
-Application (`DamageHandler`) then builds the replacement `creatures` tuple
-by substituting the replacement `CreatureState` for the original by stable
-Creature ID (matching `creature.id == target.id`), and builds a replacement
-`StateSnapshot` reusing the loaded `CampaignState`
-and `characters` tuple unchanged. Only `CreatureState.current_hp` changes for
-this transition; `id`, `definition_id`, `ability_scores`, and `max_hp` are
+Application (`DamageHandler`) passes the replacement `CreatureState` returned
+by the concrete Event applier to the narrow §3.23 Application helper:
+
+```text
+apply_damage_applied_v1
+    → replacement CreatureState
+    → replace_creature_in_snapshot(snapshot, replacement)
+    → replacement StateSnapshot
+    → StateStore.save exactly once
+```
+
+The helper substitutes exactly one Creature by stable ID, preserves the
+`creatures` tuple order, and reuses the loaded `CampaignState` and
+`characters` tuple unchanged. It does not own or repeat Damage gameplay or
+Event-application policy. Only `CreatureState.current_hp` changes for this
+transition; `id`, `definition_id`, `ability_scores`, and `max_hp` are
 preserved, per §3.18's declared Damage → HP write scope.
 
 #### Errors
@@ -3727,9 +3741,9 @@ a non-durable runtime Domain fact: it is not appended to any file, there is
 no `events.jsonl` write, and no `EventStore` exists. `StateStore` remains
 exactly `load()`/`save()` (§12.9); `DamageHandler` calls `save()` exactly once
 on the successful path, after `DamageApplied` has already been built and
-applied, and only then returns a successful `ResolutionResult` — matching
-§3.18's canonical persistence ordering and its "return success, save later"
-prohibition.
+applied and §3.23's helper has returned the replacement snapshot, and only
+then returns a successful `ResolutionResult` — matching §3.18's canonical
+persistence ordering and its "return success, save later" prohibition.
 
 #### Abstraction verdict (post-implementation)
 
@@ -3883,17 +3897,20 @@ StateStore.load
     → EventMetadataProvider
     → HealingApplied V1
     → apply_healing_applied_v1
-    → replacement creatures tuple
+    → replacement CreatureState
+    → §3.23 replace_creature_in_snapshot(snapshot, replacement)
     → replacement StateSnapshot
     → StateStore.save exactly once
     → successful ResolutionResult
 ```
 
-The loaded snapshot and target remain unchanged; tuple ordering is preserved;
-the Campaign and Character projections are reused unchanged. Missing actor or
-target uses the same `ENTITY_NOT_FOUND` policy as `DamageHandler` (the target
-error has `field="target_id"`). Metadata, Event-application/invariant, and
-`StateStore.save()` failures propagate and prevent a successful result.
+The loaded snapshot and target remain unchanged; §3.23's helper preserves tuple
+ordering and reuses the Campaign and Character projections unchanged. The
+helper receives the already-applied replacement Creature and owns no Healing
+gameplay/Event policy. Missing actor or target uses the same `ENTITY_NOT_FOUND`
+policy as `DamageHandler` (the target error has `field="target_id"`). Metadata,
+Event-application/invariant, and `StateStore.save()` failures propagate and
+prevent a successful result.
 Success is returned only after `save()` completes. No retry, rollback,
 metadata-ID reuse, Event persistence, or schema-version change is introduced.
 
@@ -3945,7 +3962,11 @@ primitive — “expected `current_hp` → replacement `current_hp`, preserve ev
 other Creature fact” — is currently identical to a single explicit
 `dataclasses.replace` call and does not justify its coupling. All deferred
 abstractions in §§3.6 and 3.18 remain deferred; no production refactor follows
-from this review.
+from this review. This was the evidence available after G6B; §3.23 supersedes
+only the snapshot-helper verdict after two further production mutation
+handlers established the same aggregate-replacement policy. Every gameplay,
+Event-applier, generic-handler, registry, and transaction verdict remains in
+force.
 
 ---
 
@@ -4299,16 +4320,21 @@ source (e.g. a spell or trap triggering Condition application through a
 different Command shape).
 
 **Replacement State construction.** Exactly like G6A/G6B, the loaded object
-graph is never mutated. The handler builds a replacement `creatures` tuple
-(replacing only the target entry, preserving order) and a replacement
-`StateSnapshot` reusing `campaign` and `characters` unchanged from the loaded
-snapshot. This replacement-construction code is duplicated, inline, across
-`DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
-`RemoveConditionHandler` — no shared `replace_creature`/snapshot-replacement
-helper is extracted in this group, even though the duplication is now
-visible across four handlers. This is a deliberate evidence checkpoint: a
-later, separately evidenced abstraction-review group (not this one) decides
-whether that duplication has earned a shared helper.
+graph is never mutated. The current Condition mutation flow is:
+
+```text
+concrete Condition Event applier
+    → replacement CreatureState
+    → §3.23 replace_creature_in_snapshot(snapshot, replacement)
+    → replacement StateSnapshot
+    → StateStore.save(...)
+```
+
+The helper preserves Creature tuple order and reuses `campaign` and
+`characters` unchanged; it owns no gameplay or Event policy. Historically,
+G6C1 deliberately kept this construction inline across `DamageHandler`,
+`HealingHandler`, `ApplyConditionHandler`, and `RemoveConditionHandler` as the
+evidence checkpoint that the later post-G6C review in §3.23 resolved.
 
 **Persistence.** `StateStore.save(replacement_snapshot)` is called exactly
 once, only on the success path; the persisted snapshot becomes the new
@@ -4367,18 +4393,18 @@ those remain deferred per §§3.6/3.18.
 Application handlers — not a generic `MutationHandler`, `ConditionMutation`
 base class, `EventApplierRegistry`, or any dispatcher from §3.6/§3.18's
 deferred list. They mirror `DamageHandler`/`HealingHandler` structurally,
-including the same inline (not extracted) replacement-snapshot construction
-described above. Gameplay behavior remains outside this G6C1 foundation; the
+including the same replacement-snapshot construction policy described above,
+now implemented by the narrow §3.23 Application helper. Gameplay behavior
+remains outside this G6C1 foundation; the
 implemented Poisoned consumers are specified separately in §3.22.
 `ApplyConditionCommand`/`RemoveConditionCommand`, their
 resolvers, Events, and appliers are likewise concrete, mirroring the existing
 per-mechanic Damage/Healing shape rather than introducing a generic
 Condition-mutation abstraction — there is still only one Condition value and
 two mutation directions, which is not new evidence for a shared framework.
-Four concrete handlers now share the same load/lookup/resolve/build/apply/
-replace/save shape; that repetition is evidence, not yet an abstraction —
-whether it justifies a shared helper is decided by a later, separately
-evidenced abstraction-review group, not introduced speculatively here.
+Four concrete handlers retain their explicit load/lookup/resolve/build/apply/
+save orchestration. §3.23 extracts only their identical snapshot-replacement
+policy; the broader sequence remains concrete.
 
 ---
 
@@ -4501,8 +4527,66 @@ the planned scaling model.
 Also excluded: every other Condition, poison damage, duration/source,
 immunity, a Saving Throw to remove Poisoned, and any Poisoned effect beyond
 the three positive consumers above. EventStore, UnitOfWork, snapshot-helper
-extraction, and broader Attack/Skills/Proficiency completion remain outside
-this slice.
+extraction, and broader Attack/Skills/Proficiency completion were outside this
+slice. The later snapshot-helper decision is isolated in §3.23 and does not
+change any Poisoned policy.
+
+---
+
+### 3.23. Post-G6C abstraction review
+
+This review compares the four implemented authoritative mutation handlers
+(`DamageHandler`, `HealingHandler`, `ApplyConditionHandler`, and
+`RemoveConditionHandler`), their four concrete Event appliers, and the
+read-only Poisoned consumers after G6C. It adds no gameplay feature.
+
+#### Extracted Application snapshot policy
+
+`application.services.state_snapshot.replace_creature_in_snapshot(snapshot,
+replacement)` is the one abstraction earned by current production evidence.
+All four mutation handlers previously duplicated the same owner/Application
+policy after their concrete Event applier returned a replacement
+`CreatureState`:
+
+```text
+loaded StateSnapshot + replacement CreatureState
+-> require replacement.id to match exactly one existing CreatureState
+-> replace that entry without changing creatures tuple order
+-> reuse the identical CampaignState projection
+-> reuse the identical characters tuple and CharacterState projections
+-> return a new StateSnapshot; do not mutate the loaded snapshot
+```
+
+`StateSnapshot` already rejects duplicate Creature IDs, so the helper's
+exactly-one check principally makes the missing-target case explicit: an
+unknown replacement ID raises `ValueError` and is never silently appended.
+The helper also validates its two boundary types. It does not locate an actor
+or target, authorize a State owner, resolve gameplay, build/decode/apply an
+Event, choose a mutation field, call `StateStore`, coordinate persistence, or
+dispatch by mechanic/Event type. It is an Application helper, not a Domain
+gameplay rule and not Infrastructure.
+
+#### Evidence review verdicts
+
+| Candidate | Actual production evidence | Verdict |
+| --- | --- | --- |
+| One-Creature snapshot replacement | Four handlers repeated the identical stable-ID replacement, tuple-order preservation, Campaign/Character projection preservation, and copy-on-write policy. The helper removes the whole duplicated tuple/snapshot block and gives missing-ID behavior one explicit contract. | `EXTRACT` — only `replace_creature_in_snapshot` |
+| Creature field mutation primitive | Damage/Healing project `current_hp`; Apply/Remove project Condition membership. Their transition decisions and preserved-field proofs remain applier-specific. A shared primitive would only wrap `dataclasses.replace`. | `KEEP CONCRETE` |
+| Generic Event applier / base / Protocol | Payloads and integrity checks differ: Damage correlates target/previous HP, Healing additionally correlates `maxHp`, and Condition Events decode membership endpoints and Condition identity. No serialized replay/dispatch consumer exists. | `KEEP CONCRETE` |
+| Generic mutation handler | Only the visible sequence is shared. Resolver/result/Event types, actor/target errors, builders, appliers, and mutation policy differ; abstraction requires callbacks, type parameters, error factories, or policy hooks. | `KEEP CONCRETE` |
+| Generic Condition/effect/mechanic policy | Ability Check and Attack intentionally use separate mechanic-specific policies; Skill reuses Ability Check and Saving Throw is the negative boundary. One Poisoned effect does not evidence a registry, effect engine, modifier pipeline, roll context, or generic dispatch. | `KEEP NARROW` |
+| Direct `has_condition` helper | Current policies need only Python membership and such a helper would merely rename `in`. | `KEEP CONCRETE` |
+| `WorkingState`, `MutationContext`, `UnitOfWork`, `TransactionManager`, or `state_changes` | Every mutation still produces one replacement snapshot and performs one `StateStore.save()`; there is no multi-resource transaction or intermediate working graph. | `DEFER` |
+| `EventStore`, `EventApplierRegistry`, generic reducer, replay | Events are returned in memory; no durable append, serialized dispatch, replay, or recovery caller exists. | `DEFER` |
+| State revision/CAS/idempotency | No concrete concurrent-write or replay mechanism is introduced by G6C; the documented successful-no-op limitation is unchanged. | `DEFER` |
+| Advantage/disadvantage source aggregation | Poisoned remains the only production source. A second source must first evidence representation of independent advantage/disadvantage sources before final `RollMode` derivation. | `DEFER` |
+
+The helper is therefore the only new production abstraction from this review.
+The four handlers and four Event appliers remain concrete. The existing
+`StateStore.load(campaign_id)` / `save(snapshot)` boundary, persistence
+ordering, successful no-op behavior, read-only Condition-consumer boundaries,
+and AI/API/UI non-authority remain unchanged. Broad Roadmap `Conditions`,
+Attack, Skills, Proficiency, HP, Damage, and Healing statuses do not change.
 
 ---
 
