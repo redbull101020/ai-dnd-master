@@ -333,8 +333,9 @@ source damage и exact ordered 1/2/3 Event branches. При positive source amou
 `AttackHandler` применяет неизменённый `DamageApplied` V1 к Character HP,
 строит replacement snapshot с сохранением `CombatState` и вызывает ровно один
 `StateStore.save()` до success. Character unarmed branch остаётся read-only;
-Group 4 real-adapter/filesystem proof и broad Weapon attack/damage scope ещё
-не завершены.
+Group 4 real-adapter/filesystem proof подтверждён полным production
+round-trip (§3.27, DEC-0042), а broad Weapon attack/damage scope ещё не
+завершён.
 
 ---
 

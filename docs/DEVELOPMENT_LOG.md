@@ -3814,3 +3814,144 @@ contracts.
   suite passes (1586 tests, including packaging tests with a writable external
   pip cache); configured mypy passes for 105 source files, and
   `git diff --check` reports no whitespace errors.
+
+## 2026-08-30 — Production-real integration evidence for Monster attack damage (G9 Group 4)
+
+- Added
+  `test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters`
+  to `tests/integration/test_attack_real_adapters.py` (existing file
+  extended, no parallel integration module introduced). No production code
+  changed; this Group added evidence only.
+- Exercised the full G9 chain through real adapters end to end: real
+  `FilesystemStateStore` (wrapped in a thin call-counting delegate, following
+  the existing `test_damage_real_adapters.py` pattern, to observe
+  `AttackHandler`'s own `save()` call count without instrumenting the
+  production adapter itself), real `PackagedDefinitionSource` reading the
+  packaged `goblin` Scimitar attack, and the real `PythonDiceEngine` adapter
+  with an injected deterministic `random.Random` seed (`20260838`, verified
+  in-test to yield roll `12` for the attack and `5` for the `1d6` damage
+  roll) — a genuine normal (non-critical) hit against an unarmored Character
+  target (Dexterity 14 → AC 12).
+- The persisted `StateSnapshot` was constructed with a canonical `dnd_5e`
+  `5.1` `CampaignState`, a Goblin attacker `CreatureState`, a Character
+  target `CreatureState` + `CharacterState`, one unrelated bystander Monster
+  `CreatureState`, one unrelated bystander Character `CreatureState` +
+  `CharacterState`, and a non-`None` `CombatState` whose `order` contains
+  exactly the attacker and target.
+- After a single `AttackHandler.handle()` invocation, a fresh
+  `FilesystemStateStore` instance (new object, same `campaigns_root`) proved:
+  the target's reloaded `current_hp` decreased by exactly the applied damage
+  amount and matches the in-memory `DamageApplied` outcome; the reloaded
+  `CombatState` is present with unchanged `id`, `round`, `order`, and
+  `active_index`; the reloaded attacker and both unrelated bystander
+  Creature/Character projections are unchanged (`==` the pre-attack objects);
+  the reloaded `CampaignState` is unchanged; `result.events` are ordered
+  exactly `MonsterAttackResolved → MonsterAttackDamageResolved →
+  DamageApplied` with an exact `causedBy` chain (first `None`, each
+  subsequent Event's `caused_by` equal to the previous Event's `event_id`,
+  all three `event_id`s distinct); the wrapped store recorded exactly one
+  `save()` call; and, as in the existing real-adapter tests, no
+  `events.jsonl`/Event-history artifact or leftover atomic-write temp file
+  exists on disk after the run — only `state.json`.
+- No State schema change, no serializer migration, and no schema V6 were
+  needed or introduced; `StateSnapshot.combat` round-trips through the
+  existing V5 writer/reader unchanged.
+- Verification: the focused new integration test passes (3, full
+  `test_attack_real_adapters.py` module); the full `tests/integration/` and
+  `tests/infrastructure/` set passes (312); the full suite passes (1587
+  tests, run through the repository's own `.venv`, Python 3.12.13);
+  configured mypy passes for 105 source files (`src/dnd_engine`); and
+  `git diff --check` reports no whitespace errors. No production file was
+  changed by this Group; only the integration test module was modified.
+  Roadmap/DEC/Deferred status updates are intentionally deferred to a
+  separate pass.
+
+## 2026-08-30 — Canonical documentation closure for Monster attack damage (G9 Group 5)
+
+- Documentation-only closure pass: brought Architecture §3.27, the Roadmap,
+  DEF-0013, and the current-state summaries into alignment with the already
+  implemented and reviewed G9 Groups 1–4 behavior. No production or test code
+  was changed.
+- Architecture §3.27 dropped its "(G9, partial)" qualifier (quick-lookup
+  table, table of contents, and section heading) and its Implementation
+  status/Remaining scope prose now records that Group 4's dedicated
+  real-adapter integration test
+  (`test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters`)
+  confirms the full chain end to end through the real `FilesystemStateStore`,
+  `PackagedDefinitionSource`, and `PythonDiceEngine` adapters — G9's narrow
+  Goblin Scimitar consequence path is complete.
+- Group 3's Application orchestration and Group 4's real-adapter evidence are
+  recorded as factual completion of the already-accepted DEC-0042 design
+  (`MonsterAttackResolved → MonsterAttackDamageResolved → optional
+  DamageApplied`), not as a new architectural decision: per `AGENTS.md`,
+  `docs/DECISIONS.md` is reserved for substantial architectural decisions and
+  contract changes, and Groups 3–4 implemented and verified an
+  already-accepted decision without changing any contract. An initial draft
+  of this pass had added a new DEC-0043 to record that completion; after
+  review it was removed in full (no replacement Decision), `docs/DECISIONS.md`
+  was restored to byte-identical with the committed Group 4 `HEAD`, and every
+  reference to DEC-0043 introduced by this Group elsewhere
+  (`docs/DEFERRED.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `README.md`,
+  `AI_DND_DATA_FLOW_CURRENT.md`) was replaced with DEC-0042, which remains
+  the sole, unchanged architectural rationale for the staged
+  Attack/Damage/Application shape.
+- Roadmap gained a new checked foundation row, "Monster Scimitar
+  attack-consequence foundation — Attack → Damage → Character HP," directly
+  under the existing G8 attack-roll foundation row, citing `§3.27, DEC-0042`.
+  The existing unchecked "Attack consequences (DEF-0013)" row was reworded to
+  point at that foundation row while keeping the broader Weapon
+  attack/damage/critical continuation explicitly open and unchecked. The
+  Phase 3 narrative paragraph and the §3.27 anchor in the Phase 3 contracts
+  line were updated to match.
+- DEF-0013 kept `Status: Deferred` (not changed to `Done`) and gained a new
+  dated History entry explaining that G8 supplied the relevant
+  Character-target part of DEF-0011 and a concrete Monster damage source,
+  that G9 (§3.27, DEC-0042) supplied the previously missing explicit Event
+  ordering/causation design, and that Group 3 wired that design into
+  `AttackHandler` while Group 4 supplied its real-adapter evidence, closing
+  the narrow Goblin Scimitar path entirely. After review, this entry's
+  reason for DEF-0013 remaining `Deferred` was narrowed to specifically the
+  unfinished Weapon attack/damage/critical continuation — a concrete
+  Character Weapon damage source and its Attack→Damage application, the
+  Equipment/Inventory ownership a Character Weapon attack requires, Character
+  weapon proficiency, and the explicit Finesse choice — and now explicitly
+  states that other Monster actions, Shortbow/range/reach, Multiattack,
+  zero-HP action eligibility, active-turn gating/action economy, and
+  resistance/immunity/vulnerability/temporary HP are separately tracked by
+  their own Roadmap/Deferred records and are not why DEF-0013 itself remains
+  Deferred. Its "Why deferred" line and References list were updated to stop
+  describing Group 4 evidence as pending; no prior History entry was
+  rewritten. The stale `#327-...-g9-partial` anchor was corrected everywhere
+  it appeared (`docs/ARCHITECTURE.md` quick-lookup table, table of contents,
+  and section heading; `docs/DEFERRED.md`'s §3.27 reference link;
+  `docs/ROADMAP.md`'s Phase 3 contracts line) to match the renamed heading.
+  Architecture §3.27's Implementation-status prose was likewise corrected
+  after review: its first draft read "the broader Attack-consequence scope
+  (Weapon attacks, other Monster attacks, generalized critical-damage
+  handling) remains open and is tracked by DEF-0013," which misattributed
+  other Monster actions to DEF-0013; it now states that DEF-0013 remains
+  Deferred specifically for the Weapon attack/damage/critical continuation,
+  and that other Monster actions and other Combat mechanics remain
+  separately tracked by their existing Roadmap/Deferred records.
+- `CLAUDE.md`, `README.md`, and `AI_DND_DATA_FLOW_CURRENT.md` were checked
+  against current code and updated only where they still described Group 4
+  real-adapter evidence as pending (and, after review, to swap their
+  now-removed DEC-0043 references for DEC-0042); none of them ever described
+  the G9 Monster-attack path itself as read-only or damage-free (that
+  description applies only to the separately-tracked, unchanged Character
+  unarmed → Monster path), so no correction was needed there.
+- Verification: the narrow `tests/architecture/test_documentation_references.py`
+  suite passes (2 tests); the full suite passes (1587 tests, run through the
+  repository's own `.venv`, Python 3.12.13, with `--basetemp` pointed at a
+  writable scratch directory because this machine's default
+  `%TEMP%\pytest-of-<user>` directory was locked/inaccessible — an
+  environment condition unrelated to this documentation-only change);
+  configured mypy passes for 105 source files (`src/dnd_engine`); and
+  `git diff --check` reports no whitespace errors. `git diff --stat` confirms
+  exactly seven changed files: `AI_DND_DATA_FLOW_CURRENT.md`, `CLAUDE.md`,
+  `README.md`, `docs/ARCHITECTURE.md`, `docs/DEFERRED.md`,
+  `docs/DEVELOPMENT_LOG.md`, and `docs/ROADMAP.md` — `docs/DECISIONS.md` is
+  no longer modified, and no source file, no test file, no State schema V6,
+  and no new production dependency are present. This Group's changes are
+  intentionally left uncommitted for review; `review.patch` at the
+  repository root contains only this Group's diff.
