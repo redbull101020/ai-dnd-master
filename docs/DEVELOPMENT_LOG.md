@@ -3495,3 +3495,25 @@ contracts.
   references `2 passed`; full suite `1251 passed` (with one non-failing pytest
   cache warning caused by the managed environment); configured mypy
   `Success: no issues found in 91 source files`.
+
+## 2026-08-30 — Phase 2 canonical foundation closure
+
+- Verified the next canonical identifiers as Architecture §3.24 and DEC-0039.
+  Corrected §3.8 from planned-only mutation wording and §3.18 from two to four
+  concrete mutation consumers, then added the Phase 2 Closure Contract:
+  reusable deterministic foundation readiness closes Phase 2 without claiming
+  full D&D mechanic coverage or weakening evidence-driven abstraction.
+- Appended Accepted DEC-0039 and rewrote Roadmap Phase 2 as eleven completed,
+  scope-accurate foundation items. Every incomplete broader mechanic is marked
+  `broader scope PARTIAL` with forward P2/DEF links; Phase 3–6 and the compact
+  cross-cutting tracks provide reverse continuation links. Event History &
+  Replay remains trigger-driven and is not a Phase 3 entry gate.
+- Synchronized README, CLAUDE, the current data-flow document, and the Deferred
+  companion: Phase 2 Basic Rules is complete in foundation scope and Phase 3
+  Combat is current. No gameplay mechanic, production Python, test contract,
+  EventStore/replay, generic Effect/mutation/transaction abstraction, or
+  zero-HP/life-state rule was added.
+- Verification on Python 3.12.13 / pytest 9.1.1: focused documentation
+  references `2 passed`; full suite `1251 passed` (with one non-failing pytest
+  cache warning caused by the managed environment); configured mypy
+  `Success: no issues found in 91 source files`.

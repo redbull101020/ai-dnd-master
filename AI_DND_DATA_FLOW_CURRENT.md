@@ -1,6 +1,7 @@
 # AI D&D Master — текущая схема потока данных
 
-> Состояние сверено с текущей веткой `feat/g6c-conditions-foundation` после реализации G6C.
+> Состояние сверено с каноническим закрытием Phase 2 в foundation scope;
+> текущая фаза Roadmap — Phase 3 Combat.
 >
 > Канонический источник контрактов проекта: `docs/ARCHITECTURE.md`.
 
@@ -1080,6 +1081,7 @@ src/dnd_engine/
 
 | Часть потока | Текущий статус |
 | --- | --- |
+| Roadmap phase | Phase 2 Basic Rules complete (foundation scope); Phase 3 Combat current |
 | `Definitions / State / Commands / Events` separation | Реализовано и канонизировано |
 | `CampaignState`, `CreatureState`, `CharacterState`, `StateSnapshot` | Реализовано |
 | Filesystem `StateStore` | Реализовано |
@@ -1108,11 +1110,19 @@ src/dnd_engine/
 | Authoritative state-mutating Command pipeline | Четыре concrete consumers реализованы по §3.18; общий только narrow §3.23 snapshot helper, generic mutation framework не введён |
 | SQLite/PostgreSQL adapters | Не реализовано |
 
-### Небольшое расхождение статуса Roadmap
+### Phase 2 closure status
 
-В текущем `docs/ROADMAP.md` пункты `Proficiency`, `Saving throws` и `Skills` всё ещё не отмечены галочками, хотя actual code, README и `docs/ARCHITECTURE.md` уже содержат proficiency foundation и read-only Saving Throw / Skill Check vertical slices.
+`docs/ROADMAP.md` теперь использует scope-accurate completed foundation items:
+implemented Proficiency, Character Saving Throw/Skill Check, HP,
+Damage/Healing, and Condition foundations отмечены `[x]`, а не смешиваются с
+полным D&D scope. Для каждого ещё неполного широкого mechanic явно указано
+`broader scope PARTIAL` со ссылками на `P2-*` closure note и `DEF-*`
+continuations в `docs/DEFERRED.md`.
 
-Для описания архитектуры выше использованы канонический `ARCHITECTURE.md` и фактический код текущей ветки. Checkbox-состояние Roadmap имеет более широкую гранулярность: minimal Damage/Healing/Condition slices не закрывают broad `HP`, `Damage`, `Healing` и `Conditions`.
+По Architecture §3.24 такая связанная broader work не переоткрывает Phase 2.
+Phase 2 Basic Rules завершена в foundation scope; текущая фаза — Phase 3
+Combat. Event History & Replay остаётся trigger-driven cross-cutting track, а
+не Phase 3 entry gate.
 
 ---
 
