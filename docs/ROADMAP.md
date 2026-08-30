@@ -145,7 +145,7 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 
 ## Phase 3 — Combat
 
-> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7) · [§3.26 Monster attack → Character vertical slice (G8)](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
+> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7) · [§3.26 Monster attack → Character vertical slice (G8)](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8) · [§3.27 Monster Attack consequence → Damage → HP vertical slice (G9, partial)](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9-partial)
 
 * [x] Initiative foundation — individual-participant dice-rolled `StartCombatCommand` → `CombatStarted` V1, persisted `CombatState.order`, Poisoned Dexterity-check disadvantage via the existing Ability Check Condition policy (§3.25).
 * [x] Turn-order advancement foundation — `AdvanceTurnCommand` → `TurnAdvanced` V1 advances `active_index`/`round`, gated by an actor-eligibility check (§3.25).
@@ -159,7 +159,7 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Opportunity attacks
 * [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target part is proven by G8; Equipment/Inventory ownership, weapon proficiency, and Finesse choice remain entirely open.
 * [ ] Monster actions beyond the Goblin Scimitar attack-roll foundation ([DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012)) — multiple/ambiguous actions, multiattack, recharge, saving-throw/AoE actions, ranged/reach, and Monster save/skill proficiency remain open.
-* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — not started; G8 supplies a concrete Monster damage source and establishes the Character-target part of DEF-0011 as the chosen "relevant part of DEF-0011" prerequisite, but Attack→Damage orchestration and Event ordering/causation design remain untouched.
+* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path is implemented through Application (§3.27, DEC-0042); real-adapter/filesystem G9 proof and broader Weapon attack/damage scope remain open.
 * [ ] Conditions expansion ([DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
 * [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
 * [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
@@ -191,6 +191,17 @@ DEF-0011's own scope and supplies a concrete Monster damage source — the
 first two of DEF-0013's three named prerequisites (relevant part of
 DEF-0011, a concrete damage source, and Event ordering/causation design) —
 without implementing DEF-0013 itself.
+
+G9 Groups 2–3 (§3.27, DEC-0042) implement the narrow Monster Scimitar
+consequence path while preserving separate Attack Resolution, source Damage
+Resolution, and HP application stages. Group 2 supplied immutable Monster
+damage resolution, normal/critical dice-count semantics, zero source damage,
+the positive Damage→HP calculation, and the explicit Event-causation
+contracts. Group 3 wires the exact 1/2/3 Event branches through
+`AttackHandler`, including optional Character HP mutation, replacement
+snapshot construction, and exactly one successful-path save. Group 4
+real-adapter/filesystem proof and broader Weapon attack/damage scope remain
+pending, so the broad Attack consequences item and DEF-0013 stay incomplete.
 
 ## Phase 4 — Magic
 

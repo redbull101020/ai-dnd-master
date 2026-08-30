@@ -3,9 +3,11 @@ from datetime import datetime, timezone
 
 import pytest
 
+from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
 from dnd_engine.domain.commands.damage import ApplyDamageCommand, ApplyDamagePayload
 from dnd_engine.domain.events.damage import (
     DamageAppliedPayloadV1,
+    build_damage_applied_from_attack_v1,
     build_damage_applied_v1,
 )
 from dnd_engine.domain.events.game_event import GameEvent
@@ -27,6 +29,15 @@ def make_command(
         campaign_id="campaign_001",
         actor_id="character_001",
         payload=ApplyDamagePayload(target_id=target_id, amount=amount),
+    )
+
+
+def make_attack_command(*, target_id: str = "character_001") -> AttackCommand:
+    return AttackCommand(
+        command_id="command_000002",
+        campaign_id="campaign_001",
+        actor_id="monster_001",
+        payload=AttackPayload(target_id=target_id),
     )
 
 
@@ -123,6 +134,70 @@ def test_builder_uses_supplied_metadata_and_command_correlation() -> None:
     assert event.actor_id == command.actor_id
     assert event.caused_by is None
     assert event.timestamp is FIXED_TIMESTAMP
+
+
+def test_attack_facade_creates_exact_damage_applied_v1_event() -> None:
+    command = make_attack_command()
+    outcome = make_outcome(
+        target_id="character_001",
+        amount=6,
+        previous_hp=10,
+        new_hp=4,
+    )
+
+    event = build_damage_applied_from_attack_v1(
+        event_id="event_000125",
+        timestamp=FIXED_TIMESTAMP,
+        command=command,
+        outcome=outcome,
+        caused_by="event_000124",
+    )
+
+    assert event.event_id == "event_000125"
+    assert event.type == "DamageApplied"
+    assert event.version == 1
+    assert event.command_id == command.command_id
+    assert event.campaign_id == command.campaign_id
+    assert event.actor_id == command.actor_id
+    assert event.caused_by == "event_000124"
+    assert event.payload == {
+        "targetId": "character_001",
+        "amount": 6,
+        "previousHp": 10,
+        "newHp": 4,
+    }
+
+
+@pytest.mark.parametrize(
+    ("command", "outcome", "caused_by", "error", "match"),
+    [
+        (object(), make_outcome(), "event_1", TypeError, "AttackCommand"),
+        (make_attack_command(), object(), "event_1", TypeError, "DamageResult"),
+        (make_attack_command(), make_outcome(), None, TypeError, "caused_by"),
+        (
+            make_attack_command(target_id="character_001"),
+            make_outcome(target_id="character_002"),
+            "event_1",
+            ValueError,
+            "target_id",
+        ),
+    ],
+)
+def test_attack_facade_rejects_wrong_types_and_target_mismatch(
+    command: object,
+    outcome: object,
+    caused_by: object,
+    error: type[Exception],
+    match: str,
+) -> None:
+    with pytest.raises(error, match=match):
+        build_damage_applied_from_attack_v1(
+            event_id="event_000125",
+            timestamp=FIXED_TIMESTAMP,
+            command=command,  # type: ignore[arg-type]
+            outcome=outcome,  # type: ignore[arg-type]
+            caused_by=caused_by,  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize(

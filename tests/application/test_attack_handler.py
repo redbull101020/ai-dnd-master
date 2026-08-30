@@ -16,6 +16,7 @@ from dnd_engine.domain.services.definitions import (
 from dnd_engine.domain.services.state_store import StateStoreError
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
@@ -55,13 +56,20 @@ class FailingStateStore(SpyStateStore):
         raise StateStoreError("state backend unavailable")
 
 
+class SaveFailingStateStore(SpyStateStore):
+    def save(self, snapshot: StateSnapshot) -> None:
+        self._calls.append("save")
+        self.save_calls.append(snapshot)
+        raise StateStoreError("state backend unavailable")
+
+
 class ScriptedDiceEngine:
     def __init__(
         self,
         raw_roll: int,
         calls: list[str],
         *,
-        additional_rolls: tuple[int, ...] = (),
+        additional_rolls: tuple[int | tuple[int, ...], ...] = (),
         fail: bool = False,
     ) -> None:
         self._raw_rolls = iter((raw_roll, *additional_rolls))
@@ -75,10 +83,11 @@ class ScriptedDiceEngine:
         if self._fail:
             raise RuntimeError("dice unavailable")
         raw_roll = next(self._raw_rolls)
+        rolls = (raw_roll,) if type(raw_roll) is int else raw_roll
         return DiceRoll(
-            expression="1d20",
-            rolls=(raw_roll,),
-            total=raw_roll,
+            expression=expression,
+            rolls=rolls,
+            total=sum(rolls),
         )
 
 
@@ -122,16 +131,19 @@ class FixedEventMetadataProvider:
         self._calls = calls
         self._fail = fail
         self.next_calls: list[str] = []
+        self._next_event_number = 123
 
     def next_metadata(self, campaign_id: str) -> EventMetadata:
         self._calls.append("metadata")
         self.next_calls.append(campaign_id)
         if self._fail:
             raise RuntimeError("metadata unavailable")
-        return EventMetadata(
-            event_id="event_000123",
+        metadata = EventMetadata(
+            event_id=f"event_{self._next_event_number:06d}",
             timestamp=FIXED_TIMESTAMP,
         )
+        self._next_event_number += 1
+        return metadata
 
 
 def make_creature(
@@ -215,13 +227,17 @@ def make_monster_definition(
     )
 
 
-def make_scimitar_attack(*, action_id: str = "scimitar") -> MonsterAttackDefinition:
+def make_scimitar_attack(
+    *,
+    action_id: str = "scimitar",
+    damage_modifier: int = 2,
+) -> MonsterAttackDefinition:
     return MonsterAttackDefinition(
         action_id=action_id,
         name="Scimitar",
         attack_bonus=4,
         damage_dice="1d6",
-        damage_modifier=2,
+        damage_modifier=damage_modifier,
         damage_type=DamageType.SLASHING,
     )
 
@@ -230,6 +246,7 @@ def make_snapshot(
     *,
     creatures: tuple[CreatureState, ...] = (),
     characters: tuple[CharacterState, ...] = (),
+    combat: CombatState | None = None,
 ) -> StateSnapshot:
     return StateSnapshot(
         campaign=CampaignState(
@@ -239,6 +256,7 @@ def make_snapshot(
         ),
         creatures=creatures,
         characters=characters,
+        combat=combat,
     )
 
 
@@ -710,13 +728,18 @@ def make_monster_actor(
     )
 
 
-def make_character_target(*, dexterity: int = 14) -> CreatureState:
+def make_character_target(
+    *,
+    dexterity: int = 14,
+    current_hp: int = 11,
+    max_hp: int = 11,
+) -> CreatureState:
     return make_creature(
         creature_id="character_001",
         definition_id="fighter",
         dexterity=dexterity,
-        current_hp=11,
-        max_hp=11,
+        current_hp=current_hp,
+        max_hp=max_hp,
     )
 
 
@@ -743,11 +766,10 @@ def handle_monster_attack_with(
     ).handle(make_monster_attack_command())
 
 
-def test_monster_attack_hit_resolves_against_unarmored_character_armor_class() -> None:
-    # dexterity 14 -> modifier +2 -> unarmored Character AC 12 (no
-    # Equipment/persisted AC source is consulted).
+def test_monster_attack_miss_emits_only_attack_event_without_save() -> None:
+    target = make_character_target()
     snapshot = make_snapshot(
-        creatures=(make_monster_actor(), make_character_target(dexterity=14)),
+        creatures=(make_monster_actor(), target),
         characters=(make_character(),),
     )
     calls: list[str] = []
@@ -755,12 +777,54 @@ def test_monster_attack_hit_resolves_against_unarmored_character_armor_class() -
     definitions = SpyDefinitionSource(
         make_monster_definition(attacks=(make_scimitar_attack(),)), calls
     )
-    dice = ScriptedDiceEngine(10, calls)
+    dice = ScriptedDiceEngine(1, calls)
     metadata = FixedEventMetadataProvider(calls)
 
     result = handle_monster_attack_with(store, definitions, dice, metadata)
 
     assert calls == ["load", "definition", "dice", "metadata"]
+    assert dice.roll_calls == ["1d20"]
+    assert metadata.next_calls == ["campaign_001"]
+    assert store.save_calls == []
+    assert target.current_hp == 11
+    assert result.success is True
+    assert result.outcome is not None
+    assert result.outcome.hit is False
+    assert len(result.events) == 1
+    assert result.events[0].type == "MonsterAttackResolved"
+    assert result.events[0].caused_by is None
+
+
+def test_monster_attack_hit_resolves_damage_and_persists_hp_mutation() -> None:
+    # dexterity 14 -> modifier +2 -> unarmored Character AC 12 (no
+    # Equipment/persisted AC source is consulted).
+    actor = make_monster_actor()
+    target = make_character_target(dexterity=14)
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+    )
+    loaded_before = deepcopy(snapshot)
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert calls == [
+        "load",
+        "definition",
+        "dice",
+        "dice",
+        "metadata",
+        "metadata",
+        "metadata",
+        "save",
+    ]
     assert definitions.get_calls == [
         {
             "ruleset_id": "dnd_5e",
@@ -769,8 +833,20 @@ def test_monster_attack_hit_resolves_against_unarmored_character_armor_class() -
             "expected_type": MonsterDefinition,
         }
     ]
-    assert dice.roll_calls == ["1d20"]
-    assert store.save_calls == []
+    assert dice.roll_calls == ["1d20", "1d6"]
+    assert metadata.next_calls == ["campaign_001"] * 3
+    assert snapshot == loaded_before
+    assert target.current_hp == 11
+    assert len(store.save_calls) == 1
+    saved_snapshot = store.save_calls[0]
+    saved_target = next(
+        creature
+        for creature in saved_snapshot.creatures
+        if creature.id == "character_001"
+    )
+    assert saved_target.current_hp == 5
+    assert saved_target is not target
+    assert saved_snapshot.creatures[0] is actor
 
     assert result.success is True
     assert result.errors == ()
@@ -786,13 +862,25 @@ def test_monster_attack_hit_resolves_against_unarmored_character_armor_class() -
     assert outcome.hit is True
     assert outcome.critical_hit is False
 
-    assert len(result.events) == 1
-    event = result.events[0]
-    assert event.type == "MonsterAttackResolved"
-    assert event.version == 1
-    assert event.actor_id == "monster_001"
-    assert event.caused_by is None
-    assert event.payload == {
+    assert len(result.events) == 3
+    attack_event, damage_event, applied_event = result.events
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "DamageApplied",
+    ]
+    assert [event.event_id for event in result.events] == [
+        "event_000123",
+        "event_000124",
+        "event_000125",
+    ]
+    assert attack_event.caused_by is None
+    assert damage_event.caused_by == attack_event.event_id
+    assert applied_event.caused_by == damage_event.event_id
+    assert all(event.command_id == "command_000001" for event in result.events)
+    assert all(event.campaign_id == "campaign_001" for event in result.events)
+    assert all(event.actor_id == "monster_001" for event in result.events)
+    assert attack_event.payload == {
         "targetId": "character_001",
         "actionId": "scimitar",
         "roll": {"mode": "normal", "rolls": (10,), "selected": 10},
@@ -802,6 +890,199 @@ def test_monster_attack_hit_resolves_against_unarmored_character_armor_class() -
         "hit": True,
         "criticalHit": False,
     }
+    assert damage_event.payload == {
+        "targetId": "character_001",
+        "actionId": "scimitar",
+        "roll": {"expression": "1d6", "rolls": (4,), "total": 4},
+        "damageModifier": 2,
+        "damageType": "slashing",
+        "criticalHit": False,
+        "amount": 6,
+    }
+    assert applied_event.payload == {
+        "targetId": "character_001",
+        "amount": 6,
+        "previousHp": 11,
+        "newHp": 5,
+    }
+
+
+def test_monster_attack_critical_doubles_dice_count_and_applies_modifier_once() -> None:
+    target = make_character_target()
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), target),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(20, calls, additional_rolls=((3, 4),))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert dice.roll_calls == ["1d20", "2d6"]
+    assert len(result.events) == 3
+    assert result.events[1].payload["roll"] == {
+        "expression": "2d6",
+        "rolls": (3, 4),
+        "total": 7,
+    }
+    assert result.events[1].payload["damageModifier"] == 2
+    assert result.events[1].payload["amount"] == 9
+    assert result.events[2].payload["newHp"] == 2
+    assert len(store.save_calls) == 1
+
+
+def test_monster_attack_lethal_damage_floors_hp_at_zero() -> None:
+    target = make_character_target(current_hp=5, max_hp=11)
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), target),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(6,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert len(result.events) == 3
+    assert result.events[2].payload == {
+        "targetId": "character_001",
+        "amount": 8,
+        "previousHp": 5,
+        "newHp": 0,
+    }
+    saved_target = next(
+        creature
+        for creature in store.save_calls[0].creatures
+        if creature.id == target.id
+    )
+    assert saved_target.current_hp == 0
+    assert len(store.save_calls) == 1
+
+
+def test_monster_attack_zero_source_damage_emits_two_events_without_save() -> None:
+    target = make_character_target()
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), target),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(
+            attacks=(make_scimitar_attack(damage_modifier=-2),)
+        ),
+        calls,
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(1,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert result.outcome is not None and result.outcome.hit is True
+    assert dice.roll_calls == ["1d20", "1d6"]
+    assert metadata.next_calls == ["campaign_001"] * 2
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+    ]
+    assert result.events[1].caused_by == result.events[0].event_id
+    assert result.events[1].payload["amount"] == 0
+    assert store.save_calls == []
+    assert target.current_hp == 11
+
+
+def test_monster_attack_positive_damage_at_zero_hp_still_applies_and_saves() -> None:
+    target = make_character_target(current_hp=0, max_hp=11)
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), target),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert len(result.events) == 3
+    assert result.events[2].payload["previousHp"] == 0
+    assert result.events[2].payload["newHp"] == 0
+    assert len(store.save_calls) == 1
+
+
+def test_monster_attack_damage_preserves_existing_combat_state() -> None:
+    actor = make_monster_actor()
+    target = make_character_target()
+    combat = CombatState(
+        id="combat_001",
+        round=2,
+        order=(actor.id, target.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert len(store.save_calls) == 1
+    assert store.save_calls[0].combat is combat
+    assert snapshot.combat is combat
+    saved_target = next(
+        creature
+        for creature in store.save_calls[0].creatures
+        if creature.id == target.id
+    )
+    assert saved_target.current_hp == 5
+    assert target.current_hp == 11
+
+
+def test_monster_attack_save_failure_propagates_and_keeps_loaded_state() -> None:
+    actor = make_monster_actor()
+    target = make_character_target()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+    )
+    loaded_before = deepcopy(snapshot)
+    calls: list[str] = []
+    store = SaveFailingStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    with pytest.raises(StateStoreError, match="backend unavailable"):
+        handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert calls.count("save") == 1
+    assert len(store.save_calls) == 1
+    assert store.snapshot == loaded_before
+    assert target.current_hp == 11
 
 
 def test_monster_attack_poisoned_actor_rolls_with_disadvantage() -> None:
@@ -857,7 +1138,14 @@ def test_monster_attack_natural_one_and_twenty_are_automatic(
     definitions = SpyDefinitionSource(
         make_monster_definition(attacks=(make_scimitar_attack(),)), calls
     )
-    dice = ScriptedDiceEngine(raw_roll, calls)
+    damage_rolls: tuple[int | tuple[int, ...], ...] = (
+        ((3, 4),) if expected_hit else ()
+    )
+    dice = ScriptedDiceEngine(
+        raw_roll,
+        calls,
+        additional_rolls=damage_rolls,
+    )
     metadata = FixedEventMetadataProvider(calls)
 
     result = handle_monster_attack_with(store, definitions, dice, metadata)
@@ -869,6 +1157,7 @@ def test_monster_attack_natural_one_and_twenty_are_automatic(
     assert outcome.critical_hit is expected_critical
     assert result.events[0].payload["hit"] is expected_hit
     assert result.events[0].payload["criticalHit"] is expected_critical
+    assert dice.roll_calls == (["1d20", "2d6"] if expected_hit else ["1d20"])
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from dnd_engine.domain.commands.attack import AttackCommand
 from dnd_engine.domain.commands.damage import ApplyDamageCommand
 from dnd_engine.domain.events.game_event import GameEvent
 from dnd_engine.domain.rules.damage import DamageResult
@@ -43,6 +44,55 @@ def build_damage_applied_v1(
     if outcome.amount != command.payload.amount:
         raise ValueError("outcome amount must match command payload amount")
 
+    return _build_damage_applied_v1(
+        event_id=event_id,
+        timestamp=timestamp,
+        command_id=command.command_id,
+        campaign_id=command.campaign_id,
+        actor_id=command.actor_id,
+        outcome=outcome,
+        caused_by=None,
+    )
+
+
+def build_damage_applied_from_attack_v1(
+    *,
+    event_id: str,
+    timestamp: datetime,
+    command: AttackCommand,
+    outcome: DamageResult,
+    caused_by: str,
+) -> GameEvent:
+    if not isinstance(command, AttackCommand):
+        raise TypeError("command must be an AttackCommand")
+    if not isinstance(outcome, DamageResult):
+        raise TypeError("outcome must be a DamageResult")
+    if type(caused_by) is not str:
+        raise TypeError("caused_by must be a str")
+    if outcome.target_id != command.payload.target_id:
+        raise ValueError("outcome target_id must match command payload target_id")
+
+    return _build_damage_applied_v1(
+        event_id=event_id,
+        timestamp=timestamp,
+        command_id=command.command_id,
+        campaign_id=command.campaign_id,
+        actor_id=command.actor_id,
+        outcome=outcome,
+        caused_by=caused_by,
+    )
+
+
+def _build_damage_applied_v1(
+    *,
+    event_id: str,
+    timestamp: datetime,
+    command_id: str,
+    campaign_id: str,
+    actor_id: str,
+    outcome: DamageResult,
+    caused_by: str | None,
+) -> GameEvent:
     payload = DamageAppliedPayloadV1(
         target_id=outcome.target_id,
         amount=outcome.amount,
@@ -52,13 +102,13 @@ def build_damage_applied_v1(
 
     return GameEvent(
         event_id=event_id,
-        command_id=command.command_id,
+        command_id=command_id,
         type="DamageApplied",
         version=1,
-        campaign_id=command.campaign_id,
+        campaign_id=campaign_id,
         timestamp=timestamp,
-        actor_id=command.actor_id,
-        caused_by=None,
+        actor_id=actor_id,
+        caused_by=caused_by,
         payload={
             "targetId": payload.target_id,
             "amount": payload.amount,

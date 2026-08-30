@@ -124,6 +124,9 @@ consumer, G7 (§3.25), добавляет ещё два mutating handler'а —
 напрямую через `dataclasses.replace(snapshot, combat=...)`, а не через
 §3.23 helper (single optional field, а не lookup по многим Creature). Все
 шесть handlers вызывают `StateStore.save()` ровно один раз на успешном пути.
+G9 (§3.27) добавляет седьмой concrete mutating consumer: positive-damage
+Monster Scimitar path применяет `DamageApplied` V1 через тот же §3.23 helper;
+его miss и zero-source-damage ветви остаются read-only без save.
 Это concrete Event → State projections, а не общий Event Log/replay
 subsystem. Durable ordered Event history, `EventStore`, version-aware
 decoding для произвольных Events и полноценный recovery/replay остаются
@@ -322,8 +325,16 @@ Ability Check Condition policy) и Turn Order advancement (`AdvanceTurnCommand`
 по уже загруженному факту "есть ли у actor `CharacterState`"), с
 переиспользованием Poisoned Condition policy и `unarmored_character_armor_class`.
 Weapon attacks (Equipment/Inventory ownership, weapon proficiency, Finesse
-choice), attack consequences (DEF-0013), zero-HP legality, `CombatEnded` и
-другие связанные механики продолжатся по Roadmap.
+choice), broad Attack consequences (DEF-0013), zero-HP legality,
+`CombatEnded` и другие связанные механики продолжатся по Roadmap. G9 Groups
+2–3 (§3.27, DEC-0042) реализуют narrow Monster Scimitar consequence path:
+`MonsterAttackDamageResult`, normal/critical damage-dice semantics, zero
+source damage и exact ordered 1/2/3 Event branches. При positive source amount
+`AttackHandler` применяет неизменённый `DamageApplied` V1 к Character HP,
+строит replacement snapshot с сохранением `CombatState` и вызывает ровно один
+`StateStore.save()` до success. Character unarmed branch остаётся read-only;
+Group 4 real-adapter/filesystem proof и broad Weapon attack/damage scope ещё
+не завершены.
 
 ---
 

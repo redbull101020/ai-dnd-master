@@ -7,6 +7,7 @@ from dnd_engine.application.services.state_snapshot import (
 )
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
@@ -37,10 +38,17 @@ def test_replaces_exactly_one_creature_and_preserves_snapshot_projections() -> N
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
     )
+    combat = CombatState(
+        id="combat_001",
+        round=2,
+        order=("monster_002", "character_001", "monster_001"),
+        active_index=1,
+    )
     snapshot = StateSnapshot(
         campaign=campaign,
         creatures=(other, target, character_creature),
         characters=(character,),
+        combat=combat,
     )
     replacement = replace(target, current_hp=3)
 
@@ -54,7 +62,11 @@ def test_replaces_exactly_one_creature_and_preserves_snapshot_projections() -> N
     assert result.creatures[2] is character_creature
     assert result.characters is snapshot.characters
     assert result.characters[0] is character
+    assert result.combat is combat
     assert snapshot.creatures == (other, target, character_creature)
+    assert snapshot.campaign is campaign
+    assert snapshot.characters == (character,)
+    assert snapshot.combat is combat
     assert target.current_hp == 7
 
 

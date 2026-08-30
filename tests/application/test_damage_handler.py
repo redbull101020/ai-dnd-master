@@ -10,6 +10,7 @@ from dnd_engine.domain.errors import ErrorCode
 from dnd_engine.domain.services.state_store import StateStoreError
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
@@ -107,6 +108,7 @@ def make_snapshot(
     *,
     creatures: tuple[CreatureState, ...] = (),
     characters: tuple[CharacterState, ...] = (),
+    combat: CombatState | None = None,
 ) -> StateSnapshot:
     return StateSnapshot(
         campaign=CampaignState(
@@ -116,14 +118,20 @@ def make_snapshot(
         ),
         creatures=creatures,
         characters=characters,
+        combat=combat,
     )
 
 
-def make_command(*, target_id: str = "monster_001", amount: int = 3) -> ApplyDamageCommand:
+def make_command(
+    *,
+    actor_id: str = "character_001",
+    target_id: str = "monster_001",
+    amount: int = 3,
+) -> ApplyDamageCommand:
     return ApplyDamageCommand(
         command_id="command_000001",
         campaign_id="campaign_001",
-        actor_id="character_001",
+        actor_id=actor_id,
         payload=ApplyDamagePayload(target_id=target_id, amount=amount),
     )
 
@@ -224,6 +232,44 @@ def test_successful_damage_follows_canonical_lifecycle_and_persists() -> None:
         "previousHp": 7,
         "newHp": 4,
     }
+
+
+def test_successful_damage_preserves_existing_combat_state() -> None:
+    actor = make_target()
+    target = make_actor()
+    character = make_character()
+    combat = CombatState(
+        id="combat_001",
+        round=2,
+        order=(actor.id, target.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        combat=combat,
+    )
+    store, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(
+        store,
+        metadata,
+        make_command(actor_id=actor.id, target_id=target.id, amount=3),
+    )
+
+    assert result.success is True
+    assert calls == ["load", "metadata", "save"]
+    assert len(store.save_calls) == 1
+
+    saved_snapshot = store.save_calls[0]
+    saved_target = next(
+        creature for creature in saved_snapshot.creatures if creature.id == target.id
+    )
+    assert saved_target.current_hp == 17
+    assert saved_snapshot.characters is snapshot.characters
+    assert saved_snapshot.combat is combat
+    assert snapshot.combat is combat
+    assert target.current_hp == 20
 
 
 # --- missing actor / target -----------------------------------------------

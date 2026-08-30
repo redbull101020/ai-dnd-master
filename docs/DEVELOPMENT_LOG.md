@@ -3730,3 +3730,87 @@ contracts.
   actor-has-no-`CharacterState` failure, now correctly routing to the new
   Monster-actor path. Full `pytest` (1517 tests) and configured `mypy`
   (`src/dnd_engine`) pass; `git diff --check` reports no whitespace errors.
+
+## 2026-08-30 — CombatState-safe Creature snapshot replacement (G9 Group 1)
+
+- Replaced the manual three-field `StateSnapshot` reconstruction in
+  `replace_creature_in_snapshot` with `dataclasses.replace`, changing only the
+  `creatures` tuple while preserving every unrelated snapshot projection by
+  identity, including an existing `CombatState`.
+- Kept the existing boundary validation, exactly-one matching-ID requirement,
+  tuple ordering, missing-ID rejection, and copy-on-write behavior unchanged.
+- Added direct helper and `DamageHandler` regressions proving that Creature HP
+  mutation preserves the original Combat projection and leaves the loaded
+  snapshot unchanged.
+- Updated Architecture §3.23 and related current summaries to describe the
+  projection-preservation contract without changing historical DEC-0038 or
+  introducing G9 attack-damage orchestration.
+- Verification: focused `test_state_snapshot_service.py` (3 tests) and
+  `test_damage_handler.py` (8 tests), full pytest (1538 tests), configured
+  mypy (103 source files), and `git diff --check` all pass.
+
+## 2026-08-30 — Monster attack damage Domain contracts (G9 Group 2)
+
+- Added immutable `MonsterAttackDamageResult` and the pure
+  `resolve_monster_attack_damage` resolver. A normal hit rolls the attack's
+  original `NdM` expression once; a critical hit doubles only the dice count;
+  the modifier is applied once and the final source amount is clamped at zero.
+- Added source-agnostic `resolve_damage_amount(target, amount=...)` for the
+  positive Damage-to-HP calculation. The existing `resolve_damage` retains its
+  `ApplyDamageCommand` type and target-correlation checks and delegates the HP
+  arithmetic to the new function; zero source damage remains outside the
+  positive Damage application contract.
+- Added `MonsterAttackDamageResolved` V1 with the damage roll, modifier, type,
+  critical flag, final amount, and explicit causation from the preceding
+  `MonsterAttackResolved` Event. Added an attack-specific producer facade for
+  the unchanged `DamageApplied` V1 schema and applier, with explicit causation
+  from the damage-resolution Event.
+- After review, synchronized the canonical contract and planning state: added
+  Architecture §3.27 and accepted DEC-0042 for the three-stage Attack/Damage
+  boundary, updated DEF-0013 history/current deferral reason with the concrete
+  causation design, and corrected current Roadmap/summary wording while
+  keeping G9 and the Attack-consequences checkbox incomplete.
+- Added focused Domain/Event coverage for normal and critical formulas,
+  zero-clamped source damage, propagation and correlation, immutability and
+  runtime invariants, positive HP application including a target already at
+  zero HP, exact Event payloads and causation, and direct `ApplyDamageCommand`
+  regressions. `AttackHandler` orchestration remains intentionally unwired;
+  G9 is not marked complete and Roadmap status is unchanged.
+- Verification after canonical synchronization: documentation/reference tests
+  (2), focused Group 2/G8 Domain/Event tests (193), and the full suite (1579,
+  including packaging tests via writable external pytest/pip temporary
+  directories) pass; configured mypy (`src/dnd_engine`, 105 source files) and
+  `git diff --check` pass.
+
+## 2026-08-30 — AttackHandler damage orchestration and HP mutation (G9 Group 3)
+
+- Extended only the Monster-actor branch of `AttackHandler`: a miss emits
+  `MonsterAttackResolved`; a hit resolves the Monster damage source and emits
+  `MonsterAttackDamageResolved`; a positive source amount additionally
+  resolves the HP transition and emits the unchanged `DamageApplied` V1.
+- Preserved the original `AttackCommand` correlation on every Event and added
+  the canonical ordered causation chain from attack resolution to damage
+  resolution to optional damage application. Gameplay computation completes
+  before the exact required one, two, or three Event metadata allocations.
+- For positive source damage, applied `DamageApplied` through the existing
+  concrete applier, replaced only the target Creature through
+  `replace_creature_in_snapshot`, and saved exactly one replacement snapshot
+  before returning success. Miss and zero-source-damage paths remain
+  read-only; save failure propagates while the loaded snapshot remains
+  unchanged.
+- Added focused Application coverage for miss, normal and critical hits,
+  lethal damage, zero source damage, positive damage at zero HP, exact Event
+  ordering/causation/correlation, metadata counts, loaded-State immutability,
+  `CombatState` preservation, exactly-one save, and save failure. Existing G8
+  target validation, one-supported-attack, Poisoned, natural 1/20, and
+  Character-unarmed regressions remain covered.
+- After review, synchronized Architecture §3.27, Roadmap, DEF-0013, and the
+  current-state summaries with the implemented Application lifecycle. Broad
+  Attack consequences remain incomplete and Group 4 real-adapter/filesystem
+  evidence remains pending; historical DEC-0042 was not rewritten.
+- Verification after documentation synchronization: documentation/reference
+  tests pass (2); the focused Attack/Monster damage/Domain/Event/applier,
+  snapshot-helper, and real-adapter regression set passes (254); the full
+  suite passes (1586 tests, including packaging tests with a writable external
+  pip cache); configured mypy passes for 105 source files, and
+  `git diff --check` reports no whitespace errors.
