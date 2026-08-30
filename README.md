@@ -289,19 +289,22 @@ python -m mypy src/dnd_engine
 ```
 
 Runnable API появится на соответствующей фазе Roadmap; текущий Core repository
-проверяется установкой пакета и pytest. Phase 2 начата; read-only Ability Check,
-Character Saving Throw, Character Skill Check и narrow Character unarmed Attack
-Roll → Monster vertical slices реализованы. Последний является только
-read-only hit/miss/critical resolution без damage/HP mutation, а не готовой
-combat system; broad `Attack rolls` остаётся unchecked в Roadmap. Отдельно
-реализованы minimal state-mutating slices: direct `Damage → current_hp`
+проверяется установкой пакета и pytest. **Phase 2 — Basic Rules завершена в
+foundation scope** по [§3.24](docs/ARCHITECTURE.md#324-phase-2-closure-contract):
+реализованы reusable deterministic foundations для Ability Checks,
+Proficiency, Character Saving Throws/Skill Checks, Armor Class, Attack Rolls,
+State mutation, Creature HP, direct Damage/Healing и Condition State/Poisoned.
+Отдельные state-mutating slices включают direct `Damage → current_hp`
 (`ApplyDamageCommand` → `DamageApplied` V1, [§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a))
 и direct `Healing → current_hp` (`ApplyHealingCommand` → `HealingApplied` V1,
 [§3.20](docs/ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b));
 а также Apply/Remove Condition membership (§3.21). Все четыре concrete
 handlers строят replacement snapshot через узкий §3.23 helper и вызывают
-`StateStore.save()` до успешного результата. Broad `HP`/`Damage`/`Healing`/
-`Conditions` и полноценная combat system по-прежнему unchecked в Roadmap.
+`StateStore.save()` до успешного результата. Более широкий D&D scope остаётся
+`PARTIAL` и связан с [`docs/DEFERRED.md`](docs/DEFERRED.md); он не переоткрывает
+Phase 2. Текущий этап — Phase 3 Combat, где concrete consumers продолжат
+weapon/monster attacks, attack consequences, zero-HP legality и другие
+связанные механики по Roadmap.
 
 ---
 
@@ -367,7 +370,8 @@ AI понимает намерение. Engine решает:
 
 - ✅ **Phase 0 — Foundation** завершена.
 - ✅ **Phase 1 — Core** завершена.
-- ➡️ Текущий этап: **Phase 2 — Basic Rules**.
+- ✅ **Phase 2 — Basic Rules** завершена в foundation scope.
+- ➡️ Текущий этап: **Phase 3 — Combat**.
 
 Текущие фазы и приоритеты — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

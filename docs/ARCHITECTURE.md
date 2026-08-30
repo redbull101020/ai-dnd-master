@@ -59,6 +59,7 @@
 | Condition State foundation, persisted `CreatureState.conditions` (G6C1) | §3.21 |
 | Minimal Poisoned behavior for checks and attacks (G6C2) | §3.22 |
 | Post-G6C abstraction review and snapshot replacement helper | §3.23 |
+| Phase 2 closure rule and deferred-scope boundary | §3.24 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -116,6 +117,7 @@
   * [3.21. Condition State foundation (G6C1)](#321-condition-state-foundation-g6c1)
   * [3.22. Minimal Poisoned behavior (G6C2)](#322-minimal-poisoned-behavior-g6c2)
   * [3.23. Post-G6C abstraction review](#323-post-g6c-abstraction-review)
+  * [3.24. Phase 2 Closure Contract](#324-phase-2-closure-contract)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1647,15 +1649,15 @@ flowchart TD
 
 Одна Command является одной логической транзакцией.
 
-Implementation status: **Planned / Deferred** до первого authoritative
-state-mutating command. §3.18 State Mutation Foundation (G5) теперь фиксирует
-канонический mutating-command lifecycle, persistence ordering и exact MVP
-atomicity boundary, которые этот раздел откладывал на «отдельное State
-Mutation Foundation решение»; сам authoritative state-mutating Command
-по-прежнему не реализован, и гарантии §3.18 остаются conceptual до первого
-Damage → HP slice.
+Implementation status: **Implemented for the current authoritative mutation
+consumers.** §3.18 State Mutation Foundation (G5) фиксирует канонический
+mutating-command lifecycle, persistence ordering и exact MVP atomicity
+boundary. Damage (§3.19), Healing (§3.20), Apply Condition и Remove Condition
+(§3.21) реализуют этот контракт end to end; это больше не Planned/Deferred
+contract. Гарантии остаются ограничены single-snapshot MVP boundary из §3.18
+и не подразумевают EventStore, replay или generic transaction framework.
 
-Будущая state-mutating Command может породить несколько Events:
+Authoritative state-mutating Command может породить несколько Events:
 
 ```text
 Command
@@ -2571,7 +2573,8 @@ Definition-loading slice, вместе с тестами. Причина: нел
 baseline Monster AC) implemented; minimal Character unarmed Attack → Monster
 consumer реализован отдельно в §3.17.** Roadmap AC отмечен выполненным только
 после production rule и regression proof обеих веток; broad Attack rolls
-остаётся unchecked (`docs/ROADMAP.md`).
+теперь зафиксирован как complete foundation с `broader scope PARTIAL`
+(`docs/ROADMAP.md`, §3.24).
 
 Согласованный pipeline фиксирован как:
 
@@ -3156,15 +3159,15 @@ Character Skill Check production contracts remain unchanged.
 
 ### 3.18. State Mutation Foundation (G5)
 
-Implementation status: **Canonical foundation contract; two concrete
-consumers implemented in §§3.19–3.20.** This section itself introduced no
+Implementation status: **Canonical foundation contract; four concrete
+consumers implemented in §§3.19–3.21.** This section itself introduced no
 concrete Command, Event applier, or Application handler and changed no Python
 contract — it fixes the general contract that every authoritative
-state-mutating Command must follow. §3.19 documents the first concrete
-realization, Damage → HP; §3.20 documents the second, Healing → HP. Both use
-State Owner-specific Event application and a replacement `StateSnapshot`
-before `StateStore.save()`, and neither introduces a generic mutation
-abstraction.
+state-mutating Command must follow. §3.19 documents Damage → HP, §3.20
+documents Healing → HP, and §3.21 documents Apply Condition and Remove
+Condition as two further concrete consumers. All four use State Owner-specific
+Event application and a replacement `StateSnapshot` before
+`StateStore.save()`, and none introduces a generic mutation abstraction.
 
 This section is the "separate State Mutation Foundation decision" that §3.8
 Atomicity deferred to. It fixes the mutating-command lifecycle, mutation
@@ -3175,7 +3178,7 @@ boundary; §3.8 keeps the general Atomicity statement.
 
 The canonical `Command → Validation → Rule Engine → Result → Events → State
 update → Persistence → Narration` flow (README, CLAUDE.md, §11) is unchanged.
-For a future authoritative state-mutating Command it resolves to exactly this
+For an authoritative state-mutating Command it resolves to exactly this
 ordered flow:
 
 ```text
@@ -4585,8 +4588,55 @@ The helper is therefore the only new production abstraction from this review.
 The four handlers and four Event appliers remain concrete. The existing
 `StateStore.load(campaign_id)` / `save(snapshot)` boundary, persistence
 ordering, successful no-op behavior, read-only Condition-consumer boundaries,
-and AI/API/UI non-authority remain unchanged. Broad Roadmap `Conditions`,
-Attack, Skills, Proficiency, HP, Damage, and Healing statuses do not change.
+and AI/API/UI non-authority remain unchanged. This review did not itself
+complete broader mechanics; their later Phase 2 foundation closure is governed
+by §3.24 and does not revise the review's evidence verdicts.
+
+---
+
+### 3.24. Phase 2 Closure Contract
+
+Implementation status: **Phase 2 — Basic Rules is complete for foundation
+scope.** Completion means that the engine has reusable, deterministic Basic
+Rules foundations sufficient for later concrete consumers. It does not mean
+that every D&D variant, source, consequence, lifecycle rule, or integration
+around those foundations is implemented. Rationale is recorded in
+[DEC-0039](DECISIONS.md#dec-0039--phase-2-closes-on-foundation-readiness-with-linked-forward-scope).
+
+The closed Phase 2 foundation consists of the implemented Ability Check,
+Character proficiency, Character Saving Throw, Character Skill Check, Armor
+Class, Character unarmed Attack Roll, State mutation, Creature HP, direct
+Damage, direct Healing, and Condition State/Poisoned behavior documented in
+§§3.10–3.23. [`ROADMAP.md`](ROADMAP.md#phase-2--basic-rules) owns completion
+status and implementation order. [`DEFERRED.md`](DEFERRED.md#phase-2-closure-notes)
+is the subordinate detailed companion: each `P2-*` note records the exact
+implemented foundation and links to stable `DEF-*` continuation records.
+
+Foundation readiness is the closure rule. In particular, advanced proficiency
+variants, Monster variants, weapon and spell attacks, Attack → Damage
+composition, weapon/critical damage, zero-HP Combat legality and Death Saves,
+temporary HP, typed damage defenses, source-aware Healing and recovery, full
+Condition identity/lifecycle/effects, independent roll-mode source
+aggregation, and durable EventStore/history/replay remain broader work. Their
+linked deferral does **not** reopen Phase 2 or make Phase 2 incomplete.
+Attack-consequence and zero-HP action-eligibility rules belong to the first
+concrete Phase 3 Combat consumers that need those facts. Event History & Replay
+remains a trigger-driven cross-cutting track and is not a Phase 3 entry gate.
+
+Every completed foundation whose broader D&D mechanic is partial has two-way
+planning traceability: its Phase 2 Roadmap item links forward through a
+`P2-*` closure note to the relevant `DEF-*` records, and the appropriate future
+Roadmap location links back to those continuation records. These links record
+scope and likely continuation; they do not make `DEFERRED.md` a canonical
+contract or scheduling source.
+
+Phase closure does not weaken the demand-driven/evidence-driven abstraction
+policy in §§3.6 and 3.23. A future consumer extends the narrow concrete
+foundation first. Shared machinery is extracted only after production evidence
+demonstrates stable semantics and ownership; no generic Effect system,
+modifier pipeline, mutation handler, Event/replay framework, transaction
+abstraction, or universal life-state model is introduced merely because its
+broader mechanic is registered as deferred.
 
 ---
 

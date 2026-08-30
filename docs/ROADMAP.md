@@ -2,7 +2,7 @@
 
 Фазы разработки AI D&D Engine.
 
-Другие документы: [`../README.md`](../README.md) — обзор проекта · [`ARCHITECTURE.md`](ARCHITECTURE.md) — текущий канонический контракт · [`DECISIONS.md`](DECISIONS.md) — append-only мотивация и история решений · [`../CLAUDE.md`](../CLAUDE.md) — выжимка правил для AI-агента.
+Другие документы: [`../README.md`](../README.md) — обзор проекта · [`ARCHITECTURE.md`](ARCHITECTURE.md) — текущий канонический контракт · [`DECISIONS.md`](DECISIONS.md) — append-only мотивация и история решений · [`DEFERRED.md`](DEFERRED.md) — подчинённый companion закрытия Phase 2 и реестр продолжений · [`../CLAUDE.md`](../CLAUDE.md) — выжимка правил для AI-агента.
 
 Каждая фаза реализуется в рамках контрактов из `ARCHITECTURE.md`. Опорные разделы указаны под заголовком фазы.
 
@@ -60,26 +60,27 @@ Definition of Done Phase 1 не добавляются.
 
 ## Phase 2 — Basic Rules
 
-> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5) · [§3.19 Minimal Damage → HP mutation vertical slice (G6A)](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a) · [§3.20 Minimal Healing → HP mutation vertical slice (G6B)](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b) · [§3.21 Condition State foundation (G6C1)](ARCHITECTURE.md#321-condition-state-foundation-g6c1) · [§3.22 Minimal Poisoned behavior (G6C2)](ARCHITECTURE.md#322-minimal-poisoned-behavior-g6c2)
+> Контракты: [§3.5 ResolutionResult](ARCHITECTURE.md#35-resolutionresult-contract) · [§3.10 Ability Check vertical slice](ARCHITECTURE.md#310-minimal-phase-2-ability-check-vertical-slice) · [§1.7 Random Number Generation](ARCHITECTURE.md#17-random-number-generation) · [§9 Command Envelope](ARCHITECTURE.md#9-command-envelope) · [§3.18 State Mutation Foundation](ARCHITECTURE.md#318-state-mutation-foundation-g5) · [§3.19 Minimal Damage → HP mutation vertical slice (G6A)](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a) · [§3.20 Minimal Healing → HP mutation vertical slice (G6B)](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b) · [§3.21 Condition State foundation (G6C1)](ARCHITECTURE.md#321-condition-state-foundation-g6c1) · [§3.22 Minimal Poisoned behavior (G6C2)](ARCHITECTURE.md#322-minimal-poisoned-behavior-g6c2) · [§3.24 Phase 2 Closure Contract](ARCHITECTURE.md#324-phase-2-closure-contract)
 
-* [x] Ability checks
-* [ ] Proficiency
-* [ ] Saving throws
-* [ ] Skills
-* [x] AC
-* [ ] Attack rolls
-* [x] State Mutation Foundation (G5)
-* [ ] HP
-* [ ] Damage
-* [ ] Healing
-* [ ] Conditions
+* [x] Ability checks — COMPLETE ([P2-ABILITY-CHECKS](DEFERRED.md#p2-ability-checks)).
+* [x] Proficiency foundation — broader scope PARTIAL ([P2-PROFICIENCY](DEFERRED.md#p2-proficiency); [DEF-0001](DEFERRED.md#def-0001), [DEF-0002](DEFERRED.md#def-0002), [DEF-0003](DEFERRED.md#def-0003)).
+* [x] Character saving throw foundation — broader scope PARTIAL ([P2-SAVING-THROWS](DEFERRED.md#p2-saving-throws); [DEF-0004](DEFERRED.md#def-0004), [DEF-0005](DEFERRED.md#def-0005)).
+* [x] Character skill-check foundation — broader scope PARTIAL ([P2-SKILLS](DEFERRED.md#p2-skills); [DEF-0001](DEFERRED.md#def-0001), [DEF-0006](DEFERRED.md#def-0006), [DEF-0007](DEFERRED.md#def-0007), [DEF-0008](DEFERRED.md#def-0008)).
+* [x] Armor Class foundation — broader scope PARTIAL ([P2-ARMOR-CLASS](DEFERRED.md#p2-armor-class); [DEF-0009](DEFERRED.md#def-0009), [DEF-0010](DEFERRED.md#def-0010)).
+* [x] Attack-roll foundation — broader scope PARTIAL ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls); [DEF-0011](DEFERRED.md#def-0011), [DEF-0012](DEFERRED.md#def-0012), [DEF-0013](DEFERRED.md#def-0013), [DEF-0014](DEFERRED.md#def-0014)).
+* [x] State Mutation Foundation (G5) — COMPLETE ([P2-STATE-MUTATION](DEFERRED.md#p2-state-mutation)).
+* [x] Creature HP foundation — broader scope PARTIAL ([P2-HP](DEFERRED.md#p2-hp); [DEF-0015](DEFERRED.md#def-0015), [DEF-0016](DEFERRED.md#def-0016)).
+* [x] Direct Damage → HP foundation — broader scope PARTIAL ([P2-DAMAGE](DEFERRED.md#p2-damage); [DEF-0013](DEFERRED.md#def-0013), [DEF-0017](DEFERRED.md#def-0017)).
+* [x] Direct Healing → HP foundation — broader scope PARTIAL ([P2-HEALING](DEFERRED.md#p2-healing); [DEF-0018](DEFERRED.md#def-0018), [DEF-0019](DEFERRED.md#def-0019)).
+* [x] Condition State foundation + Poisoned behavior — broader scope PARTIAL ([P2-CONDITIONS](DEFERRED.md#p2-conditions); [DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021)).
 
 `State Mutation Foundation (G5)` (§3.18) fixes the canonical contract for
 authoritative state-mutating Commands: read-only loaded-snapshot input,
 transition-specific mutation scope, Event → State application, replacement
 State construction, persistence ordering, save-failure semantics, and the
-exact MVP atomicity boundary. Two concrete production consumers now implement
-that contract end-to-end.
+exact MVP atomicity boundary. Four concrete production consumers now implement
+that contract end-to-end: Damage, Healing, Apply Condition, and Remove
+Condition.
 
 G6A (§3.19) implements direct `Damage → current_hp`:
 
@@ -102,11 +103,12 @@ The post-G6B comparison of both implementations retained the verdict
 the shared syntax/sequencing does not justify a generic HP mutation primitive,
 Event applier, mutation handler, registry, or transaction abstraction.
 
-The broad `HP`, `Damage`, and `Healing` checkboxes intentionally remain open.
-These minimal direct slices do not implement healing sources/resources,
-spells/items/potions, temporary HP, death/unconscious/death saves, the broader
-HP lifecycle, Attack → Damage orchestration, resistance/immunity/vulnerability,
-or Conditions.
+The completed HP, Damage, and Healing foundation items do not implement healing
+sources/resources, spells/items/potions, temporary HP,
+death/unconscious/death saves, the broader HP lifecycle, Attack → Damage
+orchestration, resistance/immunity/vulnerability, or Conditions. That broader
+scope is explicitly PARTIAL and continues through the linked `P2-*`/`DEF-*`
+records above; it does not reopen Phase 2.
 
 G6C1 (§3.21) implements the parallel Condition State foundation and its full
 direct mutation path — State representation through persistence:
@@ -130,9 +132,16 @@ Character Skill Checks (through the shared ability-check Condition policy),
 and Attack Rolls; Saving Throws remain NORMAL. Application reads authoritative
 actor Condition membership and passes a mechanic-specific Domain policy's
 effective mode into the unchanged resolver boundary. No generic effect or
-advantage/disadvantage aggregation framework was introduced. The `[ ]
-Conditions` checkbox intentionally remains open: all other Conditions and all
-other Poisoned mechanics remain unimplemented.
+advantage/disadvantage aggregation framework was introduced. The Condition
+State foundation is complete while broader Conditions scope remains PARTIAL:
+all other Conditions and all other Poisoned mechanics remain unimplemented and
+continue through the linked DEF records.
+
+**Phase 2 — Basic Rules: COMPLETE (foundation scope).** Per
+[Architecture §3.24](ARCHITECTURE.md#324-phase-2-closure-contract), reusable
+deterministic foundation readiness closes the phase. Linked broader mechanics
+remain PARTIAL and move forward to concrete consumers or cross-cutting tracks;
+they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phase-2-closes-on-foundation-readiness-with-linked-forward-scope).
 
 ## Phase 3 — Combat
 
@@ -140,12 +149,17 @@ other Poisoned mechanics remain unimplemented.
 
 * [ ] Initiative
 * [ ] Turns
+* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015))
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
-* [ ] Targeting
-* [ ] Cover
-* [ ] Visibility
+* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011))
+* [ ] Monster actions ([DEF-0002](DEFERRED.md#def-0002), [DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012))
+* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013))
+* [ ] Conditions expansion ([DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
+* [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
+* [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
+* [ ] Visibility ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
 
 ## Phase 4 — Magic
 
@@ -155,9 +169,11 @@ other Poisoned mechanics remain unimplemented.
 * [ ] Spell slots
 * [ ] Spell targeting
 * [ ] AoE
-* [ ] Saving throw spells
-* [ ] Spell attacks
-* [ ] Effects
+* [ ] Saving throw spells ([P2-SAVING-THROWS](DEFERRED.md#p2-saving-throws))
+* [ ] Spell attacks ([DEF-0014](DEFERRED.md#def-0014))
+* [ ] Source-aware healing ([DEF-0018](DEFERRED.md#def-0018))
+* [ ] Effects — consumer-driven AC, temporary-HP, typed-damage, and Condition continuations ([DEF-0010](DEFERRED.md#def-0010), [DEF-0016](DEFERRED.md#def-0016), [DEF-0017](DEFERRED.md#def-0017), [DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
+* [ ] Equipment & Inventory supporting continuation ([DEF-0009](DEFERRED.md#def-0009), [DEF-0011](DEFERRED.md#def-0011))
 * [ ] Concentration
 
 ## Phase 5 — World
@@ -166,18 +182,18 @@ other Poisoned mechanics remain unimplemented.
 
 * [ ] Locations
 * [ ] Maps
-* [ ] NPCs
+* [ ] NPCs ([DEF-0006](DEFERRED.md#def-0006))
 * [ ] Factions
 * [ ] Relationships
 * [ ] Quests
 * [ ] World time
-* [ ] Knowledge system
+* [ ] Knowledge system ([DEF-0007](DEFERRED.md#def-0007))
 
 ## Phase 6 — AI DM
 
 > Контракты: [§1.6 AI Layer](ARCHITECTURE.md#16-ai-layer) · [§10.12 AI State Owner](ARCHITECTURE.md#1012-ai-state-owner) · [§9.3 commandId](ARCHITECTURE.md#93-commandid)
 
-* [ ] Natural language → Commands
+* [ ] Natural language → Commands ([DEF-0008](DEFERRED.md#def-0008))
 * [ ] AI Context Projection
 * [ ] NPC AI
 * [ ] Memory
@@ -203,12 +219,22 @@ other Poisoned mechanics remain unimplemented.
 
 ---
 
+## Cross-cutting continuation tracks
+
+* Character Progression → [DEF-0001](DEFERRED.md#def-0001) / [DEF-0003](DEFERRED.md#def-0003)
+* Equipment & Inventory → [DEF-0009](DEFERRED.md#def-0009) / [DEF-0011](DEFERRED.md#def-0011)
+* Rest & Recovery → [DEF-0019](DEFERRED.md#def-0019)
+* Event History & Replay → [DEF-0022](DEFERRED.md#def-0022). This track is trigger-driven and is not a Phase 3 entry gate.
+
+---
+
 
 # Текущий статус
 
 - ✅ **Phase 0 — Foundation** завершена.
 - ✅ **Phase 1 — Core** завершена.
-- ➡️ Текущий этап — **Phase 2 — Basic Rules**.
+- ✅ **Phase 2 — Basic Rules** завершена в foundation scope.
+- ➡️ Текущий этап — **Phase 3 — Combat**.
 
 Порядок работ:
 

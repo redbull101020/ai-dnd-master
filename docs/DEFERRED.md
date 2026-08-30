@@ -8,10 +8,11 @@ contract, and Roadmap remains the source for status and implementation order.
 [`DECISIONS.md`](DECISIONS.md) remains the append-only rationale/history log.
 This file neither changes those roles nor makes a deferred design canonical.
 
-The P2 notes below explain what the implemented foundations prove and why the
-broader Roadmap labels may remain open. The DEF records are planning entries,
-not approved contracts or scheduling commitments. A DEF `Target` identifies
-the likely continuation area; Roadmap still controls when work starts.
+The P2 notes below explain what the implemented foundations prove and why a
+completed foundation can coexist with explicitly PARTIAL broader scope. The
+DEF records are planning entries, not approved contracts or scheduling
+commitments. A DEF `Target` identifies the likely continuation area; Roadmap
+still controls when work starts.
 
 ## Register policy
 
