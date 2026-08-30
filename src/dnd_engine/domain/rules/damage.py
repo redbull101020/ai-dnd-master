@@ -36,12 +36,27 @@ def resolve_damage(
     if command.payload.target_id != target.id:
         raise ValueError("command payload target_id must match target id")
 
+    return resolve_damage_amount(target, amount=command.payload.amount)
+
+
+def resolve_damage_amount(
+    target: CreatureState,
+    *,
+    amount: int,
+) -> DamageResult:
+    if not isinstance(target, CreatureState):
+        raise TypeError("target must be a CreatureState")
+    if type(amount) is not int:
+        raise TypeError("amount must be an int")
+    if amount < 1:
+        raise ValueError("amount must be at least 1")
+
     previous_hp = target.current_hp
-    new_hp = max(0, previous_hp - command.payload.amount)
+    new_hp = max(0, previous_hp - amount)
 
     return DamageResult(
-        target_id=command.payload.target_id,
-        amount=command.payload.amount,
+        target_id=target.id,
+        amount=amount,
         previous_hp=previous_hp,
         new_hp=new_hp,
     )

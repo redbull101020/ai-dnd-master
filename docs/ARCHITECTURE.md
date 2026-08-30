@@ -62,6 +62,7 @@
 | Phase 2 closure rule and deferred-scope boundary | §3.24 |
 | Combat Initiative/Turn Order vertical slice, actor eligibility (G7) | §3.25 |
 | Monster attack → Character vertical slice, `MonsterAttackDefinition` (G8) | §3.26 |
+| Monster Attack Damage Domain foundation (G9, partial) | §3.27 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -122,6 +123,7 @@
   * [3.24. Phase 2 Closure Contract](#324-phase-2-closure-contract)
   * [3.25. Minimal Phase 3 Combat Initiative and Turn Order vertical slice (G7)](#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
   * [3.26. Minimal Phase 3 Monster attack → Character vertical slice (G8)](#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
+  * [3.27. Minimal Phase 3 Monster Attack Damage Domain foundation (G9, partial)](#327-minimal-phase-3-monster-attack-damage-domain-foundation-g9-partial)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -5274,16 +5276,157 @@ entirely open. Neither DEF record is closed by this slice: `docs/DEFERRED.md`
 and `docs/ROADMAP.md` record this as a scope-accurate foundation row, not a
 completed broad `Monster actions` or `Weapon attacks` item.
 
-DEF-0013 (Attack consequence, separate and still not started) names its own
+DEF-0013 (Attack consequence, separate and still incomplete) names its own
 three prerequisites: "relevant part of DEF-0011," "a concrete damage
-source," and "an explicit Event ordering/causation design." This slice
-supplies the first two — it establishes the Character-target portion of
-DEF-0011 as the "relevant part" a future Monster→Character Attack-consequence
-slice would build on, and `MonsterAttackDefinition`'s `damage_dice`/
-`damage_modifier`/`damage_type` are a concrete Monster damage source — but
-it does **not** design Event ordering/causation, and it does not implement
-DEF-0013 itself. DEF-0011 does not itself name "a concrete damage source" as
-one of its own prerequisites; that phrasing belongs to DEF-0013 only.
+source," and "an explicit Event ordering/causation design." G8 supplies the
+first two — it establishes the Character-target portion of DEF-0011 as the
+"relevant part" a future Monster→Character Attack-consequence slice would
+build on, and `MonsterAttackDefinition`'s `damage_dice`/`damage_modifier`/
+`damage_type` are a concrete Monster damage source — but G8 itself does
+**not** design Event ordering/causation or implement DEF-0013. The subsequent
+partial G9 Domain/Event foundation (§3.27) supplies the concrete damage-
+resolution and causation contracts while leaving Application orchestration
+unfinished. DEF-0011 does not itself name "a concrete damage source" as one
+of its own prerequisites; that phrasing belongs to DEF-0013 only.
+
+---
+
+### 3.27. Minimal Phase 3 Monster Attack Damage Domain foundation (G9, partial)
+
+Implementation status: **Domain/Event foundation implemented; Application
+orchestration pending.** This section fixes the concrete contracts that keep
+Monster Attack Resolution, Damage Resolution, and Damage Application as three
+separate stages. It extends the G8 Monster→Character source (§3.26) and the
+existing positive Damage→HP foundation (§3.19) without wiring either new
+stage into `AttackHandler` yet.
+
+#### Implemented Domain flow
+
+```text
+MonsterAttackResult
+        ↓ hit only
+MonsterAttackDamageResult
+        ↓ amount > 0 only
+DamageResult
+```
+
+`MonsterAttackDamageResult` is an immutable concrete result containing
+`target_id`, `action_id`, `roll`, `damage_modifier`, `damage_type`,
+`critical_hit`, and `amount`. The pure
+`resolve_monster_attack_damage(attack_outcome, attack, dice)` resolver
+requires a hit, correlates the outcome's local `action_id` with the supplied
+`MonsterAttackDefinition`, and performs all gameplay randomness through the
+existing `DiceEngine` port.
+
+For a normal hit with `damage_dice = "NdM"`:
+
+```text
+dice.roll("NdM")
+amount = max(0, roll.total + damage_modifier)
+```
+
+For a critical hit, only the number of damage dice is doubled:
+
+```text
+dice.roll(f"{2 * N}d{M}")
+amount = max(0, roll.total + damage_modifier)
+```
+
+This means `(2 * N)dM`; it does not mean multiplying the whole damage
+expression. The modifier is applied exactly once. Thus the Goblin Scimitar is
+`1d6 + 2` normally and `2d6 + 2` on a critical hit, never
+`2 * (1d6 + 2)`.
+
+A negative modifier may reduce the final Monster source amount to zero.
+`MonsterAttackDamageResult(amount=0)` is valid and is the complete resolved
+source fact; zero is not converted into a `DamageResult` and is not passed to
+the positive Damage→HP calculation.
+
+`resolve_damage_amount(target, *, amount) -> DamageResult` is the new
+source-agnostic positive Damage→HP function. It requires an exact integer
+`amount >= 1`, reads `target.current_hp`, computes
+`new_hp = max(0, previous_hp - amount)`, and does not mutate the target. A
+positive amount against a target already at zero HP remains valid (`0 → 0`).
+The existing `resolve_damage(ApplyDamageCommand, target)` keeps its direct
+Damage Command type and target-identity validation and delegates only the HP
+arithmetic to `resolve_damage_amount`; `ApplyDamageCommand` still rejects
+zero.
+
+#### `MonsterAttackDamageResolved` V1
+
+The damage-source audit Event has this exact payload:
+
+```text
+targetId       str
+actionId       str
+roll           {expression, rolls, total}
+damageModifier int
+damageType     DamageType string value
+criticalHit    bool
+amount         int >= 0
+```
+
+The Event contains no `previousHp` or `newHp`: those are HP-transition facts
+owned by `DamageApplied`, not damage-source facts. Its builder receives the
+original `AttackCommand`, explicit Event metadata, the validated
+`MonsterAttackDamageResult`, and an explicit `caused_by`. The Event uses the
+same original `command_id`, `campaign_id`, and `actor_id` as the Attack
+Command and fixes this causation edge:
+
+```text
+MonsterAttackDamageResolved.causedBy = MonsterAttackResolved.eventId
+```
+
+#### Unchanged `DamageApplied` V1 producer boundary
+
+`DamageApplied` remains the source-agnostic V1 Event from §3.19 with exactly
+`targetId`, `amount`, `previousHp`, and `newHp`. No `DamageApplied` V2 and no
+`AttackDamageApplied` Event are introduced. The existing direct
+`ApplyDamageCommand` builder behavior remains unchanged; a narrow
+`build_damage_applied_from_attack_v1` facade permits a future Attack flow to
+produce the same Event from the original `AttackCommand` and a positive
+`DamageResult`. Its causation edge is:
+
+```text
+DamageApplied.causedBy = MonsterAttackDamageResolved.eventId
+```
+
+The approved complete causal chain is therefore:
+
+```text
+MonsterAttackResolved
+        ↓ causedBy
+MonsterAttackDamageResolved
+        ↓ causedBy when amount > 0
+DamageApplied
+```
+
+All Events retain correlation to the same original `AttackCommand` envelope.
+`MonsterAttackDamageResolved` owns the roll/modifier/type/critical/source-
+amount audit facts; optional `DamageApplied` owns the HP transition facts.
+
+#### Not implemented in Group 2
+
+`AttackHandler` still stops after the G8 attack-roll result and one
+`MonsterAttackResolved` Event. It does not call the new damage resolver,
+emit `MonsterAttackDamageResolved` or `DamageApplied`, mutate Character HP,
+or call `StateStore.save()`.
+
+The following end-to-end Application behavior remains pending Group 3:
+
+```text
+miss                    -> one Event
+hit                     -> damage-dice orchestration
+hit with amount == 0    -> zero-source-damage branch, no DamageResult
+hit with amount > 0     -> DamageApplied emission and Character HP mutation
+mutating path           -> replacement snapshot and StateStore.save()
+all paths               -> exact ordered 1 / 2 / 3 Event sequence
+```
+
+G9 and broad DEF-0013 are therefore not complete. This foundation introduces
+no `DamageEngine`, dice AST/formula object, generic attack-source interface,
+generic critical-damage framework, generic `EventFactory`, EventStore,
+transaction framework, or effect framework.
 
 ---
 

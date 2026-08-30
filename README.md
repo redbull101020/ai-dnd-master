@@ -323,7 +323,13 @@ Ability Check Condition policy) и Turn Order advancement (`AdvanceTurnCommand`
 переиспользованием Poisoned Condition policy и `unarmored_character_armor_class`.
 Weapon attacks (Equipment/Inventory ownership, weapon proficiency, Finesse
 choice), attack consequences (DEF-0013), zero-HP legality, `CombatEnded` и
-другие связанные механики продолжатся по Roadmap.
+другие связанные механики продолжатся по Roadmap. G9 Group 2 (§3.27,
+DEC-0042) уже добавляет partial Domain/Event foundation для Monster Attack
+Damage: отдельный `MonsterAttackDamageResult`, normal/critical damage-dice
+семантику, `MonsterAttackDamageResolved` V1, source-agnostic positive
+Damage→HP расчёт и причинную цепочку к неизменённому `DamageApplied` V1.
+`AttackHandler` эти контракты ещё не оркестрирует, HP не меняет и snapshot не
+сохраняет; end-to-end Attack consequences остаются незавершёнными.
 
 ---
 

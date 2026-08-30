@@ -681,8 +681,10 @@ still controls when work starts.
   then apply the result through the authoritative Damage/HP flow.
 - **Motivation:** `AttackResolved` currently stops at hit/miss/critical, while
   `ApplyDamageCommand` accepts an unrelated already-resolved amount.
-- **Why deferred:** Weapon attack inputs and critical-damage policy are absent;
-  premature orchestration would couple unrelated foundations.
+- **Why deferred:** The concrete Monster damage-resolution and causation
+  foundation now exists, but Application-level ordered emission, HP mutation,
+  and persistence are not wired; broader Weapon attack/damage inputs also
+  remain absent.
 - **Prerequisites:** Relevant part of DEF-0011, a concrete damage source, and
   an explicit Event ordering/causation design; DEF-0022 only if durability is
   made part of the slice.
@@ -695,10 +697,12 @@ still controls when work starts.
 - **References:** [Architecture §3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
   [§3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
+  [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-damage-domain-foundation-g9-partial),
   [§12.11](ARCHITECTURE.md#1211-event-ordering),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
-  and [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8).
+  [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8),
+  and [DEC-0042](DECISIONS.md#dec-0042--monster-attack-consequences-preserve-separate-attack-resolution-damage-resolution-and-damage-application-stages).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) supplies
   two of this record's three named prerequisites. For "relevant part of
@@ -713,6 +717,14 @@ still controls when work starts.
   ordering/causation design, and does not implement DEF-0013: no
   Attack→Damage orchestration, ordered/correlated Events, or `causedBy` chain
   was added. Status stays `Deferred`; acceptance criteria are unchanged.
+  2026-08-30 — G8 supplied the relevant Character-target prerequisite and
+  concrete Monster damage source; G9 Group 2 (§3.27, DEC-0042) now establishes
+  the concrete damage-resolution and Event-causation contracts. The approved
+  chain is `MonsterAttackResolved →
+  MonsterAttackDamageResolved → optional DamageApplied`. Application-level
+  ordered emission, HP mutation, and persistence are not yet wired, so
+  DEF-0013 remains `Deferred` for the unfinished end-to-end Monster
+  consequence path and the broader Weapon attack/damage scope.
 
 ## DEF-0014
 

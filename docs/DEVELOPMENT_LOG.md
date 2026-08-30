@@ -3748,3 +3748,36 @@ contracts.
 - Verification: focused `test_state_snapshot_service.py` (3 tests) and
   `test_damage_handler.py` (8 tests), full pytest (1538 tests), configured
   mypy (103 source files), and `git diff --check` all pass.
+
+## 2026-08-30 — Monster attack damage Domain contracts (G9 Group 2)
+
+- Added immutable `MonsterAttackDamageResult` and the pure
+  `resolve_monster_attack_damage` resolver. A normal hit rolls the attack's
+  original `NdM` expression once; a critical hit doubles only the dice count;
+  the modifier is applied once and the final source amount is clamped at zero.
+- Added source-agnostic `resolve_damage_amount(target, amount=...)` for the
+  positive Damage-to-HP calculation. The existing `resolve_damage` retains its
+  `ApplyDamageCommand` type and target-correlation checks and delegates the HP
+  arithmetic to the new function; zero source damage remains outside the
+  positive Damage application contract.
+- Added `MonsterAttackDamageResolved` V1 with the damage roll, modifier, type,
+  critical flag, final amount, and explicit causation from the preceding
+  `MonsterAttackResolved` Event. Added an attack-specific producer facade for
+  the unchanged `DamageApplied` V1 schema and applier, with explicit causation
+  from the damage-resolution Event.
+- After review, synchronized the canonical contract and planning state: added
+  Architecture §3.27 and accepted DEC-0042 for the three-stage Attack/Damage
+  boundary, updated DEF-0013 history/current deferral reason with the concrete
+  causation design, and corrected current Roadmap/summary wording while
+  keeping G9 and the Attack-consequences checkbox incomplete.
+- Added focused Domain/Event coverage for normal and critical formulas,
+  zero-clamped source damage, propagation and correlation, immutability and
+  runtime invariants, positive HP application including a target already at
+  zero HP, exact Event payloads and causation, and direct `ApplyDamageCommand`
+  regressions. `AttackHandler` orchestration remains intentionally unwired;
+  G9 is not marked complete and Roadmap status is unchanged.
+- Verification after canonical synchronization: documentation/reference tests
+  (2), focused Group 2/G8 Domain/Event tests (193), and the full suite (1579,
+  including packaging tests via writable external pytest/pip temporary
+  directories) pass; configured mypy (`src/dnd_engine`, 105 source files) and
+  `git diff --check` pass.

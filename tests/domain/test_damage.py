@@ -4,7 +4,11 @@ from dataclasses import FrozenInstanceError, fields
 import pytest
 
 from dnd_engine.domain.commands.damage import ApplyDamageCommand, ApplyDamagePayload
-from dnd_engine.domain.rules.damage import DamageResult, resolve_damage
+from dnd_engine.domain.rules.damage import (
+    DamageResult,
+    resolve_damage,
+    resolve_damage_amount,
+)
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 
@@ -56,6 +60,53 @@ def canonical_result(**overrides: object) -> DamageResult:
 
 
 # --- resolve_damage: gameplay behaviour -------------------------------
+
+
+def test_resolve_damage_amount_reduces_hp_by_positive_amount() -> None:
+    result = resolve_damage_amount(make_creature(current_hp=12), amount=5)
+
+    assert result == DamageResult(
+        target_id="monster_001",
+        amount=5,
+        previous_hp=12,
+        new_hp=7,
+    )
+
+
+def test_resolve_damage_amount_accepts_positive_damage_at_zero_hp() -> None:
+    result = resolve_damage_amount(
+        make_creature(current_hp=0, max_hp=12),
+        amount=5,
+    )
+
+    assert result.previous_hp == 0
+    assert result.new_hp == 0
+
+
+@pytest.mark.parametrize("amount", [0, -1])
+def test_resolve_damage_amount_rejects_non_positive_amount(amount: int) -> None:
+    with pytest.raises(ValueError, match="amount"):
+        resolve_damage_amount(make_creature(), amount=amount)
+
+
+@pytest.mark.parametrize("amount", [True, 5.0, "5", None])
+def test_resolve_damage_amount_requires_exact_integer_amount(amount: object) -> None:
+    with pytest.raises(TypeError, match="amount"):
+        resolve_damage_amount(make_creature(), amount=amount)  # type: ignore[arg-type]
+
+
+def test_resolve_damage_amount_rejects_wrong_target_type() -> None:
+    with pytest.raises(TypeError, match="CreatureState"):
+        resolve_damage_amount(object(), amount=5)  # type: ignore[arg-type]
+
+
+def test_resolve_damage_amount_does_not_mutate_target() -> None:
+    target = make_creature(current_hp=12)
+    target_before = deepcopy(target)
+
+    resolve_damage_amount(target, amount=5)
+
+    assert target == target_before
 
 
 def test_ordinary_damage_reduces_hp_by_amount() -> None:
