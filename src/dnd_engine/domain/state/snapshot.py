@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 
 
@@ -10,6 +11,7 @@ class StateSnapshot:
     campaign: CampaignState
     creatures: tuple[CreatureState, ...]
     characters: tuple[CharacterState, ...] = ()
+    combat: CombatState | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.campaign, CampaignState):
@@ -24,6 +26,8 @@ class StateSnapshot:
             isinstance(character, CharacterState) for character in self.characters
         ):
             raise TypeError("characters must contain only CharacterState values")
+        if self.combat is not None and not isinstance(self.combat, CombatState):
+            raise TypeError("combat must be a CombatState or None")
 
         creature_ids = [creature.id for creature in self.creatures]
         if len(creature_ids) != len(set(creature_ids)):
@@ -35,4 +39,11 @@ class StateSnapshot:
         if not set(character_ids).issubset(creature_ids):
             raise ValueError(
                 "every CharacterState must have a corresponding CreatureState"
+            )
+
+        if self.combat is not None and not set(self.combat.order).issubset(
+            creature_ids
+        ):
+            raise ValueError(
+                "every CombatState participant must have a corresponding CreatureState"
             )

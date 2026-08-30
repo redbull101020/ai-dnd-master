@@ -2,6 +2,7 @@ from collections.abc import Mapping
 
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
@@ -19,11 +20,20 @@ LEGACY_SCHEMA_V3_VERSION = 3
 # `schema_version == SCHEMA_VERSION` would stop matching legacy V4 payloads
 # and silently mis-decode them as pre-V4 (§3.21, DEC-0035).
 SCHEMA_V4_VERSION = 4
-SCHEMA_VERSION = SCHEMA_V4_VERSION
+# Fixed identity of the V5 state shape (adds the top-level `combat` key,
+# §3.25/DEC-0040). Same rationale as SCHEMA_V4_VERSION above: historical V5
+# semantics compare against this fixed sentinel, never against the mutable
+# SCHEMA_VERSION below.
+SCHEMA_V5_VERSION = 5
+SCHEMA_VERSION = SCHEMA_V5_VERSION
+# The V4 Creature shape (with `conditions`) is unchanged by the V5 state-level
+# `combat` addition; both versions decode Creature payloads the same way.
+_CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {SCHEMA_V4_VERSION, SCHEMA_V5_VERSION}
 
 _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
 _V2_STATE_FIELDS = {"campaign", "creatures", "characters"}
+_V5_STATE_FIELDS = _V2_STATE_FIELDS | {"combat"}
 _CAMPAIGN_FIELDS = {"id", "rulesetId", "rulesetVersion"}
 _CREATURE_FIELDS = {
     "id",
@@ -47,6 +57,7 @@ _ABILITY_SCORE_FIELDS = {
     "wisdom",
     "charisma",
 }
+_COMBAT_FIELDS = {"id", "round", "order", "activeIndex"}
 
 
 def _require_mapping(value: object, location: str) -> Mapping[str, object]:
@@ -197,6 +208,41 @@ def _serialize_character(character: CharacterState) -> dict[str, object]:
     }
 
 
+def _validate_combat(combat: CombatState | None, creature_ids: set[str]) -> None:
+    if combat is None:
+        return
+    if not isinstance(combat, CombatState):
+        raise TypeError("snapshot combat must be a CombatState or None")
+    _require_str(combat.id, "combat.id")
+    round_ = _require_int(combat.round, "combat.round")
+    if round_ < 1:
+        raise ValueError("combat.round must be at least 1")
+    if type(combat.order) is not tuple or len(combat.order) == 0:
+        raise TypeError("combat.order must be a non-empty tuple")
+    if not all(type(creature_id) is str for creature_id in combat.order):
+        raise TypeError("combat.order must contain only str values")
+    if len(set(combat.order)) != len(combat.order):
+        raise ValueError("combat.order must not contain duplicate creature ids")
+    if not set(combat.order).issubset(creature_ids):
+        raise ValueError(
+            "every CombatState participant must have a corresponding CreatureState"
+        )
+    active_index = _require_int(combat.active_index, "combat.active_index")
+    if not 0 <= active_index < len(combat.order):
+        raise ValueError("combat.active_index must be a valid index into combat.order")
+
+
+def _serialize_combat(combat: CombatState | None) -> dict[str, object] | None:
+    if combat is None:
+        return None
+    return {
+        "id": combat.id,
+        "round": combat.round,
+        "order": list(combat.order),
+        "activeIndex": combat.active_index,
+    }
+
+
 class StateSerializer:
     @staticmethod
     def serialize(snapshot: StateSnapshot) -> dict[str, object]:
@@ -222,6 +268,8 @@ class StateSerializer:
                 )
             character_ids.add(character.id)
 
+        _validate_combat(snapshot.combat, creature_ids)
+
         creatures = sorted(snapshot.creatures, key=lambda creature: creature.id)
         characters = sorted(snapshot.characters, key=lambda character: character.id)
         return {
@@ -239,6 +287,7 @@ class StateSerializer:
                 "characters": [
                     _serialize_character(character) for character in characters
                 ],
+                "combat": _serialize_combat(snapshot.combat),
             },
         }
 
@@ -253,16 +302,18 @@ class StateSerializer:
             LEGACY_SCHEMA_V2_VERSION,
             LEGACY_SCHEMA_V3_VERSION,
             SCHEMA_V4_VERSION,
+            SCHEMA_V5_VERSION,
         }:
             raise ValueError(f"unsupported schemaVersion: {schema_version}")
 
         campaign_id = _require_str(root["campaignId"], "campaignId")
         state = _require_mapping(root["state"], "state")
-        state_fields = (
-            _V1_STATE_FIELDS
-            if schema_version == LEGACY_SCHEMA_VERSION
-            else _V2_STATE_FIELDS
-        )
+        if schema_version == LEGACY_SCHEMA_VERSION:
+            state_fields = _V1_STATE_FIELDS
+        elif schema_version == SCHEMA_V5_VERSION:
+            state_fields = _V5_STATE_FIELDS
+        else:
+            state_fields = _V2_STATE_FIELDS
         _require_exact_fields(state, state_fields, "state")
 
         campaign_data = _require_mapping(state["campaign"], "state.campaign")
@@ -304,10 +355,15 @@ class StateSerializer:
                 )
                 for index, character_data in enumerate(characters_data)
             )
+        if schema_version == SCHEMA_V5_VERSION:
+            combat = StateSerializer._deserialize_combat(state["combat"])
+        else:
+            combat = None
         return StateSnapshot(
             campaign=campaign,
             creatures=creatures,
             characters=characters,
+            combat=combat,
         )
 
     @staticmethod
@@ -319,7 +375,7 @@ class StateSerializer:
         creature = _require_mapping(data, f"state.creatures[{index}]")
         creature_fields = (
             _V4_CREATURE_FIELDS
-            if schema_version == SCHEMA_V4_VERSION
+            if schema_version in _CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS
             else _CREATURE_FIELDS
         )
         _require_exact_fields(creature, creature_fields, "creature")
@@ -347,7 +403,7 @@ class StateSerializer:
         )
 
         conditions: list[Condition] = []
-        if schema_version == SCHEMA_V4_VERSION:
+        if schema_version in _CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS:
             conditions_data = creature["conditions"]
             if type(conditions_data) is not list:
                 raise TypeError(
@@ -462,4 +518,26 @@ class StateSerializer:
             total_level=total_level,
             saving_throw_proficiencies=frozenset(proficiencies),
             skill_proficiencies=frozenset(skill_proficiencies),
+        )
+
+    @staticmethod
+    def _deserialize_combat(data: object) -> CombatState | None:
+        if data is None:
+            return None
+        combat = _require_mapping(data, "state.combat")
+        _require_exact_fields(combat, _COMBAT_FIELDS, "combat")
+
+        order_data = combat["order"]
+        if type(order_data) is not list:
+            raise TypeError("state.combat.order must be a list")
+        order = tuple(
+            _require_str(value, f"state.combat.order[{index}]")
+            for index, value in enumerate(order_data)
+        )
+
+        return CombatState(
+            id=_require_str(combat["id"], "combat.id"),
+            round=_require_int(combat["round"], "combat.round"),
+            order=order,
+            active_index=_require_int(combat["activeIndex"], "combat.activeIndex"),
         )

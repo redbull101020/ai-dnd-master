@@ -60,6 +60,7 @@
 | Minimal Poisoned behavior for checks and attacks (G6C2) | §3.22 |
 | Post-G6C abstraction review and snapshot replacement helper | §3.23 |
 | Phase 2 closure rule and deferred-scope boundary | §3.24 |
+| Combat Initiative/Turn Order vertical slice, actor eligibility (G7) | §3.25 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -118,6 +119,7 @@
   * [3.22. Minimal Poisoned behavior (G6C2)](#322-minimal-poisoned-behavior-g6c2)
   * [3.23. Post-G6C abstraction review](#323-post-g6c-abstraction-review)
   * [3.24. Phase 2 Closure Contract](#324-phase-2-closure-contract)
+  * [3.25. Minimal Phase 3 Combat Initiative and Turn Order vertical slice (G7)](#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1190,20 +1192,25 @@ class StateSnapshot:
     campaign: CampaignState
     creatures: tuple[CreatureState, ...]
     characters: tuple[CharacterState, ...] = ()
+    combat: CombatState | None = None
 ```
 
 `StateSnapshot` — persistence grouping текущих State Owner objects для одного
 snapshot, а не новый gameplay State Owner. `CampaignState` сохраняет только
-Campaign ownership, а каждый `CreatureState` — Creature ownership; containment
-в snapshot не разрешает cross-domain mutation и не передаёт Creature ownership
-кампании.
+Campaign ownership, каждый `CreatureState` — Creature ownership, а `combat` —
+Combat Engine ownership (§10.7); containment в snapshot не разрешает
+cross-domain mutation и не передаёт Creature/Combat ownership кампании.
+`combat` — G7 addition (§3.25); полный contract, invariants и schema
+migration policy описаны там, а не здесь.
 
 Snapshot допускает ноль, один или несколько `CreatureState` и ноль, один или
 несколько `CharacterState`. Runtime ID существ внутри одного snapshot
 уникальны; runtime ID character-specific проекций также уникальны. Каждый
 `CharacterState.id` обязан совпадать с ID существующего `CreatureState` в том
 же snapshot. Обратное не требуется: не каждый Creature является Character, а
-`characters=()` валиден.
+`characters=()` валиден. `combat` по умолчанию `None` ("нет активного боя");
+когда присутствует, каждый ID в `combat.order` обязан совпадать с ID
+существующего `CreatureState` в том же snapshot.
 
 Snapshot не имеет собственного runtime ID, revision или
 optimistic-concurrency version и не содержит Event Log, Commands, AI context
@@ -1653,9 +1660,10 @@ Implementation status: **Implemented for the current authoritative mutation
 consumers.** §3.18 State Mutation Foundation (G5) фиксирует канонический
 mutating-command lifecycle, persistence ordering и exact MVP atomicity
 boundary. Damage (§3.19), Healing (§3.20), Apply Condition и Remove Condition
-(§3.21) реализуют этот контракт end to end; это больше не Planned/Deferred
-contract. Гарантии остаются ограничены single-snapshot MVP boundary из §3.18
-и не подразумевают EventStore, replay или generic transaction framework.
+(§3.21), а также Start Combat и Advance Turn (§3.25) реализуют этот контракт
+end to end; это больше не Planned/Deferred contract. Гарантии остаются
+ограничены single-snapshot MVP boundary из §3.18 и не подразумевают
+EventStore, replay или generic transaction framework.
 
 Authoritative state-mutating Command может породить несколько Events:
 
@@ -3159,13 +3167,14 @@ Character Skill Check production contracts remain unchanged.
 
 ### 3.18. State Mutation Foundation (G5)
 
-Implementation status: **Canonical foundation contract; four concrete
-consumers implemented in §§3.19–3.21.** This section itself introduced no
-concrete Command, Event applier, or Application handler and changed no Python
-contract — it fixes the general contract that every authoritative
-state-mutating Command must follow. §3.19 documents Damage → HP, §3.20
-documents Healing → HP, and §3.21 documents Apply Condition and Remove
-Condition as two further concrete consumers. All four use State Owner-specific
+Implementation status: **Canonical foundation contract; six concrete
+consumers implemented in §§3.19–3.21 and §3.25.** This section itself
+introduced no concrete Command, Event applier, or Application handler and
+changed no Python contract — it fixes the general contract that every
+authoritative state-mutating Command must follow. §3.19 documents Damage →
+HP, §3.20 documents Healing → HP, §3.21 documents Apply Condition and Remove
+Condition, and §3.25 documents Start Combat and Advance Turn as the first
+Phase 3 consumers of the same contract. All six use State Owner-specific
 Event application and a replacement `StateSnapshot` before
 `StateStore.save()`, and none introduces a generic mutation abstraction.
 
@@ -3431,8 +3440,12 @@ production state-mutating gameplay consumers at the post-G6B review. That
 comparison reviewed their actual shared and differing responsibilities and
 retained the verdict `KEEP CONCRETE`. G6C later added
 `ApplyConditionHandler`/`RemoveConditionHandler`; §3.23 supersedes only the
-snapshot-replacement-helper verdict. None of the other deferred abstractions
-above gained a production implementation.
+snapshot-replacement-helper verdict. G7 (§3.25) later added
+`StartCombatHandler`/`AdvanceTurnHandler` as the first Phase 3 consumers of
+this same foundation; its own review (§3.25 "Abstraction verdict") found
+their `StateSnapshot.combat` attachment simpler than the four Creature
+consumers and needing no helper at all. None of the other deferred
+abstractions above gained a production implementation.
 
 #### Exact MVP atomicity boundary
 
@@ -4637,6 +4650,325 @@ demonstrates stable semantics and ownership; no generic Effect system,
 modifier pipeline, mutation handler, Event/replay framework, transaction
 abstraction, or universal life-state model is introduced merely because its
 broader mechanic is registered as deferred.
+
+---
+
+### 3.25. Minimal Phase 3 Combat Initiative and Turn Order vertical slice (G7)
+
+Implementation status: **Implemented.** This is the first concrete Phase 3
+Combat consumer. It reuses the §3.18 State Mutation Foundation contract
+unchanged for two further mutating Commands (`StartCombatCommand`,
+`AdvanceTurnCommand`) and adds exactly one new State Owner, `CombatState`
+(§10.7), with its own minimal persisted shape.
+
+#### Scope
+
+```text
+CombatState: id, round, order (initiative-sorted creature IDs), active_index
+StartCombatHandler validates command.actor_id against authoritative snapshot.creatures
+dice-rolled Initiative: a Dexterity check (1d20 + Dexterity modifier per participant, via DiceEngine)
+Poisoned participants roll Initiative at disadvantage, reusing the existing Ability Check Condition policy
+deterministic tie-break: higher total, then higher Dexterity, then lower creature id
+turn advancement: move to the next combatant in order, incrementing round on wraparound
+actor eligibility: only the current active combatant may advance the turn
+exactly one StartCombatCommand -> CombatStarted V1 Event
+exactly one AdvanceTurnCommand -> TurnAdvanced V1 Event
+replacement State (CombatState, StateSnapshot) and exactly one StateStore.save() per successful Command
+```
+
+#### Explicit exclusions
+
+This slice does not implement, and does not imply a decision on:
+
+```text
+CombatEnded / combat lifecycle end
+zero-HP action eligibility (DEF-0015) — this slice's eligibility gate is turn-order identity only
+Death Saves (DEF-0005)
+movement, positions, reactions, opportunity attacks
+turn resources, action economy
+Attack -> Combat integration (Attack, §3.17, is unchanged by this slice)
+SRD 5.1 grouped initiative for identical GM-controlled creatures
+independent advantage/disadvantage source aggregation, combine_roll_modes, generic Condition->RollMode mapping
+monster/NPC-initiated turn advancement policy
+generic action/eligibility pipeline
+```
+
+These stay open for later, separately evidenced Phase 3 consumers, per
+§3.6/§3.18's rule against introducing future-phase behaviour ahead of a
+concrete consumer. In particular, `AttackHandler` (§3.17) does not consult
+`CombatState`: the first concrete Combat actor/action-eligibility consumer in
+this slice is `AdvanceTurnHandler`'s own turn-ownership gate, not Attack.
+
+Initiative *is* explicitly in scope as a Dexterity check (SRD 5.1), so the
+already-implemented Poisoned Ability Check Condition policy (§3.22) already
+applies to it — this is reuse of an existing closed policy, not a new
+Condition/effect framework; see "`StartCombatCommand` / `StartCombatResult`"
+below. This slice rolls Initiative individually per participant only. SRD
+5.1 grouped initiative for identical GM-controlled creatures — the GM makes
+one roll for the whole group, so it acts together — is not this slice's
+optional tie-break mechanic; it is the base grouped-initiative rule itself,
+and it remains open remaining Initiative scope for a later concrete
+Monster/control consumer, not implemented here.
+
+#### `CombatState`
+
+Canonical Python semantics:
+
+```python
+@dataclass
+class CombatState:
+    id: str
+    round: int
+    order: tuple[str, ...]
+    active_index: int
+```
+
+`CombatState` — mutable campaign-scoped State; owner — `CombatEngine` (§10.7).
+`id` is a runtime Combat ID (`combat_NNN`, §4.13). Per §4.11's ID Generation
+Policy, a new Entity ID is generated only by the corresponding service
+(`EntityFactory` for Entity IDs) — UI and AI never invent one. `combat_id`
+therefore arrives on `StartCombatPayload` as an **already-allocated** Combat
+ID, produced through that canonical Entity-ID generation boundary before the
+Command is constructed, exactly like every other Command-carried ID is
+already-allocated by the time it reaches a Domain Command. This slice does
+not implement a concrete `EntityFactory`: that remains a separate, deferred
+Infrastructure/Application boundary. `StartCombatPayload.combat_id` staying a
+plain `str` field is not, by itself, a decision that callers may allocate
+Combat IDs arbitrarily — §4.11 is unchanged and still governs who may
+allocate one. Fixed literal combat IDs used by this slice's tests are test
+fixtures standing in for an already-allocated ID, not evidence of, or
+license for, ad hoc production ID allocation. `round` starts at `1` and only
+increments when `active_index` wraps back
+to `0`. `order` is the fixed initiative sequence of existing Creature IDs
+decided once at combat start; it is not re-rolled or reordered afterward.
+`active_index` is the current turn pointer into `order`; the derived
+`active_creature_id` property indexes into it. Invariants: `round >= 1`,
+`order` is a non-empty tuple of unique `str` values, and
+`0 <= active_index < len(order)`.
+
+`StateSnapshot` (§3.2.3) gains a fourth field, `combat: CombatState | None =
+None`, defaulting to "no combat in progress" so every existing snapshot
+construction site is unaffected. `StateSnapshot` additionally requires every
+`CombatState.order` entry to reference an existing `CreatureState` in the same
+snapshot, mirroring the existing Character-to-Creature referential check.
+`CombatState` is not a field of `CampaignState` (§3.2.2 is unchanged) — it is
+snapshot-level persistence grouping only, exactly like `creatures` and
+`characters`; snapshot containment does not transfer Combat ownership to the
+Campaign.
+
+#### `StartCombatCommand` / `StartCombatResult`
+
+```text
+StartCombatCommand(command_id, campaign_id, actor_id, payload)
+StartCombatPayload(combat_id: str, participant_ids: tuple[str, ...])
+```
+
+`participant_ids` is the already-decided ordered set of participating
+Creature IDs — deciding *who* is in combat is an external (DM/AI) concern, not
+an Engine decision; the Command carries no `encounter_id`, `location_id`, or
+surprise/ambush semantics. `StartCombatHandler` first validates
+`command.actor_id` against authoritative `snapshot.creatures` — a missing
+actor returns `ENTITY_NOT_FOUND` (`entity_id=actor_id`, `field=None`) before
+any participant lookup, `DiceEngine` call, `EventMetadataProvider` call, or
+persistence, matching the actor-first validation order already used by every
+other handler (`AttackHandler`, `DamageHandler`, `ApplyConditionHandler`,
+etc.). Nothing requires `command.actor_id` to also be one of
+`participant_ids` — the initiating actor (for example, the character who
+spotted the threat) need not themselves join the fight, and no existing
+canonical contract imposes that constraint. Only after the actor is found
+does the handler reject starting a new combat while `snapshot.combat` is
+already present (`RULE_VIOLATION`, entity_id = the existing combat ID) — there
+is no combat merge/queueing — and then look each participant up by ID
+(`ENTITY_NOT_FOUND`, `field="participant_ids"`, on the first miss).
+
+Initiative is a Dexterity check (SRD 5.1), so each participant's effective
+`RollMode` is derived exactly like an Ability Check: `StartCombatHandler`
+reads each participant's authoritative `CreatureState.conditions` and calls
+the existing `ability_check_roll_mode_from_conditions` (§3.22) — the same
+function `AbilityCheckHandler`/`SkillCheckHandler` already call — producing
+one `RollMode` per participant, aligned by position with
+`command.payload.participant_ids`. This is Application reusing an existing
+closed Domain policy, not a new one; it is not a generic
+Condition→RollMode framework, and it does not introduce
+`combine_roll_modes` or independent-source aggregation (DEF-0021 stays
+untouched — Poisoned remains the only production roll-mode source).
+
+`resolve_start_combat(command, participants, dice, *, roll_modes:
+tuple[RollMode, ...]) -> StartCombatResult` is a pure function: `roll_modes`
+is a required, positionally-aligned tuple with one already-effective
+`RollMode` per participant, supplied by Application. The resolver itself
+still owns the Dexterity-check gameplay math and determinism: for each
+participant, in payload order, it rolls via `resolve_d20_roll(dice,
+roll_mode)` (§3.12) — one `"1d20"` call for `RollMode.NORMAL`, two
+independent calls for `RollMode.DISADVANTAGE` — and adds the shared
+`ability_modifier` (§1.2.1) of `ability_scores.dexterity`. The resolver does
+not read `CreatureState.conditions` and does not call
+`ability_check_roll_mode_from_conditions` itself — that Condition lookup is
+an Application concern, matching the existing `AbilityCheckHandler`/
+`AttackHandler` policy boundary. The pure result carries a per-participant
+audit trail:
+
+```text
+InitiativeEntry(creature_id: str, roll: D20Roll, modifier: int, total: int)
+StartCombatResult(combat_id: str, round: int, order: tuple[str, ...], entries: tuple[InitiativeEntry, ...])
+```
+
+`order` is `entries` sorted by descending `total`, tie-broken by descending
+raw Dexterity score, then by ascending creature ID for full determinism when
+both are equal. `round` is intrinsically `1`, and `order`/`entries` are
+intrinsically forbidden from containing a duplicate creature ID. This
+tie-break is an explicit Engine rule, not `dnd_5e` table-adjudication
+guidance; it exists so the same inputs, Conditions, and dice rolls always
+produce the same order.
+
+#### `CombatStarted` V1
+
+Canonical payload:
+
+```text
+combatId
+round
+order
+entries: [{ creatureId, roll: { mode, rolls, selected }, modifier, total }, ...]
+```
+
+`build_combat_started_v1` copies the already-resolved `StartCombatResult`
+verbatim and checks `outcome.combat_id == command.payload.combat_id` and that
+`outcome.order` contains exactly `command.payload.participant_ids` as a set.
+`apply_combat_started_v1(event) -> CombatState` decodes and structurally
+validates the full payload (including reconstructing each entry's `D20Roll`)
+and constructs a **new** `CombatState` — `round=1`, the decoded `order`, and
+`active_index=0` — because `CombatStarted` is a creation transition with no
+prior `CombatState` to correlate against, unlike every other applier in
+§§3.19–3.21 which mutates an existing State object. It performs no dice call,
+no Definition lookup, and no persistence I/O, per §3.18's Event → State
+contract.
+
+#### `AdvanceTurnCommand` / `AdvanceTurnResult`
+
+```text
+AdvanceTurnCommand(command_id, campaign_id, actor_id, payload)
+AdvanceTurnPayload(combat_id: str)
+```
+
+`AdvanceTurnHandler` loads `snapshot.combat`; if it is absent or its `id`
+does not match `payload.combat_id`, it returns `ENTITY_NOT_FOUND`
+(`field="combat_id"`). It then requires `command.actor_id ==
+combat.active_creature_id`; a mismatch returns `ACTION_NOT_AVAILABLE`
+(`entity_id=actor_id`) without calling `DiceEngine`, `EventMetadataProvider`,
+or `StateStore.save()`. **This is the concrete actor/action-eligibility
+consumer this slice exists to deliver**: only the creature whose turn it
+already is may advance it. It does not check `current_hp` — that is the
+open zero-HP question DEF-0015 still tracks; a downed combatant's turn still
+formally passes in this slice, matching the SRD's Unconscious behavior of the
+turn order itself continuing even when the combatant cannot act.
+
+`resolve_advance_turn(command, combat) -> AdvanceTurnResult` is pure: it
+computes `next_index = (active_index + 1) % len(order)`, increments `round`
+only when `next_index == 0`, and returns the previous/next active creature ID
+and previous/next round together for the Event and applier to correlate
+against.
+
+#### `TurnAdvanced` V1
+
+Canonical payload:
+
+```text
+combatId
+previousActiveCreatureId
+activeCreatureId
+previousRound
+round
+```
+
+A single Event per `AdvanceTurnCommand` — not a `TurnEnded`/`TurnStarted`
+pair — keeping this slice's Event count per mutating Command identical to
+every other implemented mutation consumer (§§3.19–3.21); §3.8 already
+permits an authoritative Command to produce more than one Event, but no
+concrete need to split turn advancement into two separate Events has been
+demonstrated yet. `apply_turn_advanced_v1(combat, event) -> CombatState`
+requires `payload.combatId == combat.id`,
+`payload.previousActiveCreatureId == combat.active_creature_id`, and
+`payload.previousRound == combat.round` (the same stale-input integrity-check
+shape as `apply_damage_applied_v1`'s `previousHp` check), then returns
+`dataclasses.replace(combat, round=payload.round,
+active_index=combat.order.index(payload.activeCreatureId))`. Only `round` and
+`active_index` change; `id` and `order` are preserved.
+
+#### Application orchestration and persistence
+
+Both handlers follow the unchanged §3.18 mutating-command lifecycle:
+
+```text
+StartCombatHandler:
+    load snapshot -> require actor exists -> reject if already in combat
+    -> look up participants -> derive effective RollMode per participant
+    -> resolve_start_combat -> build CombatStarted V1
+    -> apply_combat_started_v1 (new CombatState)
+    -> dataclasses.replace(snapshot, combat=new_combat) -> StateStore.save() once
+
+AdvanceTurnHandler:
+    load snapshot -> locate combat -> require actor is the active combatant
+    -> resolve_advance_turn -> build TurnAdvanced V1
+    -> apply_turn_advanced_v1 (replacement CombatState)
+    -> dataclasses.replace(snapshot, combat=replacement_combat) -> StateStore.save() once
+```
+
+Attaching or replacing `StateSnapshot.combat` uses the stdlib
+`dataclasses.replace(snapshot, combat=...)` directly — unlike the four
+Creature-mutation consumers, there is no tuple of many `CombatState` values to
+search by ID, so the §3.23 `replace_creature_in_snapshot` helper does not
+apply and no analogous "replace combat in snapshot" helper is extracted for a
+single optional field. Neither handler mutates `creatures` or `characters`;
+both reuse them unchanged from the loaded snapshot. Both call
+`StateStore.save()` exactly once, only after their Event has been built and
+applied, matching §3.18's persistence ordering and "return success, save
+later" prohibition; a `StateStore.save()` failure propagates unmodified
+through the existing `StateStoreError` boundary (§12.9) and never yields a
+successful `ResolutionResult`.
+
+#### Errors
+
+```text
+missing StartCombat actor CreatureState -> EngineError(code=ENTITY_NOT_FOUND, entity_id=<actor_id>, field=None)
+combat already in progress            -> EngineError(code=RULE_VIOLATION, entity_id=<existing combat id>)
+missing participant CreatureState     -> EngineError(code=ENTITY_NOT_FOUND, entity_id=<participant_id>, field="participant_ids")
+no combat / combat id mismatch        -> EngineError(code=ENTITY_NOT_FOUND, entity_id=<payload.combat_id>, field="combat_id")
+actor is not the active combatant     -> EngineError(code=ACTION_NOT_AVAILABLE, entity_id=<actor_id>)
+Event/State integrity mismatch        -> propagating TypeError / ValueError, not a gameplay EngineError
+StateStore.save() failure             -> propagates unmodified through the existing StateStoreError boundary (§12.9)
+```
+
+No new `ErrorCode` value was introduced; `RULE_VIOLATION` and
+`ACTION_NOT_AVAILABLE` already existed in the closed §3.9 Error Contract.
+
+#### Persistence (State schema V5)
+
+`StateSnapshot.combat` is persisted. State schema gains exact integer
+`schemaVersion = 5` as the current writer (`SCHEMA_V5_VERSION`, alongside the
+existing fixed `SCHEMA_V4_VERSION` sentinel — the same "compare against a
+fixed historical constant, never against the mutable current-writer
+`SCHEMA_VERSION`" discipline DEC-0035 already established for the V4 Creature
+shape, §12.12). V5 adds exactly one new required top-level `state.combat`
+key: `null` when no combat is in progress, or an object with exactly `id`,
+`round`, `order` (a JSON array of Creature ID strings), and `activeIndex`.
+V1–V4 payloads keep their existing fixed field sets with no `combat` key —
+loading them always produces `StateSnapshot.combat = None`; the V4 Creature
+shape (`conditions`) is otherwise unchanged and decodes identically under V4
+and V5. This is a version bump, not a Condition/HP/Character schema change.
+
+#### Abstraction verdict
+
+**KEEP CONCRETE**, and no new transaction abstraction. `StartCombatHandler`
+and `AdvanceTurnHandler` are two more concrete producers of the pattern
+`§3.18` already fixed; their snapshot attachment is strictly simpler than the
+four existing Creature-mutation consumers (a single optional field, not a
+tuple search), so it needed no helper at all, extracted or otherwise. Neither
+Command's required atomicity exceeds the existing single-snapshot
+`StateStore.save()` boundary (§3.18 "Exact MVP atomicity boundary"), so no
+`UnitOfWork`/`TransactionManager` is introduced. This section changes no
+existing Command, Event, `ResolutionResult`, `ErrorCode`, or `StateStore`
+contract; it changes `StateSnapshot`'s shape by exactly one optional field.
 
 ---
 
@@ -7419,11 +7751,11 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Каноническая current V4 schema:
+filesystem I/O. Каноническая current V5 schema:
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "campaignId": "campaign_001",
   "state": {
     "campaign": {
@@ -7461,40 +7793,48 @@ filesystem I/O. Каноническая current V4 schema:
           "perception"
         ]
       }
-    ]
+    ],
+    "combat": null
   }
 }
 ```
 
-JSON использует camelCase. Writer всегда выпускает `schemaVersion: 4` и exact
-V4 state fields `campaign`, `creatures`, `characters`, включая
-`"characters": []` для пустой collection и `"conditions": []` для пустого
-Creature Condition membership (§3.21). Creatures и Characters сортируются по
-runtime ID, `savingThrowProficiencies` — по `Ability.value`,
-`skillProficiencies` — по `Skill.value`, а `conditions` — по `Condition.value`.
-Пустые membership сериализуются как JSON arrays `[]`.
+JSON использует camelCase. Writer всегда выпускает `schemaVersion: 5` и exact
+V5 state fields `campaign`, `creatures`, `characters`, `combat`, включая
+`"characters": []` для пустой collection, `"conditions": []` для пустого
+Creature Condition membership (§3.21) и `"combat": null`, когда `StateSnapshot.
+combat is None` (§3.25). Creatures и Characters сортируются по runtime ID,
+`savingThrowProficiencies` — по `Ability.value`, `skillProficiencies` — по
+`Skill.value`, а `conditions` — по `Condition.value`. Пустые membership
+сериализуются как JSON arrays `[]`. Когда combat присутствует, `combat` —
+object с exact fields `id`, `round`, `order` (JSON array Creature ID strings в
+initiative-порядке) и `activeIndex`.
 
-Reader принимает четыре точные схемы: legacy V1 с state fields `campaign` и
+Reader принимает пять точных схем: legacy V1 с state fields `campaign` и
 `creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
-обязательным дополнительным `skillProficiencies`, и current V4. Поле
-`characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
-`StateSnapshot.characters=()` и не придумывает level или proficiency defaults.
-V2 Character entry сохраняет exact legacy fields `id`, `totalLevel` и
-`savingThrowProficiencies`; reader мигрирует его в canonical `CharacterState`
-с `skill_proficiencies=frozenset()`. V1–V3 Creature entries не содержат поле
-`conditions` — оно unknown и запрещено для этих трёх версий; успешное чтение
-любой из них создаёт `CreatureState.conditions == frozenset()` без выдумывания
-membership.
+обязательным дополнительным `skillProficiencies`, legacy V4 с обязательным
+`conditions` (без `combat`), и current V5 с обязательным дополнительным
+`combat`. Поле `characters` в V1 является unknown и запрещено. Успешное
+чтение V1 создаёт `StateSnapshot.characters=()` и не придумывает level или
+proficiency defaults. V2 Character entry сохраняет exact legacy fields `id`,
+`totalLevel` и `savingThrowProficiencies`; reader мигрирует его в canonical
+`CharacterState` с `skill_proficiencies=frozenset()`. V1–V3 Creature entries
+не содержат поле `conditions` — оно unknown и запрещено для этих трёх версий;
+успешное чтение любой из них создаёт `CreatureState.conditions ==
+frozenset()` без выдумывания membership. V1–V4 не содержат `state.combat` —
+оно unknown для этих четырёх версий; успешное чтение любой из них создаёт
+`StateSnapshot.combat is None` без выдумывания Combat State.
 
-Для всех четырёх версий required fields и JSON primitive/container types
-точны; unknown fields, defaults, type coercion, несовпадение outer
-`campaignId` с `state.campaign.id`, невалидные Domain values и duplicate IDs
-запрещены. V2, V3 и V4 дополнительно требуют, чтобы каждый Character ID
-ссылался на существующий Creature ID. V3 и V4 Character entry содержит
+Для всех пяти версий required fields и JSON primitive/container types точны;
+unknown fields, defaults, type coercion, несовпадение outer `campaignId` с
+`state.campaign.id`, невалидные Domain values и duplicate IDs запрещены. V2–V5
+дополнительно требуют, чтобы каждый Character ID ссылался на существующий
+Creature ID; V5 дополнительно требует, чтобы каждый `combat.order` ID
+ссылался на существующий Creature ID. V3–V5 Character entry содержит
 identical exact fields `id`, `totalLevel`, `savingThrowProficiencies` и
-`skillProficiencies` — Character schema не менялась в V4; duplicate
+`skillProficiencies` — Character schema не менялась с V3; duplicate
 serialized abilities и skills запрещены до преобразования списков в
-соответствующие `frozenset`. V4 Creature entry дополнительно требует
+соответствующие `frozenset`. V4 и V5 Creature entry дополнительно требует
 `conditions`: JSON list точных строк, каждая — известное значение `Condition`,
 без дубликатов; malformed non-list, unknown-value и duplicate-value payloads
 отклоняются (§3.21).
@@ -7502,14 +7842,15 @@ serialized abilities и skills запрещены до преобразован�
 Character decoding (включая ветку, читающую `skillProficiencies`) определяется
 явным сравнением с `LEGACY_SCHEMA_V2_VERSION`, а не сравнением только с
 текущим `SCHEMA_VERSION` — это защищает V3-чтение при будущих schema bump'ах.
-Симметрично, V4 Creature field set и `conditions` decoding определяются
-сравнением с отдельной fixed-identity константой `SCHEMA_V4_VERSION`, а не с
-мутируемым `SCHEMA_VERSION`: `SCHEMA_VERSION = SCHEMA_V4_VERSION` сегодня, но
-эти два имени не взаимозаменяемы — `SCHEMA_VERSION` обозначает current writer
-и используется только при записи, тогда как historical V4 read semantics
-зафиксированы на `SCHEMA_V4_VERSION` независимо от того, останется ли V4
-current writer в будущем (§3.21 фиксирует эту regression-защиту как часть
-G6C1).
+Симметрично, V4/V5 Creature field set и `conditions` decoding определяются
+сравнением с fixed-identity множеством `{SCHEMA_V4_VERSION,
+SCHEMA_V5_VERSION}`, а не с мутируемым `SCHEMA_VERSION`: `SCHEMA_VERSION =
+SCHEMA_V5_VERSION` сегодня, но эти имена не взаимозаменяемы — `SCHEMA_VERSION`
+обозначает current writer и используется только при записи, тогда как
+historical V4/V5 read semantics зафиксированы на своих собственных fixed
+constants независимо от того, останется ли V5 current writer в будущем (§3.21
+фиксирует эту regression-защиту как часть G6C1; §3.25 применяет тот же
+constant-based discipline к своему V5 `combat` addition, G7).
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -7533,11 +7874,11 @@ revision fields и file/process/distributed locks отсутствуют.
 EventStore, replay и transaction ordering между Event persistence и State
 projection отложены до отдельного будущего решения.
 
-Текущая V4 schema содержит `CampaignState`, collection `CreatureState`
-(включая `conditions`, §3.21) и character-specific collection `CharacterState`.
-По мере появления следующих State domains snapshot schema должна расширяться
-отдельным версионируемым контрактом, не превращая `CampaignState` в God
-Object.
+Текущая V5 schema содержит `CampaignState`, collection `CreatureState`
+(включая `conditions`, §3.21), character-specific collection `CharacterState`
+и optional `CombatState` (§3.25). По мере появления следующих State domains
+snapshot schema должна расширяться отдельным версионируемым контрактом, не
+превращая `CampaignState` в God Object.
 
 Snapshot не содержит:
 
@@ -7680,7 +8021,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -7711,9 +8052,10 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 4`; writer выпускает
-только V4. Reader также принимает exact legacy integer `schemaVersion = 1`,
-`schemaVersion = 2` и `schemaVersion = 3`. Другие значения запрещены, а `bool`
+Current State schema — exact integer `schemaVersion = 5` (§3.25, G7: adds
+top-level `state.combat`); writer выпускает только V5. Reader также принимает
+exact legacy integer `schemaVersion = 1`, `schemaVersion = 2`,
+`schemaVersion = 3` и `schemaVersion = 4`. Другие значения запрещены, а `bool`
 не считается integer version. Это версия storage schema, а не revision
 текущего State и не механизм concurrency control.
 

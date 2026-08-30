@@ -4,6 +4,7 @@ import pytest
 
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
@@ -25,6 +26,15 @@ def creature_state(creature_id: str) -> CreatureState:
         ability_scores=AbilityScores(8, 14, 10, 10, 8, 8),
         current_hp=7,
         max_hp=7,
+    )
+
+
+def combat_state(*order: str, active_index: int = 0) -> CombatState:
+    return CombatState(
+        id="combat_001",
+        round=1,
+        order=order,
+        active_index=active_index,
     )
 
 
@@ -164,4 +174,45 @@ def test_snapshot_has_only_persistence_grouping_fields() -> None:
         "campaign",
         "creatures",
         "characters",
+        "combat",
     )
+
+
+def test_snapshot_defaults_to_no_combat() -> None:
+    snapshot = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature_state("monster_001"),),
+    )
+
+    assert snapshot.combat is None
+
+
+def test_snapshot_accepts_combat_referencing_existing_creatures() -> None:
+    creature = creature_state("monster_001")
+    combat = combat_state("monster_001")
+
+    snapshot = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature,),
+        combat=combat,
+    )
+
+    assert snapshot.combat is combat
+
+
+def test_snapshot_rejects_non_combat_state_value() -> None:
+    with pytest.raises(TypeError):
+        StateSnapshot(  # type: ignore[arg-type]
+            campaign=campaign_state(),
+            creatures=(creature_state("monster_001"),),
+            combat={"id": "combat_001"},
+        )
+
+
+def test_snapshot_rejects_combat_participant_without_matching_creature() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("monster_001"),),
+            combat=combat_state("monster_002"),
+        )
