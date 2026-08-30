@@ -3814,3 +3814,54 @@ contracts.
   suite passes (1586 tests, including packaging tests with a writable external
   pip cache); configured mypy passes for 105 source files, and
   `git diff --check` reports no whitespace errors.
+
+## 2026-08-30 — Production-real integration evidence for Monster attack damage (G9 Group 4)
+
+- Added
+  `test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters`
+  to `tests/integration/test_attack_real_adapters.py` (existing file
+  extended, no parallel integration module introduced). No production code
+  changed; this Group added evidence only.
+- Exercised the full G9 chain through real adapters end to end: real
+  `FilesystemStateStore` (wrapped in a thin call-counting delegate, following
+  the existing `test_damage_real_adapters.py` pattern, to observe
+  `AttackHandler`'s own `save()` call count without instrumenting the
+  production adapter itself), real `PackagedDefinitionSource` reading the
+  packaged `goblin` Scimitar attack, and the real `PythonDiceEngine` adapter
+  with an injected deterministic `random.Random` seed (`20260838`, verified
+  in-test to yield roll `12` for the attack and `5` for the `1d6` damage
+  roll) — a genuine normal (non-critical) hit against an unarmored Character
+  target (Dexterity 14 → AC 12).
+- The persisted `StateSnapshot` was constructed with a canonical `dnd_5e`
+  `5.1` `CampaignState`, a Goblin attacker `CreatureState`, a Character
+  target `CreatureState` + `CharacterState`, one unrelated bystander Monster
+  `CreatureState`, one unrelated bystander Character `CreatureState` +
+  `CharacterState`, and a non-`None` `CombatState` whose `order` contains
+  exactly the attacker and target.
+- After a single `AttackHandler.handle()` invocation, a fresh
+  `FilesystemStateStore` instance (new object, same `campaigns_root`) proved:
+  the target's reloaded `current_hp` decreased by exactly the applied damage
+  amount and matches the in-memory `DamageApplied` outcome; the reloaded
+  `CombatState` is present with unchanged `id`, `round`, `order`, and
+  `active_index`; the reloaded attacker and both unrelated bystander
+  Creature/Character projections are unchanged (`==` the pre-attack objects);
+  the reloaded `CampaignState` is unchanged; `result.events` are ordered
+  exactly `MonsterAttackResolved → MonsterAttackDamageResolved →
+  DamageApplied` with an exact `causedBy` chain (first `None`, each
+  subsequent Event's `caused_by` equal to the previous Event's `event_id`,
+  all three `event_id`s distinct); the wrapped store recorded exactly one
+  `save()` call; and, as in the existing real-adapter tests, no
+  `events.jsonl`/Event-history artifact or leftover atomic-write temp file
+  exists on disk after the run — only `state.json`.
+- No State schema change, no serializer migration, and no schema V6 were
+  needed or introduced; `StateSnapshot.combat` round-trips through the
+  existing V5 writer/reader unchanged.
+- Verification: the focused new integration test passes (3, full
+  `test_attack_real_adapters.py` module); the full `tests/integration/` and
+  `tests/infrastructure/` set passes (312); the full suite passes (1587
+  tests, run through the repository's own `.venv`, Python 3.12.13);
+  configured mypy passes for 105 source files (`src/dnd_engine`); and
+  `git diff --check` reports no whitespace errors. No production file was
+  changed by this Group; only the integration test module was modified.
+  Roadmap/DEC/Deferred status updates are intentionally deferred to a
+  separate pass.
