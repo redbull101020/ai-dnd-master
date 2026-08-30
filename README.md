@@ -314,9 +314,16 @@ concrete consumer, G7 (§3.25) — dice-rolled individual-participant Initiative
 (`StartCombatCommand` → `CombatStarted` V1, Poisoned-aware через существующую
 Ability Check Condition policy) и Turn Order advancement (`AdvanceTurnCommand`
 → `TurnAdvanced` V1, gated по actor eligibility) поверх нового `CombatState`
-(State schema V5) — уже реализован; weapon/monster attacks, attack
-consequences, zero-HP legality, `CombatEnded` и другие связанные механики
-продолжатся по Roadmap.
+(State schema V5) — уже реализован. Второй concrete consumer, G8 (§3.26) —
+первый Monster-attacker / Character-target Attack: узкий
+`MonsterAttackDefinition` (Goblin Scimitar packaged), новый
+`resolve_monster_attack`/`MonsterAttackResult`/`MonsterAttackResolved` V1,
+достигаемые через неизменённый `AttackCommand`/`AttackHandler` (новая ветка
+по уже загруженному факту "есть ли у actor `CharacterState`"), с
+переиспользованием Poisoned Condition policy и `unarmored_character_armor_class`.
+Weapon attacks (Equipment/Inventory ownership, weapon proficiency, Finesse
+choice), attack consequences (DEF-0013), zero-HP legality, `CombatEnded` и
+другие связанные механики продолжатся по Roadmap.
 
 ---
 

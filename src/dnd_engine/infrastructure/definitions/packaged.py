@@ -7,6 +7,7 @@ from typing import Any
 from dnd_engine.domain.definitions.base import Definition
 from dnd_engine.domain.definitions.item import ItemDefinition
 from dnd_engine.domain.definitions.monster import MonsterDefinition
+from dnd_engine.domain.definitions.monster_attack import MonsterAttackDefinition
 from dnd_engine.domain.definitions.weapon import WeaponDefinition
 from dnd_engine.domain.services.definitions import (
     DefinitionNotFoundError,
@@ -28,7 +29,17 @@ _ABILITY_SCORE_FIELDS = (
     "charisma",
 )
 _MONSTER_FIELDS = frozenset(
-    {"type", "id", "version", "name", "abilityScores", "armorClass"}
+    {"type", "id", "version", "name", "abilityScores", "armorClass", "attacks"}
+)
+_MONSTER_ATTACK_FIELDS = frozenset(
+    {
+        "actionId",
+        "name",
+        "attackBonus",
+        "damageDice",
+        "damageModifier",
+        "damageType",
+    }
 )
 _ITEM_FIELDS = frozenset({"type", "id", "version", "name"})
 _WEAPON_FIELDS = frozenset(
@@ -206,6 +217,52 @@ def _require_ability_scores(payload: dict[str, Any], definition_id: str) -> Abil
         ) from error
 
 
+def _decode_monster_attack(
+    raw: Any, definition_id: str
+) -> MonsterAttackDefinition:
+    if type(raw) is not dict or set(raw) != _MONSTER_ATTACK_FIELDS:
+        raise InvalidPackagedDefinitionError(
+            f"Definition {definition_id!r} has a malformed monster attack"
+        )
+    action_id = _require_str(raw, "actionId", definition_id)
+    name = _require_str(raw, "name", definition_id)
+    attack_bonus = _require_int(raw, "attackBonus", definition_id)
+    damage_dice = _require_str(raw, "damageDice", definition_id)
+    damage_modifier = _require_int(raw, "damageModifier", definition_id)
+    damage_type_raw = _require_str(raw, "damageType", definition_id)
+    try:
+        damage_type = DamageType(damage_type_raw)
+    except ValueError as error:
+        raise InvalidPackagedDefinitionError(
+            f"Definition {definition_id!r} has invalid attack damageType "
+            f"{damage_type_raw!r}"
+        ) from error
+    try:
+        return MonsterAttackDefinition(
+            action_id=action_id,
+            name=name,
+            attack_bonus=attack_bonus,
+            damage_dice=damage_dice,
+            damage_modifier=damage_modifier,
+            damage_type=damage_type,
+        )
+    except (TypeError, ValueError) as error:
+        raise InvalidPackagedDefinitionError(
+            f"Definition {definition_id!r} has an invalid monster attack: {error}"
+        ) from error
+
+
+def _require_monster_attacks(
+    payload: dict[str, Any], definition_id: str
+) -> tuple[MonsterAttackDefinition, ...]:
+    raw = payload.get("attacks")
+    if type(raw) is not list:
+        raise InvalidPackagedDefinitionError(
+            f"Definition {definition_id!r} field 'attacks' must be a list"
+        )
+    return tuple(_decode_monster_attack(item, definition_id) for item in raw)
+
+
 def _decode_monster(payload: dict[str, Any], definition_id: str) -> MonsterDefinition:
     if set(payload) != _MONSTER_FIELDS:
         raise InvalidPackagedDefinitionError(
@@ -216,6 +273,7 @@ def _decode_monster(payload: dict[str, Any], definition_id: str) -> MonsterDefin
     name = _require_str(payload, "name", definition_id)
     ability_scores = _require_ability_scores(payload, definition_id)
     armor_class = _require_int(payload, "armorClass", definition_id)
+    attacks = _require_monster_attacks(payload, definition_id)
     try:
         return MonsterDefinition(
             id=payload_id,
@@ -223,6 +281,7 @@ def _decode_monster(payload: dict[str, Any], definition_id: str) -> MonsterDefin
             name=name,
             ability_scores=ability_scores,
             armor_class=armor_class,
+            attacks=attacks,
         )
     except (TypeError, ValueError) as error:
         raise InvalidPackagedDefinitionError(

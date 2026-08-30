@@ -145,10 +145,11 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 
 ## Phase 3 — Combat
 
-> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
+> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7) · [§3.26 Monster attack → Character vertical slice (G8)](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
 
 * [x] Initiative foundation — individual-participant dice-rolled `StartCombatCommand` → `CombatStarted` V1, persisted `CombatState.order`, Poisoned Dexterity-check disadvantage via the existing Ability Check Condition policy (§3.25).
 * [x] Turn-order advancement foundation — `AdvanceTurnCommand` → `TurnAdvanced` V1 advances `active_index`/`round`, gated by an actor-eligibility check (§3.25).
+* [x] Monster → Character attack-roll foundation — Goblin Scimitar `MonsterAttackDefinition`, `resolve_monster_attack`, `MonsterAttackResolved` V1, reusing unchanged `AttackCommand`/Poisoned policy/`unarmored_character_armor_class` (§3.26). Also closes [DEF-0002](DEFERRED.md#def-0002) `Done` (typed authoritative Monster attack-bonus source); Monster save/skill proficiency remain separately open (DEF-0004).
 * [ ] Initiative: SRD 5.1 grouped initiative for identical GM-controlled creatures — G7 is individual-participant only; a later concrete Monster/control consumer must evidence this before it is added.
 * [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn)
 * [ ] Combat lifecycle / `CombatEnded` — G7 has no combat-ending Command or Event.
@@ -156,9 +157,9 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
-* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011))
-* [ ] Monster actions ([DEF-0002](DEFERRED.md#def-0002), [DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012))
-* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013))
+* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target part is proven by G8; Equipment/Inventory ownership, weapon proficiency, and Finesse choice remain entirely open.
+* [ ] Monster actions beyond the Goblin Scimitar attack-roll foundation ([DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012)) — multiple/ambiguous actions, multiattack, recharge, saving-throw/AoE actions, ranged/reach, and Monster save/skill proficiency remain open.
+* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — not started; G8 supplies a concrete Monster damage source and establishes the Character-target part of DEF-0011 as the chosen "relevant part of DEF-0011" prerequisite, but Attack→Damage orchestration and Event ordering/causation design remain untouched.
 * [ ] Conditions expansion ([DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
 * [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
 * [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
@@ -173,6 +174,23 @@ is unchanged and does not yet consult `CombatState`. Grouped/identical-creature
 initiative, turn/action economy, `CombatEnded`, zero-HP action eligibility,
 Death Saves, movement, reactions, and monster/weapon actions remain open for
 later concrete Combat consumers.
+
+G8 (§3.26) implements the first concrete Monster-as-attacker and
+Character-as-target Attack consumer. It adds a new narrow
+`MonsterAttackDefinition` (action_id, name, attack_bonus, damage_dice,
+damage_modifier, damage_type), one packaged Goblin Scimitar attack,
+`resolve_monster_attack`/`MonsterAttackResult`, and `MonsterAttackResolved`
+V1, reached through an added branch inside the unchanged
+`AttackCommand`/`AttackHandler`. It reuses the unchanged Poisoned
+attack-roll Condition policy and the unchanged
+`unarmored_character_armor_class` rule, and introduces no Inventory/Equipment
+State, no Character weapon proficiency, no `Multiattack`, no ranged/reach
+mechanics (the Goblin's Shortbow is intentionally not packaged), and no
+Attack→Damage orchestration. It establishes the Character-target part of
+DEF-0011's own scope and supplies a concrete Monster damage source — the
+first two of DEF-0013's three named prerequisites (relevant part of
+DEF-0011, a concrete damage source, and Event ordering/causation design) —
+without implementing DEF-0013 itself.
 
 ## Phase 4 — Magic
 

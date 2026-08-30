@@ -3637,3 +3637,96 @@ contracts.
   shape), actor-not-a-participant, and Poisoned-participant wiring through
   the real Condition policy; a State-serializer regression test for a
   mutated duplicate `CombatState.order`.
+
+## 2026-08-30 — First Monster attacker / Character target: Goblin Scimitar (G8)
+
+- Added the first concrete Phase 3 Monster-as-attacker and Character-as-target
+  Attack consumer, gated on two design/gate reports reviewed and corrected in
+  conversation before any production code: an initial proposal to unblock
+  DEF-0013 via a caller-supplied `weapon_definition_id` on a new
+  `WeaponAttackCommand` was rejected (a Definition ID is not an authoritative
+  ownership fact, and DEF-0011's own prerequisites name a real
+  Equipment/Inventory source, weapon proficiency, and an explicit Finesse
+  choice); a full correct Weapon-attack prerequisite was found to need two new
+  State Owners and two `CharacterState`/`AttackPayload` extensions and was
+  compared against a Monster-attack alternative that needs none, because a
+  Monster's attack is fully self-contained in its Definition.
+- Added `MonsterAttackDefinition` (`domain/definitions/monster_attack.py`):
+  `action_id, name, attack_bonus, damage_dice, damage_modifier, damage_type`,
+  intrinsically validated (`action_id` non-empty `str`, `damage_dice` via the
+  shared `parse_ndm()`, `damage_type` an actual `DamageType`). It is a narrow
+  attack-specific contract, not a generic Monster action/ability model, and
+  not a `Definition` subtype — `action_id` is a local identity scoped to the
+  owning `MonsterDefinition`, not a runtime `action_NNN` or a global registry
+  entry. `MonsterDefinition` gains `attacks: tuple[MonsterAttackDefinition,
+  ...] = ()`, validating only tuple/element-type and unique-`action_id`
+  invariants that are not already the nested type's own responsibility.
+- Packaged the SRD 5.1 Goblin Scimitar (`+4` to hit, `1d6 + 2` slashing) as
+  the sole `goblin.attacks` entry; the Goblin's Shortbow is intentionally not
+  packaged (no range/reach fields exist on this contract yet), and
+  `goblin.version` stays `1` (no Definition-version-aware lookup exists to
+  interact with; this is the project's minimal representation of already-
+  published SRD content catching up to a new contract field, not a rule
+  change). `infrastructure/definitions/packaged.py` gained strict `attacks`
+  list decoding with its own exact per-attack field-set check, mirroring the
+  existing `_decode_weapon`/`_decode_monster` strictness.
+- Added `resolve_monster_attack`/`MonsterAttackResult`
+  (`domain/rules/monster_attack.py`) as a separate concrete type from
+  `AttackResult`, not a variant of it: a flat stat-block `attack_bonus` is
+  never decomposed into a fabricated `ability`/`ability_modifier`/
+  `proficiency_bonus` split. Natural-1/20 automatic miss/hit/critical and the
+  `total >= target_armor_class` comparison reuse the same Attack-owned
+  semantics as the unarmed slice, written again rather than shared — two
+  concrete consumers do not by themselves justify extracting a natural-
+  outcome helper under the existing evidence-driven abstraction policy.
+- Added `MonsterAttackResolved` V1 (`domain/events/monster_attack.py`):
+  `targetId, actionId, roll, attackBonus, total, targetArmorClass, hit,
+  criticalHit`. This is a new Event type, not an `AttackResolved` V2, because
+  the field set is conceptually different rather than a roll-representation
+  change (the same reasoning that already keeps `SkillCheckResolved`/
+  `SavingThrowResolved`/`AbilityCheckResolved` separate). `AttackResolved` V1
+  is completely untouched. The Event carries no damage fields, amount, or
+  `previousHp`/`newHp`: it records the attack roll only; Damage resolution is
+  explicit future DEF-0013 scope.
+- `AttackCommand`/`AttackPayload(target_id)` are completely unchanged — still
+  one explicit Attack intent, per DEF-0011's own "Planned approach" wording.
+  `AttackHandler` gained one new branch keyed on data it already loads: an
+  actor with a matching `CharacterState` projection takes the existing
+  unarmed path unchanged; an actor without one — previously an unconditional
+  `INVALID_STATE` failure — now takes a new Monster-actor path requiring
+  exactly one supported `MonsterAttackDefinition`
+  (`ACTION_NOT_AVAILABLE`, not `INVALID_STATE`, for zero or multiple — no
+  silent `attacks[0]` fallback, no dice rolled, no Event built), requiring the
+  target to have a `CharacterState` projection (`INVALID_TARGET` otherwise),
+  computing target AC via the unchanged `unarmored_character_armor_class`,
+  and deriving `RollMode` via the unchanged `attack_roll_mode_from_conditions`
+  (Poisoned reuse, no duplicated Condition logic). `AttackHandler.handle()`'s
+  return type becomes `ResolutionResult[AttackResult | MonsterAttackResult]`.
+  No `CombatState`/active-turn check and no `current_hp` eligibility check
+  were added — both remain exactly as open as before this slice.
+- Updated Architecture (new §3.26), added DEC-0041, updated Roadmap Phase 3
+  with a scope-accurate `Monster → Character attack-roll foundation` row
+  (broad `Monster actions` and `Weapon attacks` remain open), and updated
+  DEF-0011/DEF-0012/DEF-0013 in `docs/DEFERRED.md` with dated History entries
+  recording this partial foundation without redefining their titles, status,
+  or acceptance criteria — all three stay `Deferred` for their remaining
+  scope. `CLAUDE.md` resynced.
+- Added focused tests: `MonsterAttackDefinition`/`MonsterDefinition.attacks`
+  invariants (empty default, tuple/element-type checks, duplicate `action_id`
+  rejection); `resolve_monster_attack`/`MonsterAttackResult` (ordinary hit/
+  miss, natural 1/20 automatic outcomes independent of `attack_bonus`,
+  advantage/disadvantage roll-mode reuse, actor-id-mismatch and wrong-type
+  rejection, no ability/proficiency decomposition); `MonsterAttackResolved`
+  V1 payload/builder invariants and JSON serialization; packaged-decoder
+  strictness for `attacks` (missing key, non-list, malformed/unknown-field/
+  wrong-primitive-type per-attack elements, duplicate `action_id`); real
+  packaged-Goblin production decode assertions; `AttackHandler` Monster-actor
+  branch coverage (hit/miss/critical, Poisoned disadvantage, actor Definition
+  lookup failures, zero/multiple supported attacks with no dice/metadata
+  calls, missing target, target without `CharacterState`); a real
+  `FilesystemStateStore`/`PackagedDefinitionSource`/`PythonDiceEngine` round
+  trip for a Goblin Scimitar attack against a Character target; and an
+  updated regression test for the previously-unconditional
+  actor-has-no-`CharacterState` failure, now correctly routing to the new
+  Monster-actor path. Full `pytest` (1517 tests) and configured `mypy`
+  (`src/dnd_engine`) pass; `git diff --check` reports no whitespace errors.

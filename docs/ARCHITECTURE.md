@@ -61,6 +61,7 @@
 | Post-G6C abstraction review and snapshot replacement helper | §3.23 |
 | Phase 2 closure rule and deferred-scope boundary | §3.24 |
 | Combat Initiative/Turn Order vertical slice, actor eligibility (G7) | §3.25 |
+| Monster attack → Character vertical slice, `MonsterAttackDefinition` (G8) | §3.26 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -120,6 +121,7 @@
   * [3.23. Post-G6C abstraction review](#323-post-g6c-abstraction-review)
   * [3.24. Phase 2 Closure Contract](#324-phase-2-closure-contract)
   * [3.25. Minimal Phase 3 Combat Initiative and Turn Order vertical slice (G7)](#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
+  * [3.26. Minimal Phase 3 Monster attack → Character vertical slice (G8)](#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1008,16 +1010,26 @@ class MonsterDefinition:
     name: str
     ability_scores: AbilityScores
     armor_class: int
+    attacks: tuple[MonsterAttackDefinition, ...] = ()
 ```
 
 `MonsterDefinition` — immutable template/rules definition. `armor_class` —
 baseline Armor Class из monster stat block (exact `int`, `bool` отклоняется);
 это immutable Definition fact, а не effective/derived AC (§3.15) и не runtime
 State. Поле добавлено вместе с G4a (§3.16) как согласованный prerequisite
-из DEC-0028. `MonsterDefinition` не содержит current HP, current
-conditions/effects, position, combat turn data, monster runtime ID или
-inventory/equipment state. Speed, CR, senses, actions, spellcasting и другие
-поля будущих phases добавляются только тогда, когда их потребует Roadmap.
+из DEC-0028. `attacks` добавлено вместе с G8 (§3.26): узкий attack-specific
+subset stat block'а — tuple вложенных `MonsterAttackDefinition` (`action_id,
+name, attack_bonus, damage_dice, damage_modifier, damage_type`), default
+`()`. Это **не** generic Monster actions/abilities field и не MonsterAction
+hierarchy — только attack roll + damage source facts. `MonsterDefinition`
+не содержит current HP, current conditions/effects, position, combat turn
+data, monster runtime ID или inventory/equipment state. Реализовано сейчас:
+narrow `attacks`/`MonsterAttackDefinition` (G8, §3.26). Остаются future
+scope и не добавляются заранее: generic Monster actions field, action
+selection среди нескольких supported attacks, range/reach, Multiattack,
+recharge actions, saving-throw/AoE actions, spellcasting и другие non-attack
+action kinds, а также Speed, CR, senses и прочие поля будущих phases —
+добавляются только тогда, когда их потребует Roadmap и конкретный consumer.
 
 ---
 
@@ -4969,6 +4981,304 @@ Command's required atomicity exceeds the existing single-snapshot
 `UnitOfWork`/`TransactionManager` is introduced. This section changes no
 existing Command, Event, `ResolutionResult`, `ErrorCode`, or `StateStore`
 contract; it changes `StateSnapshot`'s shape by exactly one optional field.
+
+---
+
+### 3.26. Minimal Phase 3 Monster attack → Character vertical slice (G8)
+
+Implementation status: **Implemented (intentionally narrow, read-only
+scope).** This is the first concrete Monster-as-attacker consumer and the
+first concrete Character-as-target consumer. It reuses the unchanged §3.17
+`AttackCommand`/`AttackPayload` intent, the unchanged §3.12 d20 foundation,
+the unchanged §3.22 Poisoned attack-roll Condition policy, and the unchanged
+§3.15 `unarmored_character_armor_class` rule. It adds one new narrow
+Definition contract (`MonsterAttackDefinition`), one new pure resolver
+(`resolve_monster_attack`), one new Event (`MonsterAttackResolved` V1), and
+one new branch inside the existing `AttackHandler`.
+
+#### Scope
+
+```text
+MonsterAttackDefinition: action_id, name, attack_bonus, damage_dice, damage_modifier, damage_type
+MonsterDefinition.attacks: tuple[MonsterAttackDefinition, ...] = ()
+AttackCommand/AttackPayload(target_id): unchanged, still the single explicit Attack intent
+AttackHandler branches on already-loaded actor CharacterState membership:
+    actor has a CharacterState  -> existing unarmed Character path (§3.17), byte-identical behavior
+    actor has no CharacterState -> Monster-actor path (this section)
+Monster-actor path requires exactly one MonsterAttackDefinition on the actor's MonsterDefinition
+target must have a CharacterState projection; target AC is unarmored_character_armor_class(target)
+attacker Conditions reuse attack_roll_mode_from_conditions (Poisoned disadvantage), unchanged
+one MonsterAttackResolved V1 Event per successful resolution
+```
+
+#### Why routing lives in `AttackHandler`, not a new Command
+
+DEF-0011's own planned approach already states the target evolution: keep
+one explicit Attack intent, and derive source-specific inputs from
+authoritative State/Definitions rather than branching on caller-supplied
+identity. `AttackCommand`/`AttackPayload(target_id)` (§3.17) are completely
+unchanged by this slice: no `MonsterAttackCommand`, no `action_id` on the
+Command, no actor-kind flag. `AttackHandler` already loads the actor's
+`CreatureState` and looks up a matching `CharacterState` projection before
+this slice; that existing lookup result is now also the dispatch signal.
+An actor with a `CharacterState` projection takes the existing unarmed path
+(§3.17) with no observable change. An actor without one — previously an
+unconditional `INVALID_STATE` failure — now takes the Monster-actor path
+below. This is a deliberate, evidenced behavior change: an actor id that
+could never successfully attack before can now succeed via this new path,
+but only when its `MonsterDefinition` actually supports it.
+
+#### `MonsterAttackDefinition`
+
+```python
+@dataclass(frozen=True)
+class MonsterAttackDefinition:
+    action_id: str
+    name: str
+    attack_bonus: int
+    damage_dice: str
+    damage_modifier: int
+    damage_type: DamageType
+```
+
+`MonsterAttackDefinition` is an attack-specific contract, not a generic
+Monster action/ability model: it has no fields for range, reach,
+multiattack, recharge, save DC, area of effect, or any non-attack action.
+It is not a `Definition` subtype (it has no top-level `id`/`version` and is
+never looked up on its own through `DefinitionSource`) — it is a nested
+value embedded in `MonsterDefinition.attacks`, the same relationship
+`AbilityScores` already has to `MonsterDefinition`. `action_id` is a
+**local, semantic identifier scoped to the owning `MonsterDefinition`**
+(e.g. `"scimitar"`): it is not a runtime `action_NNN` Instance ID (§4.13),
+not a globally registered Definition ID, not added to the §4.13 ID Reference
+Table, and does not imply an Action registry. `__post_init__` validates
+every field intrinsically: `action_id` must match the canonical local
+format `^[a-z][a-z0-9_]*$` (lowercase snake_case, e.g. `"scimitar"`,
+`"claw_attack"` — rejecting empty strings, uppercase, embedded whitespace,
+leading digits, and path-like values such as `"../scimitar"`) via a small
+Domain-local regex owned by `MonsterAttackDefinition` itself, not a shared
+ID-format abstraction and not the Infrastructure packaged-resource-segment
+pattern (§12.26) imported into Domain; `name` a `str`; `attack_bonus` and
+`damage_modifier` exact `int` (negative values are valid stat-block facts,
+not rejected); `damage_dice` a `str` accepted by the shared `parse_ndm()`
+(§1.7.1) — the same primitive `WeaponDefinition.damage_dice` already uses,
+not a duplicated grammar; `damage_type` an actual `DamageType` member.
+
+`MonsterDefinition` (§3.1.1) gains exactly one new field:
+
+```python
+attacks: tuple[MonsterAttackDefinition, ...] = ()
+```
+
+`MonsterDefinition.__post_init__` is responsible only for the
+Definition-level invariants that are not already `MonsterAttackDefinition`'s
+own responsibility: `attacks` is a `tuple`, every element is a
+`MonsterAttackDefinition`, and every `action_id` is unique within that one
+`MonsterDefinition`. It does not re-run `parse_ndm` or re-validate any
+`MonsterAttackDefinition` field — that would duplicate validation already
+owned by the nested type. The empty default preserves every existing
+`MonsterDefinition(...)` call site; zero attacks is a valid Definition (not
+every Monster needs to attack), and is not itself a validation error.
+
+`damage_dice`, `damage_modifier`, and `damage_type` are carried on this
+contract even though this slice never resolves damage: they are the
+authoritative facts a later DEF-0013 Attack-consequence consumer needs to
+compute normal-hit damage (`damage_dice` + `damage_modifier`) and
+critical-hit damage (a critical-damage policy applied over the same dice)
+for this exact attack, without redesigning `MonsterAttackDefinition` when
+that consumer arrives.
+
+#### Packaged content: Goblin Scimitar only
+
+The packaged `goblin` Monster Definition
+(`resources/rulesets/dnd_5e/5.1/definitions/goblin.json`) gains one
+`attacks` entry, the SRD 5.1 Goblin's Scimitar (`+4` to hit, `1d6 + 2`
+slashing). `goblin.version` stays `1`: this is the project's minimal
+representation of already-published SRD 5.1 content catching up to a
+Definition-contract field that did not exist before, not a change to an
+already-relied-upon rule value, and `PackagedDefinitionSource` has no
+Definition-version-aware lookup for this to interact with (identity routes
+on `ruleset_id`/`ruleset_version`/`definition_id` only, per §12.26). The
+Goblin's SRD 5.1 stat block also has a Shortbow (ranged) attack; it is
+**intentionally not packaged**, because this project's Monster attack
+contract has no range/reach fields yet — `MonsterDefinition.attacks`
+represents the subset of a Monster's SRD actions this minimal contract can
+currently express, not a claim that Scimitar is the Goblin's only SRD
+action. A future ranged-attack consumer adds range/reach fields and the
+Shortbow entry together; it does not retrofit them onto this slice.
+
+#### `MonsterAttackResult` and `resolve_monster_attack`
+
+```python
+@dataclass(frozen=True)
+class MonsterAttackResult:
+    target_id: str
+    action_id: str
+    roll: D20Roll
+    attack_bonus: int
+    total: int
+    target_armor_class: int
+    hit: bool
+    critical_hit: bool
+
+
+def resolve_monster_attack(
+    command: AttackCommand,
+    creature: CreatureState,
+    action: MonsterAttackDefinition,
+    dice: DiceEngine,
+    *,
+    target_armor_class: int,
+    roll_mode: RollMode = RollMode.NORMAL,
+) -> MonsterAttackResult:
+    ...
+```
+
+`MonsterAttackResult` is a separate concrete type from `AttackResult`
+(§3.17); neither is a variant of the other, and `AttackResult` itself is
+completely unchanged by this slice. `MonsterAttackResult` has no `ability`,
+`ability_modifier`, or `proficiency_bonus` field: a stat-block `attack_bonus`
+is one already-published flat number, and decomposing it into a fabricated
+Ability/proficiency split — fields that do not describe how a Monster's
+attack bonus actually arises — would misrepresent the audited fact. `total
+== roll.selected + attack_bonus` is the whole composition rule. Natural
+1/20 automatic miss/hit/critical and the `total >= target_armor_class`
+comparison otherwise are the same Attack-owned semantics as §3.17, reused by
+writing the same checks again in this second concrete resolver/Result pair
+— see "Abstraction verdict" below for why no shared helper was extracted.
+`AttackHandler.handle()`'s return type becomes
+`ResolutionResult[AttackResult | MonsterAttackResult]`: one Command, two
+possible concrete resolved shapes depending on which authoritative actor
+Definition resolved it — not a generic modifier-breakdown framework, and not
+a union of arbitrary future outcome types.
+
+#### `MonsterAttackResolved` V1
+
+```text
+targetId          str
+actionId          str
+roll              {mode, rolls, selected}
+attackBonus       int
+total             int
+targetArmorClass  int
+hit               bool
+criticalHit       bool
+```
+
+This is a new Event type, not an `AttackResolved` V2: unlike the
+`AbilityCheckResolved` V1→V2 evolution (§3.10), which kept the same logical
+field set and only changed the roll's internal representation,
+`MonsterAttackResolved`'s field set is conceptually different from
+`AttackResolved` (`attackBonus` instead of `ability`/`abilityModifier`/
+`proficiencyBonus`) — the same reasoning that already keeps
+`SkillCheckResolved`, `SavingThrowResolved`, and `AbilityCheckResolved`
+separate Event types despite sharing the d20 foundation. `AttackResolved` V1
+is untouched: it has no backward-compatibility question to answer, because
+nothing about it changed. The Event does not carry `damageDice`,
+`damageModifier`, `damageType`, any damage amount, `previousHp`/`newHp`, or
+a caused Damage Event: this Event records resolution of the **attack roll**
+only, exactly like `AttackResolved` does; Damage resolution belongs to a
+separate DEF-0013 Attack-consequence Event, not to this one. Within the
+current authoritative State/ruleset resolution context, the attacking
+Monster's action is identified by `GameEvent.actor_id` (the runtime Creature
+ID) plus the loaded `CreatureState.definition_id` it currently resolves to
+(its `MonsterDefinition`) plus this payload's `actionId` (the local
+`MonsterAttackDefinition` within that Definition) — no global Action
+registry and no runtime `action_NNN` are introduced. This is not a claim
+that `MonsterAttackResolved` is a self-contained durable source-provenance
+record for future replay: it carries no `monsterDefinitionId`, no
+Definition version, and no damage fields, and reconstructing "which action
+this was" outside the current State/ruleset context is explicitly out of
+scope here. Durable Event history, version-aware replay, and source
+provenance remain the separate cross-cutting DEF-0022 track, revisited only
+when a real durable consumer exists (§3.18, §12.10).
+
+#### Application: `AttackHandler` Monster-actor branch
+
+```text
+actor CreatureState lookup                          -> ENTITY_NOT_FOUND (unchanged, shared with Character path)
+actor CharacterState lookup
+    found     -> existing Character/unarmed path (§3.17), unchanged
+    not found -> Monster-actor path:
+        actor MonsterDefinition lookup (DefinitionSource)
+            not found   -> DEFINITION_NOT_FOUND, entity_id=<actor.definition_id>, field="definition_id"
+            wrong type  -> INVALID_STATE, entity_id=<actor.id>, field="definition_id"
+        len(monster.attacks) != 1                    -> ACTION_NOT_AVAILABLE, entity_id=<actor.id>, field="attacks"
+        target CreatureState lookup                  -> ENTITY_NOT_FOUND, entity_id=<target_id>, field="target_id"
+        target CharacterState lookup
+            not found -> INVALID_TARGET, entity_id=<target.id>, field="target_id"
+        target_armor_class = unarmored_character_armor_class(target)
+        roll_mode = attack_roll_mode_from_conditions(actor.conditions)
+        resolve_monster_attack(...) -> MonsterAttackResult -> MonsterAttackResolved V1
+```
+
+Zero or multiple supported attacks on the actor's `MonsterDefinition` is
+**not** a Definition-shape error (`INVALID_STATE`): the Definition itself
+stays valid — a Monster may genuinely have zero attacks (a non-combatant) or
+more than one (future evidence) — but this narrow Command carries no
+action-selection intent, so this concrete consumer cannot pick one.
+`ACTION_NOT_AVAILABLE` is used instead, and the handler does not fall back
+to `attacks[0]`: no dice are rolled and no `EventMetadataProvider` call is
+made in either case. Explicit action selection among several supported
+attacks is left for a later DEF-0012 continuation once a Monster with more
+than one packaged attack provides real evidence. `INVALID_TARGET` (not
+`INVALID_STATE`) is used when the target Creature exists but has no
+`CharacterState` projection: the target is a real entity, just outside this
+concrete Monster→Character consumer's supported target category
+(Monster→Monster targets remain unimplemented). No new `ErrorCode` was
+introduced.
+
+#### Explicit exclusions
+
+This slice does not implement, and does not imply a decision on:
+
+```text
+Shortbow / any ranged Monster attack, range, reach
+Multiattack, recharge actions, saving-throw actions, area-of-effect actions
+Damage resolution, DamageApplied, HP mutation, causedBy chains (DEF-0013)
+Action selection among multiple supported Monster attacks
+CombatState / active-turn legality for AttackCommand (unchanged from §3.25)
+Zero-HP / combatant eligibility (DEF-0015)
+Equipment/Inventory State, Character weapon proficiency, Weapon attacks (DEF-0011 weapon path)
+```
+
+#### Abstraction verdict
+
+**KEEP CONCRETE.** `MonsterAttackResult`/`MonsterAttackResolvedPayloadV1`
+duplicate the same natural-1/20 and `total >= target_armor_class` invariant
+checks already written for `AttackResult`/`AttackResolvedPayloadV1` (§3.17).
+This is the second concrete pair to need them; per this project's
+evidence-driven abstraction policy (§3.6), two concrete consumers do not by
+themselves justify extracting a shared
+`resolve_natural_attack_outcome`-style helper, and none is introduced in
+this slice. The one abstraction actually extracted here — reusing the
+existing `attack_roll_mode_from_conditions` and
+`unarmored_character_armor_class` pure functions instead of writing new
+Monster-specific equivalents — is reuse of already-evidenced policy, not a
+new one. Revisit only if a third concrete Attack-Result-shaped consumer
+appears.
+
+#### Relationship to DEF-0011 / DEF-0012 / DEF-0013
+
+This slice is the first concrete Monster-attack consumer (DEF-0012 origin)
+and, simultaneously, the first concrete Character-as-target consumer within
+DEF-0011's own "Weapon attacks and Character-target attacks" scope — DEF-0011
+itself names Character targets as part of what it covers, alongside the
+Weapon-attack/Equipment/Inventory/proficiency/Finesse scope that remains
+entirely open. Neither DEF record is closed by this slice: `docs/DEFERRED.md`
+and `docs/ROADMAP.md` record this as a scope-accurate foundation row, not a
+completed broad `Monster actions` or `Weapon attacks` item.
+
+DEF-0013 (Attack consequence, separate and still not started) names its own
+three prerequisites: "relevant part of DEF-0011," "a concrete damage
+source," and "an explicit Event ordering/causation design." This slice
+supplies the first two — it establishes the Character-target portion of
+DEF-0011 as the "relevant part" a future Monster→Character Attack-consequence
+slice would build on, and `MonsterAttackDefinition`'s `damage_dice`/
+`damage_modifier`/`damage_type` are a concrete Monster damage source — but
+it does **not** design Event ordering/causation, and it does not implement
+DEF-0013 itself. DEF-0011 does not itself name "a concrete damage source" as
+one of its own prerequisites; that phrasing belongs to DEF-0013 only.
 
 ---
 

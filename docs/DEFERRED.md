@@ -311,14 +311,18 @@ still controls when work starts.
   [P2-SAVING-THROWS](#p2-saving-throws).
 - **Created:** 2026-08-30
 - **Target:** Phase 3 — Monster actions.
-- **Status:** Deferred
+- **Status:** Done
 - **Description:** Establish authoritative monster proficiency inputs for
   saves, skills, attacks, and other mechanics without applying the Character
   total-level formula to monsters.
 - **Motivation:** Monster proficiency follows monster/stat-block or challenge
   rules, not `CharacterState.total_level`.
-- **Why deferred:** Current `MonsterDefinition` intentionally lacks challenge,
-  proficiency, save, skill, and action fields.
+- **Why deferred:** Originally deferred because `MonsterDefinition`
+  intentionally lacked challenge, proficiency, save, skill, and action
+  fields. G8 (§3.26) added the first such field, `attacks`, carrying a flat
+  authoritative `attack_bonus`; challenge, save, and skill proficiency
+  fields still do not exist on `MonsterDefinition` and remain separately
+  deferred (see "What `Done` does not mean" below).
 - **Prerequisites:** A concrete monster save/skill/attack consumer and the
   minimal immutable Definition facts it needs.
 - **Planned approach:** Extend the typed packaged Monster Definition only with
@@ -330,9 +334,27 @@ still controls when work starts.
   deterministic tests cover the new data.
 - **References:** [Architecture §3.11](ARCHITECTURE.md#311-minimal-phase-2-proficiency-foundation),
   [§3.16](ARCHITECTURE.md#316-minimal-phase-2-definition-access-vertical-slice-g4a),
-  and [DEC-0029](DECISIONS.md#dec-0029--definition-access-and-packaged-srd-51-ruleset-boundary-g4a).
+  [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
+  [DEC-0029](DECISIONS.md#dec-0029--definition-access-and-packaged-srd-51-ruleset-boundary-g4a),
+  and [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
-  implementation or scheduling commitment.
+  implementation or scheduling commitment. 2026-08-30 — Closed `Done`: G8
+  (§3.26, DEC-0041) is the first concrete Monster attack/save/skill consumer
+  this record asked for. It resolves from typed authoritative packaged data
+  (`MonsterAttackDefinition.attack_bonus`, a flat stat-block fact read
+  through the existing `DefinitionSource`/`PackagedDefinitionSource`
+  boundary), does not reuse `CharacterState.total_level` or
+  `character_proficiency_bonus` for the Monster path, maps missing/wrong-type
+  Monster Definitions through the existing `DEFINITION_NOT_FOUND`/
+  `INVALID_STATE` lookup-error contract unchanged, and is covered by
+  packaged-decoder, Domain, Application, and real-adapter integration tests.
+  Every stated acceptance criterion is satisfied by this one concrete
+  consumer. **What `Done` does not mean:** Monster Saving Throw proficiency
+  inputs, Monster Skill proficiency inputs, a generic Monster proficiency
+  formula, and challenge-rating-derived proficiency are not implemented —
+  none of those facts exist on `MonsterDefinition`. Those remain
+  consumer-driven and are still required by their own records, such as
+  [DEF-0004](#def-0004).
 
 ## DEF-0003
 
@@ -374,8 +396,11 @@ still controls when work starts.
   naming where appropriate.
 - **Motivation:** Broad Saving Throws cannot close with only a Character
   projection-dependent resolver.
-- **Why deferred:** [DEF-0002](#def-0002) is unresolved and the current monster
-  Definition contains no saving-throw proficiency facts.
+- **Why deferred:** Originally deferred while DEF-0002 was unresolved. G8
+  (§3.26) now closes that foundation with the first authoritative Monster
+  attack-bonus source, but `MonsterDefinition` still contains no Saving
+  Throw proficiency facts and no concrete Monster Saving Throw consumer
+  exists.
 - **Prerequisites:** DEF-0002 and a concrete monster-save caller.
 - **Planned approach:** Reuse `D20Roll` and shared ability modifier, but create
   a concrete monster resolver/handler policy rather than forcing
@@ -383,10 +408,17 @@ still controls when work starts.
 - **Acceptance criteria:** Proficient and non-proficient monster saves resolve
   deterministically; natural 1/20 retain Saving Throw semantics; Event audit
   contributions are explicit; Character save behavior is unchanged.
-- **References:** [Architecture §3.13](ARCHITECTURE.md#313-minimal-phase-2-character-saving-throw-vertical-slice)
-  and [DEC-0024](DECISIONS.md#dec-0024--first-saving-throw-vertical-slice-is-character-specific).
+- **References:** [Architecture §3.13](ARCHITECTURE.md#313-minimal-phase-2-character-saving-throw-vertical-slice),
+  [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
+  [DEC-0024](DECISIONS.md#dec-0024--first-saving-throw-vertical-slice-is-character-specific),
+  and [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
-  implementation or scheduling commitment.
+  implementation or scheduling commitment. 2026-08-30 — G8 (§3.26, DEC-0041)
+  closed [DEF-0002](#def-0002) `Done` on its typed authoritative Monster
+  attack-bonus foundation. This record remains `Deferred`: it needs Monster
+  Saving Throw proficiency facts specifically, which still do not exist on
+  `MonsterDefinition`, and no concrete Monster Saving Throw consumer has been
+  built. Prerequisites and acceptance criteria are unchanged.
 
 ## DEF-0005
 
@@ -581,10 +613,18 @@ still controls when work starts.
   failures, Events, and persistence side effects are explicit and tested.
 - **References:** [Architecture §3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
   [§3.1.1](ARCHITECTURE.md#311-minimal-phase-1-definition-contracts),
+  [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
   [DEC-0030](DECISIONS.md#dec-0030--shared-domain-ndm-parser-for-dice-engine-and-weapondefinition-g4b),
-  and [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete).
+  [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
+  and [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
-  implementation or scheduling commitment.
+  implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) proves the
+  Character-target part of this record (a real Attack resolving against
+  `unarmored_character_armor_class`, gated on an explicit `CharacterState`
+  projection check), using a Monster as the attacker rather than a weapon
+  source. The Weapon-attack part of this record — Equipment/Inventory
+  ownership, weapon-instance selection, weapon proficiency, and explicit
+  Finesse ability choice — remains entirely open; Status stays `Deferred`.
 
 ## DEF-0012
 
@@ -609,9 +649,24 @@ still controls when work starts.
   Event audit are explicit; consequence handoff is tested if included.
 - **References:** [Architecture §3.16](ARCHITECTURE.md#316-minimal-phase-2-definition-access-vertical-slice-g4a),
   [§3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
-  and [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete).
+  [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
+  [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
+  and [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
-  implementation or scheduling commitment.
+  implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) delivers
+  the first real stat-block action and concrete resolver this record asked
+  for: a narrow `MonsterAttackDefinition` (action_id, name, attack_bonus,
+  damage_dice, damage_modifier, damage_type), one packaged Goblin Scimitar
+  attack, `resolve_monster_attack`, and `MonsterAttackResolved` V1, reached
+  through the unchanged `AttackCommand`/`AttackHandler` rather than a new
+  action registry. This same slice also satisfies this record's own
+  [DEF-0002](#def-0002) prerequisite: `attack_bonus` is now a landed
+  authoritative typed Monster attack-bonus source, and DEF-0002 itself
+  closed `Done` on that foundation. Multiple/ambiguous supported attacks,
+  action selection, multiattack, recharge, saving-throw/AoE actions, and
+  ranged/reach (the Goblin's Shortbow is intentionally not packaged) remain
+  open; Status stays
+  `Deferred` for that broader scope.
 
 ## DEF-0013
 
@@ -639,11 +694,25 @@ still controls when work starts.
   HP changes only after concrete Damage application and successful save.
 - **References:** [Architecture §3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
   [§3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
+  [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
   [§12.11](ARCHITECTURE.md#1211-event-ordering),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
-  and [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete).
+  [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
+  and [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
-  implementation or scheduling commitment.
+  implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) supplies
+  two of this record's three named prerequisites. For "relevant part of
+  DEF-0011," G8 chooses and delivers the Character-target part of DEF-0011's
+  own "Weapon attacks and Character-target attacks" scope (DEF-0011 does not
+  itself name "a concrete damage source" as one of its prerequisites — that
+  is this record's own separate, second prerequisite). G8 supplies that
+  second prerequisite directly:
+  `MonsterAttackDefinition.damage_dice`/`damage_modifier`/`damage_type` is a
+  concrete Monster damage source, carried but not yet resolved. G8 does
+  **not** supply this record's third prerequisite, an explicit Event
+  ordering/causation design, and does not implement DEF-0013: no
+  Attack→Damage orchestration, ordered/correlated Events, or `causedBy` chain
+  was added. Status stays `Deferred`; acceptance criteria are unchanged.
 
 ## DEF-0014
 

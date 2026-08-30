@@ -7,6 +7,7 @@ from dnd_engine.application.handlers.attack import AttackHandler
 from dnd_engine.application.services.event_metadata import EventMetadata
 from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
 from dnd_engine.domain.definitions.monster import MonsterDefinition
+from dnd_engine.domain.definitions.monster_attack import MonsterAttackDefinition
 from dnd_engine.domain.errors import ErrorCode
 from dnd_engine.domain.services.definitions import (
     DefinitionNotFoundError,
@@ -20,6 +21,7 @@ from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 from dnd_engine.domain.value_objects.condition import Condition
 from dnd_engine.domain.value_objects.d20 import RollMode
+from dnd_engine.domain.value_objects.damage_type import DamageType
 from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 from dnd_engine.infrastructure.definitions.packaged import (
     InvalidPackagedDefinitionError,
@@ -191,7 +193,11 @@ def make_character(
     )
 
 
-def make_monster_definition(*, armor_class: int = 15) -> MonsterDefinition:
+def make_monster_definition(
+    *,
+    armor_class: int = 15,
+    attacks: tuple[MonsterAttackDefinition, ...] = (),
+) -> MonsterDefinition:
     return MonsterDefinition(
         id="goblin",
         version=1,
@@ -205,6 +211,18 @@ def make_monster_definition(*, armor_class: int = 15) -> MonsterDefinition:
             charisma=8,
         ),
         armor_class=armor_class,
+        attacks=attacks,
+    )
+
+
+def make_scimitar_attack(*, action_id: str = "scimitar") -> MonsterAttackDefinition:
+    return MonsterAttackDefinition(
+        action_id=action_id,
+        name="Scimitar",
+        attack_bonus=4,
+        damage_dice="1d6",
+        damage_modifier=2,
+        damage_type=DamageType.SLASHING,
     )
 
 
@@ -239,6 +257,7 @@ def make_dependencies(
     raw_roll: int = 9,
     additional_rolls: tuple[int, ...] = (),
     monster_armor_class: int = 15,
+    monster_attacks: tuple[MonsterAttackDefinition, ...] = (),
     definition_error: Exception | None = None,
     dice_fail: bool = False,
     metadata_fail: bool = False,
@@ -253,7 +272,9 @@ def make_dependencies(
     return (
         SpyStateStore(snapshot, calls),
         SpyDefinitionSource(
-            make_monster_definition(armor_class=monster_armor_class),
+            make_monster_definition(
+                armor_class=monster_armor_class, attacks=monster_attacks
+            ),
             calls,
             error=definition_error,
         ),
@@ -501,7 +522,11 @@ def test_missing_actor_stops_before_target_definition_resolution() -> None:
     assert store.save_calls == []
 
 
-def test_missing_character_stops_before_target_definition_resolution() -> None:
+def test_missing_character_routes_actor_to_monster_attack_path() -> None:
+    # An actor with no matching CharacterState is no longer an unconditional
+    # error: it is routed to the Monster-actor path (G8). With zero
+    # supported attacks on the actor's MonsterDefinition, that path itself
+    # reports ACTION_NOT_AVAILABLE rather than reaching AttackResolved.
     snapshot = make_snapshot(creatures=(make_actor(), make_target()))
     store, definitions, dice, metadata, calls = make_dependencies(snapshot)
 
@@ -511,11 +536,18 @@ def test_missing_character_stops_before_target_definition_resolution() -> None:
     assert result.outcome is None
     assert result.events == ()
     assert len(result.errors) == 1
-    assert result.errors[0].code is ErrorCode.INVALID_STATE
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
     assert result.errors[0].entity_id == "character_001"
-    assert result.errors[0].field == "characters"
-    assert calls == ["load"]
-    assert definitions.get_calls == []
+    assert result.errors[0].field == "attacks"
+    assert calls == ["load", "definition"]
+    assert definitions.get_calls == [
+        {
+            "ruleset_id": "dnd_5e",
+            "ruleset_version": "5.1",
+            "definition_id": "fighter",
+            "expected_type": MonsterDefinition,
+        }
+    ]
     assert dice.roll_calls == []
     assert metadata.next_calls == []
     assert store.save_calls == []
@@ -662,4 +694,314 @@ def test_metadata_failure_propagates_after_resolution_without_save() -> None:
     assert calls == ["load", "definition", "dice", "metadata"]
     assert dice.roll_calls == ["1d20"]
     assert metadata.next_calls == ["campaign_001"]
+    assert store.save_calls == []
+
+
+# --- Monster actor -> Character target path (G8) -----------------------
+
+
+def make_monster_actor(
+    *, conditions: frozenset[Condition] = frozenset()
+) -> CreatureState:
+    return make_creature(
+        creature_id="monster_001",
+        definition_id="goblin",
+        conditions=conditions,
+    )
+
+
+def make_character_target(*, dexterity: int = 14) -> CreatureState:
+    return make_creature(
+        creature_id="character_001",
+        definition_id="fighter",
+        dexterity=dexterity,
+        current_hp=11,
+        max_hp=11,
+    )
+
+
+def make_monster_attack_command() -> AttackCommand:
+    return AttackCommand(
+        command_id="command_000001",
+        campaign_id="campaign_001",
+        actor_id="monster_001",
+        payload=AttackPayload(target_id="character_001"),
+    )
+
+
+def handle_monster_attack_with(
+    store: SpyStateStore,
+    definitions: SpyDefinitionSource,
+    dice: ScriptedDiceEngine,
+    metadata: FixedEventMetadataProvider,
+):
+    return AttackHandler(
+        state_store=store,
+        definition_source=definitions,
+        dice=dice,
+        event_metadata_provider=metadata,
+    ).handle(make_monster_attack_command())
+
+
+def test_monster_attack_hit_resolves_against_unarmored_character_armor_class() -> None:
+    # dexterity 14 -> modifier +2 -> unarmored Character AC 12 (no
+    # Equipment/persisted AC source is consulted).
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), make_character_target(dexterity=14)),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice", "metadata"]
+    assert definitions.get_calls == [
+        {
+            "ruleset_id": "dnd_5e",
+            "ruleset_version": "5.1",
+            "definition_id": "goblin",
+            "expected_type": MonsterDefinition,
+        }
+    ]
+    assert dice.roll_calls == ["1d20"]
+    assert store.save_calls == []
+
+    assert result.success is True
+    assert result.errors == ()
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.target_id == "character_001"
+    assert outcome.action_id == "scimitar"
+    assert outcome.roll.mode is RollMode.NORMAL
+    assert outcome.roll.selected == 10
+    assert outcome.attack_bonus == 4
+    assert outcome.total == 14
+    assert outcome.target_armor_class == 12
+    assert outcome.hit is True
+    assert outcome.critical_hit is False
+
+    assert len(result.events) == 1
+    event = result.events[0]
+    assert event.type == "MonsterAttackResolved"
+    assert event.version == 1
+    assert event.actor_id == "monster_001"
+    assert event.caused_by is None
+    assert event.payload == {
+        "targetId": "character_001",
+        "actionId": "scimitar",
+        "roll": {"mode": "normal", "rolls": (10,), "selected": 10},
+        "attackBonus": 4,
+        "total": 14,
+        "targetArmorClass": 12,
+        "hit": True,
+        "criticalHit": False,
+    }
+
+
+def test_monster_attack_poisoned_actor_rolls_with_disadvantage() -> None:
+    snapshot = make_snapshot(
+        creatures=(
+            make_monster_actor(conditions=frozenset({Condition.POISONED})),
+            make_character_target(),
+        ),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(17, calls, additional_rolls=(6,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice", "dice", "metadata"]
+    assert dice.roll_calls == ["1d20", "1d20"]
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.roll.mode is RollMode.DISADVANTAGE
+    assert outcome.roll.rolls == (17, 6)
+    assert outcome.roll.selected == 6
+    assert result.events[0].payload["roll"] == {
+        "mode": "disadvantage",
+        "rolls": (17, 6),
+        "selected": 6,
+    }
+
+
+@pytest.mark.parametrize(
+    ("raw_roll", "expected_hit", "expected_critical"),
+    [
+        (1, False, False),
+        (20, True, True),
+    ],
+)
+def test_monster_attack_natural_one_and_twenty_are_automatic(
+    raw_roll: int,
+    expected_hit: bool,
+    expected_critical: bool,
+) -> None:
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), make_character_target(dexterity=30)),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(raw_roll, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.hit is expected_hit
+    assert outcome.critical_hit is expected_critical
+    assert result.events[0].payload["hit"] is expected_hit
+    assert result.events[0].payload["criticalHit"] is expected_critical
+
+
+@pytest.mark.parametrize(
+    ("definition_error", "expected_code", "expected_entity_id"),
+    [
+        (
+            DefinitionNotFoundError("missing definition"),
+            ErrorCode.DEFINITION_NOT_FOUND,
+            "goblin",
+        ),
+        (
+            DefinitionTypeMismatchError("wrong definition type"),
+            ErrorCode.INVALID_STATE,
+            "monster_001",
+        ),
+    ],
+)
+def test_monster_attack_actor_definition_failures_stop_before_rolling(
+    definition_error: Exception,
+    expected_code: ErrorCode,
+    expected_entity_id: str,
+) -> None:
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), make_character_target()),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)),
+        calls,
+        error=definition_error,
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is expected_code
+    assert result.errors[0].entity_id == expected_entity_id
+    assert result.errors[0].field == "definition_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+@pytest.mark.parametrize(
+    "attacks",
+    [
+        (),
+        (make_scimitar_attack(action_id="scimitar"), make_scimitar_attack(action_id="bite")),
+    ],
+)
+def test_monster_attack_requires_exactly_one_supported_attack(
+    attacks: tuple[MonsterAttackDefinition, ...],
+) -> None:
+    # Neither zero nor multiple supported attacks is a Definition-shape
+    # error: the Definition itself stays valid, but this narrow Command
+    # cannot select among them, so no dice are rolled and no Event is built.
+    snapshot = make_snapshot(creatures=(make_monster_actor(),))
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(make_monster_definition(attacks=attacks), calls)
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field == "attacks"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_monster_attack_missing_target_creature() -> None:
+    snapshot = make_snapshot(creatures=(make_monster_actor(),))
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ENTITY_NOT_FOUND
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "target_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_monster_attack_target_without_character_state_is_invalid_target() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), make_character_target()),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_TARGET
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "target_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
     assert store.save_calls == []

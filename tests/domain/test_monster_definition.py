@@ -4,10 +4,30 @@ import pytest
 
 from dnd_engine.domain.definitions.base import Definition
 from dnd_engine.domain.definitions.monster import MonsterDefinition
+from dnd_engine.domain.definitions.monster_attack import MonsterAttackDefinition
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.damage_type import DamageType
 
 
-CANONICAL_FIELDS = ("id", "version", "name", "ability_scores", "armor_class")
+CANONICAL_FIELDS = (
+    "id",
+    "version",
+    "name",
+    "ability_scores",
+    "armor_class",
+    "attacks",
+)
+
+
+def scimitar(*, action_id: str = "scimitar") -> MonsterAttackDefinition:
+    return MonsterAttackDefinition(
+        action_id=action_id,
+        name="Scimitar",
+        attack_bonus=4,
+        damage_dice="1d6",
+        damage_modifier=2,
+        damage_type=DamageType.SLASHING,
+    )
 
 
 def goblin() -> MonsterDefinition:
@@ -101,3 +121,69 @@ def test_monster_definition_rejects_non_int_armor_class() -> None:
             ability_scores=goblin().ability_scores,
             armor_class="15",  # type: ignore[arg-type]
         )
+
+
+def test_monster_definition_attacks_default_to_empty_tuple() -> None:
+    assert goblin().attacks == ()
+
+
+def test_monster_definition_accepts_one_attack() -> None:
+    monster = MonsterDefinition(
+        id="goblin",
+        version=1,
+        name="Goblin",
+        ability_scores=goblin().ability_scores,
+        armor_class=15,
+        attacks=(scimitar(),),
+    )
+
+    assert monster.attacks == (scimitar(),)
+
+
+def test_monster_definition_rejects_non_tuple_attacks() -> None:
+    with pytest.raises(TypeError, match="attacks"):
+        MonsterDefinition(
+            id="goblin",
+            version=1,
+            name="Goblin",
+            ability_scores=goblin().ability_scores,
+            armor_class=15,
+            attacks=[scimitar()],  # type: ignore[arg-type]
+        )
+
+
+def test_monster_definition_rejects_non_monster_attack_elements() -> None:
+    with pytest.raises(TypeError, match="attacks"):
+        MonsterDefinition(
+            id="goblin",
+            version=1,
+            name="Goblin",
+            ability_scores=goblin().ability_scores,
+            armor_class=15,
+            attacks=(object(),),  # type: ignore[arg-type]
+        )
+
+
+def test_monster_definition_rejects_duplicate_action_id() -> None:
+    with pytest.raises(ValueError, match="action_id"):
+        MonsterDefinition(
+            id="goblin",
+            version=1,
+            name="Goblin",
+            ability_scores=goblin().ability_scores,
+            armor_class=15,
+            attacks=(scimitar(), scimitar()),
+        )
+
+
+def test_monster_definition_allows_multiple_distinct_action_ids() -> None:
+    monster = MonsterDefinition(
+        id="goblin",
+        version=1,
+        name="Goblin",
+        ability_scores=goblin().ability_scores,
+        armor_class=15,
+        attacks=(scimitar(), scimitar(action_id="bite")),
+    )
+
+    assert len(monster.attacks) == 2
