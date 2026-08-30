@@ -4,6 +4,7 @@ import pytest
 
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
@@ -51,6 +52,38 @@ CANONICAL_V4_DATA: dict[str, object] = {
                 "skillProficiencies": ["athletics", "perception"],
             }
         ],
+    },
+}
+
+COMBAT_DATA: dict[str, object] = {
+    "id": "combat_001",
+    "round": 2,
+    "order": ["monster_001", "character_001"],
+    "activeIndex": 1,
+}
+
+# Legacy V4: current V1-V4 state shape, no top-level `combat` key.
+LEGACY_V4_DATA: dict[str, object] = deepcopy(CANONICAL_V4_DATA)
+
+CANONICAL_V5_DATA: dict[str, object] = {
+    "schemaVersion": 5,
+    "campaignId": "campaign_001",
+    "state": {
+        "campaign": {
+            "id": "campaign_001",
+            "rulesetId": "dnd_5e",
+            "rulesetVersion": "5.1",
+        },
+        "creatures": [V4_CREATURE_DATA],
+        "characters": [
+            {
+                "id": "character_001",
+                "totalLevel": 5,
+                "savingThrowProficiencies": ["constitution", "strength"],
+                "skillProficiencies": ["athletics", "perception"],
+            }
+        ],
+        "combat": None,
     },
 }
 
@@ -111,15 +144,31 @@ def character_state(character_id: str = "character_001") -> CharacterState:
     )
 
 
+def combat_state(
+    *order: str,
+    combat_id: str = "combat_001",
+    round: int = 2,
+    active_index: int = 1,
+) -> CombatState:
+    return CombatState(
+        id=combat_id, round=round, order=order, active_index=active_index
+    )
+
+
 def snapshot(
     *creatures: CreatureState,
     characters: tuple[CharacterState, ...] = (),
+    combat: CombatState | None = None,
 ) -> StateSnapshot:
-    return StateSnapshot(campaign_state(), tuple(creatures), characters)
+    return StateSnapshot(campaign_state(), tuple(creatures), characters, combat)
+
+
+def v5_data() -> dict[str, object]:
+    return deepcopy(CANONICAL_V5_DATA)
 
 
 def v4_data() -> dict[str, object]:
-    return deepcopy(CANONICAL_V4_DATA)
+    return deepcopy(LEGACY_V4_DATA)
 
 
 def v3_data() -> dict[str, object]:
@@ -141,20 +190,20 @@ def nested(data: dict[str, object], *path: str | int) -> object:
     return value
 
 
-def test_serialize_emits_exact_canonical_v4_mapping() -> None:
+def test_serialize_emits_exact_canonical_v5_mapping() -> None:
     serialized = StateSerializer.serialize(
         snapshot(creature_state(), characters=(character_state(),))
     )
 
-    assert serialized == CANONICAL_V4_DATA
-    assert serialized["schemaVersion"] == 4
+    assert serialized == CANONICAL_V5_DATA
+    assert serialized["schemaVersion"] == 5
 
 
-def test_serialize_emits_empty_characters_and_conditions_in_v4() -> None:
+def test_serialize_emits_empty_characters_conditions_and_combat_in_v5() -> None:
     serialized = StateSerializer.serialize(snapshot())
 
     assert serialized == {
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "campaignId": "campaign_001",
         "state": {
             "campaign": {
@@ -164,11 +213,12 @@ def test_serialize_emits_empty_characters_and_conditions_in_v4() -> None:
             },
             "creatures": [],
             "characters": [],
+            "combat": None,
         },
     }
 
 
-def test_serialize_uses_exact_v4_state_creature_and_character_fields() -> None:
+def test_serialize_uses_exact_v5_state_creature_and_character_fields() -> None:
     serialized = StateSerializer.serialize(
         snapshot(creature_state(), characters=(character_state(),))
     )
@@ -176,7 +226,7 @@ def test_serialize_uses_exact_v4_state_creature_and_character_fields() -> None:
     creature = state["creatures"][0]  # type: ignore[index]
     character = state["characters"][0]  # type: ignore[index]
 
-    assert set(state) == {"campaign", "creatures", "characters"}
+    assert set(state) == {"campaign", "creatures", "characters", "combat"}
     assert set(creature) == {
         "id",
         "definitionId",
@@ -190,6 +240,23 @@ def test_serialize_uses_exact_v4_state_creature_and_character_fields() -> None:
         "totalLevel",
         "savingThrowProficiencies",
         "skillProficiencies",
+    }
+
+
+def test_serialize_emits_exact_combat_fields() -> None:
+    serialized = StateSerializer.serialize(
+        snapshot(
+            creature_state("character_001"),
+            creature_state("monster_001"),
+            combat=combat_state("monster_001", "character_001"),
+        )
+    )
+
+    assert serialized["state"]["combat"] == {  # type: ignore[index]
+        "id": "combat_001",
+        "round": 2,
+        "order": ["monster_001", "character_001"],
+        "activeIndex": 1,
     }
 
 
@@ -240,7 +307,7 @@ def test_serialize_orders_conditions_by_value() -> None:
     ]
 
 
-def test_v4_round_trip_reconstructs_equivalent_current_snapshot() -> None:
+def test_v5_round_trip_reconstructs_equivalent_current_snapshot() -> None:
     original = snapshot(
         creature_state(conditions=frozenset({Condition.POISONED})),
         characters=(character_state(),),
@@ -251,7 +318,7 @@ def test_v4_round_trip_reconstructs_equivalent_current_snapshot() -> None:
     assert reconstructed == original
 
 
-def test_v4_round_trip_with_empty_conditions() -> None:
+def test_v5_round_trip_with_empty_conditions() -> None:
     original = snapshot(creature_state())
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
@@ -260,13 +327,34 @@ def test_v4_round_trip_with_empty_conditions() -> None:
     assert reconstructed.creatures[0].conditions == frozenset()
 
 
-def test_v4_round_trip_with_poisoned_condition() -> None:
+def test_v5_round_trip_with_poisoned_condition() -> None:
     original = snapshot(creature_state(conditions=frozenset({Condition.POISONED})))
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
 
     assert reconstructed == original
     assert reconstructed.creatures[0].conditions == frozenset({Condition.POISONED})
+
+
+def test_v5_round_trip_with_combat() -> None:
+    original = snapshot(
+        creature_state("character_001"),
+        creature_state("monster_001"),
+        combat=combat_state("monster_001", "character_001"),
+    )
+
+    reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
+
+    assert reconstructed == original
+    assert reconstructed.combat == combat_state("monster_001", "character_001")
+
+
+def test_v5_round_trip_without_combat() -> None:
+    original = snapshot(creature_state())
+
+    reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
+
+    assert reconstructed.combat is None
 
 
 def test_serialize_emits_empty_skill_membership_as_array() -> None:
@@ -301,34 +389,57 @@ def test_deserialize_v3_restores_skill_membership_and_empty_conditions() -> None
     assert reconstructed.creatures[0].conditions == frozenset()
 
 
-def test_legacy_v2_reserializes_as_current_v4() -> None:
+def test_legacy_v2_reserializes_as_current_v5() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v2_data()))
 
-    assert serialized["schemaVersion"] == 4
+    assert serialized["schemaVersion"] == 5
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == []
     assert serialized["state"]["creatures"][0]["conditions"] == []  # type: ignore[index]
+    assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v3_reserializes_as_current_v4() -> None:
+def test_legacy_v3_reserializes_as_current_v5() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v3_data()))
 
-    assert serialized["schemaVersion"] == 4
+    assert serialized["schemaVersion"] == 5
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == ["athletics", "perception"]
     assert serialized["state"]["creatures"][0]["conditions"] == []  # type: ignore[index]
+    assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v1_reserializes_as_current_v4() -> None:
+def test_legacy_v4_reserializes_as_current_v5() -> None:
+    serialized = StateSerializer.serialize(StateSerializer.deserialize(v4_data()))
+
+    assert serialized["schemaVersion"] == 5
+    assert serialized["state"]["characters"][0][  # type: ignore[index]
+        "skillProficiencies"
+    ] == ["athletics", "perception"]
+    assert serialized["state"]["creatures"][0]["conditions"] == []  # type: ignore[index]
+    assert serialized["state"]["combat"] is None  # type: ignore[index]
+
+
+def test_legacy_v1_reserializes_as_current_v5() -> None:
     reconstructed = StateSerializer.deserialize(v1_data())
 
     serialized = StateSerializer.serialize(reconstructed)
 
-    assert serialized["schemaVersion"] == 4
+    assert serialized["schemaVersion"] == 5
     assert serialized["state"]["characters"] == []  # type: ignore[index]
     assert serialized["state"]["creatures"][0]["conditions"] == []  # type: ignore[index]
+    assert serialized["state"]["combat"] is None  # type: ignore[index]
+
+
+def test_deserialize_v4_legacy_produces_no_combat() -> None:
+    """G7 regression: a real, on-disk legacy V4 snapshot (predating the
+    state-level `combat` field) must still load with `combat=None`, not just
+    through the V1-V3 legacy-read tests above."""
+    reconstructed = StateSerializer.deserialize(v4_data())
+
+    assert reconstructed.combat is None
 
 
 def test_deserialize_accepts_exact_legacy_v1_without_inventing_character_state() -> None:
@@ -571,11 +682,12 @@ def test_v4_creature_shape_is_fixed_and_survives_future_schema_version_bump(
 ) -> None:
     """Regression: V4 Creature field/`conditions` decoding must be keyed to
     the fixed `SCHEMA_V4_VERSION` identity, not the mutable current-writer
-    `SCHEMA_VERSION`. Simulates a future schema bump (`SCHEMA_VERSION = 5`)
-    and asserts a historical, already-persisted V4 snapshot with `conditions`
-    still decodes exactly as V4 — it must not be silently misread against the
-    pre-V4 Creature field set."""
-    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 5)
+    `SCHEMA_VERSION`. The V5 bump (adding top-level `combat`, §3.25) already
+    happened for real; this simulates the *next* hypothetical schema bump
+    (`SCHEMA_VERSION = 6`) and asserts a historical, already-persisted V4
+    snapshot with `conditions` still decodes exactly as V4 -- it must not be
+    silently misread against the pre-V4 Creature field set."""
+    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 6)
     data = v4_data()
     nested(data, "state", "creatures", 0)["conditions"] = [  # type: ignore[index]
         "poisoned"
@@ -586,6 +698,29 @@ def test_v4_creature_shape_is_fixed_and_survives_future_schema_version_bump(
     assert reconstructed.creatures[0].conditions == frozenset({Condition.POISONED})
     assert reconstructed.characters[0].skill_proficiencies == frozenset(
         {Skill.ATHLETICS, Skill.PERCEPTION}
+    )
+    assert reconstructed.combat is None
+
+
+def test_v5_state_shape_is_fixed_and_survives_future_schema_version_bump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same regression as above for the V5 state-level `combat` addition:
+    historical V5 semantics must be keyed to the fixed `SCHEMA_V5_VERSION`
+    identity, not the mutable current-writer `SCHEMA_VERSION`."""
+    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 6)
+    data = v5_data()
+    nested(data, "state")["combat"] = {  # type: ignore[index]
+        "id": "combat_001",
+        "round": 1,
+        "order": ["character_001"],
+        "activeIndex": 0,
+    }
+
+    reconstructed = StateSerializer.deserialize(data)
+
+    assert reconstructed.combat == combat_state(
+        "character_001", round=1, active_index=0
     )
 
 
@@ -716,7 +851,7 @@ def test_deserialize_rejects_invalid_hp(current_hp: int, max_hp: int) -> None:
         StateSerializer.deserialize(data)
 
 
-@pytest.mark.parametrize("schema_version", [0, 5, -1])
+@pytest.mark.parametrize("schema_version", [0, 6, -1])
 def test_deserialize_rejects_unsupported_schema_version(
     schema_version: int,
 ) -> None:
@@ -783,3 +918,155 @@ def test_serialize_rejects_mutated_invalid_creature_conditions() -> None:
 
     with pytest.raises(TypeError):
         StateSerializer.serialize(snapshot(creature))
+
+
+# --- V5 `combat` field ------------------------------------------------------
+
+
+def test_serialize_rejects_combat_referencing_missing_creature() -> None:
+    with pytest.raises(ValueError):
+        StateSerializer.serialize(
+            snapshot(
+                creature_state("character_001"),
+                combat=combat_state("character_001", "monster_001"),
+            )
+        )
+
+
+def test_serialize_rejects_mutated_invalid_combat_state() -> None:
+    combat = combat_state("character_001", active_index=0)
+    combat.round = 0  # type: ignore[assignment]
+
+    with pytest.raises(ValueError):
+        StateSerializer.serialize(snapshot(creature_state("character_001"), combat=combat))
+
+
+def test_serialize_rejects_mutated_duplicate_combat_order() -> None:
+    """CombatState.order intrinsically requires unique IDs at construction,
+    but CombatState is a mutable dataclass; the serializer must independently
+    reject a mutated instance whose order was corrupted into duplicates
+    before ever writing it as V5."""
+    combat = combat_state("character_001", "monster_001")
+    combat.order = ("character_001", "character_001")  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="duplicate"):
+        StateSerializer.serialize(
+            snapshot(
+                creature_state("character_001"),
+                creature_state("monster_001"),
+                combat=combat,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "field"),
+    [
+        (("state", "combat"), "id"),
+        (("state", "combat"), "round"),
+        (("state", "combat"), "order"),
+        (("state", "combat"), "activeIndex"),
+    ],
+)
+def test_v5_deserialize_rejects_missing_combat_fields(
+    path: tuple[str | int, ...],
+    field: str,
+) -> None:
+    data = v5_data()
+    nested(data, "state")["combat"] = deepcopy(COMBAT_DATA)  # type: ignore[index]
+    del nested(data, *path)[field]  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v5_deserialize_rejects_unknown_combat_field() -> None:
+    data = v5_data()
+    combat = deepcopy(COMBAT_DATA)
+    combat["extra"] = "unexpected"
+    nested(data, "state")["combat"] = combat  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v5_deserialize_requires_combat_key() -> None:
+    data = v5_data()
+    del nested(data, "state")["combat"]  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v5_deserialize_rejects_combat_referencing_missing_creature() -> None:
+    data = v5_data()
+    combat = deepcopy(COMBAT_DATA)
+    combat["order"] = ["does_not_exist"]
+    combat["activeIndex"] = 0
+    nested(data, "state")["combat"] = combat  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("state", "combat", "id"), 1),
+        (("state", "combat", "round"), "1"),
+        (("state", "combat", "round"), True),
+        (("state", "combat", "order"), ()),
+        (("state", "combat", "order", 0), 1),
+        (("state", "combat", "activeIndex"), "0"),
+        (("state", "combat", "activeIndex"), True),
+    ],
+)
+def test_v5_deserialize_rejects_wrong_combat_types(
+    path: tuple[str | int, ...],
+    value: object,
+) -> None:
+    data = v5_data()
+    combat = deepcopy(COMBAT_DATA)
+    combat["order"] = ["character_001"]
+    nested(data, "state")["combat"] = combat  # type: ignore[index]
+    parent = nested(data, *path[:-1])
+    parent[path[-1]] = value  # type: ignore[index]
+
+    with pytest.raises(TypeError):
+        StateSerializer.deserialize(data)
+
+
+def test_v5_deserialize_rejects_out_of_range_active_index() -> None:
+    data = v5_data()
+    combat = deepcopy(COMBAT_DATA)
+    combat["order"] = ["character_001"]
+    combat["activeIndex"] = 1
+    nested(data, "state")["combat"] = combat  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v5_deserialize_rejects_empty_combat_order() -> None:
+    data = v5_data()
+    combat = deepcopy(COMBAT_DATA)
+    combat["order"] = []
+    combat["activeIndex"] = 0
+    nested(data, "state")["combat"] = combat  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v5_deserialize_accepts_present_combat() -> None:
+    data = v5_data()
+    combat = deepcopy(COMBAT_DATA)
+    combat["order"] = ["character_001"]
+    combat["activeIndex"] = 0
+    nested(data, "state")["combat"] = combat  # type: ignore[index]
+
+    reconstructed = StateSerializer.deserialize(data)
+
+    assert reconstructed.combat == CombatState(
+        id="combat_001", round=2, order=("character_001",), active_index=0
+    )

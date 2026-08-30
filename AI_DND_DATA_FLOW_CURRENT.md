@@ -284,13 +284,13 @@ src/dnd_engine/domain/state/
 
 `StateSnapshot` группирует несколько State-проекций для persistence, но не является новым gameplay owner.
 
-Текущий JSON snapshot использует `schemaVersion: 4`.
+Текущий JSON snapshot использует `schemaVersion: 5` (V5 добавляет top-level `combat`, §3.25).
 
 Пример:
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "campaignId": "campaign_001",
   "state": {
     "campaign": {
@@ -315,7 +315,8 @@ src/dnd_engine/domain/state/
         "conditions": []
       }
     ],
-    "characters": []
+    "characters": [],
+    "combat": null
   }
 }
 ```
@@ -1083,9 +1084,9 @@ src/dnd_engine/
 | --- | --- |
 | Roadmap phase | Phase 2 Basic Rules complete (foundation scope); Phase 3 Combat current |
 | `Definitions / State / Commands / Events` separation | Реализовано и канонизировано |
-| `CampaignState`, `CreatureState`, `CharacterState`, `StateSnapshot` | Реализовано |
+| `CampaignState`, `CreatureState`, `CharacterState`, `CombatState`, `StateSnapshot` | Реализовано |
 | Filesystem `StateStore` | Реализовано |
-| JSON State serialization (`schemaVersion: 4`) | Реализовано |
+| JSON State serialization (`schemaVersion: 5`) | Реализовано |
 | `GameEvent` | Реализовано |
 | Event JSON serializer | Реализовано |
 | DiceEngine + Python RNG adapter | Реализовано |

@@ -145,11 +145,14 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 
 ## Phase 3 — Combat
 
-> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering)
+> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
 
-* [ ] Initiative
-* [ ] Turns
-* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015))
+* [x] Initiative foundation — individual-participant dice-rolled `StartCombatCommand` → `CombatStarted` V1, persisted `CombatState.order`, Poisoned Dexterity-check disadvantage via the existing Ability Check Condition policy (§3.25).
+* [x] Turn-order advancement foundation — `AdvanceTurnCommand` → `TurnAdvanced` V1 advances `active_index`/`round`, gated by an actor-eligibility check (§3.25).
+* [ ] Initiative: SRD 5.1 grouped initiative for identical GM-controlled creatures — G7 is individual-participant only; a later concrete Monster/control consumer must evidence this before it is added.
+* [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn)
+* [ ] Combat lifecycle / `CombatEnded` — G7 has no combat-ending Command or Event.
+* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — G7's eligibility gate is turn-order identity only; `current_hp` is not yet consulted.
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
@@ -160,6 +163,16 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
 * [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
 * [ ] Visibility ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
+
+G7 (§3.25) implements the first concrete Phase 3 Combat consumer: an
+individual-participant dice-rolled Initiative order (a Dexterity check, so
+Poisoned disadvantage already applies via the existing Ability Check
+Condition policy) and turn advancement, backed by a new minimal `CombatState`
+(round, order, active combatant) persisted in State schema V5. Attack (§3.17)
+is unchanged and does not yet consult `CombatState`. Grouped/identical-creature
+initiative, turn/action economy, `CombatEnded`, zero-HP action eligibility,
+Death Saves, movement, reactions, and monster/weapon actions remain open for
+later concrete Combat consumers.
 
 ## Phase 4 — Magic
 

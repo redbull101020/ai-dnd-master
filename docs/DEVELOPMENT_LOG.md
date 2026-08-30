@@ -3517,3 +3517,123 @@ contracts.
   references `2 passed`; full suite `1251 passed` (with one non-failing pytest
   cache warning caused by the managed environment); configured mypy
   `Success: no issues found in 91 source files`.
+
+## 2026-08-30 — First Phase 3 Combat consumer: Initiative/Turn Order (G7)
+
+- Confirmed Roadmap already names Phase 3 — Combat current (Phase 2 closed via
+  DEC-0039), re-read Architecture §10.7 Combat State Owner, §3.18 State
+  Mutation Foundation, §3.8 Atomicity, and the four existing concrete
+  mutation consumers (§§3.19–3.21) before designing this slice.
+- Added a new minimal State Owner, `CombatState(id, round, order,
+  active_index)`, and exactly one new optional `StateSnapshot.combat:
+  CombatState | None = None` field (default `None`; every existing snapshot
+  construction site is unaffected).
+- Implemented `StartCombatCommand(combat_id, participant_ids)`: a pure
+  `resolve_start_combat` rolls one `1d20` per participant via the existing
+  `resolve_d20_roll`/`RollMode.NORMAL` plus each participant's Dexterity
+  modifier, sorts by descending total → descending Dexterity → ascending
+  creature id for full determinism, and produces `CombatStarted` V1 plus a
+  freshly constructed `CombatState` at `round=1`. `StartCombatHandler` rejects
+  starting combat while one is already in progress (`RULE_VIOLATION`) and
+  reports a missing participant as `ENTITY_NOT_FOUND`.
+- Implemented `AdvanceTurnCommand(combat_id)`: a pure `resolve_advance_turn`
+  advances `active_index` modulo `len(order)` and increments `round` only on
+  wraparound, producing `TurnAdvanced` V1 and a replacement `CombatState`.
+  `AdvanceTurnHandler` requires `command.actor_id ==
+  combat.active_creature_id` before resolving (`ACTION_NOT_AVAILABLE`
+  otherwise) — this actor-ownership gate is the concrete Combat
+  actor/action-eligibility consumer this slice exists to deliver.
+  `current_hp` is deliberately not consulted, leaving DEF-0015's zero-HP
+  eligibility question exactly as open as before. `AttackHandler`/`AttackCommand`
+  (§3.17) were not touched.
+- Both handlers attach/replace `StateSnapshot.combat` with the stdlib
+  `dataclasses.replace(snapshot, combat=...)` directly; the existing §3.23
+  `replace_creature_in_snapshot` helper does not apply to a single optional
+  field, and no new helper or transaction abstraction was extracted or
+  introduced.
+- Bumped State schema to exact integer `schemaVersion = 5`
+  (`SCHEMA_V5_VERSION`, following the same fixed-sentinel-vs-mutable-
+  `SCHEMA_VERSION` discipline DEC-0035 established for V4): V5 adds exactly
+  one required top-level `state.combat` key (`null`, or an object with `id`/
+  `round`/`order`/`activeIndex`); V1–V4 payloads keep their existing field
+  sets with no `combat` key and always decode to `combat=None`.
+- Added new Architecture §3.25, Decision DEC-0040, and Roadmap Phase 3
+  `Initiative`/`Turns` foundation-complete status with a forward note on the
+  still-open `Zero-HP and combatant eligibility` item; synchronized CLAUDE.md
+  and the current data-flow document's schema-version mentions.
+- Added deterministic Domain tests (`CombatState`, the two Commands, the two
+  resolvers, the two Events/appliers), Application handler tests with spy
+  `StateStore`/`DiceEngine`/`EventMetadataProvider` doubles, an integration
+  test exercising both handlers through the real `FilesystemStateStore` and
+  `PythonDiceEngine` with fresh reloads between steps, and State-serializer/
+  State-store V5 persistence and legacy-V1–V4-compatibility coverage.
+- Verification on Python 3.12.9 / pytest 9.1.1: full suite `1376 passed`;
+  configured mypy `Success: no issues found in 100 source files`. The sandboxed
+  test environment's default `%TEMP%\pytest-of-<user>` directory raised a
+  pre-existing `PermissionError` unrelated to this change (reproduces on
+  unmodified `main`); all pytest runs used an explicit `--basetemp` pointed at
+  a writable scratch directory as a workaround, not a code or configuration
+  change.
+
+## 2026-08-30 — G7 correction pass: actor validation, Poisoned Initiative, ID-origin wording
+
+- Narrow review-correction pass on the still-uncommitted G7 Initiative/Turn
+  Order/`CombatState` slice; the overall design (separate `CombatEngine`-owned
+  `CombatState`, optional snapshot-level `combat`, State schema V5 with V1–V4
+  legacy reads, `StartCombat`/`CombatStarted` V1, `AdvanceTurn`/`TurnAdvanced`
+  V1, concrete Event application, direct `dataclasses.replace(snapshot,
+  combat=...)`, no generic pipeline/EventStore/UnitOfWork/TransactionManager/
+  WorkingState/LifeState/effects framework) is unchanged.
+- `StartCombatHandler` now validates `command.actor_id` against authoritative
+  `snapshot.creatures` immediately after loading State, before participant
+  resolution, any `DiceEngine` call, any `EventMetadataProvider` call, or
+  persistence — matching the actor-first order already used by every other
+  handler. A missing actor returns `ENTITY_NOT_FOUND` (`entity_id=actor_id`,
+  `field=None`) with `outcome=None`, `events=()`, and no dice/metadata/save
+  calls. The actor is not required to also be a participant.
+- Corrected Initiative semantics: SRD 5.1 Initiative is a Dexterity check, so
+  the already-implemented `ability_check_roll_mode_from_conditions` (§3.22)
+  policy now applies. `StartCombatHandler` derives one effective `RollMode`
+  per participant from authoritative `CreatureState.conditions` and passes
+  the aligned `tuple[RollMode, ...]` into a new required keyword-only
+  `resolve_start_combat(..., roll_modes=...)` parameter; the resolver keeps
+  owning the Dexterity modifier, `resolve_d20_roll` calls, totals, and
+  deterministic ordering. No generic Condition framework, `combine_roll_modes`,
+  or DEF-0021 aggregation was introduced — Poisoned is still the only
+  production roll-mode source.
+- Corrected Architecture wording for `StartCombatPayload.combat_id`: it is
+  documented as an already-allocated runtime Combat ID produced through the
+  canonical §4.11 `EntityFactory` boundary before Command construction, not
+  as a caller-invented value. §4.11 itself is unchanged; this slice still does
+  not implement a concrete `EntityFactory`, and fixed literal combat IDs in
+  tests are fixtures standing in for an already-allocated ID.
+- Made Roadmap Phase 3 scope-accurate: `Initiative` and `Turns` are now
+  `Initiative foundation` and `Turn-order advancement foundation`, with new
+  explicit open rows for SRD 5.1 grouped initiative for identical
+  GM-controlled creatures (not implemented; this is the base grouped-roll
+  rule itself, not the paragraph's separate optional tie-break method), turn/
+  action economy and turn resources, and Combat lifecycle/`CombatEnded`.
+  `Zero-HP and combatant eligibility` remains open and untouched; no
+  `LifeState` or Death Saves were introduced.
+- Strengthened the duplicate-creature-ID invariant at every layer that could
+  let one slip through: `StartCombatPayload.participant_ids` already rejected
+  duplicate input IDs; `StartCombatResult` now also rejects a duplicate
+  creature ID in its own resolved aggregate `order`; `CombatState` already
+  enforced the same invariant at construction; and the State serializer's
+  `_validate_combat` now re-validates it again before writing V5, because
+  `CombatState` is a mutable dataclass and could have been mutated after
+  construction. `InitiativeEntry` itself carries no duplicate-ID
+  responsibility.
+- Updated Architecture §3.25, DEC-0040 (in place — this slice remains
+  entirely uncommitted, so no accepted historical record was rewritten),
+  CLAUDE.md, and README.md (distinguishing the four Creature-mutation
+  handlers using the §3.23 helper from the two G7 Combat handlers using
+  direct `dataclasses.replace`, and noting G7 is already implemented rather
+  than purely future Phase 3 work).
+- Added Domain resolver coverage for normal/Poisoned/mixed participant sets
+  (dice-call counts, recorded `RollMode`, both rolls, selected lower roll,
+  preserved call order) and a duplicate-order rejection test; Application
+  handler coverage for the missing-actor failure path (call order, error
+  shape), actor-not-a-participant, and Poisoned-participant wiring through
+  the real Condition policy; a State-serializer regression test for a
+  mutated duplicate `CombatState.order`.

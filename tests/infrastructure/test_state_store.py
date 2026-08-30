@@ -171,8 +171,9 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 4
+    assert data["schemaVersion"] == 5
     assert data["state"]["characters"] == []
+    assert data["state"]["combat"] is None
 
 
 def test_load_accepts_legacy_v1_without_inventing_character_state(
@@ -218,6 +219,40 @@ def test_load_accepts_legacy_v3_with_empty_conditions(
 def test_save_load_v3_preserves_character_state(tmp_path: Path) -> None:
     store = FilesystemStateStore(tmp_path)
     original = character_snapshot()
+
+    store.save(original)
+
+    assert store.load("campaign_001") == original
+
+
+def test_save_load_v5_preserves_combat_state(tmp_path: Path) -> None:
+    from dnd_engine.domain.state.combat import CombatState
+
+    store = FilesystemStateStore(tmp_path)
+    creature = CreatureState(
+        id="character_001",
+        definition_id="fighter",
+        ability_scores=AbilityScores(16, 12, 14, 10, 10, 8),
+        current_hp=28,
+        max_hp=28,
+    )
+    other = CreatureState(
+        id="monster_001",
+        definition_id="goblin",
+        ability_scores=AbilityScores(8, 14, 10, 10, 8, 8),
+        current_hp=7,
+        max_hp=7,
+    )
+    original = StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
+        creatures=(creature, other),
+        combat=CombatState(
+            id="combat_001",
+            round=2,
+            order=("monster_001", "character_001"),
+            active_index=1,
+        ),
+    )
 
     store.save(original)
 
@@ -285,7 +320,7 @@ def test_invalid_snapshot_json_raises_invalid_snapshot(tmp_path: Path) -> None:
 
 def test_unsupported_schema_version_raises_invalid_snapshot(tmp_path: Path) -> None:
     data = valid_data()
-    data["schemaVersion"] = 5
+    data["schemaVersion"] = 6
     write_json(tmp_path / "campaign_001" / "state.json", data)
 
     with pytest.raises(InvalidStateSnapshotError):

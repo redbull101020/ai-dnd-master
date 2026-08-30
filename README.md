@@ -115,13 +115,20 @@ Monster Events. Attack slice фиксирует hit/miss/critical в одном
 mutating slices: `DamageApplied` V1 (§3.19) и `HealingApplied` V1 (§3.20)
 применяются к `CreatureState.current_hp`, а `ConditionApplied`/
 `ConditionRemoved` V1 (§3.21) — к `CreatureState.conditions`, каждый через
-свой concrete applier. Четыре handlers используют узкий §3.23 Application
-helper для immutable replacement одного Creature в snapshot, после чего
-вызывают `StateStore.save()`. Это concrete Event → State projections, а не общий
-Event Log/replay subsystem. Durable ordered Event history, `EventStore`,
-version-aware decoding для произвольных Events и полноценный recovery/replay
-остаются deferred; текущий `state.json` по-прежнему нельзя восстановить из
-persisted Event history.
+свой concrete applier. Эти четыре Creature-mutation handlers используют узкий
+§3.23 Application helper `replace_creature_in_snapshot` для immutable
+replacement одного Creature в snapshot. Отдельно, первый Phase 3 Combat
+consumer, G7 (§3.25), добавляет ещё два mutating handler'а —
+`StartCombatHandler`/`AdvanceTurnHandler` (`CombatStarted`/`TurnAdvanced` V1,
+применяются к optional `StateSnapshot.combat`) — которые заменяют snapshot
+напрямую через `dataclasses.replace(snapshot, combat=...)`, а не через
+§3.23 helper (single optional field, а не lookup по многим Creature). Все
+шесть handlers вызывают `StateStore.save()` ровно один раз на успешном пути.
+Это concrete Event → State projections, а не общий Event Log/replay
+subsystem. Durable ordered Event history, `EventStore`, version-aware
+decoding для произвольных Events и полноценный recovery/replay остаются
+deferred; текущий `state.json` по-прежнему нельзя восстановить из persisted
+Event history.
 
 ### 5. Определённость важнее удобства
 
@@ -299,12 +306,17 @@ State mutation, Creature HP, direct Damage/Healing и Condition State/Poisoned.
 и direct `Healing → current_hp` (`ApplyHealingCommand` → `HealingApplied` V1,
 [§3.20](docs/ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b));
 а также Apply/Remove Condition membership (§3.21). Все четыре concrete
-handlers строят replacement snapshot через узкий §3.23 helper и вызывают
-`StateStore.save()` до успешного результата. Более широкий D&D scope остаётся
-`PARTIAL` и связан с [`docs/DEFERRED.md`](docs/DEFERRED.md); он не переоткрывает
-Phase 2. Текущий этап — Phase 3 Combat, где concrete consumers продолжат
-weapon/monster attacks, attack consequences, zero-HP legality и другие
-связанные механики по Roadmap.
+Creature-mutation handlers строят replacement snapshot через узкий §3.23
+helper и вызывают `StateStore.save()` до успешного результата. Более широкий
+D&D scope остаётся `PARTIAL` и связан с [`docs/DEFERRED.md`](docs/DEFERRED.md);
+он не переоткрывает Phase 2. Текущий этап — **Phase 3 Combat**, где первый
+concrete consumer, G7 (§3.25) — dice-rolled individual-participant Initiative
+(`StartCombatCommand` → `CombatStarted` V1, Poisoned-aware через существующую
+Ability Check Condition policy) и Turn Order advancement (`AdvanceTurnCommand`
+→ `TurnAdvanced` V1, gated по actor eligibility) поверх нового `CombatState`
+(State schema V5) — уже реализован; weapon/monster attacks, attack
+consequences, zero-HP legality, `CombatEnded` и другие связанные механики
+продолжатся по Roadmap.
 
 ---
 
