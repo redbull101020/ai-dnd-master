@@ -3475,3 +3475,23 @@ contracts.
 - Production code and tests were unchanged. Documentation reference tests
   passed (`2 passed`); full pytest/mypy were not repeated. Group 5 remains
   uncommitted and unpushed pending review.
+
+## 2026-08-30 — Phase 2 closure and deferred-scope ledger
+
+- Added `docs/DEFERRED.md` as a companion subordinate to Architecture and
+  Roadmap, not as an alternative contract or status/order source. It records
+  eleven stable `P2-*` closure notes and stable `DEF-0001` through `DEF-0022`
+  entries with lifecycle policy, provenance, targets, planned approaches,
+  acceptance criteria, references, and dated history.
+- Kept Skill and Ability explicit, placed default Skill-to-Ability suggestion
+  under future command generation/adjudication, grouped all weapon
+  proficiency/Finesse/range/reach/ammunition work under DEF-0011, preserved
+  DEC-0037's independent-source-first RollMode rule, and placed legacy Ability
+  Check V1 cleanup only under durable Event history/replay DEF-0022.
+- Added the ledger to the README, CLAUDE, and AGENTS document maps and to local
+  Markdown link/anchor validation. No canonical Architecture, Roadmap, or
+  Decision contract and no gameplay production Python was changed.
+- Verification on Python 3.12.13 / pytest 9.1.1: focused documentation
+  references `2 passed`; full suite `1251 passed` (with one non-failing pytest
+  cache warning caused by the managed environment); configured mypy
+  `Success: no issues found in 91 source files`.
