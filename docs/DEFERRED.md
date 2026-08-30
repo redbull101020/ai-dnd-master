@@ -679,12 +679,14 @@ still controls when work starts.
 - **Description:** Connect a successful attack to source-specific damage
   resolution, including weapon dice/modifiers and natural-20 critical damage,
   then apply the result through the authoritative Damage/HP flow.
-- **Motivation:** `AttackResolved` currently stops at hit/miss/critical, while
-  `ApplyDamageCommand` accepts an unrelated already-resolved amount.
-- **Why deferred:** The concrete Monster damage-resolution and causation
-  foundation now exists, but Application-level ordered emission, HP mutation,
-  and persistence are not wired; broader Weapon attack/damage inputs also
-  remain absent.
+- **Motivation:** The Character unarmed `AttackResolved` path still stops at
+  hit/miss/critical, while `ApplyDamageCommand` accepts an unrelated
+  already-resolved amount. The implemented narrow Monster consequence path
+  does not supply the broader Weapon attack/damage ownership and proficiency
+  model.
+- **Why deferred:** The narrow Monster Scimitar Application consequence path
+  is implemented, but its real-adapter/filesystem G9 proof remains pending
+  Group 4 and broader Weapon attack/damage inputs remain absent.
 - **Prerequisites:** Relevant part of DEF-0011, a concrete damage source, and
   an explicit Event ordering/causation design; DEF-0022 only if durability is
   made part of the slice.
@@ -697,7 +699,7 @@ still controls when work starts.
 - **References:** [Architecture §3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
   [§3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
-  [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-damage-domain-foundation-g9-partial),
+  [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9-partial),
   [§12.11](ARCHITECTURE.md#1211-event-ordering),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
@@ -724,7 +726,15 @@ still controls when work starts.
   MonsterAttackDamageResolved → optional DamageApplied`. Application-level
   ordered emission, HP mutation, and persistence are not yet wired, so
   DEF-0013 remains `Deferred` for the unfinished end-to-end Monster
-  consequence path and the broader Weapon attack/damage scope.
+  consequence path and the broader Weapon attack/damage scope. 2026-08-30 —
+  G8 supplied the relevant Character-target prerequisite and concrete Monster
+  damage source; G9 Group 2 established the damage-resolution and
+  Event-causation contracts; G9 Group 3 now implements the narrow Monster
+  Scimitar Application consequence path with exact one/two/three-Event
+  branches, optional HP mutation, replacement snapshot construction, and
+  exactly one save on positive source damage. Broad Weapon attack/damage scope
+  remains unfinished, and real-adapter/filesystem proof for the G9 path is
+  still pending Group 4. DEF-0013 therefore remains `Deferred`.
 
 ## DEF-0014
 

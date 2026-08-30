@@ -3781,3 +3781,36 @@ contracts.
   including packaging tests via writable external pytest/pip temporary
   directories) pass; configured mypy (`src/dnd_engine`, 105 source files) and
   `git diff --check` pass.
+
+## 2026-08-30 — AttackHandler damage orchestration and HP mutation (G9 Group 3)
+
+- Extended only the Monster-actor branch of `AttackHandler`: a miss emits
+  `MonsterAttackResolved`; a hit resolves the Monster damage source and emits
+  `MonsterAttackDamageResolved`; a positive source amount additionally
+  resolves the HP transition and emits the unchanged `DamageApplied` V1.
+- Preserved the original `AttackCommand` correlation on every Event and added
+  the canonical ordered causation chain from attack resolution to damage
+  resolution to optional damage application. Gameplay computation completes
+  before the exact required one, two, or three Event metadata allocations.
+- For positive source damage, applied `DamageApplied` through the existing
+  concrete applier, replaced only the target Creature through
+  `replace_creature_in_snapshot`, and saved exactly one replacement snapshot
+  before returning success. Miss and zero-source-damage paths remain
+  read-only; save failure propagates while the loaded snapshot remains
+  unchanged.
+- Added focused Application coverage for miss, normal and critical hits,
+  lethal damage, zero source damage, positive damage at zero HP, exact Event
+  ordering/causation/correlation, metadata counts, loaded-State immutability,
+  `CombatState` preservation, exactly-one save, and save failure. Existing G8
+  target validation, one-supported-attack, Poisoned, natural 1/20, and
+  Character-unarmed regressions remain covered.
+- After review, synchronized Architecture §3.27, Roadmap, DEF-0013, and the
+  current-state summaries with the implemented Application lifecycle. Broad
+  Attack consequences remain incomplete and Group 4 real-adapter/filesystem
+  evidence remains pending; historical DEC-0042 was not rewritten.
+- Verification after documentation synchronization: documentation/reference
+  tests pass (2); the focused Attack/Monster damage/Domain/Event/applier,
+  snapshot-helper, and real-adapter regression set passes (254); the full
+  suite passes (1586 tests, including packaging tests with a writable external
+  pip cache); configured mypy passes for 105 source files, and
+  `git diff --check` reports no whitespace errors.

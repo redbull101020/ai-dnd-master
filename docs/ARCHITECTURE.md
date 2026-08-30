@@ -62,7 +62,7 @@
 | Phase 2 closure rule and deferred-scope boundary | §3.24 |
 | Combat Initiative/Turn Order vertical slice, actor eligibility (G7) | §3.25 |
 | Monster attack → Character vertical slice, `MonsterAttackDefinition` (G8) | §3.26 |
-| Monster Attack Damage Domain foundation (G9, partial) | §3.27 |
+| Monster Attack consequence → Damage → HP vertical slice (G9, partial) | §3.27 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -123,7 +123,7 @@
   * [3.24. Phase 2 Closure Contract](#324-phase-2-closure-contract)
   * [3.25. Minimal Phase 3 Combat Initiative and Turn Order vertical slice (G7)](#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
   * [3.26. Minimal Phase 3 Monster attack → Character vertical slice (G8)](#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
-  * [3.27. Minimal Phase 3 Monster Attack Damage Domain foundation (G9, partial)](#327-minimal-phase-3-monster-attack-damage-domain-foundation-g9-partial)
+  * [3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9, partial)](#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9-partial)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -3181,16 +3181,16 @@ Character Skill Check production contracts remain unchanged.
 
 ### 3.18. State Mutation Foundation (G5)
 
-Implementation status: **Canonical foundation contract; six concrete
-consumers implemented in §§3.19–3.21 and §3.25.** This section itself
+Implementation status: **Canonical foundation contract; seven concrete
+consumers implemented in §§3.19–3.21, §3.25, and §3.27.** This section itself
 introduced no concrete Command, Event applier, or Application handler and
 changed no Python contract — it fixes the general contract that every
 authoritative state-mutating Command must follow. §3.19 documents Damage →
 HP, §3.20 documents Healing → HP, §3.21 documents Apply Condition and Remove
-Condition, and §3.25 documents Start Combat and Advance Turn as the first
-Phase 3 consumers of the same contract. All six use State Owner-specific
-Event application and a replacement `StateSnapshot` before
-`StateStore.save()`, and none introduces a generic mutation abstraction.
+Condition, §3.25 documents Start Combat and Advance Turn as the first Phase 3
+consumers, and §3.27 adds the positive-damage Monster Attack path. All seven
+use State Owner-specific Event application and a replacement `StateSnapshot`
+before `StateStore.save()`, and none introduces a generic mutation abstraction.
 
 This section is the "separate State Mutation Foundation decision" that §3.8
 Atomicity deferred to. It fixes the mutating-command lifecycle, mutation
@@ -5283,22 +5283,26 @@ first two — it establishes the Character-target portion of DEF-0011 as the
 "relevant part" a future Monster→Character Attack-consequence slice would
 build on, and `MonsterAttackDefinition`'s `damage_dice`/`damage_modifier`/
 `damage_type` are a concrete Monster damage source — but G8 itself does
-**not** design Event ordering/causation or implement DEF-0013. The subsequent
-partial G9 Domain/Event foundation (§3.27) supplies the concrete damage-
-resolution and causation contracts while leaving Application orchestration
-unfinished. DEF-0011 does not itself name "a concrete damage source" as one
-of its own prerequisites; that phrasing belongs to DEF-0013 only.
+**not** design Event ordering/causation or implement DEF-0013. G9 Group 2
+subsequently supplied the concrete damage-resolution and causation contracts,
+and Group 3 (§3.27) wires the narrow Monster Scimitar consequence path through
+Application, optional HP mutation, and persistence. Broad Weapon attack/damage
+scope remains unfinished. DEF-0011 does not itself name "a concrete damage
+source" as one of its own prerequisites; that phrasing belongs to DEF-0013
+only.
 
 ---
 
-### 3.27. Minimal Phase 3 Monster Attack Damage Domain foundation (G9, partial)
+### 3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9, partial)
 
-Implementation status: **Domain/Event foundation implemented; Application
-orchestration pending.** This section fixes the concrete contracts that keep
-Monster Attack Resolution, Damage Resolution, and Damage Application as three
-separate stages. It extends the G8 Monster→Character source (§3.26) and the
-existing positive Damage→HP foundation (§3.19) without wiring either new
-stage into `AttackHandler` yet.
+Implementation status: **Narrow Monster Scimitar Application consequence path
+implemented; G9 remains partial pending Group 4 real-adapter/filesystem
+evidence and broader Attack-consequence scope.** This section fixes the
+concrete contracts that keep Monster Attack Resolution, Damage Resolution,
+and Damage Application as three separate stages. It extends the G8
+Monster→Character source (§3.26), the Group 2 Domain/Event foundation, and the
+existing positive Damage→HP foundation (§3.19) through the concrete
+`AttackHandler` Monster branch.
 
 #### Implemented Domain flow
 
@@ -5383,7 +5387,7 @@ MonsterAttackDamageResolved.causedBy = MonsterAttackResolved.eventId
 `targetId`, `amount`, `previousHp`, and `newHp`. No `DamageApplied` V2 and no
 `AttackDamageApplied` Event are introduced. The existing direct
 `ApplyDamageCommand` builder behavior remains unchanged; a narrow
-`build_damage_applied_from_attack_v1` facade permits a future Attack flow to
+`build_damage_applied_from_attack_v1` facade allows the Monster Attack flow to
 produce the same Event from the original `AttackCommand` and a positive
 `DamageResult`. Its causation edge is:
 
@@ -5405,28 +5409,137 @@ All Events retain correlation to the same original `AttackCommand` envelope.
 `MonsterAttackDamageResolved` owns the roll/modifier/type/critical/source-
 amount audit facts; optional `DamageApplied` owns the HP transition facts.
 
-#### Not implemented in Group 2
+#### Implemented Application orchestration
 
-`AttackHandler` still stops after the G8 attack-roll result and one
-`MonsterAttackResolved` Event. It does not call the new damage resolver,
-emit `MonsterAttackDamageResolved` or `DamageApplied`, mutate Character HP,
-or call `StateStore.save()`.
+The Monster branch performs all applicable pure Attack, source-damage, and HP
+calculations before requesting Event metadata for the successful path. It
+then emits only the complete ordered Event sequence that those outcomes
+require.
 
-The following end-to-end Application behavior remains pending Group 3:
+##### Miss
 
 ```text
-miss                    -> one Event
-hit                     -> damage-dice orchestration
-hit with amount == 0    -> zero-source-damage branch, no DamageResult
-hit with amount > 0     -> DamageApplied emission and Character HP mutation
-mutating path           -> replacement snapshot and StateStore.save()
-all paths               -> exact ordered 1 / 2 / 3 Event sequence
+AttackCommand
+→ resolve_monster_attack
+→ MonsterAttackResult(hit=false)
+→ MonsterAttackResolved
+→ successful ResolutionResult
 ```
 
-G9 and broad DEF-0013 are therefore not complete. This foundation introduces
-no `DamageEngine`, dice AST/formula object, generic attack-source interface,
-generic critical-damage framework, generic `EventFactory`, EventStore,
-transaction framework, or effect framework.
+Exactly one Event is emitted with
+`MonsterAttackResolved.causedBy = null`. No damage dice are rolled, no
+`DamageResult` is created, no HP mutation occurs, and `StateStore.save()` is
+not called.
+
+##### Hit with source amount == 0
+
+```text
+AttackCommand
+→ MonsterAttackResult(hit=true)
+→ MonsterAttackDamageResult(amount=0)
+→ MonsterAttackResolved
+→ MonsterAttackDamageResolved
+→ successful ResolutionResult
+```
+
+Damage dice are resolved and exactly two Events are emitted.
+`MonsterAttackDamageResolved.causedBy` is the preceding
+`MonsterAttackResolved.eventId`. Zero source damage does not become a
+`DamageResult`; no `DamageApplied`, State mutation, or save occurs.
+
+##### Hit with positive source damage
+
+```text
+AttackCommand
+→ MonsterAttackResult
+→ MonsterAttackDamageResult
+→ DamageResult
+→ MonsterAttackResolved
+→ MonsterAttackDamageResolved
+→ DamageApplied
+→ apply_damage_applied_v1
+→ replacement CreatureState
+→ replace_creature_in_snapshot
+→ replacement StateSnapshot
+→ StateStore.save(...)
+→ successful ResolutionResult
+```
+
+Exactly three Events are emitted in this order:
+
+```text
+MonsterAttackResolved
+MonsterAttackDamageResolved
+DamageApplied
+```
+
+Their exact `causedBy` sequence is `null` → attack Event ID → damage-resolution
+Event ID. Every Event retains the original `AttackCommand`'s `commandId`,
+`campaignId`, and `actorId`. `DamageApplied` remains V1 and Character
+`current_hp` changes only through the concrete `apply_damage_applied_v1`
+applier. `replace_creature_in_snapshot` replaces only the target Creature;
+the loaded snapshot stays untouched and unrelated projections, including an
+existing `CombatState`, are preserved. The positive-damage path calls
+`StateStore.save()` exactly once and exposes success only after save returns;
+a save failure propagates.
+
+Positive source damage against a target already at zero HP is still a valid
+positive Damage application:
+
+```text
+amount > 0
+previousHp = 0
+newHp = 0
+→ DamageApplied
+→ exactly one save
+```
+
+This does not establish zero-HP action eligibility; that policy remains out
+of scope.
+
+#### Event metadata allocation
+
+The concrete Application allocation policy is:
+
+```text
+miss             → 1 metadata allocation
+hit, amount == 0 → 2 metadata allocations
+hit, amount > 0  → 3 metadata allocations
+```
+
+Pure Attack, source-damage, and optional HP calculation completes before
+Event metadata for that successful path is allocated. No unused Event
+metadata is requested.
+
+#### ResolutionResult and unchanged Character branch
+
+Every successful Monster path keeps `MonsterAttackResult` as the
+`ResolutionResult` outcome. Damage details are represented by the ordered
+Events; no composite Attack+Damage result or `state_changes` field is added.
+The existing Character unarmed → Monster branch remains read-only and
+behaviorally unchanged.
+
+#### Remaining scope
+
+G9 is not the broad Attack-consequences feature, and Group 4
+real-adapter/filesystem integration evidence for this G9 path remains pending.
+Broad DEF-0013 therefore remains incomplete. This slice does not add or decide:
+
+```text
+Weapon / Inventory / Equipment ownership
+Character weapon proficiency or Finesse
+Shortbow, ranged, or reach
+Multiattack or generic Monster actions
+resistance / immunity / vulnerability
+temporary HP, unconscious, death, or death saves
+zero-HP action eligibility
+active-turn Attack gating or action economy
+generic damage-source abstraction
+generic Event orchestration framework
+EventStore or replay
+UnitOfWork or transaction framework
+State schema V6
+```
 
 ---
 

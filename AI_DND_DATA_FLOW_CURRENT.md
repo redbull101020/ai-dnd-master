@@ -1098,8 +1098,8 @@ src/dnd_engine/
 | Skill Check read-only flow | Реализовано в коде и Architecture |
 | AC minimal rules | Реализовано |
 | Character unarmed Attack Roll → Monster read-only flow | Реализовано; Damage/HP не применяет |
-| Monster attack (Goblin Scimitar) → Character read-only flow (G8) | Реализовано: `AttackHandler` Monster-actor branch → `resolve_monster_attack` → `MonsterAttackResolved` V1; Damage/HP не применяет |
-| Monster Attack Damage Domain/Event foundation (G9 Group 2) | Реализовано: `MonsterAttackDamageResult`, normal/critical dice-count policy, zero source damage, `MonsterAttackDamageResolved` V1 and causation to optional unchanged `DamageApplied` V1; `AttackHandler` orchestration/HP persistence not implemented |
+| Monster attack-roll foundation (Goblin Scimitar) → Character (G8) | Реализовано: `AttackHandler` Monster-actor branch → `resolve_monster_attack` → `MonsterAttackResolved` V1; consequence расширен G9 ниже |
+| Monster Scimitar Attack consequence → Damage → Character HP (G9 Groups 2–3, partial) | Реализовано через Application: normal/critical source damage, zero-source branch, exact ordered 1/2/3 correlated Events and causation; positive amount → unchanged `DamageApplied` V1 → target replacement with `CombatState` preservation → exactly one `StateStore.save()` before success. Group 4 real-adapter/filesystem proof и broad Weapon scope pending |
 | Direct Damage → HP mutation | Реализовано: `ApplyDamageCommand → DamageApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
 | Direct Healing → HP mutation | Реализовано: `ApplyHealingCommand → HealingApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
 | Apply/Remove Condition membership | Реализовано: concrete Commands/Events/appliers → §3.23 snapshot helper → `StateStore.save()` |
@@ -1110,8 +1110,8 @@ src/dnd_engine/
 | Natural language → Commands | Не реализовано; Phase 6 |
 | AI Context Projection | Не реализовано; Phase 6 |
 | Runtime EventStore / ordered Event append | Не реализовано |
-| Deterministic Event → State projection | Concrete Damage, Healing, Condition Apply/Remove projections реализованы; generic dispatch/replay deferred |
-| Authoritative state-mutating Command pipeline | Четыре concrete consumers реализованы по §3.18; общий только narrow §3.23 snapshot helper, generic mutation framework не введён |
+| Deterministic Event → State projection | Concrete Damage, Healing, Condition Apply/Remove и positive-damage Monster Attack projections реализованы; generic dispatch/replay deferred |
+| Authoritative state-mutating Command pipeline | Семь concrete consumers реализованы по §3.18, включая positive-damage Monster Attack path; общий только narrow §3.23 snapshot helper, generic mutation framework не введён |
 | SQLite/PostgreSQL adapters | Не реализовано |
 
 ### Phase 2 closure status
