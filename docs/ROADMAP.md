@@ -145,11 +145,12 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 
 ## Phase 3 — Combat
 
-> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7) · [§3.26 Monster attack → Character vertical slice (G8)](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8) · [§3.27 Monster Attack consequence → Damage → HP vertical slice (G9, partial)](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9-partial)
+> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7) · [§3.26 Monster attack → Character vertical slice (G8)](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8) · [§3.27 Monster Attack consequence → Damage → HP vertical slice (G9)](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9)
 
 * [x] Initiative foundation — individual-participant dice-rolled `StartCombatCommand` → `CombatStarted` V1, persisted `CombatState.order`, Poisoned Dexterity-check disadvantage via the existing Ability Check Condition policy (§3.25).
 * [x] Turn-order advancement foundation — `AdvanceTurnCommand` → `TurnAdvanced` V1 advances `active_index`/`round`, gated by an actor-eligibility check (§3.25).
 * [x] Monster → Character attack-roll foundation — Goblin Scimitar `MonsterAttackDefinition`, `resolve_monster_attack`, `MonsterAttackResolved` V1, reusing unchanged `AttackCommand`/Poisoned policy/`unarmored_character_armor_class` (§3.26). Also closes [DEF-0002](DEFERRED.md#def-0002) `Done` (typed authoritative Monster attack-bonus source); Monster save/skill proficiency remain separately open (DEF-0004).
+* [x] Monster Scimitar attack-consequence foundation — Attack → Damage → Character HP: `MonsterAttackResult` → `MonsterAttackDamageResult` (normal/critical source damage, zero-source branch) → optional `DamageResult`, emitted as the exact ordered/correlated `MonsterAttackResolved → MonsterAttackDamageResolved → optional DamageApplied` Event chain, applying `DamageApplied` V1 to Character `current_hp` and saving exactly once on positive damage, confirmed through a full real-adapter/filesystem production round trip (§3.27, DEC-0042). Broader Weapon attack/damage/critical scope beyond this one Monster attack remains open below.
 * [ ] Initiative: SRD 5.1 grouped initiative for identical GM-controlled creatures — G7 is individual-participant only; a later concrete Monster/control consumer must evidence this before it is added.
 * [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn)
 * [ ] Combat lifecycle / `CombatEnded` — G7 has no combat-ending Command or Event.
@@ -159,7 +160,7 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Opportunity attacks
 * [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target part is proven by G8; Equipment/Inventory ownership, weapon proficiency, and Finesse choice remain entirely open.
 * [ ] Monster actions beyond the Goblin Scimitar attack-roll foundation ([DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012)) — multiple/ambiguous actions, multiattack, recharge, saving-throw/AoE actions, ranged/reach, and Monster save/skill proficiency remain open.
-* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path is implemented through Application (§3.27, DEC-0042); real-adapter/filesystem G9 proof and broader Weapon attack/damage scope remain open.
+* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path is implemented and evidenced through real adapters (§3.27, DEC-0042; foundation row above); the broader Weapon attack/damage/critical continuation (a concrete Character Weapon damage source and its Attack→Damage application, Equipment/Inventory ownership, Character weapon proficiency, and the explicit Finesse choice) remains open.
 * [ ] Conditions expansion ([DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
 * [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
 * [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
@@ -192,16 +193,20 @@ first two of DEF-0013's three named prerequisites (relevant part of
 DEF-0011, a concrete damage source, and Event ordering/causation design) —
 without implementing DEF-0013 itself.
 
-G9 Groups 2–3 (§3.27, DEC-0042) implement the narrow Monster Scimitar
+G9 (§3.27, DEC-0042) implements the narrow Monster Scimitar
 consequence path while preserving separate Attack Resolution, source Damage
 Resolution, and HP application stages. Group 2 supplied immutable Monster
 damage resolution, normal/critical dice-count semantics, zero source damage,
 the positive Damage→HP calculation, and the explicit Event-causation
 contracts. Group 3 wires the exact 1/2/3 Event branches through
 `AttackHandler`, including optional Character HP mutation, replacement
-snapshot construction, and exactly one successful-path save. Group 4
-real-adapter/filesystem proof and broader Weapon attack/damage scope remain
-pending, so the broad Attack consequences item and DEF-0013 stay incomplete.
+snapshot construction, and exactly one successful-path save. Group 4 adds a
+real-adapter/filesystem integration test confirming this end to end through
+the real `FilesystemStateStore`, `PackagedDefinitionSource`, and
+`PythonDiceEngine` adapters. G9's own narrow Goblin Scimitar scope is
+therefore complete, but broader Weapon attack/damage/critical scope remains
+open, so the broad Attack consequences item and DEF-0013 stay incomplete for
+that remaining scope.
 
 ## Phase 4 — Magic
 

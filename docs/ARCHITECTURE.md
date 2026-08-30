@@ -62,7 +62,7 @@
 | Phase 2 closure rule and deferred-scope boundary | §3.24 |
 | Combat Initiative/Turn Order vertical slice, actor eligibility (G7) | §3.25 |
 | Monster attack → Character vertical slice, `MonsterAttackDefinition` (G8) | §3.26 |
-| Monster Attack consequence → Damage → HP vertical slice (G9, partial) | §3.27 |
+| Monster Attack consequence → Damage → HP vertical slice (G9) | §3.27 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -123,7 +123,7 @@
   * [3.24. Phase 2 Closure Contract](#324-phase-2-closure-contract)
   * [3.25. Minimal Phase 3 Combat Initiative and Turn Order vertical slice (G7)](#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
   * [3.26. Minimal Phase 3 Monster attack → Character vertical slice (G8)](#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
-  * [3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9, partial)](#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9-partial)
+  * [3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9)](#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -5293,15 +5293,23 @@ only.
 
 ---
 
-### 3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9, partial)
+### 3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9)
 
 Implementation status: **Narrow Monster Scimitar Application consequence path
-implemented; G9 remains partial pending Group 4 real-adapter/filesystem
-evidence and broader Attack-consequence scope.** This section fixes the
+implemented and confirmed through a full production round-trip (real
+`FilesystemStateStore`, `PackagedDefinitionSource`, and `PythonDiceEngine`
+adapters). G9's narrow Goblin Scimitar consequence path — hit/critical
+resolution, source damage resolution, and optional Character HP application —
+is complete. DEF-0013 remains `Deferred` for the broader Weapon
+attack/damage/critical continuation (a concrete Character Weapon damage
+source and its Attack→Damage application, Equipment/Inventory ownership,
+Character weapon proficiency, and the explicit Finesse choice). Other Monster
+actions and other Combat mechanics remain separately tracked by their
+existing Roadmap/Deferred records, not by DEF-0013.** This section fixes the
 concrete contracts that keep Monster Attack Resolution, Damage Resolution,
 and Damage Application as three separate stages. It extends the G8
-Monster→Character source (§3.26), the Group 2 Domain/Event foundation, and the
-existing positive Damage→HP foundation (§3.19) through the concrete
+Monster→Character source (§3.26), the Group 2 Domain/Event foundation, and
+the existing positive Damage→HP foundation (§3.19) through the concrete
 `AttackHandler` Monster branch.
 
 #### Implemented Domain flow
@@ -5521,9 +5529,15 @@ behaviorally unchanged.
 
 #### Remaining scope
 
-G9 is not the broad Attack-consequences feature, and Group 4
-real-adapter/filesystem integration evidence for this G9 path remains pending.
-Broad DEF-0013 therefore remains incomplete. This slice does not add or decide:
+G9 is not the broad Attack-consequences feature. A dedicated real-adapter
+integration test (`test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters`,
+Group 4) exercises the full chain end to end through the real
+`FilesystemStateStore`, `PackagedDefinitionSource`, and `PythonDiceEngine`
+adapters, confirming a fresh-reload-visible HP change, an unchanged
+`CombatState` and unrelated Creature/Character projections, exactly one
+`save()` call, and the exact ordered/`causedBy` Event chain. Broad DEF-0013
+therefore remains `Deferred` only for the broader Weapon attack/damage scope,
+not for this narrow Goblin Scimitar path. This slice does not add or decide:
 
 ```text
 Weapon / Inventory / Equipment ownership

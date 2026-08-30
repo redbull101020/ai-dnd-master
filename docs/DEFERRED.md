@@ -685,8 +685,8 @@ still controls when work starts.
   does not supply the broader Weapon attack/damage ownership and proficiency
   model.
 - **Why deferred:** The narrow Monster Scimitar Application consequence path
-  is implemented, but its real-adapter/filesystem G9 proof remains pending
-  Group 4 and broader Weapon attack/damage inputs remain absent.
+  is implemented and confirmed by real-adapter/filesystem G9 evidence
+  (Group 4); broader Weapon attack/damage inputs remain absent.
 - **Prerequisites:** Relevant part of DEF-0011, a concrete damage source, and
   an explicit Event ordering/causation design; DEF-0022 only if durability is
   made part of the slice.
@@ -699,7 +699,7 @@ still controls when work starts.
 - **References:** [Architecture §3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
   [§3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
-  [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9-partial),
+  [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9),
   [§12.11](ARCHITECTURE.md#1211-event-ordering),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
@@ -735,6 +735,34 @@ still controls when work starts.
   exactly one save on positive source damage. Broad Weapon attack/damage scope
   remains unfinished, and real-adapter/filesystem proof for the G9 path is
   still pending Group 4. DEF-0013 therefore remains `Deferred`.
+  2026-08-30 — Summary: G8 supplied the relevant Character-target part of
+  DEF-0011 and a concrete Monster damage source (`MonsterAttackDefinition`'s
+  `damage_dice`/`damage_modifier`/`damage_type`); G9 supplied the previously
+  missing explicit Event ordering/causation design (§3.27, DEC-0042) —
+  `MonsterAttackResolved → MonsterAttackDamageResolved → optional
+  DamageApplied`. G9 Group 3 wired that already-accepted design into
+  `AttackHandler`'s ordered emission and optional HP mutation, and G9 Group 4
+  (§3.27) added real-adapter/filesystem integration evidence: a full
+  production round trip through the real `FilesystemStateStore`,
+  `PackagedDefinitionSource`, and `PythonDiceEngine` adapters confirms a
+  fresh-reload-visible Character `current_hp` change, an untouched
+  `CombatState` and unrelated Creature/Character projections, exactly one
+  `save()` call, and the exact ordered/`causedBy` Event chain for a Goblin
+  Scimitar attack. This closes out the narrow Goblin Scimitar
+  Monster-consequence path entirely, using DEC-0042 as its accepted
+  architectural rationale; Groups 3–4 implemented and verified that
+  already-accepted decision without changing any contract, so no new
+  Decision record was needed. DEF-0013 remains `Deferred` specifically for
+  the unfinished broader Weapon attack/damage/critical continuation: a
+  concrete Character Weapon damage source and its Attack→Damage application,
+  the Equipment/Inventory ownership a Character Weapon attack requires,
+  Character weapon proficiency, and the explicit (not auto-maximized) Finesse
+  choice all remain unimplemented. Other Monster actions, Shortbow/range/
+  reach, Multiattack, zero-HP action eligibility, active-turn Attack
+  gating/action economy, and resistance/immunity/vulnerability/temporary HP
+  are separately tracked by their own Roadmap/Deferred records and are not
+  why DEF-0013 itself remains Deferred. DEF-0013's status is not changed to
+  `Done`.
 
 ## DEF-0014
 
