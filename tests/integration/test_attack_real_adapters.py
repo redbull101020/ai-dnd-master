@@ -162,3 +162,129 @@ def test_attack_uses_real_state_definition_and_dice_adapters_read_only(
         if path.is_file()
     ) == ["state.json"]
     assert list(state_path.parent.glob(".state-*.tmp")) == []
+
+
+def test_goblin_scimitar_attacks_character_using_real_packaged_adapters(
+    tmp_path: Path,
+) -> None:
+    campaigns_root = tmp_path / "campaigns"
+    goblin_actor = CreatureState(
+        id="monster_001",
+        definition_id="goblin",
+        ability_scores=AbilityScores(
+            strength=8,
+            dexterity=14,
+            constitution=10,
+            intelligence=10,
+            wisdom=8,
+            charisma=8,
+        ),
+        current_hp=7,
+        max_hp=7,
+    )
+    character_target = CreatureState(
+        id="character_001",
+        definition_id="fighter",
+        ability_scores=AbilityScores(
+            strength=16,
+            dexterity=14,
+            constitution=14,
+            intelligence=10,
+            wisdom=10,
+            charisma=10,
+        ),
+        current_hp=20,
+        max_hp=20,
+    )
+    snapshot = StateSnapshot(
+        campaign=CampaignState(
+            id="campaign_001",
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+        ),
+        creatures=(goblin_actor, character_target),
+        characters=(
+            CharacterState(
+                id="character_001",
+                total_level=5,
+                saving_throw_proficiencies=frozenset(),
+                skill_proficiencies=frozenset(),
+            ),
+        ),
+    )
+    store = FilesystemStateStore(campaigns_root)
+    store.save(snapshot)
+
+    state_path = campaigns_root / "campaign_001" / "state.json"
+    state_before = state_path.read_bytes()
+    metadata = FixedEventMetadataProvider()
+    seed = 20260830
+    rng = random.Random(seed)
+    expected_rng = random.Random(seed)
+    expected_roll = expected_rng.randint(1, 20)
+    command = AttackCommand(
+        command_id="command_000789",
+        campaign_id="campaign_001",
+        actor_id="monster_001",
+        payload=AttackPayload(target_id="character_001"),
+    )
+
+    result = AttackHandler(
+        state_store=store,
+        definition_source=PackagedDefinitionSource(),
+        dice=PythonDiceEngine(rng),
+        event_metadata_provider=metadata,
+    ).handle(command)
+
+    # dexterity 14 -> modifier +2 -> unarmored Character AC 12.
+    expected_ac = 12
+    expected_total = expected_roll + 4
+
+    assert metadata.calls == ["campaign_001"]
+    assert result.success is True
+    assert result.errors == ()
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.target_id == "character_001"
+    assert outcome.action_id == "scimitar"
+    assert outcome.roll.mode is RollMode.NORMAL
+    assert outcome.roll.rolls == (expected_roll,)
+    assert outcome.attack_bonus == 4
+    assert outcome.total == expected_total
+    assert outcome.target_armor_class == expected_ac
+
+    assert len(result.events) == 1
+    event = result.events[0]
+    assert event.event_id == "event_000456"
+    assert event.command_id == command.command_id
+    assert event.type == "MonsterAttackResolved"
+    assert event.version == 1
+    assert event.campaign_id == command.campaign_id
+    assert event.timestamp == FIXED_TIMESTAMP
+    assert event.actor_id == "monster_001"
+    assert event.caused_by is None
+    assert event.payload == {
+        "targetId": "character_001",
+        "actionId": "scimitar",
+        "roll": {
+            "mode": "normal",
+            "rolls": (expected_roll,),
+            "selected": expected_roll,
+        },
+        "attackBonus": 4,
+        "total": expected_total,
+        "targetArmorClass": expected_ac,
+        "hit": outcome.hit,
+        "criticalHit": outcome.critical_hit,
+    }
+
+    assert state_path.read_bytes() == state_before
+    persisted = store.load("campaign_001")
+    persisted_actor = next(
+        creature for creature in persisted.creatures if creature.id == "monster_001"
+    )
+    persisted_target = next(
+        creature for creature in persisted.creatures if creature.id == "character_001"
+    )
+    assert (persisted_actor.current_hp, persisted_actor.max_hp) == (7, 7)
+    assert (persisted_target.current_hp, persisted_target.max_hp) == (20, 20)

@@ -11,5 +11,15 @@
     "wisdom": 8,
     "charisma": 8
   },
-  "armorClass": 15
+  "armorClass": 15,
+  "attacks": [
+    {
+      "actionId": "scimitar",
+      "name": "Scimitar",
+      "attackBonus": 4,
+      "damageDice": "1d6",
+      "damageModifier": 2,
+      "damageType": "slashing"
+    }
+  ]
 }

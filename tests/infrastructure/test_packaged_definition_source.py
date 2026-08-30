@@ -28,6 +28,16 @@ DAGGER_PAYLOAD: dict[str, object] = {
 }
 
 
+SCIMITAR_ATTACK_PAYLOAD: dict[str, object] = {
+    "actionId": "scimitar",
+    "name": "Scimitar",
+    "attackBonus": 4,
+    "damageDice": "1d6",
+    "damageModifier": 2,
+    "damageType": "slashing",
+}
+
+
 GOBLIN_PAYLOAD: dict[str, object] = {
     "type": "monster",
     "id": "goblin",
@@ -42,6 +52,7 @@ GOBLIN_PAYLOAD: dict[str, object] = {
         "charisma": 8,
     },
     "armorClass": 15,
+    "attacks": [SCIMITAR_ATTACK_PAYLOAD],
 }
 
 
@@ -84,6 +95,14 @@ def test_production_default_reads_packaged_goblin() -> None:
     assert monster.ability_scores.intelligence == 10
     assert monster.ability_scores.wisdom == 8
     assert monster.ability_scores.charisma == 8
+    assert len(monster.attacks) == 1
+    scimitar = monster.attacks[0]
+    assert scimitar.action_id == "scimitar"
+    assert scimitar.name == "Scimitar"
+    assert scimitar.attack_bonus == 4
+    assert scimitar.damage_dice == "1d6"
+    assert scimitar.damage_modifier == 2
+    assert scimitar.damage_type is DamageType.SLASHING
 
 
 def test_production_default_reads_packaged_dagger() -> None:
@@ -387,6 +406,191 @@ def test_intrinsic_domain_invariant_violation_raises_invalid_packaged(
         "wisdom": 8,
         "charisma": 99,
     }
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+def test_monster_definition_decodes_zero_attacks(tmp_path: Path) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = []
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    monster = source.get_definition(
+        ruleset_id="dnd_5e",
+        ruleset_version="5.1",
+        definition_id="goblin",
+        expected_type=MonsterDefinition,
+    )
+
+    assert monster.attacks == ()
+
+
+def test_monster_definition_missing_attacks_key_raises_invalid_packaged(
+    tmp_path: Path,
+) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    del payload["attacks"]
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+@pytest.mark.parametrize("attacks", ["not-a-list", {"actionId": "scimitar"}, 1])
+def test_monster_definition_non_list_attacks_raises_invalid_packaged(
+    tmp_path: Path,
+    attacks: object,
+) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = attacks
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+def test_monster_attack_missing_key_raises_invalid_packaged(tmp_path: Path) -> None:
+    broken = dict(SCIMITAR_ATTACK_PAYLOAD)
+    del broken["damageModifier"]
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = [broken]
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+def test_monster_attack_unknown_field_raises_invalid_packaged(tmp_path: Path) -> None:
+    broken = dict(SCIMITAR_ATTACK_PAYLOAD)
+    broken["range"] = 5
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = [broken]
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+def test_monster_attack_non_object_element_raises_invalid_packaged(
+    tmp_path: Path,
+) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = ["not-a-dict"]
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("actionId", 1),
+        ("name", 1),
+        ("attackBonus", "4"),
+        ("attackBonus", True),
+        ("damageDice", "1D6"),
+        ("damageDice", 6),
+        ("damageModifier", "2"),
+        ("damageModifier", True),
+        ("damageType", "not-a-real-type"),
+        ("damageType", 1),
+    ],
+)
+def test_monster_attack_wrong_field_type_raises_invalid_packaged(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    broken = dict(SCIMITAR_ATTACK_PAYLOAD)
+    broken[field] = value
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = [broken]
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+@pytest.mark.parametrize(
+    "action_id",
+    ["Scimitar", "scimitar attack", " scimitar", "scimitar/attack", "1scimitar"],
+)
+def test_monster_attack_non_canonical_action_id_raises_invalid_packaged(
+    tmp_path: Path,
+    action_id: str,
+) -> None:
+    # Domain-level `MonsterAttackDefinition` validation (a local
+    # ^[a-z][a-z0-9_]*$ identifier) rejects a non-canonical actionId; the
+    # existing (TypeError, ValueError) -> InvalidPackagedDefinitionError
+    # wrapping in the packaged decoder surfaces it the same way as any other
+    # Domain invariant violation.
+    broken = dict(SCIMITAR_ATTACK_PAYLOAD)
+    broken["actionId"] = action_id
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = [broken]
+    write_definition(tmp_path, payload=payload)
+    source = PackagedDefinitionSource(resources_root=tmp_path)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        source.get_definition(
+            ruleset_id="dnd_5e",
+            ruleset_version="5.1",
+            definition_id="goblin",
+            expected_type=MonsterDefinition,
+        )
+
+
+def test_monster_attack_duplicate_action_id_raises_invalid_packaged(
+    tmp_path: Path,
+) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["attacks"] = [dict(SCIMITAR_ATTACK_PAYLOAD), dict(SCIMITAR_ATTACK_PAYLOAD)]
     write_definition(tmp_path, payload=payload)
     source = PackagedDefinitionSource(resources_root=tmp_path)
 

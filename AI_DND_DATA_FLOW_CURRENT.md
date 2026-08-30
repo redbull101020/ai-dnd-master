@@ -1097,6 +1097,7 @@ src/dnd_engine/
 | Skill Check read-only flow | Реализовано в коде и Architecture |
 | AC minimal rules | Реализовано |
 | Character unarmed Attack Roll → Monster read-only flow | Реализовано; Damage/HP не применяет |
+| Monster attack (Goblin Scimitar) → Character read-only flow (G8) | Реализовано: `AttackHandler` Monster-actor branch → `resolve_monster_attack` → `MonsterAttackResolved` V1; Damage/HP не применяет |
 | Direct Damage → HP mutation | Реализовано: `ApplyDamageCommand → DamageApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
 | Direct Healing → HP mutation | Реализовано: `ApplyHealingCommand → HealingApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
 | Apply/Remove Condition membership | Реализовано: concrete Commands/Events/appliers → §3.23 snapshot helper → `StateStore.save()` |
