@@ -9,8 +9,9 @@ Use project documentation in this order:
 1. `docs/ARCHITECTURE.md` — canonical architecture and contracts.
 2. `docs/ROADMAP.md` — implementation order and current status.
 3. `docs/DECISIONS.md` — append-only rationale/history; never an alternative contract.
-4. `README.md` — project overview and developer workflow.
-5. `CLAUDE.md` — supplementary condensed guidance.
+4. `docs/DEFERRED.md` — subordinate Phase 2 closure companion and deferred-scope register; never an alternative contract or status/order source.
+5. `README.md` — project overview and developer workflow.
+6. `CLAUDE.md` — supplementary condensed guidance.
 
 `ARCHITECTURE.md = current canonical contract`; `DECISIONS.md = append-only rationale/history`.
 
@@ -29,6 +30,7 @@ If code, documentation, Roadmap, and task requirements conflict, do not choose s
 * `tests/` — deterministic automated tests.
 * `docs/ARCHITECTURE.md` — canonical contracts.
 * `docs/ROADMAP.md` — development phases and status.
+* `docs/DEFERRED.md` — detailed Phase 2 closure notes and deferred-scope register, subordinate to Architecture and Roadmap.
 
 ## Canonical architecture
 

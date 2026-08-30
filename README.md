@@ -22,6 +22,7 @@
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Источник истины.** Контракты, Envelope-схемы, ID System, слои, State Ownership, правила сериализации |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Append-only журнал мотивации и истории архитектурных решений |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Фазы разработки и текущий статус |
+| [`docs/DEFERRED.md`](docs/DEFERRED.md) | Подчинённый Architecture/Roadmap companion: подробное закрытие Phase 2 и стабильный реестр отложенного scope; не контракт и не источник порядка/статуса |
 | [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md) | Append-only история выполненных development iterations; не источник контрактов или статуса |
 | `CLAUDE.md` | Выжимка правил проекта для AI-агента |
 
@@ -187,6 +188,7 @@ ai-dnd-master/
 │   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
 │   ├── ROADMAP.md
+│   ├── DEFERRED.md
 │   └── DEVELOPMENT_LOG.md
 │
 ├── src/
