@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 
@@ -20,11 +22,9 @@ def replace_creature_in_snapshot(
             "in snapshot"
         )
 
-    return StateSnapshot(
-        campaign=snapshot.campaign,
-        creatures=tuple(
-            replacement if creature.id == replacement.id else creature
-            for creature in snapshot.creatures
-        ),
-        characters=snapshot.characters,
+    replacement_creatures = tuple(
+        replacement if creature.id == replacement.id else creature
+        for creature in snapshot.creatures
     )
+
+    return replace(snapshot, creatures=replacement_creatures)

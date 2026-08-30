@@ -191,8 +191,9 @@ integrity-check shape, и для них также реализованы concre
 replacement-snapshot/`save()`-exactly-once orchestration, что и у `DamageHandler`/
 `HealingHandler`. Post-G6C review (§3.23, DEC-0038) извлёк только общий
 Application helper `replace_creature_in_snapshot`: он заменяет ровно одного
-existing Creature по stable ID, сохраняет tuple order и identity Campaign/
-Character projections и не мутирует loaded snapshot. Остальная orchestration
+existing Creature по stable ID, сохраняет tuple order и identity всех
+остальных `StateSnapshot` projections и не мутирует loaded snapshot. Остальная
+orchestration
 и все concrete Event appliers не объединены. Первый Phase 3 Combat consumer,
 G7 (§3.25, DEC-0040), добавил ещё два concrete mutating handler'а
 (`StartCombatHandler`/`AdvanceTurnHandler`) на том же §3.18 контракте; они

@@ -4320,7 +4320,7 @@ StateStore.load
 -> concrete Condition Event (build_condition_applied_v1 / build_condition_removed_v1)
 -> concrete Creature applier (apply_condition_applied_v1 / apply_condition_removed_v1)
 -> replacement creatures tuple, order preserved
--> replacement StateSnapshot (campaign and characters reused unchanged)
+-> replacement StateSnapshot (all unrelated projections reused unchanged)
 -> StateStore.save(replacement_snapshot), exactly once, on the success path only
 -> successful ResolutionResult
 ```
@@ -4358,8 +4358,9 @@ concrete Condition Event applier
     → StateStore.save(...)
 ```
 
-The helper preserves Creature tuple order and reuses `campaign` and
-`characters` unchanged; it owns no gameplay or Event policy. Historically,
+The helper preserves Creature tuple order and reuses every unrelated
+`StateSnapshot` projection unchanged; it owns no gameplay or Event policy.
+Historically,
 G6C1 deliberately kept this construction inline across `DamageHandler`,
 `HealingHandler`, `ApplyConditionHandler`, and `RemoveConditionHandler` as the
 evidence checkpoint that the later post-G6C review in §3.23 resolved.
@@ -4580,10 +4581,14 @@ policy after their concrete Event applier returned a replacement
 loaded StateSnapshot + replacement CreatureState
 -> require replacement.id to match exactly one existing CreatureState
 -> replace that entry without changing creatures tuple order
--> reuse the identical CampaignState projection
--> reuse the identical characters tuple and CharacterState projections
+-> preserve every unrelated StateSnapshot projection by identity
 -> return a new StateSnapshot; do not mutate the loaded snapshot
 ```
+
+The helper constructs the new snapshot with `dataclasses.replace`, changing
+only `creatures`. Consequently `campaign`, `characters`, `combat`, and any
+future independent `StateSnapshot` projections are retained unless a caller
+explicitly replaces them through a different flow.
 
 `StateSnapshot` already rejects duplicate Creature IDs, so the helper's
 exactly-one check principally makes the missing-target case explicit: an
@@ -4598,7 +4603,7 @@ gameplay rule and not Infrastructure.
 
 | Candidate | Actual production evidence | Verdict |
 | --- | --- | --- |
-| One-Creature snapshot replacement | Four handlers repeated the identical stable-ID replacement, tuple-order preservation, Campaign/Character projection preservation, and copy-on-write policy. The helper removes the whole duplicated tuple/snapshot block and gives missing-ID behavior one explicit contract. | `EXTRACT` — only `replace_creature_in_snapshot` |
+| One-Creature snapshot replacement | Four handlers repeated the identical stable-ID replacement, tuple-order preservation, unrelated-projection preservation, and copy-on-write policy. The helper removes the whole duplicated tuple/snapshot block and gives missing-ID behavior one explicit contract. | `EXTRACT` — only `replace_creature_in_snapshot` |
 | Creature field mutation primitive | Damage/Healing project `current_hp`; Apply/Remove project Condition membership. Their transition decisions and preserved-field proofs remain applier-specific. A shared primitive would only wrap `dataclasses.replace`. | `KEEP CONCRETE` |
 | Generic Event applier / base / Protocol | Payloads and integrity checks differ: Damage correlates target/previous HP, Healing additionally correlates `maxHp`, and Condition Events decode membership endpoints and Condition identity. No serialized replay/dispatch consumer exists. | `KEEP CONCRETE` |
 | Generic mutation handler | Only the visible sequence is shared. Resolver/result/Event types, actor/target errors, builders, appliers, and mutation policy differ; abstraction requires callbacks, type parameters, error factories, or policy hooks. | `KEEP CONCRETE` |

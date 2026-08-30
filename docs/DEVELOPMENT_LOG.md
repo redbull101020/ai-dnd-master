@@ -3730,3 +3730,21 @@ contracts.
   actor-has-no-`CharacterState` failure, now correctly routing to the new
   Monster-actor path. Full `pytest` (1517 tests) and configured `mypy`
   (`src/dnd_engine`) pass; `git diff --check` reports no whitespace errors.
+
+## 2026-08-30 — CombatState-safe Creature snapshot replacement (G9 Group 1)
+
+- Replaced the manual three-field `StateSnapshot` reconstruction in
+  `replace_creature_in_snapshot` with `dataclasses.replace`, changing only the
+  `creatures` tuple while preserving every unrelated snapshot projection by
+  identity, including an existing `CombatState`.
+- Kept the existing boundary validation, exactly-one matching-ID requirement,
+  tuple ordering, missing-ID rejection, and copy-on-write behavior unchanged.
+- Added direct helper and `DamageHandler` regressions proving that Creature HP
+  mutation preserves the original Combat projection and leaves the loaded
+  snapshot unchanged.
+- Updated Architecture §3.23 and related current summaries to describe the
+  projection-preservation contract without changing historical DEC-0038 or
+  introducing G9 attack-damage orchestration.
+- Verification: focused `test_state_snapshot_service.py` (3 tests) and
+  `test_damage_handler.py` (8 tests), full pytest (1538 tests), configured
+  mypy (103 source files), and `git diff --check` all pass.
