@@ -4054,3 +4054,29 @@ contracts.
   access (`WinError 5`); rerunning with `PIP_CACHE_DIR` in a dedicated writable
   location passed all 1587 tests without code changes. Configured mypy passes
   for 105 source files; no formatter or linter is configured.
+
+## 2026-08-31 — TSK-0001 minimal authoritative Character weapon-source contract
+
+- Documentation-only architecture iteration based on
+  `d8f86eddff568ef9e9b263f1afee2d9418ab207d`. Added Architecture §3.29 and
+  accepted DEC-0044 for the minimal authoritative Character weapon source;
+  production behavior and Python/test code remain unchanged, and production
+  implementation is still pending.
+- Defined separate runtime Item identity and immutable Definition identity,
+  minimal Character-owned `InventoryState` and `EquipmentState` projections,
+  snapshot integrity rules, Definition-ID-based Character weapon proficiency,
+  and explicit Strength/Dexterity Dagger Finesse intent on the future single
+  `AttackCommand` payload.
+- Defined the future State schema V6 compatibility boundary: V1–V5 remain
+  readable with empty weapon proficiency, Inventory, and Equipment defaults;
+  legacy reads synthesize no Dagger or ownership/equipment State. The current
+  production writer remains V5.
+- Preserved §3.28 active-turn precedence and the G9 separation of Attack
+  Resolution, Damage Resolution, and Damage Application. Recorded the minimum
+  Definition lookup, validation order, failure codes, and pre-resolution
+  no-side-effect boundary.
+- Intentionally excluded production State/serializer/handler/resolver/Event
+  and damage changes; generic Item, inventory lifecycle, equipment-slot,
+  proficiency, modifier, and attack-source frameworks; armor/shields, dual
+  wielding, targeting/reach, Movement, critical-damage implementation, Monster
+  HP mutation, and ranged/thrown/ammunition mechanics.
