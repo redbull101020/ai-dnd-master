@@ -1130,23 +1130,25 @@ implementation
 
 ### Goal
 
-Define the smallest canonical authoritative source that lets one Character
-attack with the packaged Dagger while preserving the separate Inventory,
-Equipment, Character proficiency, Attack Resolution, Damage Resolution, and
-Damage Application responsibilities already required by the repository.
+Define the smallest canonical authoritative weapon source needed by the future
+Character Dagger attack consumer while preserving the already-canonical
+`InventoryEngine` and `EquipmentEngine` ownership boundaries and the separate
+Character proficiency, Attack Resolution, Damage Resolution, and Damage
+Application responsibilities already required by the repository.
 
 ### Why now
 
 G9 closes the narrow Goblin Scimitar consequence path and repeatedly identifies
 the Character Weapon continuation as its remaining adjacent frontier. The
 packaged Dagger and Attack/Damage foundations already exist, but implementation
-cannot start until ownership, proficiency, and the explicit Finesse choice are
-canonical.
+cannot start until the minimum `InventoryState` / `EquipmentState` facts,
+weapon proficiency, and the explicit Finesse choice are canonical.
 
 ### Scope
 
-- decide the minimum Inventory/Equipment facts and State Owner boundaries
-  required to identify the Character's authoritative weapon source;
+- define the minimum `InventoryState` / `EquipmentState` facts required by the
+  Character Dagger consumer while preserving the already-canonical
+  `InventoryEngine` and `EquipmentEngine` ownership boundaries;
 - decide the minimum Character weapon-proficiency representation;
 - decide where the explicit Strength/Dexterity Finesse choice belongs while
   preserving one `AttackCommand` intent and rejecting caller-supplied derived
@@ -1162,16 +1164,19 @@ canonical.
 - production or test implementation;
 - broad inventory management, containers, currency, encumbrance, loot, or a
   generic item-instance framework;
-- armor/shield AC, dual wielding, thrown/ranged attacks, reach, ammunition, or
-  action economy;
+- armor/shield AC, dual wielding, thrown/ranged attacks, ammunition, or action
+  economy;
+- targeting, distance, and reach legality; these remain separate prerequisites
+  for the eventual Dagger Attack implementation;
 - generic attack-source, modifier, equipment-slot, or Event orchestration
   abstractions;
 - changing the implemented Goblin Scimitar path.
 
 ### Acceptance criteria
 
-- the canonical documents identify every authoritative input needed for one
-  Character Dagger attack and its owning State/Definition boundary;
+- the canonical documents identify every authoritative weapon-source input
+  needed by the future Character Dagger attack consumer and its already-owned
+  State or Definition source;
 - weapon proficiency and the Finesse choice have explicit, non-derived sources
   without embedding computed attack bonuses in the Command;
 - the minimum State and serialization impact, compatibility policy, validation
