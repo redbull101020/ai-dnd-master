@@ -4099,3 +4099,22 @@ contracts.
   current production-status statements remain accurate, so they were
   intentionally not changed. `docs/TASK.md`, Architecture, Decisions,
   production Python, and tests were also not changed in this reconciliation.
+
+## 2026-08-31 — Task Queue reconciliation after TSK-0002 merge
+
+- Confirmed that PR #68 / merge commit
+  `d8f86eddff568ef9e9b263f1afee2d9418ab207d` accepted the TSK-0002 result on
+  `main`; marked TSK-0002 `Done`, moved it to `Recently completed`, and removed
+  its full detail from the open queue.
+- Selected TSK-0001 as `Current` and reconciled its planning detail with the
+  canonical Character weapon-source contract in Architecture §3.29 and
+  DEC-0044. Production implementation remains the separate subsequent
+  TSK-0004 task.
+- Marked TSK-0003 `Ready` because its sole TSK-0002 dependency is satisfied;
+  removed the obsolete blocker text without deciding the future zero-HP
+  eligibility contract.
+- Recalculated the curated short-term order to
+  `Next: TSK-0008 → TSK-0003`; `Hard blockers` remains empty and the next free
+  ID remains TSK-0009.
+- No production behavior or canonical gameplay contract changed in this
+  Task Queue reconciliation iteration.
