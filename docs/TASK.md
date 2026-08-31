@@ -1080,8 +1080,8 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0001
-- **Next:** TSK-0008 → TSK-0003
+- **Current:** TSK-0008
+- **Next:** TSK-0003
 - **Hard blockers:** —
 - **Next free ID:** TSK-0009
 - **Last reviewed:** 2026-08-31
@@ -1092,123 +1092,16 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0001` | `Current` | `P1` | `M` | `architecture` | Cross-cutting prerequisite for Phase 3 / Weapon attacks and Attack consequences | Define the minimal authoritative Character weapon source |
 | `TSK-0003` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
 | `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
 | `TSK-0006` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Turn/action economy | Implement active-turn Attack gating |
 | `TSK-0007` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement zero-HP Attack eligibility |
-| `TSK-0008` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Targeting and Weapon attacks | Define minimal melee targeting and reach for the first Character Dagger attack |
+| `TSK-0008` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Targeting and Weapon attacks | Define minimal melee targeting and reach for the first Character Dagger attack |
 
 ---
 
 # Open task details
-
-## TSK-0001 — Define the minimal authoritative Character weapon source
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `architecture`
-
-**Roadmap target:** Cross-cutting prerequisite for Phase 3 / Weapon attacks and
-Attack consequences
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Weapon attacks and Attack consequences; Equipment &
-  Inventory cross-cutting continuation
-- `ARCHITECTURE.md` §§3.1.1, 3.17, 3.27, 3.29, 10.5, 10.6, 12.12
-- `DEF-0009`, `DEF-0011`, `DEF-0013`
-- `DEC-0030`, `DEC-0031`, `DEC-0041`, `DEC-0042`, `DEC-0044`
-
-**Depends on:** `—`
-
-**Contract impact:** Defines the canonical Character weapon-source foundation
-in Architecture §3.29 and DEC-0044; production implementation remains the
-separate subsequent `TSK-0004` task
-
-### Goal
-
-Establish Architecture §3.29 and DEC-0044 as the accepted minimal canonical
-authoritative weapon-source contract for the future Character Dagger consumer,
-while preserving the existing ownership and staged resolution boundaries and
-leaving production implementation to a separate subsequent task.
-
-### Why now
-
-G9 closes the narrow Goblin Scimitar consequence path and repeatedly identifies
-the Character Weapon continuation as its remaining adjacent frontier. The
-packaged Dagger and Attack/Damage foundations already exist, but implementation
-cannot start until the minimum `InventoryState` / `EquipmentState` facts,
-weapon proficiency, and the explicit Finesse choice are canonical.
-
-### Scope
-
-- define in Architecture §3.29 the minimum authoritative runtime
-  Inventory/Equipment facts, Character weapon-proficiency membership, and
-  explicit Strength/Dexterity Dagger Finesse intent required by the first
-  Character weapon consumer;
-- record the rationale and consequences in DEC-0044 without duplicating the
-  full canonical contract in this planning layer;
-- establish the State schema V6 compatibility, validation, failure, ownership,
-  and staged Attack→Damage implementation boundaries required for the later
-  production task;
-- reconcile only documentation directly affected by the accepted contract.
-
-### Out of scope
-
-- production or test implementation;
-- broad inventory management, containers, currency, encumbrance, loot, or a
-  generic item-instance framework;
-- armor/shield AC, dual wielding, thrown/ranged attacks, ammunition, or action
-  economy;
-- targeting, distance, and reach legality; these remain separate prerequisites
-  for the eventual Dagger Attack implementation;
-- generic attack-source, modifier, equipment-slot, or Event orchestration
-  abstractions;
-- changing the implemented Goblin Scimitar path.
-
-### Acceptance criteria
-
-- Architecture §3.29 and DEC-0044 identify every authoritative weapon-source
-  input needed by the future Character Dagger consumer and its owning State or
-  Definition source;
-- weapon proficiency and the Finesse choice have explicit, non-derived sources
-  without embedding computed attack bonuses in the Command;
-- State schema V6 impact, compatibility policy, validation order, failure
-  boundaries, and the later production implementation boundary are explicit;
-- the accepted contract does not silently add ranged, armor,
-  inventory-management, or generic-framework scope;
-- all directly affected planning and deferred-scope references agree with
-  Architecture §3.29, DEC-0044, Roadmap, and the still-deferred broader
-  `DEF-*` concerns;
-- production implementation remains a separate subsequent task and is not
-  claimed by this architecture-only result.
-
-### Verification
-
-- documentation-reference tests;
-- targeted reference/anchor search for the changed contracts and Decision;
-- consistency review against the existing Character unarmed, Monster
-  Scimitar, packaged Dagger, State ownership, and serialization contracts.
-
-### Expected touchpoints
-
-```text
-docs/ARCHITECTURE.md
-docs/DECISIONS.md
-docs/DEFERRED.md
-docs/ROADMAP.md
-docs/TASK.md
-docs/DEVELOPMENT_LOG.md
-CLAUDE.md (only if a reproduced canonical fact changes)
-```
-
----
 
 ## TSK-0003 — Define zero-HP Attack eligibility by creature category
 
@@ -1315,7 +1208,7 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 ## TSK-0008 — Define minimal melee targeting and reach for the first Character Dagger attack
 
-**Status:** `Ready`
+**Status:** `Current`
 
 **Priority:** `P1`
 
@@ -1328,14 +1221,16 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 **References:**
 
 - `ROADMAP.md` — Phase 3 / Targeting, Weapon attacks, Movement
-- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27, 10.4, 10.7
+- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27, 3.29, 3.30, 10.4, 10.7
 - `P2-ATTACK-ROLLS`
 - `DEF-0011`
-- `DEC-0031`, `DEC-0041`, `DEC-0042`
+- `DEC-0031`, `DEC-0041`, `DEC-0042`, `DEC-0044`, `DEC-0045`
 
 **Depends on:** `—`
 
-**Contract impact:** Architecture update and new Decision required before implementation
+**Contract impact:** Defines the canonical Character Dagger melee
+targeting/reach foundation in Architecture §3.30 and DEC-0045; production
+implementation remains a separate subsequent task
 
 ### Goal
 
@@ -1363,7 +1258,8 @@ architecture.
   intended Monster target is legal for the first Character Dagger melee
   attack;
 - decide whether existing State is sufficient and, if not, define only the
-  minimum additional spatial State required by this consumer;
+  minimum additional spatial State required by this consumer as Combat-owned
+  and combat-local, not a World/Location placement model;
 - identify the State Owner for any new authoritative spatial fact;
 - define the authoritative source of the Dagger's melee reach requirement;
 - define where Application obtains the required State/Definition inputs and
@@ -1371,7 +1267,9 @@ architecture.
 - define rejection semantics before Attack dice, Event metadata, State
   mutation, or persistence;
 - define any StateSnapshot serialization/version compatibility consequence if
-  additional authoritative State is required;
+  additional authoritative State is required, including its relationship to
+  the already-reserved State schema V6 (§3.29) as a later, strictly additive
+  schema version;
 - preserve the existing separation between target legality and attack-roll /
   damage resolution;
 - update the canonical Architecture, append one Decision, and reconcile only
@@ -1390,6 +1288,8 @@ architecture.
 - cover and visibility;
 - Character weapon ownership, proficiency, or Finesse choice covered by
   `TSK-0001`;
+- a World/Location placement model (Phase 5 Locations/Maps) or any
+  `LocationState`/`location_id`;
 - action-resource budgets or zero-HP eligibility;
 - retrofitting the existing Goblin Scimitar path merely to create a shared
   targeting abstraction;
@@ -1402,8 +1302,9 @@ architecture.
   source for every fact needed to accept or reject its melee target;
 - ownership of any spatial State is explicit and does not give AI, API, Attack
   resolution, or another non-owner direct mutation authority;
-- Dagger melee reach is derived from authoritative Definition/State facts
-  rather than caller-supplied computed legality;
+- effective Dagger melee reach and legality derive from authoritative
+  `dnd_5e` rule policy together with authoritative Definition/Combat State
+  facts, never caller-supplied computed legality;
 - invalid target/reach attempts are rejected deterministically before
   DiceEngine, Event allocation, State mutation, or persistence;
 - the contract does not require a general Movement, geometry, ranged-attack,
@@ -1442,6 +1343,7 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 | ID | Title | Evidence |
 | --- | --- | --- |
+| `TSK-0001` | Define the minimal authoritative Character weapon source | PR #69 / merge commit `f4dbc50` |
 | `TSK-0002` | Define active-turn gating for `AttackCommand` | PR #68 / merge commit `d8f86ed` |
 
 ---
