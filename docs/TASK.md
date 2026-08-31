@@ -1081,9 +1081,9 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 - **Active Roadmap phase:** Phase 3 — Combat
 - **Current:** TSK-0002
-- **Next:** TSK-0003 → TSK-0001
+- **Next:** TSK-0001 → TSK-0008
 - **Hard blockers:** —
-- **Next free ID:** TSK-0006
+- **Next free ID:** TSK-0009
 - **Last reviewed:** 2026-08-31
 
 ---
@@ -1094,9 +1094,12 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | --- | --- | --- | --- | --- | --- | --- |
 | `TSK-0001` | `Ready` | `P1` | `M` | `architecture` | Cross-cutting prerequisite for Phase 3 / Weapon attacks and Attack consequences | Define the minimal authoritative Character weapon source |
 | `TSK-0002` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Turn/action economy | Define active-turn gating for `AttackCommand` |
-| `TSK-0003` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
+| `TSK-0003` | `Blocked` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
 | `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
+| `TSK-0006` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Turn/action economy | Implement active-turn Attack gating |
+| `TSK-0007` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement zero-HP Attack eligibility |
+| `TSK-0008` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Targeting and Weapon attacks | Define minimal melee targeting and reach for the first Character Dagger attack |
 
 ---
 
@@ -1292,7 +1295,7 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 ## TSK-0003 — Define zero-HP Attack eligibility by creature category
 
-**Status:** `Ready`
+**Status:** `Blocked`
 
 **Priority:** `P1`
 
@@ -1309,7 +1312,7 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 - `DEF-0005`, `DEF-0015`
 - `DEC-0033`, `DEC-0034`, `DEC-0040`, `DEC-0042`
 
-**Depends on:** `—`
+**Depends on:** `TSK-0002`
 
 **Contract impact:** Architecture update and new Decision required before
 implementation
@@ -1317,9 +1320,10 @@ implementation
 ### Goal
 
 Define separately whether a Character or Monster at authoritative
-`current_hp == 0` may use the existing `AttackCommand`, and clarify the
-unchanged turn-advancement boundary without predesigning the broader life-state
-or death-save system.
+`current_hp == 0` may use the existing `AttackCommand`, and define the narrow
+validation relationship between zero-HP eligibility and the canonical
+active-turn gate established by `TSK-0002`, without predesigning the broader
+life-state, death-save, or action-economy system.
 
 ### Why now
 
@@ -1327,13 +1331,21 @@ The implemented Monster consequence path can now reduce a real target to zero
 HP, while Attack and turn advancement are concrete Phase 3 consumers. That is
 the evidence trigger `DEF-0015` required for a narrow eligibility decision.
 
+The decision must follow the active-turn contract rather than independently
+inventing a second Attack eligibility boundary whose failure precedence would
+otherwise remain undefined.
+
 ### Scope
 
 - decide Character and Monster zero-HP Attack eligibility separately;
 - determine whether existing `current_hp` is sufficient for this gate or a
   narrower category-specific fact is demonstrably required;
-- define failure semantics and the boundary with the existing rule that a
-  zero-HP combatant's turn may still be advanced;
+- define the relative validation boundary between the active-turn gate
+  established by `TSK-0002` and zero-HP Attack eligibility;
+- define failure semantics before dice, Event metadata, State mutation, or
+  persistence;
+- clarify the unchanged boundary with the rule that a zero-HP combatant's turn
+  may still be advanced;
 - preserve the current arithmetic Damage/Healing contracts and their valid
   zero-HP transitions;
 - update the canonical Architecture, append one Decision, and reconcile
@@ -1341,11 +1353,12 @@ the evidence trigger `DEF-0015` required for a narrow eligibility decision.
 
 ### Out of scope
 
-- death saves, unconscious/stable/dead counters or a universal `LifeState`;
+- action, bonus-action, or reaction resource budgets;
+- death saves, unconscious/stable/dead counters, or a universal `LifeState`;
 - stabilization, targetability, further-Damage consequences, Healing recovery
   semantics, or automatic combat ending;
-- active-turn precedence, action resources, weapon-source rules, or
-  implementation.
+- weapon-source, equipment, targeting-distance, or movement rules;
+- implementation.
 
 ### Acceptance criteria
 
@@ -1353,16 +1366,155 @@ the evidence trigger `DEF-0015` required for a narrow eligibility decision.
   conflated into an unsupported universal lifecycle model;
 - the decision states whether additional authoritative State is required and
   rejects it unless this concrete consumer provides evidence;
+- the interaction and deterministic failure precedence between active-turn
+  eligibility and zero-HP Attack eligibility is explicit;
+- rejected attacks reach neither DiceEngine nor Event metadata, State
+  mutation, or persistence;
 - Damage, Healing, Attack, and turn-advancement boundaries remain mutually
-  consistent, including deterministic failure behavior before dice/Event work;
+  consistent;
 - `DEF-0005` remains deferred unless its separate death-save prerequisites are
   actually resolved.
 
 ### Verification
 
 - documentation-reference tests;
+- consistency review against the accepted `TSK-0002` active-turn contract;
 - consistency review against zero-HP Damage/Healing tests, Monster lethal-
   damage tests, and turn-advancement tests.
+
+### Expected touchpoints
+
+```text
+docs/ARCHITECTURE.md
+docs/DECISIONS.md
+docs/DEFERRED.md
+docs/ROADMAP.md
+docs/TASK.md
+docs/DEVELOPMENT_LOG.md
+CLAUDE.md (only if a reproduced canonical fact changes)
+```
+
+### Blocker
+
+Blocker: `TSK-0002` has not yet established the canonical active-turn
+`AttackCommand` eligibility and validation boundary.
+
+Unblock condition: `TSK-0002` is `Done` on `main`, so zero-HP eligibility can
+be defined against that accepted contract rather than inventing an independent
+failure ordering.
+
+---
+
+## TSK-0008 — Define minimal melee targeting and reach for the first Character Dagger attack
+
+**Status:** `Ready`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Targeting and Weapon attacks
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Targeting, Weapon attacks, Movement
+- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27, 10.4, 10.7
+- `P2-ATTACK-ROLLS`
+- `DEF-0011`
+- `DEC-0031`, `DEC-0041`, `DEC-0042`
+
+**Depends on:** `—`
+
+**Contract impact:** Architecture update and new Decision required before implementation
+
+### Goal
+
+Define the smallest authoritative targeting and spatial contract needed to
+determine whether the first Character Dagger attack against a Monster is a
+legal melee target, without designing the broader Movement system or a generic
+targeting/geometry framework.
+
+### Why now
+
+The Character Dagger is now a concrete next Weapon Attack consumer.
+
+The existing Character unarmed and Goblin Scimitar consumers prove the Attack
+and consequence boundaries, while the Character weapon-source task explicitly
+leaves targeting, distance, and reach as separate prerequisites.
+
+`DEF-0011` also requires necessary targeting/distance facts and melee reach
+before the broader Character Weapon attack continuation can be completed. The
+consumer evidence therefore exists; this is no longer speculative spatial
+architecture.
+
+### Scope
+
+- define the minimum authoritative facts required to decide whether the
+  intended Monster target is legal for the first Character Dagger melee
+  attack;
+- decide whether existing State is sufficient and, if not, define only the
+  minimum additional spatial State required by this consumer;
+- identify the State Owner for any new authoritative spatial fact;
+- define the authoritative source of the Dagger's melee reach requirement;
+- define where Application obtains the required State/Definition inputs and
+  where deterministic target/reach validation occurs;
+- define rejection semantics before Attack dice, Event metadata, State
+  mutation, or persistence;
+- define any StateSnapshot serialization/version compatibility consequence if
+  additional authoritative State is required;
+- preserve the existing separation between target legality and attack-roll /
+  damage resolution;
+- update the canonical Architecture, append one Decision, and reconcile only
+  directly affected planning/summary documentation.
+
+### Out of scope
+
+- production or test implementation;
+- movement Commands, movement expenditure, creature speed, Dash, Disengage, or
+  forced movement;
+- grid/hex representation, pathfinding, collision, terrain, difficult terrain,
+  elevation, or line-of-effect systems;
+- opportunity attacks and reactions;
+- ranged or thrown attacks, normal/long range, ammunition, or generic reach
+  support for arbitrary weapons;
+- cover and visibility;
+- Character weapon ownership, proficiency, or Finesse choice covered by
+  `TSK-0001`;
+- action-resource budgets or zero-HP eligibility;
+- retrofitting the existing Goblin Scimitar path merely to create a shared
+  targeting abstraction;
+- a generic `TargetingEngine`, geometry service, spatial query framework, or
+  shared Attack-validation pipeline without additional concrete consumers.
+
+### Acceptance criteria
+
+- the first Character Dagger → Monster consumer has one explicit authoritative
+  source for every fact needed to accept or reject its melee target;
+- ownership of any spatial State is explicit and does not give AI, API, Attack
+  resolution, or another non-owner direct mutation authority;
+- Dagger melee reach is derived from authoritative Definition/State facts
+  rather than caller-supplied computed legality;
+- invalid target/reach attempts are rejected deterministically before
+  DiceEngine, Event allocation, State mutation, or persistence;
+- the contract does not require a general Movement, geometry, ranged-attack,
+  or targeting framework;
+- any State/serialization compatibility impact is explicit;
+- the existing Character unarmed and Monster Scimitar contracts remain
+  unchanged unless an actual canonical conflict is discovered and reported
+  rather than silently resolved.
+
+### Verification
+
+- documentation-reference tests;
+- consistency review against the existing `AttackCommand` / `AttackHandler`
+  target boundary;
+- consistency review against Creature and Combat State ownership;
+- consistency review against the packaged Dagger Definition and existing
+  Character-unarmed / Goblin-Scimitar Attack consumers;
+- targeted reference search confirming no generic movement/targeting framework
+  was made canonical accidentally.
 
 ### Expected touchpoints
 

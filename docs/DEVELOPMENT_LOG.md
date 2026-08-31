@@ -3980,3 +3980,16 @@ contracts.
   task records (`TSK-0001` through `TSK-0005`).
 - No canonical gameplay contract, architectural Decision, production code, or
   test changed in this planning-only iteration.
+
+## 2026-08-31 — Task Queue refinement for TSK-0006 through TSK-0008
+
+- Refined the Phase 3 Task Queue without changing production behavior or
+  canonical Architecture contracts: `TSK-0003` now depends on `TSK-0002` and
+  is `Blocked`; compact implementation continuations `TSK-0006` and
+  `TSK-0007` are reserved as `Backlog`; and `TSK-0008` is a `Ready`
+  architecture task for the first concrete Character Dagger melee-target and
+  reach prerequisite.
+- `Current` remains `TSK-0002`, and the short-term `Next` order is now
+  `TSK-0001 → TSK-0008`.
+- No production code, gameplay contract, canonical Architecture contract, or
+  architectural Decision was accepted in this planning-only iteration.
