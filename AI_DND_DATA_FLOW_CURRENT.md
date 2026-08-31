@@ -1100,6 +1100,7 @@ src/dnd_engine/
 | Character unarmed Attack Roll → Monster read-only flow | Реализовано; Damage/HP не применяет |
 | Monster attack-roll foundation (Goblin Scimitar) → Character (G8) | Реализовано: `AttackHandler` Monster-actor branch → `resolve_monster_attack` → `MonsterAttackResolved` V1; consequence расширен G9 ниже |
 | Monster Scimitar Attack consequence → Damage → Character HP (G9) | Реализовано через Application: normal/critical source damage, zero-source branch, exact ordered 1/2/3 correlated Events and causation; positive amount → unchanged `DamageApplied` V1 → target replacement with `CombatState` preservation → exactly one `StateStore.save()` before success. Confirmed by real-adapter/filesystem production round-trip (Group 4, §3.27, DEC-0042); broad Weapon attack/damage scope remains open |
+| Attack active-turn eligibility (§3.28, DEC-0043) | Canonical contract defined for the currently supported `AttackCommand` paths; production `AttackHandler` gate is not implemented and remains TSK-0006 |
 | Direct Damage → HP mutation | Реализовано: `ApplyDamageCommand → DamageApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
 | Direct Healing → HP mutation | Реализовано: `ApplyHealingCommand → HealingApplied` V1 → concrete applier → §3.23 snapshot helper → `StateStore.save()` |
 | Apply/Remove Condition membership | Реализовано: concrete Commands/Events/appliers → §3.23 snapshot helper → `StateStore.save()` |

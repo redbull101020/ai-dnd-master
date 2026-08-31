@@ -814,13 +814,15 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   Damage, stabilization, and Healing.
 - **Motivation:** Current `0 -> 0` Damage and Healing from zero are arithmetic
   only; they intentionally make no unconscious/death/eligibility decision.
-- **Why deferred:** No concrete Phase 3 Turns/action-eligibility consumer has
-  yet established what a combatant may do at `current_hp == 0` or whether
-  either creature category needs additional lifecycle State.
-- **Prerequisites:** A concrete Phase 3 Turns/action-eligibility consumer that
-  must answer what a combatant may do at `current_hp == 0`; evaluate Character
-  and Monster requirements separately and coordinate the Character path with
-  DEF-0005.
+- **Why deferred:** Architecture §3.28 now defines the active-turn boundary for
+  the currently supported `AttackCommand` paths, but explicitly excludes
+  zero-HP eligibility. No accepted zero-HP contract yet establishes what a
+  Character or Monster may do at `current_hp == 0` or whether either creature
+  category needs additional lifecycle State.
+- **Prerequisites:** Use the canonical §3.28 active-turn boundary as the
+  validation-order baseline, then evaluate Character and Monster zero-HP
+  requirements separately through a concrete action-eligibility consumer and
+  coordinate the Character path with DEF-0005.
 - **Planned approach:** Treat `current_hp == 0` as the already-authoritative
   fact. Add only the category-specific authoritative lifecycle State and Events
   that the concrete consumer proves necessary; do not predefine a universal
@@ -833,9 +835,15 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   authoritative lifecycle facts.
 - **References:** [Architecture §3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.20](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b),
+  [§3.28](ARCHITECTURE.md#328-minimal-phase-3-attack-active-turn-eligibility),
   and [§10.4](ARCHITECTURE.md#104-creature-state-owner).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment.
+- **History:** 2026-08-31 — TSK-0002 established the canonical active-turn
+  boundary for current `AttackCommand` paths (§3.28, DEC-0043). DEF-0015 stays
+  `Deferred`: Character/Monster zero-HP eligibility and broader death-save or
+  lifecycle semantics remain unresolved and must be decided separately against
+  that boundary.
 
 ## DEF-0016
 
