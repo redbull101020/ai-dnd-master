@@ -4118,3 +4118,63 @@ contracts.
   ID remains TSK-0009.
 - No production behavior or canonical gameplay contract changed in this
   Task Queue reconciliation iteration.
+
+## 2026-08-31 — TSK-0008 minimal Character Dagger melee targeting/reach contract
+
+- Documentation-only architecture iteration based on
+  `f4dbc50c9f963f64f8156004cfd36c45b6ca303d`. Added Architecture §3.30 and
+  accepted DEC-0045 for the first Character Dagger melee targeting/reach
+  consumer; no production Python or test code changed, and production
+  implementation remains a separate later task.
+- Assigned the authoritative combat-local tactical position this consumer
+  needs to `CombatEngine`/`CombatState` ownership (§10.7), and clarified the
+  existing §10.4 `position` responsibility so it does not materialize a
+  `CreatureState.position` field or create a second authoritative copy of
+  §3.30 combat-local tactical position; any future non-combat/world
+  placement contract remains undesigned.
+- Scoped the first Character Dagger Weapon Attack as melee-only (no
+  `attack_mode`, thrown behavior, range, or ammunition), backed by a minimal
+  planned immutable `CombatPosition(creature_id, x, y)` and a future
+  `CombatState.positions` extension. Effective 5-ft reach comes from a narrow
+  `dnd_5e` first-consumer melee policy rather than a `WeaponDefinition.reach`
+  field or a Dagger Definition field, and the caller never supplies
+  `reach`/`distance`/`inRange`.
+- Defined the deterministic combat-local reach contract: squared-integer
+  distance (`dx*dx + dy*dy <= 25`), computed by one narrow pure Domain policy
+  that Application (`AttackHandler`) invokes only after loading the
+  authoritative `CombatState`/positions/effective reach and mapping any
+  missing prerequisite to `EngineError`. Made target Combat membership an
+  explicit Dagger-specific prerequisite without changing §3.28 active-turn
+  eligibility. All spatial validation occurs before Condition/RollMode
+  derivation, `DiceEngine`, Event metadata, State mutation, and persistence,
+  using only existing `ErrorCode` values with no new Event.
+- Defined the planned State schema V7 as strictly additive over the already
+  reserved V6 weapon-source schema (§3.29): `positions` is a required field
+  on a non-null V7 `combat`, serialized deterministically sorted by
+  `creatureId`, while `combat.order` remains the unsorted gameplay-semantic
+  Initiative/turn order. The current production writer remains V5.
+- Kept the rule narrow: it does not implement Movement, grid/hex, terrain,
+  pathfinding, collision, elevation, footprint, visibility, cover,
+  line-of-effect, reactions/opportunity attacks, thrown/ranged Dagger,
+  arbitrary weapon reach, or a generic `TargetingEngine`/geometry
+  service/spatial-query/Attack-validation-pipeline framework. The existing
+  Character-unarmed and Monster Goblin Scimitar Attack contracts are
+  unchanged and were not retrofitted with spatial validation.
+- Reconciled `docs/TASK.md` (`TSK-0001` marked `Done`/moved to `Recently
+  completed`, `TSK-0008` promoted to `Current`, its reach acceptance
+  criterion corrected to name the `dnd_5e` policy rather than an implied
+  `WeaponDefinition.reach`), `docs/ROADMAP.md` (Phase 3 contract links and
+  narrative notes), and `docs/DEFERRED.md` (`P2-ATTACK-ROLLS`, `DEF-0011`)
+  with the new §3.30/DEC-0045 prerequisite. `DEF-0011` stays `Deferred`; the
+  broad Targeting, Movement, and Weapon attacks Roadmap items stay
+  incomplete; no new `DEF-*` record was created.
+- Reviewed `CLAUDE.md` and `README.md`: neither reproduces a fact this slice
+  changed (no currently implemented Attack path's behavior changed, unlike
+  §3.28), matching the precedent set for §3.29/DEC-0044, so both were
+  intentionally left unchanged.
+- Verification: `tests/architecture/test_documentation_references.py` passes
+  (2 tests); the full suite passes (1587 tests, Python 3.12.13, run with a
+  writable `--basetemp` outside the repository to avoid an unrelated Windows
+  temp-permission artifact); configured `mypy` passes for the existing source
+  tree; `git diff --check` reports no whitespace errors. No formatter or
+  linter is configured.
