@@ -64,6 +64,7 @@
 | Monster attack → Character vertical slice, `MonsterAttackDefinition` (G8) | §3.26 |
 | Monster Attack consequence → Damage → HP vertical slice (G9) | §3.27 |
 | Attack active-turn eligibility for current `AttackCommand` paths | §3.28 |
+| Minimal authoritative Character weapon source (TSK-0001) | §3.29 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -126,6 +127,7 @@
   * [3.26. Minimal Phase 3 Monster attack → Character vertical slice (G8)](#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
   * [3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9)](#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9)
   * [3.28. Minimal Phase 3 Attack active-turn eligibility](#328-minimal-phase-3-attack-active-turn-eligibility)
+  * [3.29. Minimal authoritative Character weapon source (TSK-0001)](#329-minimal-authoritative-character-weapon-source-tsk-0001)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -5693,6 +5695,351 @@ The rule is deliberately limited to **the currently supported
 mechanics require the attacker to be the active combatant. Reactions,
 opportunity attacks, and other future out-of-turn consumers may receive a
 separate eligibility contract when they are implemented.
+
+---
+
+### 3.29. Minimal authoritative Character weapon source (TSK-0001)
+
+Implementation status: **Canonical foundation defined; production
+implementation pending.** This section defines the smallest authoritative
+weapon source required by the first future Character Dagger consumer. The
+current production writer remains State schema V5, and the current
+`CharacterState`, `StateSnapshot`, `AttackPayload`, and `AttackHandler` remain
+unchanged until a separate implementation task.
+
+This foundation preserves the existing separation between immutable
+Definitions, runtime State, intent-level Commands, deterministic resolution,
+immutable Events, and Event-driven State application. It also preserves the
+Inventory and Equipment ownership boundaries in §§10.5–10.6 without
+implementing their broader future responsibilities.
+
+#### Runtime Item identity and Inventory ownership
+
+A Definition ID identifies immutable rules/content. A runtime Item ID
+identifies one campaign item instance. They are never interchangeable.
+
+The minimal future runtime record is:
+
+```python
+@dataclass
+class InventoryItemState:
+    id: str
+    definition_id: str
+```
+
+For example:
+
+```text
+item_001 → definition_id="dagger"
+```
+
+`item_001` is the runtime Item ID; `dagger` is the immutable Definition ID.
+Caller/API/AI input must not use `dagger` as a substitute for a runtime Item
+identity. This slice introduces no generic Item framework, item repository,
+item registry, or item lifecycle.
+
+The minimum Inventory projection is:
+
+```python
+@dataclass
+class InventoryState:
+    owner_id: str
+    items: tuple[InventoryItemState, ...]
+```
+
+For this slice, the supported owner is a Character. `InventoryState` records
+only which runtime items belong to that owner. It does not add quantity,
+containers, currency, weight, encumbrance, durability, loot, inventory
+Commands/Events, creation/destruction, or transfer lifecycle. Those broader
+responsibilities remain future Inventory-owner scope; they are not implied by
+this minimal persisted shape.
+
+#### Equipment ownership
+
+The minimum Equipment projection is:
+
+```python
+@dataclass
+class EquipmentState:
+    owner_id: str
+    equipped_weapon_id: str | None
+```
+
+`EquipmentState` is the authoritative fact identifying which runtime Inventory
+Item is currently selected as the equipped weapon. A non-`None`
+`equipped_weapon_id` must reference an item in the `InventoryState` of the same
+owner.
+
+This slice introduces no main-hand/off-hand split, slot Enum, armor or shield
+model, dual wielding, two-handed rules, or generic equipment-slot framework.
+Inventory ownership and equipped selection remain distinct State-owner facts.
+
+#### Planned StateSnapshot invariants
+
+The V6 implementation will add separate snapshot projections rather than
+nesting them in `CampaignState` or `CharacterState`:
+
+```python
+@dataclass(frozen=True)
+class StateSnapshot:
+    campaign: CampaignState
+    creatures: tuple[CreatureState, ...]
+    characters: tuple[CharacterState, ...] = ()
+    inventories: tuple[InventoryState, ...] = ()
+    equipment: tuple[EquipmentState, ...] = ()
+    combat: CombatState | None = None
+```
+
+Neither projection is mandatory for every Character. If a projection is
+present, these invariants apply:
+
+```text
+InventoryState.owner_id → existing CharacterState.id
+EquipmentState.owner_id → existing CharacterState.id
+at most one InventoryState per owner
+at most one EquipmentState per owner
+InventoryItemState.id values are unique across the campaign snapshot
+non-null equipped_weapon_id → item in the same owner's InventoryState
+```
+
+An absent Inventory or Equipment projection means there is no available
+authoritative Character weapon source; it does not make the snapshot invalid.
+An Equipment projection with `equipped_weapon_id=None` likewise selects no
+weapon. A non-null equipped ID without the matching owner Inventory/item is an
+invalid snapshot relation.
+
+Snapshot containment does not change ownership: `InventoryEngine` owns
+`InventoryState`, `EquipmentEngine` owns `EquipmentState`, and the Character
+projection remains owned by the Creature domain.
+
+#### Character weapon proficiency
+
+The future Character projection gains exactly one effective-membership field:
+
+```python
+@dataclass
+class CharacterState:
+    ...
+    weapon_proficiencies: frozenset[str]
+```
+
+Members are Weapon Definition IDs, for example
+`frozenset({"dagger"})`; they are never runtime Item IDs. This minimal consumer
+does not model simple/martial weapon taxonomy, weapon groups, training sources,
+proficiency provenance, or a generic proficiency abstraction.
+
+The Character weapon proficiency contribution is:
+
+```text
+weapon definition id in character.weapon_proficiencies
+    → character_proficiency_bonus(character.total_level)
+
+weapon definition id not in character.weapon_proficiencies
+    → 0
+```
+
+Lack of weapon proficiency does not prohibit the Attack. It only removes the
+proficiency contribution from the attack calculation. No `ModifierPipeline`
+or stored derived proficiency bonus is introduced.
+
+#### Attack intent evolution and routing
+
+There remains one `AttackCommand`; no `WeaponAttackCommand` is introduced. Its
+future typed payload evolves minimally to:
+
+```python
+@dataclass(frozen=True)
+class AttackPayload:
+    target_id: str
+    weapon_item_id: str | None = None
+    weapon_ability: Ability | None = None
+```
+
+Existing Character-unarmed and Monster callers set both new fields to `None`.
+`weapon_item_id` is an intent-level selection of a runtime Item, not a claim
+about its Definition or derived mechanics.
+
+The Command must never accept caller-supplied `weapon_definition_id`,
+`damage_dice`, `damage_type`, `attack_bonus`, `ability_modifier`,
+`proficiency_bonus`, derived hit chance, or target Armor Class. The Engine
+loads or derives those authoritative facts and values.
+
+Routing is:
+
+```text
+Character actor + weapon_item_id is None
+    → existing unarmed Character path
+
+Character actor + weapon_item_id is not None
+    → future Character weapon path
+
+Monster actor
+    → existing Monster attack path
+```
+
+`weapon_ability is not None` while `weapon_item_id is None` is invalid intent.
+The Character-weapon-specific payload fields must not be silently ignored on
+the Monster path; any non-`None` value there is invalid intent. These failures
+use `INVALID_COMMAND`.
+
+#### Authoritative Definition lookup
+
+The Character weapon path resolves its source through the full authoritative
+chain:
+
+```text
+weapon_item_id
+→ actor InventoryState
+→ matching InventoryItemState
+→ InventoryItemState.definition_id
+→ DefinitionSource
+→ ItemDefinition
+→ require WeaponDefinition for Weapon Attack
+```
+
+`StateSnapshot` and `StateSerializer` validate State shape and cross-State
+runtime relations but do not dereference Definition IDs. Definition lookup
+remains lazy at the concrete consumer boundary (§3.16).
+
+The failure categories are distinct:
+
+```text
+Definition ID cannot be found
+    → DEFINITION_NOT_FOUND
+
+runtime item points to a Definition of the wrong fundamental category
+    → INVALID_STATE
+
+Definition is a valid ItemDefinition but not a WeaponDefinition
+    → ACTION_NOT_AVAILABLE for Weapon Attack
+```
+
+The second case is a corrupt runtime item-to-Definition relation. The third is
+a valid item that the requested action cannot use as a weapon. No generic
+Definition exception mapper is introduced.
+
+#### Explicit Dagger Finesse choice
+
+The first supported Character weapon consumer is the packaged Dagger, whose
+immutable `WeaponDefinition.properties` contains `finesse`. Intent must
+explicitly choose exactly one of:
+
+```text
+weapon_ability = Ability.STRENGTH
+weapon_ability = Ability.DEXTERITY
+```
+
+The Engine must not automatically select the larger modifier. For the Dagger
+path, a missing choice or any Ability other than Strength or Dexterity is
+`INVALID_COMMAND`. The chosen Ability is used by both Attack Resolution and
+the subsequent Weapon Damage Resolution; the Damage stage must not select an
+Ability again or maximize the modifier independently.
+
+This is a concrete Dagger/Finesse policy, not a generic weapon
+ability-selection framework.
+
+#### State schema V6 and compatibility
+
+Production implementation of this foundation requires State schema V6. The
+current production writer remains V5 until that separate task lands. V6 will
+add:
+
+```text
+StateSnapshot.inventories
+StateSnapshot.equipment
+CharacterState.weapon_proficiencies
+```
+
+The compatibility policy is:
+
+```text
+V1–V5 remain readable
+
+legacy CharacterState:
+    weapon_proficiencies = frozenset()
+
+legacy snapshot:
+    inventories = ()
+    equipment = ()
+```
+
+Legacy reads must not synthesize a Dagger, Inventory, Equipment, or weapon
+proficiency. V6 serialization/deserialization and current-writer changes are
+part of the later production implementation task, not this architecture-only
+slice.
+
+#### Character weapon validation order
+
+The active-turn contract in §3.28 remains the earlier shared gate and is not
+changed. The future Character weapon path continues from that boundary in
+this order:
+
+```text
+StateStore.load
+→ actor CreatureState lookup
+→ active-turn eligibility (§3.28)
+→ Character / Monster routing
+→ existing target existence/category validation
+→ weapon intent shape validation
+→ actor InventoryState
+→ selected runtime InventoryItemState
+→ actor EquipmentState
+→ selected item must be equipped
+→ Item Definition lookup
+→ require WeaponDefinition
+→ weapon-proficiency membership and contribution
+→ explicit Dagger Finesse Ability validation
+→ later TSK-0008 targeting/distance/reach validation
+→ Condition/RollMode derivation
+→ Attack Resolution / DiceEngine
+→ Event metadata and Events
+→ later Weapon Damage Resolution and Damage Application
+```
+
+This order preserves actor-first and active-turn precedence from §3.28. It
+does not claim TSK-0008 targeting/reach or the weapon consequence stages are
+implemented by this foundation.
+
+#### Failure semantics and side-effect boundary
+
+The minimum failure mapping is:
+
+| Failure | `ErrorCode` |
+| --- | --- |
+| invalid weapon payload combination | `INVALID_COMMAND` |
+| actor Inventory absent or selected item absent from it | `ACTION_NOT_AVAILABLE` |
+| actor Equipment absent or selected item is not equipped | `ACTION_NOT_AVAILABLE` |
+| referenced Definition is absent | `DEFINITION_NOT_FOUND` |
+| corrupt item-to-Definition category relation | `INVALID_STATE` |
+| valid non-weapon Item selected for Weapon Attack | `ACTION_NOT_AVAILABLE` |
+| absent weapon proficiency | not an error; proficiency contribution is `0` |
+| missing/invalid Dagger Finesse Ability choice | `INVALID_COMMAND` |
+
+Any rejection before resolution performs no `DiceEngine` call, allocates no
+Event metadata, creates no Event, mutates no State, and does not call
+`StateStore.save()`. Existing `ErrorCode` values cover this contract; no new
+code is introduced.
+
+#### Boundary with later implementation
+
+This architecture slice does not implement production State classes,
+serializer changes, the `AttackHandler` weapon branch, a Character weapon
+resolver, a Weapon Attack Event, a Weapon Damage Result/Event, critical-damage
+code, `DamageApplied` orchestration, Monster HP mutation,
+targeting/distance/reach, Movement, ranged/thrown/ammunition rules, a generic
+`AttackSource`, or generic modifier/equipment frameworks.
+
+The Character weapon continuation must preserve the G9 staged architecture:
+
+```text
+Attack Resolution
+→ Damage Resolution
+→ Damage Application
+```
+
+Concrete result/Event types and Application orchestration belong to later
+implementation tasks. This foundation supplies authoritative inputs; it does
+not collapse or pre-implement those stages.
 
 ---
 

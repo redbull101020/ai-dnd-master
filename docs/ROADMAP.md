@@ -150,7 +150,7 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 
 ## Phase 3 — Combat
 
-> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7) · [§3.26 Monster attack → Character vertical slice (G8)](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8) · [§3.27 Monster Attack consequence → Damage → HP vertical slice (G9)](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9) · [§3.28 Attack active-turn eligibility](ARCHITECTURE.md#328-minimal-phase-3-attack-active-turn-eligibility)
+> Контракты: [§10.7 Combat State Owner](ARCHITECTURE.md#107-combat-state-owner) · [§3.8 Atomicity](ARCHITECTURE.md#38-atomicity) · [§12.11 Event Ordering](ARCHITECTURE.md#1211-event-ordering) · [§3.25 Combat Initiative/Turn Order vertical slice (G7)](ARCHITECTURE.md#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7) · [§3.26 Monster attack → Character vertical slice (G8)](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8) · [§3.27 Monster Attack consequence → Damage → HP vertical slice (G9)](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9) · [§3.28 Attack active-turn eligibility](ARCHITECTURE.md#328-minimal-phase-3-attack-active-turn-eligibility) · [§3.29 Character weapon source](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001)
 
 * [x] Initiative foundation — individual-participant dice-rolled `StartCombatCommand` → `CombatStarted` V1, persisted `CombatState.order`, Poisoned Dexterity-check disadvantage via the existing Ability Check Condition policy (§3.25).
 * [x] Turn-order advancement foundation — `AdvanceTurnCommand` → `TurnAdvanced` V1 advances `active_index`/`round`, gated by an actor-eligibility check (§3.25).
@@ -163,9 +163,9 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
-* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target part is proven by G8; Equipment/Inventory ownership, weapon proficiency, and Finesse choice remain entirely open.
+* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target part is proven by G8; §3.29/DEC-0044 now define the canonical Character Inventory/Equipment ownership, runtime weapon selection, effective weapon proficiency, explicit Finesse choice, and State schema V6 compatibility prerequisites. Their production implementation remains open; TSK-0008 targeting/reach is separate, and Character Dagger Attack→Damage→Monster HP, ranged/ammunition, and other weapons are not implemented.
 * [ ] Monster actions beyond the Goblin Scimitar attack-roll foundation ([DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012)) — multiple/ambiguous actions, multiattack, recharge, saving-throw/AoE actions, ranged/reach, and Monster save/skill proficiency remain open.
-* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path is implemented and evidenced through real adapters (§3.27, DEC-0042; foundation row above); the broader Weapon attack/damage/critical continuation (a concrete Character Weapon damage source and its Attack→Damage application, Equipment/Inventory ownership, Character weapon proficiency, and the explicit Finesse choice) remains open.
+* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path is implemented and evidenced through real adapters (§3.27, DEC-0042; foundation row above). The §3.29 Character weapon-source prerequisite is canonical but not implemented; the Character Dagger Attack→Damage→Monster HP continuation remains open and must preserve `Attack Resolution → Damage Resolution → Damage Application`, reusing the explicit Finesse Ability for Damage rather than auto-selecting it again.
 * [ ] Conditions expansion ([DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
 * [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
 * [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
@@ -213,8 +213,11 @@ real-adapter/filesystem integration test confirming this end to end through
 the real `FilesystemStateStore`, `PackagedDefinitionSource`, and
 `PythonDiceEngine` adapters. G9's own narrow Goblin Scimitar scope is
 therefore complete, but broader Weapon attack/damage/critical scope remains
-open, so the broad Attack consequences item and DEF-0013 stay incomplete for
-that remaining scope.
+open. Section 3.29/DEC-0044 defines its minimal Character weapon-source
+prerequisite only; production Inventory/Equipment/proficiency/Finesse State and
+behavior, TSK-0008 targeting/reach, and the Character Dagger
+Attack→Damage→Monster HP path are still absent. The broad Weapon attacks and
+Attack consequences rows and DEF-0013 therefore stay incomplete.
 
 ## Phase 4 — Magic
 

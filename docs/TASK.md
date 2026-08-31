@@ -1080,8 +1080,8 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0002
-- **Next:** TSK-0001 → TSK-0008
+- **Current:** TSK-0001
+- **Next:** TSK-0008 → TSK-0003
 - **Hard blockers:** —
 - **Next free ID:** TSK-0009
 - **Last reviewed:** 2026-08-31
@@ -1092,9 +1092,8 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0001` | `Ready` | `P1` | `M` | `architecture` | Cross-cutting prerequisite for Phase 3 / Weapon attacks and Attack consequences | Define the minimal authoritative Character weapon source |
-| `TSK-0002` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Turn/action economy | Define active-turn gating for `AttackCommand` |
-| `TSK-0003` | `Blocked` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
+| `TSK-0001` | `Current` | `P1` | `M` | `architecture` | Cross-cutting prerequisite for Phase 3 / Weapon attacks and Attack consequences | Define the minimal authoritative Character weapon source |
+| `TSK-0003` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
 | `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
 | `TSK-0006` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Turn/action economy | Implement active-turn Attack gating |
@@ -1107,7 +1106,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 ## TSK-0001 — Define the minimal authoritative Character weapon source
 
-**Status:** `Ready`
+**Status:** `Current`
 
 **Priority:** `P1`
 
@@ -1122,22 +1121,22 @@ Attack consequences
 
 - `ROADMAP.md` — Phase 3 / Weapon attacks and Attack consequences; Equipment &
   Inventory cross-cutting continuation
-- `ARCHITECTURE.md` §§3.1.1, 3.17, 3.27, 10.5, 10.6, 12.12
+- `ARCHITECTURE.md` §§3.1.1, 3.17, 3.27, 3.29, 10.5, 10.6, 12.12
 - `DEF-0009`, `DEF-0011`, `DEF-0013`
-- `DEC-0030`, `DEC-0031`, `DEC-0041`, `DEC-0042`
+- `DEC-0030`, `DEC-0031`, `DEC-0041`, `DEC-0042`, `DEC-0044`
 
 **Depends on:** `—`
 
-**Contract impact:** Architecture update and new Decision required before
-implementation
+**Contract impact:** Defines the canonical Character weapon-source foundation
+in Architecture §3.29 and DEC-0044; production implementation remains the
+separate subsequent `TSK-0004` task
 
 ### Goal
 
-Define the smallest canonical authoritative weapon source needed by the future
-Character Dagger attack consumer while preserving the already-canonical
-`InventoryEngine` and `EquipmentEngine` ownership boundaries and the separate
-Character proficiency, Attack Resolution, Damage Resolution, and Damage
-Application responsibilities already required by the repository.
+Establish Architecture §3.29 and DEC-0044 as the accepted minimal canonical
+authoritative weapon-source contract for the future Character Dagger consumer,
+while preserving the existing ownership and staged resolution boundaries and
+leaving production implementation to a separate subsequent task.
 
 ### Why now
 
@@ -1149,18 +1148,16 @@ weapon proficiency, and the explicit Finesse choice are canonical.
 
 ### Scope
 
-- define the minimum `InventoryState` / `EquipmentState` facts required by the
-  Character Dagger consumer while preserving the already-canonical
-  `InventoryEngine` and `EquipmentEngine` ownership boundaries;
-- decide the minimum Character weapon-proficiency representation;
-- decide where the explicit Strength/Dexterity Finesse choice belongs while
-  preserving one `AttackCommand` intent and rejecting caller-supplied derived
-  bonuses;
-- define the required StateSnapshot/serialization and compatibility impact;
-- define the boundary between this prerequisite and the later Dagger
-  Attack→Damage implementation slice;
-- update the canonical Architecture, append one Decision, and reconcile only
-  documentation directly affected by that decision.
+- define in Architecture §3.29 the minimum authoritative runtime
+  Inventory/Equipment facts, Character weapon-proficiency membership, and
+  explicit Strength/Dexterity Dagger Finesse intent required by the first
+  Character weapon consumer;
+- record the rationale and consequences in DEC-0044 without duplicating the
+  full canonical contract in this planning layer;
+- establish the State schema V6 compatibility, validation, failure, ownership,
+  and staged Attack→Damage implementation boundaries required for the later
+  production task;
+- reconcile only documentation directly affected by the accepted contract.
 
 ### Out of scope
 
@@ -1177,17 +1174,20 @@ weapon proficiency, and the explicit Finesse choice are canonical.
 
 ### Acceptance criteria
 
-- the canonical documents identify every authoritative weapon-source input
-  needed by the future Character Dagger attack consumer and its already-owned
-  State or Definition source;
+- Architecture §3.29 and DEC-0044 identify every authoritative weapon-source
+  input needed by the future Character Dagger consumer and its owning State or
+  Definition source;
 - weapon proficiency and the Finesse choice have explicit, non-derived sources
   without embedding computed attack bonuses in the Command;
-- the minimum State and serialization impact, compatibility policy, validation
-  order, and expected failure boundaries are explicit;
-- the later implementation boundary is reviewable without silently adding
-  ranged, armor, inventory-management, or generic-framework scope;
-- the new Decision and all directly affected summaries agree with Architecture,
-  Roadmap, and the still-deferred broader `DEF-*` concerns.
+- State schema V6 impact, compatibility policy, validation order, failure
+  boundaries, and the later production implementation boundary are explicit;
+- the accepted contract does not silently add ranged, armor,
+  inventory-management, or generic-framework scope;
+- all directly affected planning and deferred-scope references agree with
+  Architecture §3.29, DEC-0044, Roadmap, and the still-deferred broader
+  `DEF-*` concerns;
+- production implementation remains a separate subsequent task and is not
+  claimed by this architecture-only result.
 
 ### Verification
 
@@ -1210,92 +1210,9 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 ---
 
-## TSK-0002 — Define active-turn gating for `AttackCommand`
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `S`
-
-**Group:** `architecture`
-
-**Roadmap target:** Phase 3 / Turn/action economy
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Turn/action economy and turn resources
-- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27, 3.28
-- `DEC-0040`, `DEC-0041`, `DEC-0042`, `DEC-0043`
-
-**Depends on:** `—`
-
-**Contract impact:** Architecture update and new Decision required before
-implementation
-
-### Goal
-
-Define whether and how the existing `AttackCommand` paths consult
-`CombatState.active_creature_id`, including outside-combat behavior and
-rejection boundaries, without designing the broader action economy.
-
-### Why now
-
-Both persisted turn ownership and real Character/Monster Attack consumers now
-exist, so the repository has concrete evidence for a narrow eligibility rule
-that was explicitly deferred by G7–G9.
-
-### Scope
-
-- specify Attack legality with no combat, with an actor absent from combat,
-  and with an actor that is not currently active;
-- specify the validation order and error boundary before dice, Event metadata,
-  State mutation, or persistence;
-- preserve the existing Character-unarmed and Monster-Scimitar resolution and
-  consequence contracts after eligibility succeeds;
-- update the canonical Architecture, append one Decision, and reconcile
-  directly affected planning/summary documentation.
-
-### Out of scope
-
-- action/bonus-action/reaction counters or reset State;
-- movement, opportunity attacks, `Ready`, `Dodge`, `Dash`, `Disengage`, or a
-  generic action/eligibility pipeline;
-- zero-HP eligibility, combat ending, weapon-source rules, or implementation.
-
-### Acceptance criteria
-
-- every currently supported Attack path has one unambiguous CombatState gating
-  rule and deterministic failure precedence;
-- rejected attacks consume no dice, allocate no Event metadata, mutate no
-  State, and call no persistence boundary;
-- the decision does not introduce turn-resource State or a generic action
-  framework without a concrete consumer;
-- Architecture, Decision, Roadmap/Deferred references, and summaries remain
-  consistent.
-
-### Verification
-
-- documentation-reference tests;
-- consistency review against `AttackHandler`, `AdvanceTurnHandler`, and their
-  focused Application/integration tests.
-
-### Expected touchpoints
-
-```text
-docs/ARCHITECTURE.md
-docs/DECISIONS.md
-docs/ROADMAP.md
-docs/TASK.md
-docs/DEVELOPMENT_LOG.md
-CLAUDE.md (only if a reproduced canonical fact changes)
-```
-
----
-
 ## TSK-0003 — Define zero-HP Attack eligibility by creature category
 
-**Status:** `Blocked`
+**Status:** `Ready`
 
 **Priority:** `P1`
 
@@ -1393,17 +1310,6 @@ docs/TASK.md
 docs/DEVELOPMENT_LOG.md
 CLAUDE.md (only if a reproduced canonical fact changes)
 ```
-
-### Blocker
-
-Blocker: the TSK-0002 result defines the canonical active-turn
-`AttackCommand` eligibility and validation boundary in §3.28/DEC-0043, but
-`TSK-0002` is not yet `Done` on `main`, so the repository-backed dependency
-remains unmet.
-
-Unblock condition: `TSK-0002` is `Done` on `main`, so zero-HP eligibility can
-be defined against that accepted contract rather than inventing an independent
-failure ordering.
 
 ---
 
@@ -1536,8 +1442,7 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-
-_Empty._
+| `TSK-0002` | Define active-turn gating for `AttackCommand` | PR #68 / merge commit `d8f86ed` |
 
 ---
 

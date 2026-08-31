@@ -4054,3 +4054,67 @@ contracts.
   access (`WinError 5`); rerunning with `PIP_CACHE_DIR` in a dedicated writable
   location passed all 1587 tests without code changes. Configured mypy passes
   for 105 source files; no formatter or linter is configured.
+
+## 2026-08-31 — TSK-0001 minimal authoritative Character weapon-source contract
+
+- Documentation-only architecture iteration based on
+  `d8f86eddff568ef9e9b263f1afee2d9418ab207d`. Added Architecture §3.29 and
+  accepted DEC-0044 for the minimal authoritative Character weapon source;
+  production behavior and Python/test code remain unchanged, and production
+  implementation is still pending.
+- Defined separate runtime Item identity and immutable Definition identity,
+  minimal Character-owned `InventoryState` and `EquipmentState` projections,
+  snapshot integrity rules, Definition-ID-based Character weapon proficiency,
+  and explicit Strength/Dexterity Dagger Finesse intent on the future single
+  `AttackCommand` payload.
+- Defined the future State schema V6 compatibility boundary: V1–V5 remain
+  readable with empty weapon proficiency, Inventory, and Equipment defaults;
+  legacy reads synthesize no Dagger or ownership/equipment State. The current
+  production writer remains V5.
+- Preserved §3.28 active-turn precedence and the G9 separation of Attack
+  Resolution, Damage Resolution, and Damage Application. Recorded the minimum
+  Definition lookup, validation order, failure codes, and pre-resolution
+  no-side-effect boundary.
+- Intentionally excluded production State/serializer/handler/resolver/Event
+  and damage changes; generic Item, inventory lifecycle, equipment-slot,
+  proficiency, modifier, and attack-source frameworks; armor/shields, dual
+  wielding, targeting/reach, Movement, critical-damage implementation, Monster
+  HP mutation, and ranged/thrown/ammunition mechanics.
+
+## 2026-08-31 — TSK-0001 subordinate documentation reconciliation
+
+- Reconciled `docs/DEFERRED.md` and `docs/ROADMAP.md` with the canonical
+  Character weapon-source prerequisite established by §3.29/DEC-0044; no
+  production implementation or canonical contract changed.
+- Kept DEF-0009, DEF-0011, and DEF-0013 `Deferred`. Clarified that production
+  Inventory/Equipment/proficiency/Finesse behavior is still pending, TSK-0008
+  targeting/reach remains separate, ranged/ammunition and other weapons remain
+  deferred, and equipment-derived armor/shield AC is outside TSK-0001.
+- Preserved the open Roadmap `Weapon attacks`, broad `Attack consequences`,
+  and cross-cutting Equipment & Inventory scope. No checkbox or completion
+  status changed; the Character Dagger Attack→Damage→Monster HP path remains
+  unimplemented and must retain G9's Attack Resolution → Damage Resolution →
+  Damage Application separation.
+- Reviewed `CLAUDE.md`, `README.md`, and `AI_DND_DATA_FLOW_CURRENT.md`; their
+  current production-status statements remain accurate, so they were
+  intentionally not changed. `docs/TASK.md`, Architecture, Decisions,
+  production Python, and tests were also not changed in this reconciliation.
+
+## 2026-08-31 — Task Queue reconciliation after TSK-0002 merge
+
+- Confirmed that PR #68 / merge commit
+  `d8f86eddff568ef9e9b263f1afee2d9418ab207d` accepted the TSK-0002 result on
+  `main`; marked TSK-0002 `Done`, moved it to `Recently completed`, and removed
+  its full detail from the open queue.
+- Selected TSK-0001 as `Current` and reconciled its planning detail with the
+  canonical Character weapon-source contract in Architecture §3.29 and
+  DEC-0044. Production implementation remains the separate subsequent
+  TSK-0004 task.
+- Marked TSK-0003 `Ready` because its sole TSK-0002 dependency is satisfied;
+  removed the obsolete blocker text without deciding the future zero-HP
+  eligibility contract.
+- Recalculated the curated short-term order to
+  `Next: TSK-0008 → TSK-0003`; `Hard blockers` remains empty and the next free
+  ID remains TSK-0009.
+- No production behavior or canonical gameplay contract changed in this
+  Task Queue reconciliation iteration.
