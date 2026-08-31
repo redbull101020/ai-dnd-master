@@ -23,9 +23,10 @@
 | Документ | Роль |
 | --- | --- |
 | `docs/ARCHITECTURE.md` | Канонический контракт. Источник истины. |
-| `docs/ROADMAP.md` | Фазы, порядок работ, текущий статус. |
+| `docs/ROADMAP.md` | Scope и порядок фаз/capabilities, статус их завершения. |
+| `docs/TASK.md` | Конкретная исполнимая очередь `Current`/`Next` внутри разрешённого Roadmap scope. |
 | `docs/DECISIONS.md` | Append-only мотивация и история решений. Не контракт. |
-| `docs/DEFERRED.md` | Подчинённый companion закрытия Phase 2 и реестр отложенного scope. Не контракт и не источник порядка/статуса. |
+| `docs/DEFERRED.md` | Подчинённый companion закрытия Phase 2 и реестр отложенных concerns/контекста продолжения. Не контракт и не исполнимый порядок задач. |
 | `docs/DEVELOPMENT_LOG.md` | Append-only история выполненных итераций. Не контракт и не статус. |
 | `AGENTS.md` | Рабочий процесс агента: ветки, PR, тесты, definition of done. |
 | `README.md` | Обзор проекта. Без схем и контрактов. |
@@ -50,7 +51,9 @@
 
 * G9 (§3.27, DEC-0042) реализует narrow Monster Scimitar consequence path через Application, сохраняя Attack Resolution, source Damage Resolution и HP application отдельными стадиями. Immutable `MonsterAttackDamageResult` и pure `resolve_monster_attack_damage` используют исходное `NdM` для normal hit, удваивают только count до `(2 * N)dM` для critical, применяют modifier один раз и допускают `amount=0`; source-agnostic `resolve_damage_amount(target, amount >= 1)` выполняет только positive HP arithmetic. `AttackHandler` сначала завершает applicable pure computation, затем выделяет ровно 1/2/3 Event metadata и выдаёт ordered chain `MonsterAttackResolved → optional MonsterAttackDamageResolved → optional DamageApplied`, сохраняя исходные `commandId`/`campaignId`/`actorId`. Miss не катает damage и не сохраняет; zero source amount создаёт два Events без `DamageResult`/State mutation/save; positive amount применяет неизменённый `DamageApplied` V1 через concrete applier, заменяет только target Creature через §3.23 helper, сохраняет `CombatState`, вызывает один `StateStore.save()` и возвращает success только после него. Positive damage при target HP 0 остаётся валидным `0 → 0` применением с одним save. Outcome остаётся `MonsterAttackResult`; Character unarmed branch read-only и не изменён. Group 4 добавил real-adapter/filesystem integration evidence (полный production round-trip через реальные `FilesystemStateStore`/`PackagedDefinitionSource`/`PythonDiceEngine`), подтвердив fresh-reload HP change, неизменённый `CombatState` и ровно один save — этим G9's собственный narrow scope закрыт. Broad Weapon attack/damage scope остаётся открытым, поэтому DEF-0013 и Roadmap broad Attack consequences item остаются incomplete/`Deferred` для этой более широкой части.
 
-Актуальный статус — в `docs/ROADMAP.md`; при расхождении с этим списком выигрывает Roadmap.
+Актуальный scope, порядок и статус фаз/capabilities — в `docs/ROADMAP.md`;
+конкретные `Current`/`Next` задачи — в `docs/TASK.md`. При расхождении с этим
+списком выигрывает Roadmap.
 
 **Правило фазовой дисциплины.** Поля, типы и абстракции будущих фаз не добавляются заранее. Контракты Phase 1 минимальны намеренно: отсутствие поля — это решение, а не недоделка. Расширять канонический контракт можно только вместе с реализацией соответствующего поведения и только через процедуру изменения контракта.
 

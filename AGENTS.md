@@ -7,17 +7,21 @@ Instructions for Codex and other coding agents working in this repository.
 Use project documentation in this order:
 
 1. `docs/ARCHITECTURE.md` — canonical architecture and contracts.
-2. `docs/ROADMAP.md` — implementation order and current status.
-3. `docs/DECISIONS.md` — append-only rationale/history; never an alternative contract.
-4. `docs/DEFERRED.md` — subordinate Phase 2 closure companion and deferred-scope register; never an alternative contract or status/order source.
-5. `README.md` — project overview and developer workflow.
-6. `CLAUDE.md` — supplementary condensed guidance.
+2. `docs/ROADMAP.md` — phase/capability scope, ordering, and completion status.
+3. `docs/TASK.md` — current executable task and task-level `Current`/`Next` ordering.
+4. `docs/DECISIONS.md` — append-only rationale/history; never an alternative contract.
+5. `docs/DEFERRED.md` — subordinate Phase 2 closure companion and deferred-scope register; never an executable task queue.
+6. `README.md` — project overview and developer workflow.
+7. `CLAUDE.md` — supplementary condensed guidance.
 
 `ARCHITECTURE.md = current canonical contract`; `DECISIONS.md = append-only rationale/history`.
 
-Before non-trivial work, inspect the current repository state, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and the relevant implementation/tests.
+Before non-trivial work, inspect the current repository state,
+`docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/TASK.md`, the relevant
+implementation/tests, and any `docs/DEFERRED.md` or `docs/DECISIONS.md`
+context referenced by that work.
 
-If code, documentation, Roadmap, and task requirements conflict, do not choose silently. Report the conflict before changing a canonical architectural contract.
+If code, documentation, Roadmap, Task, and task requirements conflict, do not choose silently. Report the conflict before changing a canonical architectural contract.
 
 ## Repository layout
 
@@ -29,7 +33,8 @@ If code, documentation, Roadmap, and task requirements conflict, do not choose s
 * `campaigns/` — campaign-specific mutable state and event history.
 * `tests/` — deterministic automated tests.
 * `docs/ARCHITECTURE.md` — canonical contracts.
-* `docs/ROADMAP.md` — development phases and status.
+* `docs/ROADMAP.md` — development phase/capability scope, ordering, and completion status.
+* `docs/TASK.md` — current executable task queue and short-term task ordering.
 * `docs/DEFERRED.md` — detailed Phase 2 closure notes and deferred-scope register, subordinate to Architecture and Roadmap.
 
 ## Canonical architecture
@@ -69,7 +74,7 @@ For architecture changes, multi-file features, or ambiguous tasks:
 2. Identify affected contracts, modules, files, and tests.
 3. Check compatibility with `docs/ARCHITECTURE.md`.
 4. Propose or follow the smallest sufficient change.
-5. Follow `docs/ROADMAP.md` unless the task explicitly changes priority.
+5. Follow the phase/capability scope and order in `docs/ROADMAP.md`, then the concrete `Current`/`Next` task order in `docs/TASK.md`, unless the task explicitly changes priority.
 
 During implementation:
 

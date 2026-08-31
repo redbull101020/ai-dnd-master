@@ -3,7 +3,8 @@
 ```text
 ARCHITECTURE.md = canonical current contract
 DECISIONS.md = architectural rationale/history
-ROADMAP.md = implementation status/order
+ROADMAP.md = phase/capability scope, order and completion status
+TASK.md = concrete task-level execution status/order
 DEVELOPMENT_LOG.md = execution history only
 ```
 
@@ -3955,3 +3956,27 @@ contracts.
   and no new production dependency are present. This Group's changes are
   intentionally left uncommitted for review; `review.patch` at the
   repository root contains only this Group's diff.
+
+## 2026-08-31 — Task Queue integration
+
+- Introduced `docs/TASK.md` as the thin operational Task Queue below
+  Architecture and Roadmap authority.
+- Split documentation responsibilities explicitly: Roadmap owns
+  phase/capability scope, order, and completion status; Task owns concrete
+  task-level execution status and `Current`/`Next` ordering; Deferred remains
+  the deferred-concern and continuation-context register; Development Log
+  remains factual execution history.
+- Left the tracker intentionally unpopulated so selection of the first real
+  `Current` and `Next` tasks can happen in a separate refinement/review slice.
+- No gameplay behavior or canonical Architecture contract changed, and no
+  architectural Decision was added.
+
+## 2026-08-31 — Initial Task Queue population
+
+- Populated the initial Task Queue around the current Phase 3 Combat-legality
+  frontier: active-turn Attack gating is `Current`, followed by zero-HP Attack
+  eligibility and then the minimal authoritative Character weapon source.
+- Introduced 1 `Current`, 2 `Ready`, 2 near-frontier `Backlog`, and 0 `Blocked`
+  task records (`TSK-0001` through `TSK-0005`).
+- No canonical gameplay contract, architectural Decision, production code, or
+  test changed in this planning-only iteration.
