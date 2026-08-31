@@ -1080,11 +1080,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
-- **Next:** —
+- **Current:** TSK-0002
+- **Next:** TSK-0003 → TSK-0001
 - **Hard blockers:** —
-- **Next free ID:** TSK-0001
-- **Last reviewed:** —
+- **Next free ID:** TSK-0006
+- **Last reviewed:** 2026-08-31
 
 ---
 
@@ -1092,14 +1092,284 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-
-_Empty._
+| `TSK-0001` | `Ready` | `P1` | `M` | `architecture` | Cross-cutting prerequisite for Phase 3 / Weapon attacks and Attack consequences | Define the minimal authoritative Character weapon source |
+| `TSK-0002` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Turn/action economy | Define active-turn gating for `AttackCommand` |
+| `TSK-0003` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
+| `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
+| `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
 
 ---
 
 # Open task details
 
-_No refined open tasks yet._
+## TSK-0001 — Define the minimal authoritative Character weapon source
+
+**Status:** `Ready`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `architecture`
+
+**Roadmap target:** Cross-cutting prerequisite for Phase 3 / Weapon attacks and
+Attack consequences
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Weapon attacks and Attack consequences; Equipment &
+  Inventory cross-cutting continuation
+- `ARCHITECTURE.md` §§3.1.1, 3.17, 3.27, 10.5, 10.6, 12.12
+- `DEF-0009`, `DEF-0011`, `DEF-0013`
+- `DEC-0030`, `DEC-0031`, `DEC-0041`, `DEC-0042`
+
+**Depends on:** `—`
+
+**Contract impact:** Architecture update and new Decision required before
+implementation
+
+### Goal
+
+Define the smallest canonical authoritative source that lets one Character
+attack with the packaged Dagger while preserving the separate Inventory,
+Equipment, Character proficiency, Attack Resolution, Damage Resolution, and
+Damage Application responsibilities already required by the repository.
+
+### Why now
+
+G9 closes the narrow Goblin Scimitar consequence path and repeatedly identifies
+the Character Weapon continuation as its remaining adjacent frontier. The
+packaged Dagger and Attack/Damage foundations already exist, but implementation
+cannot start until ownership, proficiency, and the explicit Finesse choice are
+canonical.
+
+### Scope
+
+- decide the minimum Inventory/Equipment facts and State Owner boundaries
+  required to identify the Character's authoritative weapon source;
+- decide the minimum Character weapon-proficiency representation;
+- decide where the explicit Strength/Dexterity Finesse choice belongs while
+  preserving one `AttackCommand` intent and rejecting caller-supplied derived
+  bonuses;
+- define the required StateSnapshot/serialization and compatibility impact;
+- define the boundary between this prerequisite and the later Dagger
+  Attack→Damage implementation slice;
+- update the canonical Architecture, append one Decision, and reconcile only
+  documentation directly affected by that decision.
+
+### Out of scope
+
+- production or test implementation;
+- broad inventory management, containers, currency, encumbrance, loot, or a
+  generic item-instance framework;
+- armor/shield AC, dual wielding, thrown/ranged attacks, reach, ammunition, or
+  action economy;
+- generic attack-source, modifier, equipment-slot, or Event orchestration
+  abstractions;
+- changing the implemented Goblin Scimitar path.
+
+### Acceptance criteria
+
+- the canonical documents identify every authoritative input needed for one
+  Character Dagger attack and its owning State/Definition boundary;
+- weapon proficiency and the Finesse choice have explicit, non-derived sources
+  without embedding computed attack bonuses in the Command;
+- the minimum State and serialization impact, compatibility policy, validation
+  order, and expected failure boundaries are explicit;
+- the later implementation boundary is reviewable without silently adding
+  ranged, armor, inventory-management, or generic-framework scope;
+- the new Decision and all directly affected summaries agree with Architecture,
+  Roadmap, and the still-deferred broader `DEF-*` concerns.
+
+### Verification
+
+- documentation-reference tests;
+- targeted reference/anchor search for the changed contracts and Decision;
+- consistency review against the existing Character unarmed, Monster
+  Scimitar, packaged Dagger, State ownership, and serialization contracts.
+
+### Expected touchpoints
+
+```text
+docs/ARCHITECTURE.md
+docs/DECISIONS.md
+docs/DEFERRED.md
+docs/ROADMAP.md
+docs/TASK.md
+docs/DEVELOPMENT_LOG.md
+CLAUDE.md (only if a reproduced canonical fact changes)
+```
+
+---
+
+## TSK-0002 — Define active-turn gating for `AttackCommand`
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `S`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Turn/action economy
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Turn/action economy and turn resources
+- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27
+- `DEC-0040`, `DEC-0041`, `DEC-0042`
+
+**Depends on:** `—`
+
+**Contract impact:** Architecture update and new Decision required before
+implementation
+
+### Goal
+
+Define whether and how the existing `AttackCommand` paths consult
+`CombatState.active_creature_id`, including outside-combat behavior and
+rejection boundaries, without designing the broader action economy.
+
+### Why now
+
+Both persisted turn ownership and real Character/Monster Attack consumers now
+exist, so the repository has concrete evidence for a narrow eligibility rule
+that was explicitly deferred by G7–G9.
+
+### Scope
+
+- specify Attack legality with no combat, with an actor absent from combat,
+  and with an actor that is not currently active;
+- specify the validation order and error boundary before dice, Event metadata,
+  State mutation, or persistence;
+- preserve the existing Character-unarmed and Monster-Scimitar resolution and
+  consequence contracts after eligibility succeeds;
+- update the canonical Architecture, append one Decision, and reconcile
+  directly affected planning/summary documentation.
+
+### Out of scope
+
+- action/bonus-action/reaction counters or reset State;
+- movement, opportunity attacks, `Ready`, `Dodge`, `Dash`, `Disengage`, or a
+  generic action/eligibility pipeline;
+- zero-HP eligibility, combat ending, weapon-source rules, or implementation.
+
+### Acceptance criteria
+
+- every currently supported Attack path has one unambiguous CombatState gating
+  rule and deterministic failure precedence;
+- rejected attacks consume no dice, allocate no Event metadata, mutate no
+  State, and call no persistence boundary;
+- the decision does not introduce turn-resource State or a generic action
+  framework without a concrete consumer;
+- Architecture, Decision, Roadmap/Deferred references, and summaries remain
+  consistent.
+
+### Verification
+
+- documentation-reference tests;
+- consistency review against `AttackHandler`, `AdvanceTurnHandler`, and their
+  focused Application/integration tests.
+
+### Expected touchpoints
+
+```text
+docs/ARCHITECTURE.md
+docs/DECISIONS.md
+docs/ROADMAP.md
+docs/TASK.md
+docs/DEVELOPMENT_LOG.md
+CLAUDE.md (only if a reproduced canonical fact changes)
+```
+
+---
+
+## TSK-0003 — Define zero-HP Attack eligibility by creature category
+
+**Status:** `Ready`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Zero-HP and combatant eligibility
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
+- `ARCHITECTURE.md` §§3.19, 3.20, 3.25, 3.27
+- `DEF-0005`, `DEF-0015`
+- `DEC-0033`, `DEC-0034`, `DEC-0040`, `DEC-0042`
+
+**Depends on:** `—`
+
+**Contract impact:** Architecture update and new Decision required before
+implementation
+
+### Goal
+
+Define separately whether a Character or Monster at authoritative
+`current_hp == 0` may use the existing `AttackCommand`, and clarify the
+unchanged turn-advancement boundary without predesigning the broader life-state
+or death-save system.
+
+### Why now
+
+The implemented Monster consequence path can now reduce a real target to zero
+HP, while Attack and turn advancement are concrete Phase 3 consumers. That is
+the evidence trigger `DEF-0015` required for a narrow eligibility decision.
+
+### Scope
+
+- decide Character and Monster zero-HP Attack eligibility separately;
+- determine whether existing `current_hp` is sufficient for this gate or a
+  narrower category-specific fact is demonstrably required;
+- define failure semantics and the boundary with the existing rule that a
+  zero-HP combatant's turn may still be advanced;
+- preserve the current arithmetic Damage/Healing contracts and their valid
+  zero-HP transitions;
+- update the canonical Architecture, append one Decision, and reconcile
+  directly affected Roadmap/Deferred/summary documentation.
+
+### Out of scope
+
+- death saves, unconscious/stable/dead counters or a universal `LifeState`;
+- stabilization, targetability, further-Damage consequences, Healing recovery
+  semantics, or automatic combat ending;
+- active-turn precedence, action resources, weapon-source rules, or
+  implementation.
+
+### Acceptance criteria
+
+- Character and Monster Attack eligibility at zero HP is explicit and not
+  conflated into an unsupported universal lifecycle model;
+- the decision states whether additional authoritative State is required and
+  rejects it unless this concrete consumer provides evidence;
+- Damage, Healing, Attack, and turn-advancement boundaries remain mutually
+  consistent, including deterministic failure behavior before dice/Event work;
+- `DEF-0005` remains deferred unless its separate death-save prerequisites are
+  actually resolved.
+
+### Verification
+
+- documentation-reference tests;
+- consistency review against zero-HP Damage/Healing tests, Monster lethal-
+  damage tests, and turn-advancement tests.
+
+### Expected touchpoints
+
+```text
+docs/ARCHITECTURE.md
+docs/DECISIONS.md
+docs/DEFERRED.md
+docs/ROADMAP.md
+docs/TASK.md
+docs/DEVELOPMENT_LOG.md
+CLAUDE.md (only if a reproduced canonical fact changes)
+```
 
 ---
 

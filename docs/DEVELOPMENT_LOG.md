@@ -3970,3 +3970,13 @@ contracts.
   `Current` and `Next` tasks can happen in a separate refinement/review slice.
 - No gameplay behavior or canonical Architecture contract changed, and no
   architectural Decision was added.
+
+## 2026-08-31 — Initial Task Queue population
+
+- Populated the initial Task Queue around the current Phase 3 Combat-legality
+  frontier: active-turn Attack gating is `Current`, followed by zero-HP Attack
+  eligibility and then the minimal authoritative Character weapon source.
+- Introduced 1 `Current`, 2 `Ready`, 2 near-frontier `Backlog`, and 0 `Blocked`
+  task records (`TSK-0001` through `TSK-0005`).
+- No canonical gameplay contract, architectural Decision, production code, or
+  test changed in this planning-only iteration.
