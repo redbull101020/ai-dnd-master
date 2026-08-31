@@ -1225,8 +1225,8 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 **References:**
 
 - `ROADMAP.md` — Phase 3 / Turn/action economy and turn resources
-- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27
-- `DEC-0040`, `DEC-0041`, `DEC-0042`
+- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27, 3.28
+- `DEC-0040`, `DEC-0041`, `DEC-0042`, `DEC-0043`
 
 **Depends on:** `—`
 
@@ -1308,9 +1308,9 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 **References:**
 
 - `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
-- `ARCHITECTURE.md` §§3.19, 3.20, 3.25, 3.27
+- `ARCHITECTURE.md` §§3.19, 3.20, 3.25, 3.27, 3.28
 - `DEF-0005`, `DEF-0015`
-- `DEC-0033`, `DEC-0034`, `DEC-0040`, `DEC-0042`
+- `DEC-0033`, `DEC-0034`, `DEC-0040`, `DEC-0042`, `DEC-0043`
 
 **Depends on:** `TSK-0002`
 
@@ -1396,8 +1396,10 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 ### Blocker
 
-Blocker: `TSK-0002` has not yet established the canonical active-turn
-`AttackCommand` eligibility and validation boundary.
+Blocker: the TSK-0002 result defines the canonical active-turn
+`AttackCommand` eligibility and validation boundary in §3.28/DEC-0043, but
+`TSK-0002` is not yet `Done` on `main`, so the repository-backed dependency
+remains unmet.
 
 Unblock condition: `TSK-0002` is `Done` on `main`, so zero-HP eligibility can
 be defined against that accepted contract rather than inventing an independent
