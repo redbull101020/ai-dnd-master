@@ -4080,3 +4080,22 @@ contracts.
   proficiency, modifier, and attack-source frameworks; armor/shields, dual
   wielding, targeting/reach, Movement, critical-damage implementation, Monster
   HP mutation, and ranged/thrown/ammunition mechanics.
+
+## 2026-08-31 — TSK-0001 subordinate documentation reconciliation
+
+- Reconciled `docs/DEFERRED.md` and `docs/ROADMAP.md` with the canonical
+  Character weapon-source prerequisite established by §3.29/DEC-0044; no
+  production implementation or canonical contract changed.
+- Kept DEF-0009, DEF-0011, and DEF-0013 `Deferred`. Clarified that production
+  Inventory/Equipment/proficiency/Finesse behavior is still pending, TSK-0008
+  targeting/reach remains separate, ranged/ammunition and other weapons remain
+  deferred, and equipment-derived armor/shield AC is outside TSK-0001.
+- Preserved the open Roadmap `Weapon attacks`, broad `Attack consequences`,
+  and cross-cutting Equipment & Inventory scope. No checkbox or completion
+  status changed; the Character Dagger Attack→Damage→Monster HP path remains
+  unimplemented and must retain G9's Attack Resolution → Damage Resolution →
+  Damage Application separation.
+- Reviewed `CLAUDE.md`, `README.md`, and `AI_DND_DATA_FLOW_CURRENT.md`; their
+  current production-status statements remain accurate, so they were
+  intentionally not changed. `docs/TASK.md`, Architecture, Decisions,
+  production Python, and tests were also not changed in this reconciliation.

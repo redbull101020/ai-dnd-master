@@ -75,11 +75,14 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **Closure assessment:** The foundation is sufficient for the implemented
   Character consumers because bonus derivation and membership sources are
   explicit and persisted. It is not sufficient to close broad Proficiency:
-  source provenance, Expertise/half proficiency, monster sources, and broader
-  attack proficiency are absent.
+  source provenance, Expertise/half proficiency, Monster save/skill sources,
+  and production Character weapon proficiency remain absent. Architecture
+  §3.29 now defines the future effective weapon-proficiency membership and
+  contribution semantics, but does not implement them.
 - **Broader unimplemented scope:** [DEF-0001](#def-0001),
-  [DEF-0002](#def-0002), [DEF-0003](#def-0003), and the weapon-proficiency
-  portion of [DEF-0011](#def-0011).
+  [DEF-0003](#def-0003), remaining Monster save/skill proficiency in
+  [DEF-0004](#def-0004), and the production weapon-proficiency portion of
+  [DEF-0011](#def-0011).
 - **Motivation:** Character level, monster challenge/profiles, and weapon
   training are materially different sources and must not be forced through a
   universal Creature formula.
@@ -87,8 +90,10 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   capability order and Task determines concrete executable sequencing.
 - **References:** [Architecture §3.11](ARCHITECTURE.md#311-minimal-phase-2-proficiency-foundation),
   [§3.2.4](ARCHITECTURE.md#324-minimal-phase-2-characterstate-contract),
+  [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
   [DEC-0021](DECISIONS.md#dec-0021--proficiency-begins-as-a-pure-character-level-rule),
-  and [DEC-0023](DECISIONS.md#dec-0023--character-proficiency-prerequisites-live-in-dedicated-characterstate).
+  [DEC-0023](DECISIONS.md#dec-0023--character-proficiency-prerequisites-live-in-dedicated-characterstate),
+  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
 
 ## P2-SAVING-THROWS
 
@@ -163,8 +168,10 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   one `AttackResolved` V1 Event. Poisoned affects the attacker.
 - **Closure assessment:** The slice is sufficient evidence for the Attack
   boundary and for keeping the mechanic concrete. It is not sufficient for
-  the broad Attack Rolls item because weapons, Character targets, monsters,
-  spells, and consequences are missing.
+  the broad Attack Rolls item. G8/G9 later added the narrow Monster Scimitar
+  and Character-target path, and §3.29 now defines the Character weapon-source
+  prerequisite, but the production Character weapon path, targeting/reach,
+  broader Monster actions, spells, and broader consequences remain missing.
 - **Broader unimplemented scope:** [DEF-0011](#def-0011),
   [DEF-0012](#def-0012), [DEF-0013](#def-0013),
   [DEF-0014](#def-0014), [DEF-0021](#def-0021), and
@@ -176,7 +183,9 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   remain separate DEF records.
 - **References:** [Architecture §3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
-  and [DEC-0037](DECISIONS.md#dec-0037--minimal-poisoned-behavior-uses-mechanic-specific-condition-policies-g6c2).
+  [DEC-0037](DECISIONS.md#dec-0037--minimal-poisoned-behavior-uses-mechanic-specific-condition-policies-g6c2),
+  [Architecture §3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
+  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
 
 ## P2-STATE-MUTATION
 
@@ -228,8 +237,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   floored at zero, recorded as `DamageApplied` V1 with both HP endpoints,
   applied by a concrete Creature applier, and persisted through the G5 flow.
 - **Closure assessment:** This is sufficient for the first authoritative
-  Damage-to-HP mutation slice. Broad Damage is incomplete because source
-  orchestration, weapon/critical damage, and typed defenses are absent.
+  Damage-to-HP mutation slice. G9 later implemented narrow Monster Scimitar
+  source orchestration and critical damage, but broad Damage remains
+  incomplete because the Character weapon/damage continuation and typed
+  defenses are absent. Section 3.29 defines only the Character weapon-source
+  prerequisite, not that production continuation.
 - **Broader unimplemented scope:** Attack consequence and weapon/critical
   damage in [DEF-0013](#def-0013), typed defenses in
   [DEF-0017](#def-0017), and durable application history in
@@ -238,8 +250,12 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   do not mix attack, damage dice, defense composition, and persistence into one
   initial contract.
 - **Continuation:** DEF-0013, DEF-0017, and DEF-0022.
-- **References:** [Architecture §3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a)
-  and [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete).
+- **References:** [Architecture §3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
+  [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9),
+  [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
+  [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
+  [DEC-0042](DECISIONS.md#dec-0042--monster-attack-consequences-preserve-separate-attack-resolution-damage-resolution-and-damage-application-stages),
+  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
 
 ## P2-HEALING
 
@@ -556,8 +572,10 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   Equipment State Owner.
 - **Motivation:** Unarmored Character and baseline Monster AC cannot represent
   equipped defenses.
-- **Why deferred:** `EquipmentState`, equipped slots, armor Definitions, and
-  equip/unequip lifecycle are not implemented.
+- **Why deferred:** Architecture §3.29 defines only a minimal future
+  `EquipmentState` weapon selection; its production State is still pending,
+  and armor/shield slots, Definitions, formulas, and equip/unequip lifecycle
+  remain undefined and unimplemented.
 - **Prerequisites:** Minimal Equipment State/owner flow, typed armor/shield
   Definitions, and a concrete AC consumer.
 - **Planned approach:** Read authoritative equipment through its owner and
@@ -567,10 +585,15 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   deterministic; equipment changes affect later AC after persistence; owners
   remain separate; unarmored and Monster baseline regressions pass.
 - **References:** [Architecture §3.15](ARCHITECTURE.md#315-minimal-phase-2-armor-class-design),
-  [§10.6](ARCHITECTURE.md#106-equipment-state-owner), and
-  [DEC-0028](DECISIONS.md#dec-0028--armor-class-is-derived-from-authoritative-sources).
+  [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
+  [§10.6](ARCHITECTURE.md#106-equipment-state-owner),
+  [DEC-0028](DECISIONS.md#dec-0028--armor-class-is-derived-from-authoritative-sources),
+  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
-  implementation or scheduling commitment.
+  implementation or scheduling commitment. 2026-08-31 — TSK-0001 defined a
+  minimal canonical `EquipmentState` only for equipped-weapon selection; it
+  did not add production State or expand into armor/shield AC. This record
+  remains `Deferred` for its unchanged equipment-derived AC scope.
 
 ## DEF-0010
 
@@ -612,10 +635,16 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   reach, and ammunition constraints.
 - **Motivation:** The unarmed-to-Monster path hard-codes Strength and Character
   proficiency and has no equipment, weapon, or spatial inputs.
-- **Why deferred:** Equipment/inventory, weapon-instance selection, target
-  categories, distance, and ammunition State are absent.
-- **Prerequisites:** Minimal equipment/inventory source, typed weapon lookup,
-  necessary targeting/distance facts, and a concrete attack use case.
+- **Why deferred:** Architecture §3.29 now defines the minimal authoritative
+  Inventory/Equipment ownership, runtime weapon-instance selection, effective
+  Character weapon proficiency, explicit Finesse choice, and State schema
+  compatibility contract. Its production implementation is still pending;
+  TSK-0008 targeting/reach and broader ranged/ammunition State are separate
+  unresolved prerequisites.
+- **Prerequisites:** Production implementation of the §3.29
+  equipment/inventory source and typed weapon lookup, TSK-0008
+  targeting/distance/reach facts for the first Dagger consumer, and later
+  source-specific facts for ranged/ammunition consumers.
 - **Planned approach:** Keep one explicit Attack intent while deriving weapon
   attack inputs from authoritative State/Definitions; implement concrete
   weapon policies before considering shared abstractions.
@@ -625,9 +654,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **References:** [Architecture §3.17](ARCHITECTURE.md#317-minimal-phase-2-character-unarmed-attack-roll--monster-vertical-slice),
   [§3.1.1](ARCHITECTURE.md#311-minimal-phase-1-definition-contracts),
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
+  [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
   [DEC-0030](DECISIONS.md#dec-0030--shared-domain-ndm-parser-for-dice-engine-and-weapondefinition-g4b),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
-  and [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8).
+  [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8),
+  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) proves the
   Character-target part of this record (a real Attack resolving against
@@ -636,6 +667,14 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   source. The Weapon-attack part of this record — Equipment/Inventory
   ownership, weapon-instance selection, weapon proficiency, and explicit
   Finesse ability choice — remains entirely open; Status stays `Deferred`.
+  2026-08-31 — TSK-0001 (§3.29, DEC-0044) established the canonical
+  prerequisite contract for Inventory ownership, Equipment ownership, runtime
+  weapon-instance selection, effective Character weapon proficiency, explicit
+  Finesse choice, and State schema V6 compatibility. Production
+  Inventory/Equipment/proficiency/Finesse implementation remains pending;
+  TSK-0008 targeting/reach is a separate prerequisite, while ranged,
+  ammunition, and other-weapon scope remains deferred. Status stays
+  `Deferred` for the broader Weapon attack scope.
 
 ## DEF-0012
 
@@ -697,13 +736,18 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   model.
 - **Why deferred:** The narrow Monster Scimitar Application consequence path
   is implemented and confirmed by real-adapter/filesystem G9 evidence
-  (Group 4); broader Weapon attack/damage inputs remain absent.
+  (Group 4). Section 3.29 now defines the canonical Character weapon-source
+  inputs, but their production State/handler/resolver implementation and the
+  broader Character Weapon Attack→Damage path remain absent.
 - **Prerequisites:** Relevant part of DEF-0011, a concrete damage source, and
   an explicit Event ordering/causation design; DEF-0022 only if durability is
   made part of the slice.
-- **Planned approach:** Preserve Attack and Damage as separate decisions;
-  construct ordered correlated Events and feed an already-resolved damage
-  outcome into concrete State application without re-rolling in the applier.
+- **Planned approach:** Preserve `Attack Resolution → Damage Resolution →
+  Damage Application` as separate decisions. Reuse the explicit Finesse
+  Ability selected for Attack when deriving later weapon damage rather than
+  selecting or maximizing it again; construct ordered correlated Events and
+  feed an already-resolved damage outcome into concrete State application
+  without re-rolling in the applier.
 - **Acceptance criteria:** Miss produces no damage; hit and critical formulas
   are deterministic; dice use `DiceEngine`; Event order/`causedBy` are clear;
   HP changes only after concrete Damage application and successful save.
@@ -711,11 +755,13 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   [§3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
   [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9),
+  [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
   [§12.11](ARCHITECTURE.md#1211-event-ordering),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
   [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8),
-  and [DEC-0042](DECISIONS.md#dec-0042--monster-attack-consequences-preserve-separate-attack-resolution-damage-resolution-and-damage-application-stages).
+  [DEC-0042](DECISIONS.md#dec-0042--monster-attack-consequences-preserve-separate-attack-resolution-damage-resolution-and-damage-application-stages),
+  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) supplies
   two of this record's three named prerequisites. For "relevant part of
@@ -773,7 +819,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   gating/action economy, and resistance/immunity/vulnerability/temporary HP
   are separately tracked by their own Roadmap/Deferred records and are not
   why DEF-0013 itself remains Deferred. DEF-0013's status is not changed to
-  `Done`.
+  `Done`. 2026-08-31 — TSK-0001 made the Character weapon-source prerequisite
+  canonical in §3.29/DEC-0044 without implementing it. The broader Character
+  Weapon Attack→Damage→Monster HP path remains absent and must preserve the
+  G9 stage separation; its explicit Finesse Ability must be reused by Damage,
+  not auto-selected again. DEF-0013 remains `Deferred`.
 
 ## DEF-0014
 
