@@ -65,6 +65,7 @@
 | Monster Attack consequence → Damage → HP vertical slice (G9) | §3.27 |
 | Attack active-turn eligibility for current `AttackCommand` paths | §3.28 |
 | Minimal authoritative Character weapon source (TSK-0001) | §3.29 |
+| Character Dagger melee targeting/reach, `CombatPosition` (TSK-0008) | §3.30 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -128,6 +129,7 @@
   * [3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9)](#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9)
   * [3.28. Minimal Phase 3 Attack active-turn eligibility](#328-minimal-phase-3-attack-active-turn-eligibility)
   * [3.29. Minimal authoritative Character weapon source (TSK-0001)](#329-minimal-authoritative-character-weapon-source-tsk-0001)
+  * [3.30. Minimal Phase 3 Character Dagger melee targeting and reach (TSK-0008)](#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -5989,7 +5991,7 @@ StateStore.load
 → require WeaponDefinition
 → weapon-proficiency membership and contribution
 → explicit Dagger Finesse Ability validation
-→ later TSK-0008 targeting/distance/reach validation
+→ later TSK-0008 targeting/distance/reach validation (§3.30)
 → Condition/RollMode derivation
 → Attack Resolution / DiceEngine
 → Event metadata and Events
@@ -6026,8 +6028,9 @@ This architecture slice does not implement production State classes,
 serializer changes, the `AttackHandler` weapon branch, a Character weapon
 resolver, a Weapon Attack Event, a Weapon Damage Result/Event, critical-damage
 code, `DamageApplied` orchestration, Monster HP mutation,
-targeting/distance/reach, Movement, ranged/thrown/ammunition rules, a generic
-`AttackSource`, or generic modifier/equipment frameworks.
+targeting/distance/reach (now scoped for the Dagger melee case by §3.30),
+Movement, ranged/thrown/ammunition rules, a generic `AttackSource`, or
+generic modifier/equipment frameworks.
 
 The Character weapon continuation must preserve the G9 staged architecture:
 
@@ -6040,6 +6043,433 @@ Attack Resolution
 Concrete result/Event types and Application orchestration belong to later
 implementation tasks. This foundation supplies authoritative inputs; it does
 not collapse or pre-implement those stages.
+
+---
+
+### 3.30. Minimal Phase 3 Character Dagger melee targeting and reach (TSK-0008)
+
+Implementation status: **Canonical contract defined; production
+implementation pending.** This section defines the smallest authoritative
+targeting/reach contract required by the first future Character Dagger
+melee consumer described in §3.29. No production `CombatPosition`,
+`CombatState.positions`, State schema V7, `AttackHandler` branch, or
+resolver exists yet; the current production writer remains State schema V5
+and the current `CombatState`/`StateSnapshot` are unchanged until a separate
+implementation task.
+
+#### Consumer boundary
+
+The first Character Dagger Weapon Attack is only:
+
+```text
+Character with authoritative Dagger source → Monster target → melee attack
+```
+
+For this first consumer the Dagger is used exclusively as a melee weapon.
+This slice does not add an `attack_mode` field, a melee/thrown selector,
+thrown Dagger behavior, normal/long range, ammunition, or ranged targeting.
+The packaged Dagger's existing `thrown` property (§3.29) is not a claim that
+this first production Character Dagger consumer supports thrown mode; it
+remains an unused Definition property for this slice.
+
+#### Tactical spatial ownership
+
+The authoritative tactical position this Phase 3 consumer needs belongs to
+`CombatEngine` / `CombatState` (§10.7) — not `CreatureState` (§10.4), not a
+World/Location State, not the Attack resolver, not AI/API, and not a
+separate `TargetingEngine`.
+
+§10.4 lists `position` among the facts a Creature owner is generically
+responsible for, and §10.7 separately lists `combat positions` among what
+`CombatEngine` owns. These are not two authoritative copies of the same
+fact: the generic `position` responsibility in §10.4 does not currently
+materialize a `CreatureState.position` field, and `combat positions` in
+§10.7 — this section's `CombatState.positions` — is the sole authoritative
+tactical placement this Phase 3 consumer uses or requires. Any future
+non-combat/world placement contract remains undesigned; if one is
+introduced later, its relationship with combat-local tactical position must
+be defined without creating a competing authoritative copy. This task does
+not design that future contract. This slice introduces no `LocationState`,
+no `location_id`, no Map, and no World dependency.
+
+#### Minimal combat-local position representation
+
+The minimal planned immutable record is:
+
+```python
+@dataclass(frozen=True)
+class CombatPosition:
+    creature_id: str
+    x: int
+    y: int
+```
+
+And the future extension of the existing `CombatState` (§3.25):
+
+```python
+positions: tuple[CombatPosition, ...] = ()
+```
+
+Canonical semantics:
+
+```text
+x and y are combat-local coordinates in feet
+x and y are exact int; bool is not a valid coordinate
+negative coordinates are permitted
+positions may be a partial subset of combat.order
+each creature_id in positions is unique
+every positioned creature must also be present in the same CombatState.order
+a missing position for a participant does not by itself make CombatState
+    structurally invalid
+a spatially dependent action may require a position as its own prerequisite
+```
+
+This slice introduces no grid, no hex, no tile/cell identity, no `z`, no
+elevation, no creature footprint/size, no collision, no terrain, no path,
+and no spatial index.
+
+#### First Dagger consumer requires Combat spatial context
+
+Only the new future Character Dagger melee path requires this spatial
+contract. It requires:
+
+```text
+the existing authoritative CombatState (§3.25)
+an actor CombatPosition
+a target CombatPosition in the same CombatState
+```
+
+This does not change the existing §3.28 rule that the currently supported
+Attack paths — Character unarmed → Monster and Monster Goblin Scimitar →
+Character (§§3.17, 3.26–3.27) — may continue outside Combat. Those paths are
+unchanged and are not retrofitted with spatial validation for the sake of
+uniformity or a shared abstraction.
+
+#### Target Combat membership is a Dagger-specific prerequisite
+
+A valid `CombatPosition` may reference only a creature contained in
+`combat.order` (*Minimal combat-local position representation* above).
+Combined with the requirement that the Dagger melee target has a
+`CombatPosition` in the same `CombatState`, this creates an explicit new
+prerequisite:
+
+```text
+For the Character Dagger melee path only, target membership in the current
+CombatState becomes a spatial/targeting prerequisite because a valid
+CombatPosition may reference only a creature contained in combat.order.
+```
+
+This does not modify §3.28 active-turn eligibility:
+
+```text
+This does not modify §3.28 active-turn eligibility.
+
+§3.28 still does not require target Combat membership for the existing
+Character-unarmed or Monster-Scimitar paths.
+
+The membership requirement exists only inside the future §3.30 Character
+Dagger melee targeting branch.
+```
+
+Actor Combat membership is not a separate check here: whenever `CombatState`
+exists, §3.28 active-turn eligibility already requires
+`command.actor_id == combat.active_creature_id`, and
+`active_creature_id = combat.order[active_index]` is by construction a
+member of `combat.order`. Only the actor's `CombatPosition` remains to be
+required (see *Validation order* below); target Combat membership has no
+such prior guarantee and must be checked explicitly.
+
+#### Distance semantics
+
+This first consumer uses a narrow deterministic point-distance policy:
+
+```text
+dx = actor.x - target.x
+dy = actor.y - target.y
+
+within reach iff dx*dx + dy*dy <= effective_reach*effective_reach
+```
+
+For the current 5-foot Dagger melee case:
+
+```text
+dx*dx + dy*dy <= 25
+```
+
+Squared-distance comparison is mandatory: no `float`, no `sqrt`, and no
+geometry library or service. This is a minimal project-defined tactical
+approximation for this first concrete consumer, not a universal D&D geometry
+model.
+
+#### Application / Domain reach responsibility
+
+Application does not itself own gameplay geometry calculation. The
+canonical split between `AttackHandler` (Application) and the reach policy
+(Domain) is:
+
+```text
+AttackHandler / Application
+    → loads and selects the authoritative CombatState
+    → obtains the actor CombatPosition
+    → obtains the target CombatPosition
+    → obtains the effective melee reach from the approved dnd_5e policy
+    → maps missing prerequisites to EngineError
+    → invokes one narrow pure Domain reach policy
+
+pure Domain reach policy
+    → receives already-authoritative coordinates and effective reach
+    → computes the deterministic squared point distance
+    → returns only the reach result
+    → performs no State/Definition loading
+    → performs no I/O
+    → uses no DiceEngine
+    → allocates no Event metadata
+    → creates no Events
+    → mutates no State
+    → maps no EngineError
+
+AttackHandler
+    → maps a false reach result to OUT_OF_RANGE
+    → continues the normal Attack flow when reach succeeds
+```
+
+The exact Python function/module name for this pure Domain reach policy is
+an implementation detail and is not part of this canonical contract; only
+this responsibility split, the unchanged squared-distance formula above, and
+the effective-reach source (below) are canonical. This remains one narrow
+pure Domain rule for the first concrete consumer — it introduces no
+`TargetingEngine`, no class/service hierarchy, no `GeometryService`, no
+generic spatial abstraction, and no generic validation pipeline.
+
+#### Authoritative melee reach source
+
+This slice does not add `WeaponDefinition.reach = 5`, and it does not add a
+`"reach": 5` field to the packaged Dagger Definition (§3.29). For the first
+Dagger melee consumer, effective reach = 5 ft is determined by a narrow
+`dnd_5e` first-consumer melee rule policy, not by a Definition field.
+
+The authoritative chain is:
+
+```text
+runtime selected weapon
+→ authoritative Inventory/Equipment source (§3.29)
+→ typed WeaponDefinition = Dagger
+→ dnd_5e first-consumer melee policy = 5 ft
+→ combat-local actor/target CombatPosition
+→ deterministic reach validation
+```
+
+The caller/API/AI never supplies `reach`, `distance`, `inRange`, or
+`targetLegal`; derived legality is not stored in State. The absence of
+generic Reach-property support is intentional: arbitrary reach weapons and
+extended creature reach each require separate future consumer evidence
+before a generic Reach contract is introduced.
+
+#### Validation order
+
+This section refines the `later TSK-0008 targeting/distance/reach
+validation` step already reserved in §3.29's validation order. The existing
+§3.28/§3.29 precedence is unchanged; the future Character Dagger flow is:
+
+```text
+StateStore.load
+→ actor CreatureState lookup
+→ active-turn eligibility (§3.28)
+→ Character / Monster routing
+→ existing target existence/category validation
+→ weapon intent shape validation (§3.29)
+→ actor InventoryState (§3.29)
+→ selected runtime InventoryItemState (§3.29)
+→ actor EquipmentState (§3.29)
+→ selected item must be equipped (§3.29)
+→ typed WeaponDefinition lookup (§3.29)
+→ weapon-proficiency membership and contribution (§3.29)
+→ explicit Dagger Finesse Ability validation (§3.29)
+→ require CombatState for this Dagger melee path
+→ require actor CombatPosition (actor Combat membership already follows
+    from §3.28 active-turn eligibility)
+→ require target membership in current CombatState.order
+→ require target CombatPosition
+→ deterministic 5-ft reach validation
+→ Condition/RollMode derivation
+→ Attack Resolution / DiceEngine
+→ Event metadata / Events
+→ later Weapon Damage Resolution (§3.29)
+→ later Damage Application / persistence (§3.29)
+```
+
+Spatial validation is not moved inside the Attack roll resolver and is not
+mixed with attack-roll/damage math. `AttackHandler` (Application) loads the
+authoritative `CombatState`/`CombatPosition`/effective-reach inputs and maps
+any missing prerequisite to an `EngineError`; it then invokes the one narrow
+pure Domain reach policy described in *Application / Domain reach
+responsibility* above, which only computes the deterministic squared-distance
+result. `AttackHandler` maps a `false` result to `OUT_OF_RANGE` and otherwise
+continues into the unchanged Condition/RollMode derivation and Attack
+Resolution / DiceEngine steps.
+
+#### Failure semantics
+
+This slice introduces no new `ErrorCode` (§3.9). It uses existing values
+with the following consistent `entity_id`/`field` semantics:
+
+| Failure | `ErrorCode` | `entity_id` | `field` |
+| --- | --- | --- | --- |
+| required `CombatState` is absent for this Dagger melee path | `ACTION_NOT_AVAILABLE` | `command.actor_id` | `None` |
+| actor exists but has no required `CombatPosition` | `ACTION_NOT_AVAILABLE` | `command.actor_id` | `"position"` |
+| existing target is absent from the current `CombatState.order` | `INVALID_TARGET` | `command.payload.target_id` | `"target_id"` |
+| target is present in `CombatState.order` but has no required `CombatPosition` | `INVALID_TARGET` | `command.payload.target_id` | `"position"` |
+| actor and target are both spatially represented but `dx*dx + dy*dy > 25` | `OUT_OF_RANGE` | `command.payload.target_id` | `None` |
+
+No generic spatial error hierarchy is introduced. Each rejection above occurs
+before Condition/RollMode derivation, before any `DiceEngine` call, before
+any `EventMetadataProvider` call, before Event creation, before State
+mutation, and before `StateStore.save()`.
+
+#### No targeting Event
+
+This slice introduces no `TargetValidated`, `TargetInReach`,
+`MeleeTargetResolved`, or similar Event. Successful reach validation is a
+prerequisite of the existing `AttackCommand`, not an independent domain fact
+this consumer needs to publish. A rejected Command returns a processing
+failure with no Events, consistent with every other precondition in the
+existing validation order.
+
+#### State schema consequence
+
+The current production writer remains State schema V5. §3.29 already
+reserves the future State schema V6 for the weapon-source additions
+(`StateSnapshot.inventories`, `StateSnapshot.equipment`,
+`CharacterState.weapon_proficiencies`). V6 is not reused for spatial State.
+
+The planned spatial evolution is a subsequent V7 contract, additive on top
+of V6:
+
+```text
+V6
+    weapon-source additions from §3.29
+
+V7
+    V6 shape
+    + CombatState.positions
+```
+
+```text
+V7 = V6 additions + positions
+```
+
+V7 cannot exist as a schema that has lost the V6 additions.
+
+##### Planned V7 Combat wire shape
+
+Once V7 is implemented, a non-null `combat` object serializes with a
+required `positions` array, additive on top of the existing V5/V6 Combat
+shape (`id`, `round`, `order`, `activeIndex`):
+
+```json
+{
+  "combat": {
+    "id": "combat_001",
+    "round": 1,
+    "order": ["character_001", "monster_001"],
+    "activeIndex": 0,
+    "positions": [
+      { "creatureId": "character_001", "x": 0, "y": 0 },
+      { "creatureId": "monster_001", "x": 3, "y": 4 }
+    ]
+  }
+}
+```
+
+Canonical V7 rules:
+
+```text
+non-null CombatState in V7 requires "positions"
+missing "positions" is invalid V7
+"positions": null is invalid
+empty positions serialize as []
+
+each position entry has exactly:
+    creatureId
+    x
+    y
+
+missing position-entry field is invalid
+unknown position-entry field is invalid
+
+creatureId:
+    exact str
+
+x:
+    exact int
+    bool rejected
+
+y:
+    exact int
+    bool rejected
+
+duplicate creatureId in positions is invalid
+a position creatureId absent from combat.order is invalid
+no legacy schema is retroactively extended
+```
+
+##### Deterministic serialization is not gameplay-semantic order
+
+```text
+positions tuple order is not gameplay-semantic.
+
+The V7 writer MUST serialize positions sorted by creatureId.
+```
+
+This is distinct from `combat.order`, which remains the gameplay-semantic
+Initiative/turn order (§3.25) and is never reordered by the serializer —
+only `positions` is sorted for deterministic serialization.
+
+The future compatibility semantics, once V7 is implemented, are:
+
+```text
+V1–V4: no CombatState → no combat positions
+V5: existing CombatState without positions → positions=()
+V6: weapon-source schema + existing CombatState without positions →
+    positions=()
+V7: a non-null CombatState includes a required serialized positions array
+```
+
+This is an architecture contract for a future persistence implementation.
+This slice does not change the production serializer, `SCHEMA_VERSION`,
+State classes, or their tests.
+
+#### Explicit exclusions / abstraction verdict
+
+This slice does not design or add:
+
+```text
+Movement Commands
+movement budgets/speed
+Dash/Disengage
+forced movement
+grid/hex
+terrain/pathfinding/collision
+size/footprint
+elevation
+visibility
+cover
+line of effect
+reactions/opportunity attacks
+thrown/ranged Dagger
+arbitrary weapon reach
+a generic TargetingEngine
+a geometry service
+a spatial query framework
+a generic Attack-validation pipeline
+a shared retrofit of the existing Character unarmed and Monster Scimitar
+    Attack consumers
+```
+
+The verdict is narrow and concrete: exactly one deterministic squared-
+distance policy for one 5-foot melee weapon, backed by one minimal
+combat-local position record owned by `CombatState`. No generic targeting,
+geometry, or validation-pipeline abstraction is introduced by this slice.
 
 ---
 
@@ -7778,6 +8208,18 @@ position
 life state
 ```
 
+The generic `position` responsibility listed above does not currently
+materialize a `CreatureState.position` field and is not a second
+authoritative copy of the combat-local tactical position defined by §3.30.
+
+For the §3.30 Phase 3 consumer, `CombatState.positions` under `CombatEngine`
+ownership (§10.7) is the sole authoritative tactical placement used by that
+consumer.
+
+Any future non-combat/world placement contract remains undesigned. If such a
+contract is introduced later, its relationship with combat-local tactical
+position must be defined without creating competing authoritative copies.
+
 Но важно разделить **ownership** и **resolution**.
 
 Например `DamageResolver` рассчитывает:
@@ -7890,6 +8332,17 @@ turn resources
 combat positions
 combat-specific state
 ```
+
+`combat positions` is the authoritative combat-local tactical position for
+Combat consumers: the minimal `CombatPosition` record and
+`CombatState.positions` (§3.30) belong here, under `CombatEngine`
+ownership, and are the sole authoritative tactical placement the §3.30
+Phase 3 consumer reads or requires. The generic `position` responsibility
+listed in §10.4 does not currently materialize a `CreatureState.position`
+field and is not a second authoritative copy of this combat-local tactical
+position. Any future non-combat/world placement contract remains
+undesigned; if one is introduced later, it must be defined without creating
+a competing authoritative copy.
 
 Например:
 

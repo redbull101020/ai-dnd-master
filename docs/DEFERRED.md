@@ -169,9 +169,12 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **Closure assessment:** The slice is sufficient evidence for the Attack
   boundary and for keeping the mechanic concrete. It is not sufficient for
   the broad Attack Rolls item. G8/G9 later added the narrow Monster Scimitar
-  and Character-target path, and §3.29 now defines the Character weapon-source
-  prerequisite, but the production Character weapon path, targeting/reach,
-  broader Monster actions, spells, and broader consequences remain missing.
+  and Character-target path, §3.29 defines the Character weapon-source
+  prerequisite, and §3.30 separately defines the canonical melee
+  targeting/reach prerequisite for the first Dagger consumer, but the
+  production Character weapon path, production spatial State/reach
+  validation, broader Monster actions, spells, and broader consequences
+  remain missing.
 - **Broader unimplemented scope:** [DEF-0011](#def-0011),
   [DEF-0012](#def-0012), [DEF-0013](#def-0013),
   [DEF-0014](#def-0014), [DEF-0021](#def-0021), and
@@ -185,7 +188,9 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0037](DECISIONS.md#dec-0037--minimal-poisoned-behavior-uses-mechanic-specific-condition-policies-g6c2),
   [Architecture §3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
-  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
+  [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent),
+  [Architecture §3.30](ARCHITECTURE.md#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008),
+  and [DEC-0045](DECISIONS.md#dec-0045--minimal-character-dagger-melee-targeting-uses-combat-owned-local-positions-and-a-narrow-5-foot-reach-policy).
 
 ## P2-STATE-MUTATION
 
@@ -635,15 +640,20 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   reach, and ammunition constraints.
 - **Motivation:** The unarmed-to-Monster path hard-codes Strength and Character
   proficiency and has no equipment, weapon, or spatial inputs.
-- **Why deferred:** Architecture §3.29 now defines the minimal authoritative
+- **Why deferred:** Architecture §3.29 defines the minimal authoritative
   Inventory/Equipment ownership, runtime weapon-instance selection, effective
   Character weapon proficiency, explicit Finesse choice, and State schema
-  compatibility contract. Its production implementation is still pending;
-  TSK-0008 targeting/reach and broader ranged/ammunition State are separate
+  compatibility contract. Architecture §3.30 separately defines the minimal
+  authoritative melee targeting/reach contract for the first Dagger consumer
+  (Combat-owned `CombatPosition`/`CombatState.positions`, a narrow `dnd_5e`
+  5-ft squared-distance policy, and planned State schema V7 additive over
+  V6). Production implementation of both is still pending; broader
+  ranged/thrown/ammunition and arbitrary weapon-reach State remain separate
   unresolved prerequisites.
 - **Prerequisites:** Production implementation of the §3.29
-  equipment/inventory source and typed weapon lookup, TSK-0008
-  targeting/distance/reach facts for the first Dagger consumer, and later
+  equipment/inventory source and typed weapon lookup, production
+  implementation of the §3.30 targeting/reach contract (Combat-owned spatial
+  State, State schema V7) for the first Dagger consumer, and later
   source-specific facts for ranged/ammunition consumers.
 - **Planned approach:** Keep one explicit Attack intent while deriving weapon
   attack inputs from authoritative State/Definitions; implement concrete
@@ -655,10 +665,12 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   [§3.1.1](ARCHITECTURE.md#311-minimal-phase-1-definition-contracts),
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
   [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
+  [§3.30](ARCHITECTURE.md#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008),
   [DEC-0030](DECISIONS.md#dec-0030--shared-domain-ndm-parser-for-dice-engine-and-weapondefinition-g4b),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8),
-  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
+  [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent),
+  and [DEC-0045](DECISIONS.md#dec-0045--minimal-character-dagger-melee-targeting-uses-combat-owned-local-positions-and-a-narrow-5-foot-reach-policy).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) proves the
   Character-target part of this record (a real Attack resolving against
@@ -674,7 +686,17 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   Inventory/Equipment/proficiency/Finesse implementation remains pending;
   TSK-0008 targeting/reach is a separate prerequisite, while ranged,
   ammunition, and other-weapon scope remains deferred. Status stays
-  `Deferred` for the broader Weapon attack scope.
+  `Deferred` for the broader Weapon attack scope. 2026-08-31 — TSK-0008
+  (§3.30, DEC-0045) established the canonical melee targeting/reach
+  prerequisite contract for the first Character Dagger consumer:
+  Combat-owned `CombatPosition`/`CombatState.positions`, a narrow `dnd_5e`
+  5-ft squared-distance reach policy (not a `WeaponDefinition.reach` field),
+  explicit Application/Domain reach-policy responsibility, Dagger-specific
+  target Combat membership, and planned State schema V7 additive over V6.
+  Production spatial State, reach validation, and the broader Weapon attack
+  continuation remain pending; ranged, thrown, ammunition, and arbitrary
+  weapon reach remain deferred. Status stays `Deferred` for the broader
+  Weapon attack scope.
 
 ## DEF-0012
 
