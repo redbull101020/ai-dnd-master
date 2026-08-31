@@ -3,16 +3,20 @@
 This document is the detailed closure companion for Phase 2 and the register
 for work deliberately left outside its implemented slices. It is subordinate
 to [`ARCHITECTURE.md`](ARCHITECTURE.md) and
-[`ROADMAP.md`](ROADMAP.md): Architecture remains the current canonical
-contract, and Roadmap remains the source for status and implementation order.
+[`ROADMAP.md`](ROADMAP.md). Architecture remains the current canonical
+contract. Roadmap owns phase/capability scope, sequencing, and completion;
+[`TASK.md`](TASK.md) owns concrete executable task sequencing and task status.
+This file owns deferred-concern lifecycle and continuation context.
 [`DECISIONS.md`](DECISIONS.md) remains the append-only rationale/history log.
-This file neither changes those roles nor makes a deferred design canonical.
+This file neither changes those roles, makes a deferred design canonical, nor
+acts as the executable task queue.
 
 The P2 notes below explain what the implemented foundations prove and why a
 completed foundation can coexist with explicitly PARTIAL broader scope. The
 DEF records are planning entries, not approved contracts or scheduling
 commitments. A DEF `Target` identifies the likely continuation area; Roadmap
-still controls when work starts.
+controls whether that capability scope is open, while concrete executable work
+derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 
 ## Register policy
 
@@ -23,7 +27,13 @@ still controls when work starts.
   and `Superseded`.
 - A material change to `Status`, `Target`, `Prerequisites`, `Planned approach`,
   or `Acceptance criteria` requires a dated `History` entry explaining it.
-- A DEF becoming `Ready` or `In progress` does not itself alter Roadmap order.
+- A DEF becoming `Ready` does not mean "execute next".
+- A DEF becoming `In progress` is not authoritative executable task state once
+  concrete `TSK-*` work exists.
+- Neither status alters Roadmap capability order or Task execution order.
+- Executable work derived from a DEF is represented by `TSK-*`; a `DEF-*`
+  record is a reference/continuation concern, not a `TSK-*` dependency.
+- Existing DEF records are not automatically converted into tasks.
 - A DEF becoming `Done` records delivery of that concern; canonical behavior
   still lives in Architecture and rationale still lives in Decisions.
 - Links and proposed approaches in this register must be updated when their
@@ -73,7 +83,8 @@ still controls when work starts.
 - **Motivation:** Character level, monster challenge/profiles, and weapon
   training are materially different sources and must not be forced through a
   universal Creature formula.
-- **Continuation:** The DEF records above; Roadmap determines their order.
+- **Continuation:** The DEF records above; Roadmap determines permitted
+  capability order and Task determines concrete executable sequencing.
 - **References:** [Architecture §3.11](ARCHITECTURE.md#311-minimal-phase-2-proficiency-foundation),
   [§3.2.4](ARCHITECTURE.md#324-minimal-phase-2-characterstate-contract),
   [DEC-0021](DECISIONS.md#dec-0021--proficiency-begins-as-a-pure-character-level-rule),

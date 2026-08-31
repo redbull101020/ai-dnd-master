@@ -3,7 +3,8 @@
 ```text
 ARCHITECTURE.md = canonical current contract
 DECISIONS.md = architectural rationale/history
-ROADMAP.md = implementation status/order
+ROADMAP.md = phase/capability scope, order and completion status
+TASK.md = concrete task-level execution status/order
 DEVELOPMENT_LOG.md = execution history only
 ```
 
@@ -3955,3 +3956,17 @@ contracts.
   and no new production dependency are present. This Group's changes are
   intentionally left uncommitted for review; `review.patch` at the
   repository root contains only this Group's diff.
+
+## 2026-08-31 — Task Queue integration
+
+- Introduced `docs/TASK.md` as the thin operational Task Queue below
+  Architecture and Roadmap authority.
+- Split documentation responsibilities explicitly: Roadmap owns
+  phase/capability scope, order, and completion status; Task owns concrete
+  task-level execution status and `Current`/`Next` ordering; Deferred remains
+  the deferred-concern and continuation-context register; Development Log
+  remains factual execution history.
+- Left the tracker intentionally unpopulated so selection of the first real
+  `Current` and `Next` tasks can happen in a separate refinement/review slice.
+- No gameplay behavior or canonical Architecture contract changed, and no
+  architectural Decision was added.

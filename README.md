@@ -21,8 +21,9 @@
 | `README.md` | Идея, принципы, архитектура верхнего уровня, быстрый старт |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Источник истины.** Контракты, Envelope-схемы, ID System, слои, State Ownership, правила сериализации |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Append-only журнал мотивации и истории архитектурных решений |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Фазы разработки и текущий статус |
-| [`docs/DEFERRED.md`](docs/DEFERRED.md) | Подчинённый Architecture/Roadmap companion: подробное закрытие Phase 2 и стабильный реестр отложенного scope; не контракт и не источник порядка/статуса |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Scope и порядок фаз/capabilities, а также статус их завершения |
+| [`docs/TASK.md`](docs/TASK.md) | Текущая исполнимая очередь задач: готовность, зависимости, приоритеты и краткосрочный порядок |
+| [`docs/DEFERRED.md`](docs/DEFERRED.md) | Подчинённый Architecture/Roadmap companion: подробное закрытие Phase 2 и стабильный реестр отложенного scope; не контракт и не исполнимая очередь задач |
 | [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md) | Append-only история выполненных development iterations; не источник контрактов или статуса |
 | `CLAUDE.md` | Выжимка правил проекта для AI-агента |
 
@@ -198,6 +199,7 @@ ai-dnd-master/
 │   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
 │   ├── ROADMAP.md
+│   ├── TASK.md
 │   ├── DEFERRED.md
 │   └── DEVELOPMENT_LOG.md
 │
@@ -404,7 +406,9 @@ AI понимает намерение. Engine решает:
 - ✅ **Phase 2 — Basic Rules** завершена в foundation scope.
 - ➡️ Текущий этап: **Phase 3 — Combat**.
 
-Текущие фазы и приоритеты — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Scope, порядок и статус фаз/capabilities — в
+[`docs/ROADMAP.md`](docs/ROADMAP.md). Конкретные `Current`/`Next` задачи — в
+[`docs/TASK.md`](docs/TASK.md).
 
 ---
 
