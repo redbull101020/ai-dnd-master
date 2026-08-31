@@ -63,6 +63,7 @@
 | Combat Initiative/Turn Order vertical slice, actor eligibility (G7) | §3.25 |
 | Monster attack → Character vertical slice, `MonsterAttackDefinition` (G8) | §3.26 |
 | Monster Attack consequence → Damage → HP vertical slice (G9) | §3.27 |
+| Attack active-turn eligibility for current `AttackCommand` paths | §3.28 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -124,6 +125,7 @@
   * [3.25. Minimal Phase 3 Combat Initiative and Turn Order vertical slice (G7)](#325-minimal-phase-3-combat-initiative-and-turn-order-vertical-slice-g7)
   * [3.26. Minimal Phase 3 Monster attack → Character vertical slice (G8)](#326-minimal-phase-3-monster-attack--character-vertical-slice-g8)
   * [3.27. Minimal Phase 3 Monster Attack consequence → Damage → HP vertical slice (G9)](#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9)
+  * [3.28. Minimal Phase 3 Attack active-turn eligibility](#328-minimal-phase-3-attack-active-turn-eligibility)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -4712,11 +4714,13 @@ monster/NPC-initiated turn advancement policy
 generic action/eligibility pipeline
 ```
 
-These stay open for later, separately evidenced Phase 3 consumers, per
+These stayed open in G7 for later, separately evidenced Phase 3 consumers, per
 §3.6/§3.18's rule against introducing future-phase behaviour ahead of a
-concrete consumer. In particular, `AttackHandler` (§3.17) does not consult
-`CombatState`: the first concrete Combat actor/action-eligibility consumer in
-this slice is `AdvanceTurnHandler`'s own turn-ownership gate, not Attack.
+concrete consumer. In particular, G7 did not change `AttackHandler` (§3.17):
+the first concrete Combat actor/action-eligibility consumer in that slice was
+`AdvanceTurnHandler`'s own turn-ownership gate, not Attack. The current
+active-turn contract for the supported `AttackCommand` paths is now defined
+separately in §3.28; its production implementation remains pending.
 
 Initiative *is* explicitly in scope as a Dexterity check (SRD 5.1), so the
 already-implemented Poisoned Ability Check Condition policy (§3.22) already
@@ -5244,7 +5248,7 @@ Shortbow / any ranged Monster attack, range, reach
 Multiattack, recharge actions, saving-throw actions, area-of-effect actions
 Damage resolution, DamageApplied, HP mutation, causedBy chains (DEF-0013)
 Action selection among multiple supported Monster attacks
-CombatState / active-turn legality for AttackCommand (unchanged from §3.25)
+CombatState / active-turn legality for AttackCommand (excluded from G8; the current contract is §3.28 and implementation is pending)
 Zero-HP / combatant eligibility (DEF-0015)
 Equipment/Inventory State, Character weapon proficiency, Weapon attacks (DEF-0011 weapon path)
 ```
@@ -5547,13 +5551,148 @@ Multiattack or generic Monster actions
 resistance / immunity / vulnerability
 temporary HP, unconscious, death, or death saves
 zero-HP action eligibility
-active-turn Attack gating or action economy
+active-turn Attack gating or action economy (excluded from G9; §3.28 now defines only the current AttackCommand gate and implementation is pending)
 generic damage-source abstraction
 generic Event orchestration framework
 EventStore or replay
 UnitOfWork or transaction framework
 State schema V6
 ```
+
+---
+
+### 3.28. Minimal Phase 3 Attack active-turn eligibility
+
+Implementation status: **Canonical contract defined; production implementation
+pending in TSK-0006.** This section defines eligibility only for the currently
+supported `AttackCommand` paths. It does not claim that the gate is already
+present in `AttackHandler`.
+
+#### Scope and authoritative inputs
+
+The contract covers both existing paths after their shared actor lookup:
+
+```text
+Character unarmed → Monster Attack (§3.17)
+Monster Goblin Scimitar → Character Attack and optional Damage → HP (§§3.26–3.27)
+```
+
+`AttackHandler` owns this validation because Application already loads the
+authoritative `StateSnapshot`, routes between the Character and Monster paths,
+coordinates Definitions and dice, creates Events, and performs the optional
+State mutation/persistence sequence. The Attack resolvers remain pure and do
+not receive or load `CombatState`.
+
+After `StateStore.load(command.campaign_id)`, the handler first looks up the
+authoritative actor `CreatureState` in `snapshot.creatures`. If no actor exists,
+processing fails exactly as it does now:
+
+```text
+ErrorCode.ENTITY_NOT_FOUND
+entity_id = command.actor_id
+field = None
+events = ()
+```
+
+Combat eligibility is not evaluated for a missing actor. This actor-first
+precedence applies before any Character/Monster routing or source-/target-
+specific Attack validation.
+
+#### Outside Combat
+
+If the actor exists and `snapshot.combat is None`, active-turn eligibility does
+not apply. The existing Character or Monster Attack path continues without an
+active-turn gate.
+
+This means only that the current `AttackCommand` does not require a
+`CombatState`. It does not automatically create Combat, define general D&D
+semantics for hostile actions outside Initiative, orchestrate Initiative, or
+retry the Attack after a `StartCombatCommand`.
+
+#### Existing Combat
+
+If the actor exists and `snapshot.combat is not None`, every currently
+supported `AttackCommand` path requires:
+
+```text
+command.actor_id == snapshot.combat.active_creature_id
+```
+
+If the equality does not hold, processing fails with:
+
+```text
+ErrorCode.ACTION_NOT_AVAILABLE
+entity_id = command.actor_id
+field = None
+events = ()
+```
+
+This single equality covers both an existing actor that is absent from
+`combat.order` and an actor that is present but is not currently active.
+`CombatState.active_creature_id` is already derived from the current valid
+`order[active_index]`, so a separate `actor_id in combat.order` production
+check is redundant for this contract. Target membership in Combat is not an
+eligibility condition in this slice.
+
+#### Validation precedence
+
+The canonical order for the current paths is:
+
+```text
+StateStore.load
+→ actor CreatureState lookup
+→ active-turn eligibility
+→ existing Character/Monster routing
+→ existing source/target/Definition validations
+→ existing Condition/RollMode derivation
+→ resolver / DiceEngine
+→ Event metadata
+→ Events
+→ existing Attack consequences
+→ existing State mutation/persistence, if applicable
+```
+
+For the §3.27 Monster path, `resolver / DiceEngine` includes its existing pure
+Attack, source-damage, and optional HP calculations, all of which remain before
+Event metadata as §3.27 requires. `existing Attack consequences` in this order
+means the existing Event-driven consequence/application orchestration after
+Event construction; it does not reorder any successful-path calculation.
+
+The active-turn gate therefore runs before all source- and target-specific
+Attack processing. A rejection performs no `DefinitionSource` lookup, no
+`DiceEngine` call, no `EventMetadataProvider` call, no Event creation, no State
+mutation, and no `StateStore.save()`. The absence of a Definition lookup is a
+consequence of this validation order for `AttackHandler`, not a new generic
+framework-level contract.
+
+#### Unchanged successful paths and explicit exclusions
+
+After the gate succeeds—or when no Combat exists—the semantic contracts of the
+existing Character unarmed path, Monster Goblin Scimitar path, and Monster
+Attack → Damage → HP consequence path remain unchanged. This section changes
+no `AttackCommand`, `AttackPayload`, `AttackResult`, `MonsterAttackResult`,
+resolver, proficiency/ability calculation, Poisoned Attack policy, Armor Class
+rule, natural-1/natural-20 rule, Event, Damage/HP rule, Event ordering, State
+application, or persistence ordering.
+
+This section does not design or add:
+
+```text
+action, bonus-action, or reaction resource counters or per-turn resets
+zero-HP eligibility, LifeState, Death Saves, or other lifecycle rules
+movement, position, targeting, reach, range, or target Combat membership
+Combat start/end lifecycle or participant addition/removal
+reactions or opportunity attacks
+generic ActionEligibilityService, validation pipeline, or action framework
+a shared helper solely for the similar AdvanceTurnHandler comparison
+new State, Command fields, Events, ErrorCodes, or State schema V6
+```
+
+The rule is deliberately limited to **the currently supported
+`AttackCommand` paths**. It is not a universal rule that all future Attack
+mechanics require the attacker to be the active combatant. Reactions,
+opportunity attacks, and other future out-of-turn consumers may receive a
+separate eligibility contract when they are implemented.
 
 ---
 

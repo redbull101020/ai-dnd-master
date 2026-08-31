@@ -3993,3 +3993,33 @@ contracts.
   `TSK-0001 → TSK-0008`.
 - No production code, gameplay contract, canonical Architecture contract, or
   architectural Decision was accepted in this planning-only iteration.
+
+## 2026-08-31 — TSK-0002 Attack active-turn eligibility contract
+
+- Documentation-only architecture iteration. Added Architecture §3.28 and
+  accepted DEC-0043 for the currently supported `AttackCommand` paths; no
+  production Python or test code changed, and TSK-0006 remains the separate
+  implementation task.
+- Preserved actor-first validation. A missing authoritative actor remains
+  `ENTITY_NOT_FOUND`; Combat eligibility is not evaluated in that case. With
+  no `CombatState`, the existing Attack path continues without starting Combat
+  or orchestrating Initiative. With Combat present, the current paths require
+  `actor_id == combat.active_creature_id`; mismatch is
+  `ACTION_NOT_AVAILABLE` with no Events or downstream side effects.
+- Fixed the gate's Application ordering before Character/Monster routing and
+  all source-/target-specific processing. Rejection reaches no Definition
+  lookup, dice, Event metadata, Event construction, State mutation, or save.
+  Existing successful Character-unarmed and Monster-Scimitar Attack, Damage,
+  HP, Event, and persistence semantics remain unchanged.
+- Kept the rule narrow: it does not establish universal Attack eligibility and
+  does not design reactions, opportunity attacks, action resources, zero-HP
+  eligibility, targeting/range, Combat lifecycle, a generic eligibility
+  service/pipeline, new State, Commands, Events, ErrorCodes, or schema V6.
+- Updated only the directly stale G7/G8/G9 forward references and the
+  corresponding `CLAUDE.md` summary fact. Roadmap checkboxes, `TASK.md`
+  `Current`/`Next`, and Deferred status were not changed; `TSK-0002` remains
+  `Current` pending review and acceptance on `main`.
+- Verification: `tests/architecture/test_documentation_references.py` passes
+  (2 tests, Python 3.12.13); `git diff --check` reports no whitespace errors.
+  Pytest emitted a non-failing cache warning because this environment denied
+  creation of `.pytest_cache` (`WinError 5`).
