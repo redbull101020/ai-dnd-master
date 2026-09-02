@@ -4468,3 +4468,27 @@ contracts.
   `pytest-of-redbu` permission artifact); configured `mypy` passes for
   `src/dnd_engine` (105 source files, no issues); `git diff --check` reports
   no whitespace errors. No formatter or linter is configured.
+
+## 2026-09-02 — TSK-0006 Group 1 — production active-turn Attack gate
+
+- Branch `claude/tsk-0006-active-turn-gating`, based on `origin/main` at
+  `bec4a2c70c40cef697c2919a8069e9557c73c947`.
+- Implemented the canonical §3.28 active-turn eligibility gate in
+  `AttackHandler`, immediately after the existing actor `CreatureState`
+  lookup (which still fails with `ENTITY_NOT_FOUND` before Combat
+  eligibility is evaluated) and before Character/Monster routing. When
+  `snapshot.combat is None`, the existing Attack behavior is unchanged. When
+  Combat exists, the actor must equal `combat.active_creature_id`; a
+  mismatch returns `ACTION_NOT_AVAILABLE` with the actor `entity_id`,
+  `field=None`, and `events=()`, before any `DefinitionSource`, `DiceEngine`,
+  `EventMetadataProvider`, Event creation, State mutation, or
+  `StateStore.save()`.
+- Did not change the Character or Monster path implementations, any Domain
+  resolver, or any Command/State/Event/`ErrorCode`/schema; did not introduce
+  a new helper or a generic eligibility abstraction.
+- Existing `tests/application/test_attack_handler.py` passed unmodified: 33
+  passed.
+- Canonical Architecture/Roadmap implementation-status reconciliation is not
+  part of this group and remains pending for a later review group.
+- `docs/TASK.md` was not modified; `TSK-0006` was not marked `Done`.
+- No commit, push, or pull request was performed as of this entry.

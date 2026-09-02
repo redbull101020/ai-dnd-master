@@ -87,6 +87,24 @@ class AttackHandler:
                 ),
             )
 
+        if (
+            snapshot.combat is not None
+            and command.actor_id != snapshot.combat.active_creature_id
+        ):
+            return ResolutionResult(
+                success=False,
+                command_id=command.command_id,
+                outcome=None,
+                events=(),
+                errors=(
+                    EngineError(
+                        code=ErrorCode.ACTION_NOT_AVAILABLE,
+                        message="Attack actor is not the active combatant.",
+                        entity_id=command.actor_id,
+                    ),
+                ),
+            )
+
         actor_character = next(
             (
                 candidate
