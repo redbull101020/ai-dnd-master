@@ -140,6 +140,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | Combat Initiative/Turn Order vertical slice (G7) | §3.25 |
 | Monster attack → Character vertical slice (G8) | §3.26 |
 | Monster Attack consequence → Damage → HP vertical slice (G9) | §3.27 |
+| Attack active-turn eligibility | §3.28 |
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation
