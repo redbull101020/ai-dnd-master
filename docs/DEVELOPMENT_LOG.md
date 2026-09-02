@@ -4240,3 +4240,95 @@ contracts.
   passes 1587/1587 (Python 3.12.13). Configured `mypy` passes for all 105
   `src/dnd_engine` source files. `git diff --check` reports no whitespace
   errors. No formatter or linter is configured.
+
+## 2026-09-02 — TSK-0003 zero-HP Attack eligibility contract (architecture/planning)
+
+- Added `docs/ARCHITECTURE.md` §3.31 (Quick lookup and Table of contents
+  updated to match) defining a canonical, category-specific zero-HP Attack
+  eligibility contract for the two currently supported `AttackCommand`
+  paths — Character unarmed → Monster (§3.17) and Monster Goblin Scimitar →
+  Character, with optional Damage → HP (§§3.26–3.27). The existing
+  `CreatureState.current_hp` (§3.2.1, §3.19, §3.20) is recognized as
+  sufficient authoritative State specifically for the zero-HP predicate
+  itself; no `LifeState`, `is_alive`/`is_dead`/`is_unconscious`,
+  `ZeroHpState`, death-save counter, new State Owner, new State field, new
+  Event, new `ErrorCode`, or new State schema version is introduced. The
+  rest of the flow still uses `CombatState`, `CharacterState`, and
+  `MonsterDefinition` for exactly the category/validation responsibilities
+  they already had.
+- Character and Monster zero-HP Attack eligibility are defined as two
+  separate category-specific rules, not one shared Creature policy, even
+  though both currently resolve to the identical
+  `ErrorCode.ACTION_NOT_AVAILABLE` / `entity_id=command.actor_id` /
+  `field=None` / `events=()` outcome. This coincidence is explicitly
+  recorded as not creating a universal Character/Monster life-state model
+  and not implying identical death/unconscious semantics for the two
+  categories. Character category is established first via the actor's
+  matching `CharacterState` projection; only then is `current_hp == 0`
+  checked. The Monster-path zero-HP check is deliberately not a
+  pre-routing check ahead of category establishment: it runs only after the
+  actor's `MonsterDefinition` lookup has already succeeded, preserving the
+  existing `DEFINITION_NOT_FOUND`/`INVALID_STATE` failure precedence for a
+  malformed or unsupported non-Character actor regardless of `current_hp`.
+- The already-accepted §3.28/DEC-0043 active-turn gate keeps its earlier
+  validation precedence: when Combat exists and the actor is not the active
+  combatant, the §3.28 outcome is returned without evaluating zero-HP
+  eligibility at all. Outside Combat, only the §3.28 gate is skipped —
+  zero-HP eligibility still applies once the actor's category is
+  established. Every zero-HP rejection in §3.31 occurs before `DiceEngine`,
+  Event metadata allocation, Event creation, State mutation, and
+  `StateStore.save()`.
+- Recorded `DEC-0046` for this decision. Reconciled `docs/TASK.md`: TSK-0009
+  moved to `Recently completed` (PR #71 / merge commit `e99d0dc`, already on
+  `main`) and removed from the open queue; TSK-0003 became the sole
+  `Current` task (`Next: —`, since TSK-0004–TSK-0007 remain `Backlog`) with
+  its References/Contract impact updated for §3.31/DEC-0046. TSK-0006 and
+  TSK-0007 were deliberately left `Backlog` — no speculative `Depends on`
+  was added between them ahead of their own refinement.
+- Reconciled `docs/ROADMAP.md` Phase 3: added §3.31 to the Phase 3 contract
+  reference list and a short narrative paragraph, and updated the
+  `Zero-HP and combatant eligibility` row to record that the Character/
+  Monster zero-HP `AttackCommand` eligibility contract is now defined while
+  keeping the row unchecked (`[ ]`), since production `AttackHandler`
+  integration remains open for TSK-0007 and the broader lifecycle/
+  targetability/death-save scope stays open. No other Phase 3 capability
+  status changed.
+- Reconciled `docs/DEFERRED.md`: `DEF-0015` stays `Deferred` — its
+  References now include §3.31/DEC-0046, and its `Why deferred`/
+  `Prerequisites` record that only the narrow current-`AttackCommand`
+  actor-eligibility question is resolved, leaving targetability at zero HP,
+  further-Damage consequences, stabilization/death, Character death-save
+  lifecycle, Monster death/lifecycle policy, Healing recovery semantics,
+  Combat removal/end behavior, and other action-eligibility consumers
+  explicitly open. `DEF-0005` stays `Deferred` — it now records that a
+  Character at zero HP cannot use the current `AttackCommand` and that
+  `AdvanceTurn` is unaffected, while the death-save mechanic itself (exact
+  timing, counters, reset rules, natural 1/20 behavior, stabilization/death
+  outcome, State transitions, and Events/persistence) remains fully
+  undesigned; its `Prerequisites` were corrected during review to avoid a
+  circular dependency on remaining `DEF-0015` concerns, naming only the
+  still-needed combat timing/ownership contract for when a zero-HP
+  Character must attempt a death save. Both dated History entries were
+  appended without rewriting existing History entries.
+- `AdvanceTurnCommand`, Damage against a target already at zero HP, and
+  Healing from zero HP keep their existing accepted arithmetic/lifecycle
+  contracts (§§3.19, 3.20, 3.25) unchanged by this slice.
+- Reviewed `README.md` and `CLAUDE.md`: neither reproduces a fact this
+  slice changed. `CLAUDE.md`'s "Индекс реализованных контрактов" table
+  intentionally lists only sections with a landed production
+  implementation (through §3.27); §3.31, like the already-pending §3.28–
+  §3.30, is a canonical contract with implementation still pending in
+  TSK-0007 and is correctly not added to that table. Both files were left
+  unchanged.
+- This slice is architecture/documentation only: no production Python, no
+  test file, and no State schema changed. `AttackHandler` production
+  behavior is unchanged; implementing §3.31 remains the separate TSK-0007.
+- Verification: `tests/architecture/test_documentation_references.py`
+  passes (2 tests); the full suite passes 1587/1587 (Python 3.12.13,
+  repository `.venv`, run with a writable `--basetemp` outside the default
+  OS temp directory to avoid the previously documented Windows
+  `pytest-of-redbu` permission artifact); configured `mypy` passes for all
+  105 `src/dnd_engine` source files; `git diff --check` reports no
+  whitespace errors. No formatter or linter is configured. TSK-0003 remains
+  `Current`, not `Done`, as of this entry: per `docs/TASK.md` policy a task
+  becomes `Done` only once its accepted result exists on `main`.

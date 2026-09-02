@@ -66,6 +66,7 @@
 | Attack active-turn eligibility for current `AttackCommand` paths | §3.28 |
 | Minimal authoritative Character weapon source (TSK-0001) | §3.29 |
 | Character Dagger melee targeting/reach, `CombatPosition` (TSK-0008) | §3.30 |
+| Zero-HP Attack eligibility by creature category (TSK-0003) | §3.31 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -130,6 +131,7 @@
   * [3.28. Minimal Phase 3 Attack active-turn eligibility](#328-minimal-phase-3-attack-active-turn-eligibility)
   * [3.29. Minimal authoritative Character weapon source (TSK-0001)](#329-minimal-authoritative-character-weapon-source-tsk-0001)
   * [3.30. Minimal Phase 3 Character Dagger melee targeting and reach (TSK-0008)](#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008)
+  * [3.31. Minimal Phase 3 zero-HP Attack eligibility (TSK-0003)](#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -6470,6 +6472,242 @@ The verdict is narrow and concrete: exactly one deterministic squared-
 distance policy for one 5-foot melee weapon, backed by one minimal
 combat-local position record owned by `CombatState`. No generic targeting,
 geometry, or validation-pipeline abstraction is introduced by this slice.
+
+---
+
+### 3.31. Minimal Phase 3 zero-HP Attack eligibility (TSK-0003)
+
+Implementation status: **Canonical contract defined; production
+implementation pending in TSK-0007.** This section defines eligibility only
+for the currently supported `AttackCommand` paths. It does not claim that the
+gate is already present in `AttackHandler`.
+
+#### Scope
+
+The contract covers exactly the two currently supported `AttackCommand`
+paths, after their existing actor lookup and category establishment:
+
+```text
+Character unarmed → Monster Attack (§3.17)
+Monster Goblin Scimitar → Character Attack and optional Damage → HP (§§3.26–3.27)
+```
+
+It is not a universal rule for every future Attack, Reaction, Opportunity
+Attack, or other action. A future out-of-turn or additional Attack path may
+require its own separate eligibility contract.
+
+#### Authoritative input
+
+The zero-HP predicate itself requires no authoritative State beyond the
+existing `CreatureState.current_hp` (§3.2.1, §3.19, §3.20). No new field,
+State Owner, Event, or `ErrorCode` is introduced:
+
+```text
+no LifeState
+no is_alive / is_dead / is_unconscious
+no ZeroHpState
+no death-save counters
+no new State Owner
+no new State field
+no new Event
+no new ErrorCode
+no new State schema version
+```
+
+`current_hp == 0` is already an authoritative fact produced by the existing
+Damage/Healing contracts (§3.19, §3.20); this section only defines a new
+consumer of that existing fact for the existing `AttackCommand`, not a new
+way to produce or store it.
+
+This section does not replace or narrow any other authoritative input the
+existing Attack flow already reads. `CombatState` (§3.28 active-turn
+eligibility), `CharacterState` (Character category establishment), and
+`MonsterDefinition` (Monster category establishment) continue to be read for
+exactly the responsibilities they already had; this section only adds one
+further predicate — `current_hp == 0` — evaluated after those existing
+responsibilities have already run.
+
+#### Character rule
+
+Character category is established first, exactly as today: the actor's
+`CreatureState` has a matching `CharacterState` projection (§3.2.4). Only
+after that category is confirmed:
+
+```text
+actor_creature.current_hp == 0
+    → the current AttackCommand is unavailable
+```
+
+Failure:
+
+```text
+ErrorCode.ACTION_NOT_AVAILABLE
+entity_id = command.actor_id
+field = None
+events = ()
+```
+
+This defines only Attack eligibility for a Character actor at zero HP. It
+does not define or imply a full Character death/unconscious/death-save
+lifecycle; that broader concern remains DEF-0005, deferred until its own
+separate prerequisites are resolved.
+
+#### Monster rule
+
+No universal pre-routing `if actor_creature.current_hp == 0: ...` check is
+added ahead of Monster category establishment. Placing the check that early
+would turn zero-HP into a universal Creature policy and would change failure
+precedence for a malformed or unsupported non-Character actor: an actor
+without a valid `MonsterDefinition` must keep failing with the existing
+`DEFINITION_NOT_FOUND`/`INVALID_STATE` outcome, never with a zero-HP
+`ACTION_NOT_AVAILABLE`, regardless of `current_hp`.
+
+For the non-Character branch, the existing authoritative category
+establishment runs first and is unchanged:
+
+```text
+actor MonsterDefinition lookup
+missing Definition   → existing DEFINITION_NOT_FOUND
+wrong Definition type → existing INVALID_STATE
+```
+
+Only once the actor is confirmed as a Monster — the lookup succeeded and the
+Definition is a `MonsterDefinition` — does the zero-HP check run, before the
+existing "exactly one supported attack" check (§3.26) and every other
+Monster-path validation:
+
+```text
+actor_creature.current_hp == 0
+    → the current AttackCommand is unavailable
+```
+
+Failure uses the same shape as the Character rule:
+
+```text
+ErrorCode.ACTION_NOT_AVAILABLE
+entity_id = command.actor_id
+field = None
+events = ()
+```
+
+Because the zero-HP check runs before the existing
+`len(monster_definition.attacks) != 1` check, a Monster at zero HP whose
+Definition also does not have exactly one supported attack still fails with
+the zero-HP `ACTION_NOT_AVAILABLE` (`field=None`), not the existing
+attacks-specific `ACTION_NOT_AVAILABLE` (`field="attacks"`). This is a
+deliberate, narrow precedence choice for this concrete consumer, not a
+general rule about how every `ACTION_NOT_AVAILABLE` cause must be ordered.
+
+The Character and Monster rules produce the identical observable result
+(`ACTION_NOT_AVAILABLE`, the same `entity_id`/`field`/`events` shape) at zero
+HP. This coincidence does not create a universal Character/Monster lifecycle
+and does not mean their death/unconscious semantics are the same; it means
+only that both category-specific eligibility rules currently resolve to the
+same outcome for this one narrow Attack-eligibility question. A future
+Character death-save decision (DEF-0005) or a future Monster stabilization/
+lethal-outcome decision (DEF-0015) may diverge the two categories later
+without revising this section.
+
+#### Validation precedence
+
+This section extends the existing §3.28 active-turn precedence without
+displacing it. The canonical order for the current paths becomes:
+
+```text
+StateStore.load
+→ actor CreatureState lookup
+→ active-turn eligibility when Combat exists (§3.28)
+→ Character/Monster category establishment
+→ category-specific zero-HP Attack eligibility (this section)
+→ remaining path-specific source/target validations
+→ Condition/RollMode derivation
+→ resolver / DiceEngine
+→ Event metadata
+→ Events
+→ optional consequences / State application / persistence
+```
+
+The zero-HP check never moves ahead of the §3.28 active-turn gate. If Combat
+exists and the actor is not the active combatant, the existing §3.28
+`ACTION_NOT_AVAILABLE` outcome has precedence: it is returned before the
+zero-HP check runs, whether or not the actor also has zero HP. The zero-HP
+check is reached only once the actor is the active combatant, or once no
+Combat exists at all.
+
+#### Outside Combat
+
+When `snapshot.combat is None`, only the §3.28 active-turn gate is skipped.
+Zero-HP eligibility still applies once the actor's category is established:
+
+```text
+Character actor at current_hp == 0, no Combat → AttackCommand unavailable
+Monster actor at current_hp == 0, no Combat, Monster category confirmed
+    → AttackCommand unavailable
+```
+
+#### Side-effect boundary
+
+Every zero-HP rejection in this section occurs before:
+
+```text
+DiceEngine
+Event metadata allocation
+Event creation
+State mutation
+StateStore.save()
+```
+
+For the Character path, no Definition lookup is required to reject: Character
+category is already established from the matching `CharacterState`
+projection, and `current_hp` is already loaded on `actor_creature`.
+
+For the Monster path, the existing `DefinitionSource` lookup that establishes
+Monster category runs before the zero-HP check, because that lookup is how
+this contract distinguishes a Monster actor from a malformed/unsupported
+actor in the first place. This section does not claim that Monster zero-HP
+rejection is universally free of `DefinitionSource` access — only that, once
+category is confirmed, no further `DiceEngine`, Event, State mutation, or
+persistence side effect occurs on the rejection path.
+
+#### Unchanged contracts
+
+This section changes none of the following, all of which keep their existing
+arithmetic or lifecycle behavior:
+
+```text
+AdvanceTurnCommand (§3.25) — a zero-HP active combatant may still formally
+    advance its own turn; current_hp is not consulted by AdvanceTurnHandler
+Damage against a target already at zero HP (§3.19) — the existing
+    successful 0 → 0 transition is unchanged
+Healing from zero HP (§3.20) — unchanged
+Attack targetability at zero HP — this section does not change existing
+    target-validation behavior; only the actor's own current_hp is
+    consulted by this section, and whether a creature at zero HP is a valid
+    Attack target remains open under DEF-0015
+```
+
+#### Explicit exclusions
+
+This section does not design or add:
+
+```text
+action, bonus-action, or reaction resource budgets
+death saves, stabilization, or a universal LifeState/unconscious/dead model
+further-Damage consequences beyond the existing arithmetic contracts
+automatic removal from Combat or CombatEnded
+Monster-specific death policy
+weapon-source, equipment, targeting, reach, or movement rules
+reactions or opportunity attacks
+ActionEligibilityService, a generic validation pipeline, or a shared
+    eligibility helper
+a generic Creature life-state model shared by Character and Monster
+```
+
+DEF-0005 (Character death saves) and the broader DEF-0015 concern (Monster
+death policy, stabilization, and targetability/lifecycle questions beyond
+this narrow Attack-eligibility rule) remain deferred; this section resolves
+only the narrow zero-HP Attack-eligibility question named in TSK-0003, with
+production implementation reserved for TSK-0007.
 
 ---
 
