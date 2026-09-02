@@ -4390,3 +4390,81 @@ contracts.
   configured. TSK-0006 remains `Current`, not `Done`, as of this entry: per
   `docs/TASK.md` policy a task becomes `Done` only once its accepted result
   exists on `main`.
+
+## 2026-09-02 — Post-merge Task Closure made a mandatory execution gate
+
+- `docs/TASK.md` §4.5 already defined `Done` as: a task becomes `Done` only
+  when its accepted result exists on `main`, and code/local tests/`review
+  .patch`/a commit/a pushed branch/an open pull request/an approved review
+  are not, by themselves, sufficient. This definition was not changed.
+- The existing post-merge reconciliation guidance (§18, previously titled
+  "Completion and history", and the §20 review triggers) was strengthened
+  into an explicit mandatory Task Closure gate: after the accepted result of
+  the current task lands on `main`, the tracker must be reconciled to that
+  fact before implementation of the newly selected `Current` task begins.
+  Task Closure itself does not change when a task becomes `Done` — the
+  accepted result existing on `main` remains the defining condition; Task
+  Closure only reconciles `TASK.md` to that already-satisfied fact, and a
+  task does not stay in an undefined "merged but not Done" state waiting for
+  a separate closure commit.
+- Task Closure is explicitly not a new task lifecycle status: the allowed
+  status set stays exactly `Backlog` / `Ready` / `Current` / `Blocked` /
+  `Done` / `Superseded`. Task Closure is also explicitly not a project task
+  of its own — it never receives a new `TSK-*` ID, and §5 now forbids
+  administrative recursion such as a dedicated `TSK-0011 — Close TSK-0010`
+  whose only deliverable would be updating the tracker after a merge.
+- §18 was renamed from "Completion and history" to "Task closure and
+  history" and now opens with a normative statement that Task Closure is
+  mandatory, not optional bookkeeping. §18 kept the existing post-merge
+  responsibilities: mark the task `Done`, add it to `Recently completed`,
+  remove its full detail from `Open task details`, append the required
+  `DEVELOPMENT_LOG.md` entry, reconcile Roadmap/Deferred status when the
+  delivered work changes them, select the next `Current`, recalculate the
+  short-term queue, and update review metadata. Group 1 additionally made
+  `Hard blockers` reconciliation explicit in the closure checklist (step 7
+  now reads "recalculate `Next` and `Hard blockers`", not just `Next`), and
+  clarified that `Next free ID` changes only when allocation state actually
+  changes, not mechanically on every closure. §18 additionally states that
+  an implementation branch/PR must not mark its own task `Done` before its
+  accepted result exists on `main`, and that a separate follow-up
+  documentation commit/PR performing closure is normal, since the merge
+  delivering the task cannot itself truthfully record its own post-merge
+  status.
+- §20 now makes post-merge reconciliation an immediate execution gate:
+  "after a task is merged" was strengthened to "immediately after a Current
+  task is merged, before implementation of the next task begins," and a
+  guard was added so `TASK.md` must not indefinitely keep pointing at an
+  already-completed task as `Current` — while making clear that
+  reconciliation is not required to land in the same merge commit that
+  delivers the task, since that would force a false pre-merge `Done`.
+- No automation, bot, or hook was implemented to enforce this gate; it is a
+  documentation/process policy for the humans/agents operating the queue.
+- Authorization rules in `AGENTS.md` (who may commit/push/open a PR/merge)
+  were not changed and are not duplicated into `TASK.md`. No canonical
+  Architecture or Roadmap contract, gameplay behavior, production Python,
+  test, or State schema changed. No new `DEC-*` decision was recorded — this
+  is an operational Task Queue policy refinement, not an architectural
+  gameplay decision. The current Task Queue factual state was not changed by
+  this process-policy edit: `Current: TSK-0006`, `TSK-0007` stays `Blocked`
+  / `M`, TSK-0004/TSK-0005 stay `Backlog` / `L`, and `Next free ID` stays
+  `TSK-0010`.
+- Cross-document consistency review covered `AGENTS.md`, `CLAUDE.md`,
+  `README.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`,
+  `docs/DECISIONS.md`, and `docs/DEFERRED.md`: none required a change.
+  `TASK.md` owns operational task lifecycle/status/queue semantics;
+  `AGENTS.md` owns authorization/branch/commit/push/PR workflow and does not
+  duplicate the Task Closure algorithm; `ARCHITECTURE.md` does not own
+  project-management lifecycle; `ROADMAP.md` does not own per-task queue
+  reconciliation; `DEFERRED.md` is a deferred-concerns register, not a task
+  tracker; `README.md` and `CLAUDE.md` reference `TASK.md` only as a
+  document pointer and do not restate its operational policy.
+- Changed files for this iteration: `docs/TASK.md` (§4.5, §5, §17, §18,
+  §20) and this `docs/DEVELOPMENT_LOG.md` entry. No other tracked file was
+  modified.
+- Verification: `tests/architecture/test_documentation_references.py`
+  passes (2 tests); the full suite passes (1587 passed; Python 3.12.13,
+  repository `.venv`, run with a writable `--basetemp` outside the default
+  OS temp directory to avoid the previously documented Windows
+  `pytest-of-redbu` permission artifact); configured `mypy` passes for
+  `src/dnd_engine` (105 source files, no issues); `git diff --check` reports
+  no whitespace errors. No formatter or linter is configured.
