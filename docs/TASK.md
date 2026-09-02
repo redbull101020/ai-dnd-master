@@ -1080,11 +1080,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0008
+- **Current:** TSK-0009
 - **Next:** TSK-0003
 - **Hard blockers:** —
-- **Next free ID:** TSK-0009
-- **Last reviewed:** 2026-08-31
+- **Next free ID:** TSK-0010
+- **Last reviewed:** 2026-09-02
 
 ---
 
@@ -1097,7 +1097,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
 | `TSK-0006` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Turn/action economy | Implement active-turn Attack gating |
 | `TSK-0007` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement zero-HP Attack eligibility |
-| `TSK-0008` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Targeting and Weapon attacks | Define minimal melee targeting and reach for the first Character Dagger attack |
+| `TSK-0009` | `Current` | `P2` | `M` | `documentation` | Phase 3 / Combat documentation consistency | Deduplicate README/CLAUDE and remove redundant current data-flow projection |
 
 ---
 
@@ -1206,135 +1206,101 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 ---
 
-## TSK-0008 — Define minimal melee targeting and reach for the first Character Dagger attack
+## TSK-0009 — Deduplicate README/CLAUDE and remove redundant current data-flow projection
 
 **Status:** `Current`
 
-**Priority:** `P1`
+**Priority:** `P2`
 
 **Size:** `M`
 
-**Group:** `architecture`
+**Group:** `documentation`
 
-**Roadmap target:** Phase 3 / Targeting and Weapon attacks
+**Roadmap target:** Phase 3 / Combat documentation consistency
 
 **References:**
 
-- `ROADMAP.md` — Phase 3 / Targeting, Weapon attacks, Movement
-- `ARCHITECTURE.md` §§3.17, 3.25, 3.26, 3.27, 3.29, 3.30, 10.4, 10.7
-- `P2-ATTACK-ROLLS`
-- `DEF-0011`
-- `DEC-0031`, `DEC-0041`, `DEC-0042`, `DEC-0044`, `DEC-0045`
+- `ROADMAP.md` — Phase 3 — Combat
+- `DEC-0016`, `DEC-0018`
 
 **Depends on:** `—`
 
-**Contract impact:** Defines the canonical Character Dagger melee
-targeting/reach foundation in Architecture §3.30 and DEC-0045; production
-implementation remains a separate subsequent task
+**Contract impact:** `none`
 
 ### Goal
 
-Define the smallest authoritative targeting and spatial contract needed to
-determine whether the first Character Dagger attack against a Monster is a
-legal melee target, without designing the broader Movement system or a generic
-targeting/geometry framework.
+Reduce maintenance-sensitive duplication between `README.md`, `CLAUDE.md`, and
+`AI_DND_DATA_FLOW_CURRENT.md` while preserving onboarding value and
+coding-agent guardrails.
 
 ### Why now
 
-The Character Dagger is now a concrete next Weapon Attack consumer.
-
-The existing Character unarmed and Goblin Scimitar consumers prove the Attack
-and consequence boundaries, while the Character weapon-source task explicitly
-leaves targeting, distance, and reach as separate prerequisites.
-
-`DEF-0011` also requires necessary targeting/distance facts and melee reach
-before the broader Character Weapon attack continuation can be completed. The
-consumer evidence therefore exists; this is no longer speculative spatial
-architecture.
+The user explicitly selected this documentation maintenance work before
+returning to the normal Phase 3 queue. `README.md` and `CLAUDE.md` have
+accumulated implementation-status detail beyond their stated roles, and
+`AI_DND_DATA_FLOW_CURRENT.md` has become another mutable current-state
+projection alongside the canonical Architecture/Roadmap documents. This task
+changes no gameplay behavior and no canonical architecture contract.
 
 ### Scope
 
-- define the minimum authoritative facts required to decide whether the
-  intended Monster target is legal for the first Character Dagger melee
-  attack;
-- decide whether existing State is sufficient and, if not, define only the
-  minimum additional spatial State required by this consumer as Combat-owned
-  and combat-local, not a World/Location placement model;
-- identify the State Owner for any new authoritative spatial fact;
-- define the authoritative source of the Dagger's melee reach requirement;
-- define where Application obtains the required State/Definition inputs and
-  where deterministic target/reach validation occurs;
-- define rejection semantics before Attack dice, Event metadata, State
-  mutation, or persistence;
-- define any StateSnapshot serialization/version compatibility consequence if
-  additional authoritative State is required, including its relationship to
-  the already-reserved State schema V6 (§3.29) as a later, strictly additive
-  schema version;
-- preserve the existing separation between target legality and attack-roll /
-  damage resolution;
-- update the canonical Architecture, append one Decision, and reconcile only
-  directly affected planning/summary documentation.
+- simplify `README.md` ownership to onboarding, high-level architecture, and
+  current-phase pointers;
+- restore `CLAUDE.md` to the narrow duplication policy of `DEC-0016`/`DEC-0018`;
+- remove `AI_DND_DATA_FLOW_CURRENT.md`;
+- preserve intentional duplication of stable guardrails;
+- preserve historical mentions of the removed file in append-only history;
+- update `docs/DEVELOPMENT_LOG.md` once the full task is complete;
+- run existing documentation-reference tests and the full repository test
+  suite.
 
 ### Out of scope
 
-- production or test implementation;
-- movement Commands, movement expenditure, creature speed, Dash, Disengage, or
-  forced movement;
-- grid/hex representation, pathfinding, collision, terrain, difficult terrain,
-  elevation, or line-of-effect systems;
-- opportunity attacks and reactions;
-- ranged or thrown attacks, normal/long range, ammunition, or generic reach
-  support for arbitrary weapons;
-- cover and visibility;
-- Character weapon ownership, proficiency, or Finesse choice covered by
-  `TSK-0001`;
-- a World/Location placement model (Phase 5 Locations/Maps) or any
-  `LocationState`/`location_id`;
-- action-resource budgets or zero-HP eligibility;
-- retrofitting the existing Goblin Scimitar path merely to create a shared
-  targeting abstraction;
-- a generic `TargetingEngine`, geometry service, spatial query framework, or
-  shared Attack-validation pipeline without additional concrete consumers.
+- changes to canonical gameplay behavior;
+- changes to `docs/ARCHITECTURE.md`;
+- changes to Roadmap scope/status;
+- changes to `DEC-0016` or `DEC-0018`;
+- a new Decision;
+- `AGENTS.md` policy changes;
+- `docs/DEFERRED.md` changes;
+- production code changes;
+- new frameworks or automated textual deduplication machinery;
+- replacement documents such as `OVERVIEW.md`, `CURRENT_ARCHITECTURE.md`, or
+  another data-flow document.
 
 ### Acceptance criteria
 
-- the first Character Dagger → Monster consumer has one explicit authoritative
-  source for every fact needed to accept or reject its melee target;
-- ownership of any spatial State is explicit and does not give AI, API, Attack
-  resolution, or another non-owner direct mutation authority;
-- effective Dagger melee reach and legality derive from authoritative
-  `dnd_5e` rule policy together with authoritative Definition/Combat State
-  facts, never caller-supplied computed legality;
-- invalid target/reach attempts are rejected deterministically before
-  DiceEngine, Event allocation, State mutation, or persistence;
-- the contract does not require a general Movement, geometry, ranged-attack,
-  or targeting framework;
-- any State/serialization compatibility impact is explicit;
-- the existing Character unarmed and Monster Scimitar contracts remain
-  unchanged unless an actual canonical conflict is discovered and reported
-  rather than silently resolved.
+- `README.md` remains useful as first-entry onboarding but no longer carries
+  G5/G6/G7/G8/G9-style implementation census, handler inventories,
+  Event-version inventories, or State-schema history;
+- `CLAUDE.md` keeps the deliberately reproduced facts required by
+  `DEC-0016`/`DEC-0018` but removes detailed implementation narration;
+- `AI_DND_DATA_FLOW_CURRENT.md` is removed;
+- no active current-document reference requires that file;
+- historical references in append-only Decision/Development history remain
+  historical and are not rewritten;
+- Architecture, Roadmap scope, gameplay contracts, `AGENTS.md` policy,
+  `DEC-0016`, and `DEC-0018` remain unchanged;
+- existing documentation-reference tests pass without modifying their policy
+  merely to accommodate the cleanup;
+- full `pytest` passes;
+- `git diff --check` passes;
+- no production code changes.
 
 ### Verification
 
-- documentation-reference tests;
-- consistency review against the existing `AttackCommand` / `AttackHandler`
-  target boundary;
-- consistency review against Creature and Combat State ownership;
-- consistency review against the packaged Dagger Definition and existing
-  Character-unarmed / Goblin-Scimitar Attack consumers;
-- targeted reference search confirming no generic movement/targeting framework
-  was made canonical accidentally.
+- `tests/architecture/test_documentation_references.py`;
+- full `pytest` suite;
+- `git diff --check`.
 
 ### Expected touchpoints
 
 ```text
-docs/ARCHITECTURE.md
-docs/DECISIONS.md
-docs/DEFERRED.md
-docs/ROADMAP.md
 docs/TASK.md
+README.md
+CLAUDE.md
+AI_DND_DATA_FLOW_CURRENT.md
 docs/DEVELOPMENT_LOG.md
-CLAUDE.md (only if a reproduced canonical fact changes)
 ```
 
 ---
@@ -1345,6 +1311,7 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 | --- | --- | --- |
 | `TSK-0001` | Define the minimal authoritative Character weapon source | PR #69 / merge commit `f4dbc50` |
 | `TSK-0002` | Define active-turn gating for `AttackCommand` | PR #68 / merge commit `d8f86ed` |
+| `TSK-0008` | Define minimal melee targeting and reach for the first Character Dagger attack | PR #70 / merge commit `24da875` |
 
 ---
 
