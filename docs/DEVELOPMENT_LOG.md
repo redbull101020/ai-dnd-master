@@ -4178,3 +4178,65 @@ contracts.
   temp-permission artifact); configured `mypy` passes for the existing source
   tree; `git diff --check` reports no whitespace errors. No formatter or
   linter is configured.
+
+## 2026-09-02 — TSK-0009 documentation ownership and deduplication
+
+- Reconciled `docs/TASK.md` after TSK-0008's accepted merge (PR #70 / merge
+  commit `24da875`): marked TSK-0008 `Done`, moved it to `Recently completed`,
+  and removed its full open-queue detail. Registered TSK-0009 as the new
+  `Current` task — user-prioritized Phase 3 documentation-consistency work,
+  selected ahead of the standing `Next: TSK-0003` queue order without
+  changing Roadmap phase or scope. `Next free ID` advanced to `TSK-0010`.
+  TSK-0009 itself remains `Current`, not `Done`, as of this entry: per
+  `docs/TASK.md` policy a task becomes `Done` only once its accepted result
+  exists on `main`, which has not yet happened.
+- Reduced `README.md` to stable onboarding/high-level-architecture/current-
+  phase content: collapsed the G6/G7/G8/G9 Events implementation narrative,
+  the persistence section's handler/Event-version census, and the Quick
+  Start's Phase 2/Phase 3 implementation report into short conceptual
+  statements pointing to `docs/ROADMAP.md`/`docs/TASK.md`; corrected an
+  inaccurate "README has no diagrams" claim; and, after two rounds of
+  review, kept only the Event immutability summary in README while leaving
+  the canonical rule for correcting an erroneous Event by creating a new
+  correcting Event to `docs/ARCHITECTURE.md`.
+- Brought `CLAUDE.md` back inside the DEC-0016/DEC-0018 duplication policy:
+  merged the Phase 1/Phase 2 contract tables and the "Текущая фаза" G5-G9
+  narrative into one compact "Индекс реализованных контрактов"
+  (`Contract → §`); replaced a separate pending-contract status table for
+  §3.28-§3.30 with one pointer to `docs/ROADMAP.md`/`docs/TASK.md` (per
+  review feedback, to avoid creating a second status inventory); trimmed the
+  deferred-abstraction review history and the `state.json` schema-version
+  history to durable guardrails; and corrected the `README.md` document-map
+  row. All DEC-0016 intentional-duplication categories (document map,
+  current phase, contract names/sections, `current_hp`/`max_hp` naming trap,
+  closed `DamageType` set, Command lifecycle states, forbidden/deferred
+  abstraction names) were preserved. A final consistency pass also corrected
+  a stale tooling-status statement that claimed formatter, linter, *and*
+  type checker are all unconfigured: `pyproject.toml` actually declares
+  `mypy` as a `dev` optional dependency and configures `[tool.mypy]` with
+  `files = ["src/dnd_engine"]`. The statement now records formatter/linter
+  as not configured, `mypy` as configured and expected to run for
+  `src/dnd_engine`, and keeps the existing prohibition on introducing
+  additional formatter/linter/type-checker tooling merely to satisfy a task.
+- Removed `AI_DND_DATA_FLOW_CURRENT.md` as a redundant, non-canonical
+  current-state data-flow projection. A reference audit before deletion
+  found no active current-document (README, CLAUDE, AGENTS, Architecture,
+  Roadmap) or test dependency on the file; historical mentions in
+  `docs/DECISIONS.md` and `docs/DEVELOPMENT_LOG.md` (past "Affected
+  contracts/files" lists and iteration notes) were left unchanged as
+  append-only history. No replacement overview/data-flow document was
+  created.
+- No canonical gameplay/architecture contract changed: `docs/ARCHITECTURE.md`,
+  `docs/ROADMAP.md`, `docs/DECISIONS.md`, `docs/DEFERRED.md`, and `AGENTS.md`
+  are unmodified on this branch. No production Python or test file changed.
+  `tests/architecture/test_documentation_references.py` required no policy
+  change or new test merely to accommodate this deletion — its existing
+  checked-document set never included the removed file.
+- Verification: `tests/architecture/test_documentation_references.py`
+  passes (2 tests). An initial ordinary full-suite `pytest` run hit the same
+  pre-existing Windows `pytest` base-temp `PermissionError` already
+  documented in the TSK-0008 entry above; re-run with the established
+  writable `--basetemp` workaround outside the repository, the full suite
+  passes 1587/1587 (Python 3.12.13). Configured `mypy` passes for all 105
+  `src/dnd_engine` source files. `git diff --check` reports no whitespace
+  errors. No formatter or linter is configured.
