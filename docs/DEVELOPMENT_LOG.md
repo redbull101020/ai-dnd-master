@@ -4519,3 +4519,31 @@ contracts.
 - No production code, Architecture, Roadmap, Task, Decision, Deferred, or
   `CLAUDE.md` changes were made in Group 2; `TSK-0006` remains not `Done`.
 - Group 2 was still uncommitted/unpushed at the time of this entry.
+
+## 2026-09-02 — TSK-0006 Group 3 — active-turn implementation-status reconciliation
+
+- Group 1 already implemented the production §3.28 gate and Group 2 already
+  added targeted `AttackHandler` application coverage for it; Group 3
+  changed no production Python and no tests.
+- Reconciled stale current-status statements in `docs/ARCHITECTURE.md`
+  §§3.25–3.28: removed statements that production active-turn integration
+  remained pending, and updated §3.28's own implementation-status line to
+  record the current `AttackHandler` implementation, while preserving the
+  historical facts that G7/G8/G9 themselves did not integrate Attack with
+  Combat.
+- Canonical §3.28 behavior itself was not changed: actor-first precedence,
+  no-Combat behavior, the equality against `active_creature_id`, the
+  existing `ACTION_NOT_AVAILABLE` rejection shape, the side-effect boundary,
+  and the current-`AttackCommand`-paths-only scope all remain exactly as
+  previously accepted.
+- `docs/ROADMAP.md` gained a completed narrow `Attack active-turn gating
+  foundation` item. The broad Turn/action economy/resource item remains
+  open, because action/bonus-action/reaction budgets and per-turn resets
+  are still unimplemented. Zero-HP Attack eligibility remains pending
+  TSK-0007.
+- No new architectural Decision was required: this is implementation/status
+  reconciliation of the already-accepted DEC-0043, not a new decision.
+- `docs/TASK.md`, `docs/DECISIONS.md`, `docs/DEFERRED.md`, `README.md`, and
+  `CLAUDE.md` were not changed in Group 3; `TSK-0006` was not marked `Done`.
+- Documentation reference test result: 2 passed.
+- Group 3 was still uncommitted/unpushed at the time of this entry.
