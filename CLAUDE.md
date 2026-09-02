@@ -29,7 +29,7 @@
 | `docs/DEFERRED.md` | Подчинённый companion закрытия Phase 2 и реестр отложенных concerns/контекста продолжения. Не контракт и не исполнимый порядок задач. |
 | `docs/DEVELOPMENT_LOG.md` | Append-only история выполненных итераций. Не контракт и не статус. |
 | `AGENTS.md` | Рабочий процесс агента: ветки, PR, тесты, definition of done. |
-| `README.md` | Обзор проекта. Без схем и контрактов. |
+| `README.md` | Обзор проекта, архитектура верхнего уровня и quick start; не источник canonical schemas/contracts. |
 | `CLAUDE.md` | Этот файл. Выжимка правил. |
 
 ---
@@ -38,19 +38,12 @@
 
 * Phase 0 — Foundation: завершена.
 * Phase 1 — Core: завершена.
-* Phase 2 — Basic Rules: завершена в foundation scope (§3.24, DEC-0039); более широкий D&D scope явно `PARTIAL` и продолжается через `docs/DEFERRED.md`, не переоткрывая Phase 2.
+* Phase 2 — Basic Rules: завершена в foundation scope (§3.24); более широкий D&D scope `PARTIAL` и продолжается через `docs/DEFERRED.md`, не переоткрывая Phase 2.
 * **Phase 3 — Combat: текущая.**
-* Первый read-only Ability Check vertical slice Phase 2 реализован.
-* Minimal read-only Character unarmed Attack Roll → Monster slice (§3.17) реализован; Attack-roll foundation complete, broader scope `PARTIAL` и напрямую продолжается в DEF-0011–DEF-0014.
-* State Mutation Foundation (G5, §3.18) COMPLETE: четыре concrete consumers — minimal Damage → HP (G6A, §3.19), minimal Healing → HP (G6B, §3.20), Apply Condition и Remove Condition (§3.21) — используют concrete Creature Event application, replacement `StateSnapshot` и `StateStore.save()` до success. Event History & Replay — отдельный trigger-driven cross-cutting track; generic mutation/transaction abstractions остаются evidence-deferred и не являются missing G5 scope. Post-G6B verdict `KEEP CONCRETE` изменён §3.23 только для узкого snapshot helper.
-* Condition State foundation, G6C1 (§3.21, DEC-0035/DEC-0036): closed single-value `Condition` (`POISONED`) и persisted `CreatureState.conditions: frozenset[Condition]` с empty default. State schema V4 добавил этот Creature `conditions` shape (сейчас legacy read-only — current writer V5, §3.25); V1–V3 остаются legacy read-only. Pure Domain mutation contract реализован: `ApplyConditionCommand`/`RemoveConditionCommand` (payload `target_id`, `condition`), pure `resolve_condition_application`/`resolve_condition_removal` (`ConditionApplicationResult`/`ConditionRemovalResult`, `active` intrinsically `True`/`False`), `ConditionApplied`/`ConditionRemoved` V1 Events (`targetId`, `condition`, `previousActive`, `active`) и concrete Creature appliers `apply_condition_applied_v1`/`apply_condition_removed_v1`, меняющие только `conditions` через `dataclasses.replace`. Apply already-active / Remove already-absent — successful no-op, не `RULE_VIOLATION`, Event всё равно строится, а полный lifecycle (включая `save()`) не short-circuit-ится. Application orchestration реализована: `ApplyConditionHandler`/`RemoveConditionHandler` (только `StateStore` + `EventMetadataProvider`) повторяют canonical Damage/Healing lifecycle и вызывают `StateStore.save()` ровно один раз на успешном пути; production round-trip через реальный `FilesystemStateStore` подтверждён fresh-reload тестами.
-* Minimal Poisoned behavior, G6C2 (§3.22, DEC-0037): две узкие pure Domain policies определяют effective `RollMode` отдельно для Ability Check context и Attack Roll context. `POISONED` даёт `DISADVANTAGE` для Ability Check, Character Skill Check (reuse ability-check policy) и Attack attacker; Saving Throw policy не вызывает и остаётся NORMAL. Handlers читают authoritative `CreatureState.conditions` и передают effective mode в существующие resolver contracts; Commands/API/UI/AI не задают `roll_mode`. Generic Condition→RollMode mapping, pairwise combiner и effect/modifier framework не введены; при втором реальном source сначала моделируется presence independent advantage/disadvantage sources, затем final `RollMode`. Condition State foundation complete; broader Conditions scope `PARTIAL` в DEF-0020/DEF-0021.
-* Post-G6C abstraction review (§3.23, DEC-0038): четыре mutation handlers подтвердили один shared Application policy, поэтому `replace_creature_in_snapshot(snapshot, replacement)` заменяет ровно одного существующего Creature по stable ID, сохраняет tuple order и identity Campaign/Character projections и не мутирует input; missing ID raises, append запрещён. Это единственная extracted abstraction. Event appliers, handler orchestration, Condition policies и membership checks остаются concrete/narrow; generic mutation/effect/replay/transaction frameworks остаются deferred.
-* Первый concrete Phase 3 Combat consumer, G7 (§3.25, DEC-0040): новый minimal State Owner `CombatState(id, round, order, active_index)` и optional `StateSnapshot.combat: CombatState | None = None` (default `None`, State schema V4→V5). `combat_id` в `StartCombatPayload` — уже allocated runtime Combat ID через canonical Entity-ID generation boundary (§4.11 `EntityFactory`), а не id, который вправе изобрести caller/UI/AI; §4.11 не менялся, concrete `EntityFactory` этим срезом не реализован. `StartCombatHandler` сначала валидирует `command.actor_id` против authoritative `snapshot.creatures` (`ENTITY_NOT_FOUND`, `field=None`) раньше participant lookup, `DiceEngine` и `EventMetadataProvider` вызовов и persistence — actor не обязан быть среди `participant_ids`. Initiative — Dexterity check (SRD 5.1): handler читает authoritative `CreatureState.conditions` каждого участника и переиспользует существующий `ability_check_roll_mode_from_conditions` (§3.22, тот же, что уже использует `AbilityCheckHandler`/`SkillCheckHandler`), передавая per-participant `RollMode` в `resolve_start_combat(..., roll_modes=...)`. Resolver сохраняет владение Dexterity-modifier/`resolve_d20_roll`/totals/сортировкой (по убыванию total → Dexterity → creature id) и катает `1d20` (`RollMode.NORMAL`) или два независимых `1d20` (`RollMode.DISADVANTAGE` для Poisoned), строит `CombatStarted` V1 и свежий `CombatState` при `round=1`. Generic Condition→RollMode framework, `combine_roll_modes` и DEF-0021 aggregation не введены — Poisoned остаётся единственным production roll-mode source. `AdvanceTurnCommand(combat_id)` через pure `resolve_advance_turn` продвигает `active_index` по модулю `len(order)`, инкрементирует `round` только при wraparound, строит `TurnAdvanced` V1 и replacement `CombatState`. `AdvanceTurnHandler` требует `actor_id == combat.active_creature_id` (иначе `ACTION_NOT_AVAILABLE`) — это и есть concrete actor/action-eligibility consumer G7, а не изменение `AttackHandler` (Attack, §3.17, не был тронут этим срезом; его current active-turn contract теперь находится в §3.28 и ожидает production implementation). `current_hp` сознательно не проверяется: zero-HP eligibility (DEF-0015) остаётся открытым для последующего consumer. Оба handler'а используют `dataclasses.replace(snapshot, combat=...)` напрямую — helper §3.23 не применим к single optional field, новый helper не извлекался. `StartCombatResult`/`_validate_combat` (serializer) отклоняют дублирующиеся creature id в `order`. Production round-trip через реальный `FilesystemStateStore` подтверждён. Roadmap записывает scope-accurate `Initiative foundation`/`Turn-order advancement foundation` (не blanket `Initiative`/`Turns`); grouped/identical-creature Initiative, turn/action economy, `CombatEnded` и `Zero-HP and combatant eligibility` остаются открытыми incomplete items.
-* Первый concrete Monster-attacker / Character-target Attack consumer, G8 (§3.26, DEC-0041): узкий attack-specific `MonsterAttackDefinition(action_id, name, attack_bonus, damage_dice, damage_modifier, damage_type)` — не generic Monster action/ability model и не `Definition` subtype; `action_id` — local identity внутри владеющего `MonsterDefinition`, не runtime `action_NNN` и не global registry entry. `MonsterDefinition.attacks: tuple[MonsterAttackDefinition, ...] = ()` валидирует только tuple/element-type и unique `action_id`; intrinsic field validation (включая `parse_ndm` для `damage_dice`) целиком принадлежит `MonsterAttackDefinition`. Packaged `goblin` получил ровно один attack — SRD 5.1 Scimitar (`+4` to hit, `1d6 + 2` slashing); Goblin Shortbow сознательно не packaged (range/reach полей у контракта ещё нет), `goblin.version` остаётся `1` (`PackagedDefinitionSource` не Definition-version-aware). `AttackCommand`/`AttackPayload(target_id)` (§3.17) не изменены — один explicit Attack intent. `AttackHandler` получил новую ветку по уже загруженному факту: actor с `CharacterState` — существующий unarmed путь без изменений; actor без `CharacterState` (раньше безусловный `INVALID_STATE`) — новый Monster-actor путь: actor `MonsterDefinition` lookup, ровно один supported attack обязателен (`len(attacks) != 1` → `ACTION_NOT_AVAILABLE`, не `INVALID_STATE`, без silent `attacks[0]`, без dice/metadata вызовов), target обязан иметь `CharacterState` (`INVALID_TARGET` иначе), target AC — неизменённый `unarmored_character_armor_class`, `RollMode` — неизменённый `attack_roll_mode_from_conditions` (Poisoned reuse). Новый `resolve_monster_attack`/`MonsterAttackResult` — отдельный от `AttackResult` concrete type: flat `attack_bonus` не раскладывается в fake `ability`/`ability_modifier`/`proficiency_bonus`. Новый `MonsterAttackResolved` V1 (`targetId, actionId, roll, attackBonus, total, targetArmorClass, hit, criticalHit`) — отдельный Event type, не `AttackResolved` V2 (field set концептуально другой, не просто roll-representation change); `AttackResolved` V1 не тронут, damage-поля/`previousHp`/`newHp` в новом Event отсутствуют — Damage resolution остаётся DEF-0013. `AttackHandler.handle()` возвращает `ResolutionResult[AttackResult | MonsterAttackResult]`. G8 не добавлял `CombatState`/active-turn или `current_hp` eligibility; production active-turn проверка всё ещё отсутствует, но её current contract теперь определён §3.28 и ожидает TSK-0006, тогда как zero-HP eligibility остаётся открытым. Shared natural-outcome helper не извлекался (два concrete consumers — недостаточно evidence). Срез устанавливает Character-target часть собственного scope DEF-0011 как выбранную "relevant part of DEF-0011" и отдельно даёт concrete Monster damage source — первые два из трёх собственных prerequisites DEF-0013 (relevant part of DEF-0011, concrete damage source, Event ordering/causation design); DEF-0011 сам не называет "concrete damage source" своим prerequisite — это отдельный prerequisite именно DEF-0013. Weapon attacks и сама DEF-0013 не реализованы; оба DEF остаются `Deferred` для оставшегося scope. Срез также закрывает DEF-0002 (Monster proficiency sources) как `Done` на foundation уровне: authoritative typed `attack_bonus` — первый concrete Monster-consumer источник; Monster Saving Throw/Skill proficiency и generic Monster proficiency formula этим не реализованы и остаются в DEF-0004.
 
-* G9 (§3.27, DEC-0042) реализует narrow Monster Scimitar consequence path через Application, сохраняя Attack Resolution, source Damage Resolution и HP application отдельными стадиями. Immutable `MonsterAttackDamageResult` и pure `resolve_monster_attack_damage` используют исходное `NdM` для normal hit, удваивают только count до `(2 * N)dM` для critical, применяют modifier один раз и допускают `amount=0`; source-agnostic `resolve_damage_amount(target, amount >= 1)` выполняет только positive HP arithmetic. `AttackHandler` сначала завершает applicable pure computation, затем выделяет ровно 1/2/3 Event metadata и выдаёт ordered chain `MonsterAttackResolved → optional MonsterAttackDamageResolved → optional DamageApplied`, сохраняя исходные `commandId`/`campaignId`/`actorId`. Miss не катает damage и не сохраняет; zero source amount создаёт два Events без `DamageResult`/State mutation/save; positive amount применяет неизменённый `DamageApplied` V1 через concrete applier, заменяет только target Creature через §3.23 helper, сохраняет `CombatState`, вызывает один `StateStore.save()` и возвращает success только после него. Positive damage при target HP 0 остаётся валидным `0 → 0` применением с одним save. Outcome остаётся `MonsterAttackResult`; Character unarmed branch read-only и не изменён. Group 4 добавил real-adapter/filesystem integration evidence (полный production round-trip через реальные `FilesystemStateStore`/`PackagedDefinitionSource`/`PythonDiceEngine`), подтвердив fresh-reload HP change, неизменённый `CombatState` и ровно один save — этим G9's собственный narrow scope закрыт. Broad Weapon attack/damage scope остаётся открытым, поэтому DEF-0013 и Roadmap broad Attack consequences item остаются incomplete/`Deferred` для этой более широкой части.
-* Minimal active-turn eligibility (§3.28, DEC-0043): contract defined, production implementation pending in TSK-0006. После actor-first `snapshot.creatures` lookup отсутствие Combat не блокирует текущие `AttackCommand` paths и не запускает Combat автоматически; при существующем Combat требуется `actor_id == combat.active_creature_id`, иначе `ACTION_NOT_AVAILABLE` до Character/Monster routing, Definition lookup, dice, metadata, Events, State mutation и save. Правило относится только к текущим Character-unarmed и Monster-Scimitar paths и не предрешает Reactions/Opportunity Attacks; action resources и generic eligibility framework не введены.
+Реализованные и pending Phase 2/3 contracts — см. «Индекс реализованных
+контрактов» ниже; точная история и rationale каждого среза — в
+`docs/ARCHITECTURE.md` и `docs/DECISIONS.md`, не здесь.
 
 Актуальный scope, порядок и статус фаз/capabilities — в `docs/ROADMAP.md`;
 конкретные `Current`/`Next` задачи — в `docs/TASK.md`. При расхождении с этим
@@ -111,44 +104,46 @@ Definition immutable: во время сессии не мутируется, п
 
 ---
 
-## Реализованные контракты Phase 1
+## Индекс реализованных контрактов
 
-Всё перечисленное реализовано, покрыто тестами и имеет канонический раздел. Наборы полей **полные, минимальные и закрытые**: не добавляй поля, не переименовывай, не заводи синонимы.
+Всё перечисленное реализовано и покрыто тестами. Здесь только имя и раздел;
+состав полей, Envelope-схемы и точное поведение — в указанном разделе
+`docs/ARCHITECTURE.md`, не здесь. Наборы полей перечисленных Definitions/
+State/Value Objects **полные, минимальные и закрытые**: не добавляй поля, не
+переименовывай, не заводи синонимы.
 
-| Контракт | Слой | Раздел |
-| --- | --- | --- |
-| `AbilityScores` | Domain / value object | §1.2.1 |
-| `Definition` (база) | Domain / definitions | §3.1 |
-| `ItemDefinition`, `WeaponDefinition`, `MonsterDefinition` | Domain / definitions | §3.1.1 |
-| `DamageType` | Domain / value object | §3.1.1 |
-| `CreatureState` | Domain / state | §3.2.1 |
-| `CampaignState` | Domain / state | §3.2.2 |
-| `StateSnapshot` | Domain / state | §3.2.3 |
-| `DiceEngine`, `DiceRoll` | Domain / service, value object | §1.7.1 |
-| `GameEvent` | Domain / events | §3.4, §8.1, §8.2 |
-| `StateStore` | Domain port | §3.2.3, §12.9 |
-| `EventSerializer` | Infrastructure | §12.10 |
-| `StateSerializer`, `FilesystemStateStore` | Infrastructure | §12.9 |
+| Контракт | Раздел |
+| --- | --- |
+| `AbilityScores` | §1.2.1 |
+| `Definition` (база), `ItemDefinition`, `WeaponDefinition`, `MonsterDefinition` | §3.1, §3.1.1 |
+| `DamageType` | §3.1.1 |
+| `CreatureState`, `CampaignState`, `StateSnapshot`, `CharacterState` | §3.2.1–§3.2.4 |
+| `DiceEngine`, `DiceRoll` | §1.7.1 |
+| `GameEvent` | §3.4, §8.1, §8.2 |
+| `StateStore`, `EventSerializer`, `StateSerializer`, `FilesystemStateStore` | §3.2.3, §12.9, §12.10 |
+| `ResolutionResult[T]`, `ErrorCode`/`EngineError` | §3.5, §3.9 |
+| Ability Check vertical slice | §3.3, §3.10 |
+| Proficiency foundation | §3.11 |
+| Minimal d20 semantics (`RollMode`, `D20Roll`) | §3.12 |
+| Character Saving Throw vertical slice | §3.13 |
+| Character Skill Check vertical slice | §3.14 |
+| Armor Class (minimal) | §3.15 |
+| Definition Access foundation (G4a, `DefinitionSource`) | §3.16 |
+| Character unarmed Attack Roll → Monster vertical slice | §3.17 |
+| State Mutation Foundation (G5) | §3.18 |
+| Damage → HP mutation slice (G6A) | §3.19 |
+| Healing → HP mutation slice (G6B) | §3.20 |
+| Condition State foundation (G6C1) | §3.21 |
+| Minimal Poisoned behavior (G6C2) | §3.22 |
+| Post-G6C abstraction review / `replace_creature_in_snapshot` | §3.23 |
+| Phase 2 Closure Contract | §3.24 |
+| Combat Initiative/Turn Order vertical slice (G7) | §3.25 |
+| Monster attack → Character vertical slice (G8) | §3.26 |
+| Monster Attack consequence → Damage → HP vertical slice (G9) | §3.27 |
 
----
-
-## Реализованные контракты Phase 2
-
-* `ResolutionResult[T]` (§3.5). `success` означает успех обработки команды и разрешения правил, **не** игровой исход: проваленная проверка — это `success is True` и `outcome.succeeded is False`. Полей `state_changes` и generic top-level `rolls` нет; placeholder-абстракция `StateChange` не вводится.
-* `ErrorCode` и `EngineError` (§3.9). Минимальное structured representation ожидаемых ошибок без exception hierarchy.
-* Ability Check vertical slice (§3.3, §3.10): `Ability`, `AbilityCheckCommand`, `AbilityCheckPayload`, `AbilityCheckResult` и `resolve_ability_check`. Result использует `D20Roll`; total вычисляется из `roll.selected`. `AbilityCheckResolvedPayloadV1`/V1 builder сохранены как legacy NORMAL-only schema, а `AbilityCheckResolvedPayloadV2`/V2 builder являются current writer. Shared `ability_modifier` живёт в `domain.rules.ability`, а прежний import path через `domain.rules.ability_check` сохранён; правило `(score - 10) // 2` не хранится ни в `AbilityScores`, ни в State.
-* Character Saving Throw vertical slice (§3.13): generic `SavingThrowCommand` / `SavingThrowResolved` V1 и character-specific `resolve_character_saving_throw`. Resolver получает matching `CreatureState` + `CharacterState`, использует shared `ability_modifier`, условную save proficiency membership и derived character bonus; `SavingThrowResult`/Event хранят contributions раздельно. Missing Creature = `ENTITY_NOT_FOUND`, missing Character projection = `INVALID_STATE`; monster и Death Saving Throws остаются deferred.
-* Character Skill Check vertical slice (§3.14): explicit `SkillCheckCommand(skill, ability, dc)`, character-specific `resolve_character_skill_check`, `SkillCheckResult` и `SkillCheckResolved` V1. Skill определяет proficiency membership, actual Ability определяет score/modifier; alternative combinations вроде Strength (Intimidation) не нормализуются. Missing Creature = `ENTITY_NOT_FOUND`, missing Character projection = `INVALID_STATE`; monster Skill Checks, Expertise и half proficiency остаются deferred.
-* Character unarmed Attack Roll → Monster vertical slice (§3.17, DEC-0031): target-only `AttackCommand`, matching actor `CreatureState` + `CharacterState`, target `CreatureState`, Strength modifier, always-applied derived Character proficiency и typed `MonsterDefinition.armor_class` lookup через Campaign ruleset identity/`DefinitionSource`. Attack owns natural 1 automatic miss and natural 20 automatic hit/`critical_hit` semantics over `D20Roll.selected`. `AttackResult` и единый `AttackResolved` V1 записывают фактически использованный target AC; slice read-only, без damage/HP/Event persistence. Roadmap Attack-roll foundation complete; broader scope `PARTIAL` и связан с P2-ATTACK-ROLLS/DEF continuations.
-* Application orchestration (§2.2, §§3.10, 3.13–3.14, 3.17): `EventMetadata`, `EventMetadataProvider`, explicit `AbilityCheckHandler`, `SavingThrowHandler`, `SkillCheckHandler` и `AttackHandler`. Read-only handlers загружают State, находят нужные projections, вызывают concrete resolver, получают metadata через injected provider и собирают Event/`ResolutionResult`; Attack также выполняет typed target Definition lookup. Они не читают clock, не генерируют ID, не мутируют State и не вызывают `StateStore.save()`.
-* Proficiency foundation (§3.11): `character_proficiency_bonus(level)` — pure derived character-level rule. Authoritative input хранится в `CharacterState.total_level`, effective Saving Throw и Skill membership — в explicit `saving_throw_proficiencies: frozenset[Ability]` и `skill_proficiencies: frozenset[Skill]`. Bonus не хранится; raw Ability Check не изменён, а Expertise, half proficiency, monster/other proficiency и class progression остаются deferred.
-* Skill/Character State foundation (§1.2.2, §3.2.3, §3.2.4, §12.9): `Skill` — closed 18-value identity-only `StrEnum` без fixed Ability mapping. Отдельный `CharacterState` является второй проекцией той же runtime character entity и использует ID существующего `CreatureState`; Character schema (`skillProficiencies` mandatory) не менялась с V3 и сохраняется в current V5 writer, strict legacy V1 reader создаёт `characters=()`, а V2 reader создаёт empty Skill membership.
-* Minimal d20 semantics (§3.12): closed `RollMode`, immutable `D20Roll` и concrete `resolve_d20_roll`, используемые Ability Check, Character Saving Throw, Character Skill Check и Character unarmed Attack Roll. NORMAL использует один independent `"1d20"` call, ADVANTAGE/DISADVANTAGE — два; `"2d20"` не используется. Primitive сам не интерпретирует natural 1/20; implemented Attack владеет automatic miss/hit/critical policy. Effective mode не является Command/API/AI input.
-* Definition Access foundation, G4a (§3.16, §12.26): `DefinitionSource` (`domain/services/definitions.py`) — generic read-only Domain port `get_definition(*, ruleset_id, ruleset_version, definition_id, expected_type) -> TDefinition`, никогда не возвращает `None`. `DefinitionNotFoundError`/`DefinitionTypeMismatchError` — стабильные semantic lookup failures; `AttackHandler` является первым concrete Application consumer и локально maps их в `DEFINITION_NOT_FOUND` / `INVALID_STATE, field="definition_id"`. Они остаются отдельными от Infrastructure `InvalidPackagedDefinitionError`. Production adapter `PackagedDefinitionSource` (`infrastructure/definitions/packaged.py`) читает единственный authoritative packaged dataset `src/dnd_engine/resources/rulesets/` через `importlib.resources`. `MonsterDefinition.armor_class: int` — immutable baseline Monster AC (§3.1.1). Referential validation остаётся lazy: State loading не dereference-ит `definition_id`.
-* Armor Class (§3.15): `unarmored_character_armor_class(creature)` — pure Domain rule `10 + ability_modifier(creature.ability_scores.dexterity)`; `CharacterState`, proficiency, RNG, persistence и Event не участвуют. Baseline Monster AC читается напрямую из `MonsterDefinition.armor_class` после typed G4a lookup по Campaign ruleset identity и `CreatureState.definition_id`; отдельная pass-through Monster AC rule не введена. Effective AC не сохраняется в State; minimal Attack (§3.17) читает baseline Monster AC как audit input, а Equipment/runtime modifiers остаются deferred.
-* Weapon damage dice foundation, G4b (§1.7.1, §3.1.1, §12.26, DEC-0030): shared pure Domain `parse_ndm(expression: str) -> tuple[int, int]` (`domain/dice.py`) заменяет private parser внутри `PythonDiceEngine` и одновременно является intrinsic `__post_init__` invariant `WeaponDefinition.damage_dice`; RNG execution и `DiceRoll` остаются Infrastructure/Domain-value-object concerns соответственно, и `parse_ndm` о них не знает. `damage_dice` остаётся plain `str`, новых полей нет. Единственный production weapon Definition — packaged `dagger` (`1d4` piercing; `finesse`/`light`/`thrown`), decoded существующим `_decode_weapon()` без изменения decoder dispatch. Dagger/weapon attacks, weapon-derived Damage / Attack → Damage orchestration, broad HP/combat mechanics и generic dice DSL остаются deferred.
-* Minimal Damage → HP mutation vertical slice, G6A (§3.19, DEC-0033): первый production authoritative state-mutating consumer §3.18. Direct already-resolved `ApplyDamageCommand(target_id, amount: int >= 1)` → pure `resolve_damage`/`DamageResult` (`new_hp = max(0, previous_hp - amount)`) → concrete `DamageApplied` V1 Event (`targetId`, `amount`, `previousHp`, `newHp`) → concrete `apply_damage_applied_v1` Creature applier (проецирует уже готовый `newHp`, clamp не пересчитывает) → `DamageHandler` строит replacement `StateSnapshot` через §3.23 helper и вызывает `StateStore.save()` ровно один раз на успешном пути. Меняется только `CreatureState.current_hp`; `id`/`definition_id`/`ability_scores`/`max_hp` сохраняются. `0 → 0` — валидный no-op результат без duplicate-detection guarantee. Attack → Damage, weapon roll, критический урон, `DamageType` mechanics, resistance/immunity/vulnerability, temporary HP, death/unconscious и conditions остаются deferred; Creature HP и direct Damage foundations complete, broader scope `PARTIAL`.
-* Minimal Healing → HP mutation vertical slice, G6B (§3.20, DEC-0034): второй production authoritative state-mutating consumer §3.18. Direct already-resolved source-agnostic `ApplyHealingCommand(target_id, amount: int >= 1)` → pure `resolve_healing`/`HealingResult` (`new_hp = min(max_hp, previous_hp + amount)`) → concrete `HealingApplied` V1 Event (`targetId`, `amount`, `previousHp`, `maxHp`, `newHp`) → concrete `apply_healing_applied_v1` Creature applier (проверяет target/previous/max correlation и проецирует готовый `newHp`) → `HealingHandler` строит replacement snapshot через §3.23 helper и сохраняет его до success. Healing from zero разрешён; full-HP positive Healing — успешный no-op, который всё равно создаёт Event и вызывает один `save()`, без replay/idempotency guarantee. Spells/items/resources, temporary HP, life-state recovery и conditions остаются deferred; direct Healing foundation complete, broader scope `PARTIAL`. Post-G6B review был `KEEP CONCRETE`; §3.23 supersedes только snapshot-helper verdict после появления двух Condition mutation handlers.
+Canonical контракты, чья production implementation ещё не сделана,
+отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation
+status из одного факта присутствия в Architecture.
 
 ---
 
@@ -183,31 +178,14 @@ generic transaction coordinator
 ```
 
 Канонический контракт применения Events к State — loaded snapshot как
-read-only input, replacement/copy-on-write вместо in-place мутации,
-transition-specific mutation scope, save ordering, save-failure semantics и
-exact MVP atomicity boundary — зафиксирован в §3.18. Concrete Event appliers
-и mutating handlers реализованы для Damage → HP (G6A, §3.19) и Healing → HP
-(G6B, §3.20). Они не образуют generic `EventApplierRegistry`/reducer:
-post-G6B review сравнил shared `current_hp` projection, Creature/snapshot
-replacement, stale-state checks и generic orchestration candidates и сохранил
-verdict `KEEP CONCRETE`. Concrete Condition appliers (`apply_condition_applied_v1`/
-`apply_condition_removed_v1`, G6C1 §3.21, DEC-0036) следуют тому же concrete
-integrity-check shape, и для них также реализованы concrete mutating handlers
-`ApplyConditionHandler`/`RemoveConditionHandler` (G6C1 Group 3) с тем же
-replacement-snapshot/`save()`-exactly-once orchestration, что и у `DamageHandler`/
-`HealingHandler`. Post-G6C review (§3.23, DEC-0038) извлёк только общий
-Application helper `replace_creature_in_snapshot`: он заменяет ровно одного
-existing Creature по stable ID, сохраняет tuple order и identity всех
-остальных `StateSnapshot` projections и не мутирует loaded snapshot. Остальная
-orchestration
-и все concrete Event appliers не объединены. Первый Phase 3 Combat consumer,
-G7 (§3.25, DEC-0040), добавил ещё два concrete mutating handler'а
-(`StartCombatHandler`/`AdvanceTurnHandler`) на том же §3.18 контракте; они
-используют `dataclasses.replace(snapshot, combat=...)` напрямую, а не
-`replace_creature_in_snapshot` (single optional field, не tuple-by-ID lookup),
-и не потребовали новой abstraction. EventStore,
-Event persistence/runtime-append в JSONL, serialized Event type/version dispatch
-и replay остаются отдельно deferred (§12.10, §3.18).
+read-only input, replacement/copy-on-write вместо in-place мутации, save
+ordering и exact MVP atomicity boundary — зафиксирован в §3.18. Единственная
+извлечённая generic abstraction — narrow Application helper
+`replace_creature_in_snapshot` (§3.23): заменяет ровно одного existing
+Creature по stable ID и не мутирует loaded snapshot. Остальная orchestration и
+все concrete Event appliers остаются narrow, не объединённые в
+`EventApplierRegistry`/reducer. EventStore, durable Event persistence/append и
+replay остаются отдельно deferred (§12.10, §3.18).
 
 Первый vertical slice Phase 2 использует explicit Application handler и прямой
 вызов конкретного Domain resolver. Общая orchestration abstraction появляется
@@ -251,7 +229,7 @@ Created → Validating → Rejected | Accepted → Resolving → Completed | Fai
 
 Других словарей состояний нет. `Received`, `Valid`, `Invalid`, `Executing` отвергнуты (DEC-0015).
 
-Event immutable: после записи не редактируется и не удаляется. Ошибку исправляет новое компенсирующее событие. Имя события — факт в прошедшем времени: `DamageApplied`, `AttackResolved`, `CreatureMoved`; не `ApplyDamage`, не `DoAttack`. `causedBy` связывает событие с породившим его событием — цепочку не терять.
+Event immutable: опубликованный Event неизменяем. Имя события — факт в прошедшем времени: `DamageApplied`, `AttackResolved`, `CreatureMoved`; не `ApplyDamage`, не `DoAttack`. `causedBy` связывает событие с породившим его событием — цепочку не терять.
 
 ---
 
@@ -296,7 +274,7 @@ Event immutable: после записи не редактируется и не
 * Чтение и запись — только в Infrastructure, через Serializer или Repository. Serializer — чистая граница без ввода-вывода.
 * Python `snake_case` ↔ JSON `camelCase`. Границу пересекает только сериализатор.
 * **JSON** — Definitions, state snapshots, config, AI context, API DTO. **JSONL** — append-only потоки; одна строка = один JSON-объект.
-* Current `state.json` содержит целочисленный `schemaVersion = 5`; writer выпускает только V5, reader принимает exact V5 и legacy V1/V2/V3/V4. V1 мигрирует в `characters=()`, V2 — в empty `skill_proficiencies`, V1–V3 — в empty `CreatureState.conditions`, V1–V4 — в `StateSnapshot.combat = None` (§3.25). Это версия схемы, а не ревизия State.
+* `state.json` несёт целочисленный `schemaVersion`; writer пишет ровно одну current version, reader строго принимает current version и явно перечисленные legacy versions read-only. Точная current version и migration table по каждой legacy version — §12.13 в `docs/ARCHITECTURE.md`, не здесь.
 * **Десериализация строгая:** все поля обязательны; неизвестные поля, значения по умолчанию и приведение типов запрещены. Доменные инварианты проверяются при разборе.
 * Untrusted boundary проверяет shape, runtime types, schema/version, форматы и ссылки при dereference. Domain Value Objects и State/Definitions сами защищают intrinsic/semantic invariants; transport validation не копируется в каждый dataclass.
 * Domain constructors не выполняют coercion (`"1" → 1`, `list → tuple`, `string → enum`); normalization принадлежит boundary mapper/loader.
@@ -377,7 +355,7 @@ piercing  poison  psychic  radiant  slashing  thunder
 * Закончив правки, всегда собирай `review.patch` в корне репозитория и указывай путь в отчёте. Файл под `.gitignore`; коммитить его нельзя.
 * PR создаётся как **draft**, если явно не запрошено иное. Merge и auto-merge — только по явному разрешению.
 * При авторизованном создании PR: если `gh` отсутствует — остановись и сообщи; commit и push это не блокирует. Не открывай PR через REST API и не читай хранилища учётных данных.
-* Форматтер, линтер и type checker в репозитории **не настроены**. Не приноси Ruff, Black, mypy или их аналоги. Если проверка требуется — сообщи `not configured`.
+* Форматтер и линтер в репозитории **не настроены** — не приноси Ruff, Black или их аналоги, если проверка требуется — сообщи `not configured`. `mypy` настроен через `pyproject.toml` (`[tool.mypy]`, `files = ["src/dnd_engine"]`) и должен запускаться для `src/dnd_engine`. Не вводи дополнительный форматтер, линтер, type checker или иной tooling только ради прохождения конкретной задачи.
 * Целевой рантайм — Python 3.12+. В отчёте указывай фактическую версию, на которой гонялись тесты.
 
 Полная процедура: см. `AGENTS.md`, раздел «Change authorisation and diff review».

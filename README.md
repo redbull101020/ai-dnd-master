@@ -14,7 +14,7 @@
 
 ## Документация
 
-Этот файл — **обзорный**. Он объясняет идею и общую архитектуру, но не содержит схем и контрактов.
+Этот файл — **обзорный**: объясняет идею, общую архитектуру и содержит высокоуровневые концептуальные схемы, но не является источником точных контрактов. Канонические схемы данных, Envelope-контракты, таблицы владения State, наборы полей, версии и точное поведение системы — в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 | Документ | Содержание |
 | --- | --- |
@@ -107,32 +107,16 @@ LLM отвечает за понимание намерения, поведен�
 ### 4. Events являются историей изменений
 
 По каноническому контракту состояние меняется только через события. Событие —
-факт, который уже произошёл; оно неизменяемо и не удаляется. Сейчас реализованы
-модель `GameEvent`, сериализация Event и read-only Ability Check, Character
-Saving Throw, Character Skill Check и narrow Character unarmed Attack Roll →
-Monster Events. Attack slice фиксирует hit/miss/critical в одном
-`AttackResolved` V1, читает baseline Monster AC через typed Definition access
-и не применяет damage или HP mutation. Отдельно реализованы minimal
-mutating slices: `DamageApplied` V1 (§3.19) и `HealingApplied` V1 (§3.20)
-применяются к `CreatureState.current_hp`, а `ConditionApplied`/
-`ConditionRemoved` V1 (§3.21) — к `CreatureState.conditions`, каждый через
-свой concrete applier. Эти четыре Creature-mutation handlers используют узкий
-§3.23 Application helper `replace_creature_in_snapshot` для immutable
-replacement одного Creature в snapshot. Отдельно, первый Phase 3 Combat
-consumer, G7 (§3.25), добавляет ещё два mutating handler'а —
-`StartCombatHandler`/`AdvanceTurnHandler` (`CombatStarted`/`TurnAdvanced` V1,
-применяются к optional `StateSnapshot.combat`) — которые заменяют snapshot
-напрямую через `dataclasses.replace(snapshot, combat=...)`, а не через
-§3.23 helper (single optional field, а не lookup по многим Creature). Все
-шесть handlers вызывают `StateStore.save()` ровно один раз на успешном пути.
-G9 (§3.27) добавляет седьмой concrete mutating consumer: positive-damage
-Monster Scimitar path применяет `DamageApplied` V1 через тот же §3.23 helper;
-его miss и zero-source-damage ветви остаются read-only без save.
-Это concrete Event → State projections, а не общий Event Log/replay
-subsystem. Durable ordered Event history, `EventStore`, version-aware
-decoding для произвольных Events и полноценный recovery/replay остаются
-deferred; текущий `state.json` по-прежнему нельзя восстановить из persisted
-Event history.
+факт, который уже произошёл; опубликованный Event неизменяем. Событие
+само не выполняет и не инициирует изменение State: authoritative mutation
+оркестрирует Application/Engine слой, который после детерминированного
+разрешения правил применяет уже случившийся факт через соответствующего
+State Owner. Durable ordered Event history, `EventStore` и полноценный replay
+пока не реализованы: текущее persisted состояние — это snapshot, а не
+результат восстановления из Event log. Точные контракты Command / Result /
+Event и State-transition — в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md);
+актуальный список реализованных Command/Event vertical slices — в
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### 5. Определённость важнее удобства
 
@@ -157,8 +141,8 @@ Infrastructure    infrastructure/   persistence, LLM, RNG, filesystem
 **Domain ни от чего не зависит.** Он не импортирует FastAPI, SQLAlchemy, SDK LLM-провайдеров или реализацию файловой системы. Infrastructure зависит от Domain через интерфейсы, а не наоборот.
 
 Благодаря этому Domain rules и concrete resolvers можно выполнять как обычный
-Python-код, без HTTP и без сети. Общий `GameEngine.execute(...)` API пока не
-реализован и не требуется для первого Phase 2 vertical slice.
+Python-код, без HTTP и без сети. Единый `GameEngine.execute(...)` API пока не
+реализован.
 
 > Подробно: [§2 Слои приложения](docs/ARCHITECTURE.md#2-слои-приложения--application-layers) · [§2.5 Запрещённые зависимости](docs/ARCHITECTURE.md#25-запрещённые-зависимости--forbidden-dependencies)
 
@@ -238,27 +222,22 @@ Event Log  +  Materialized State
 
 **Implemented now:**
 
-* filesystem snapshot persistence в `state.json`;
-* immutable `GameEvent` model;
-* чистый `EventSerializer` без filesystem I/O;
-* concrete `DamageApplied` V1 и `HealingApplied` V1 →
-  `CreatureState.current_hp` Event → State projections, за которыми
-  следует authoritative snapshot persistence через `StateStore.save()`
-  ([§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
-  [§3.20](docs/ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b)).
+* filesystem snapshot persistence в `state.json` через `StateStore` port;
+* immutable `GameEvent` model и чистый `EventSerializer` без filesystem I/O;
+* authoritative Event → State mutation применяется владельцем State и
+  сохраняется через `StateStore.save()`.
 
 **Planned / deferred:**
 
 * runtime `EventStore` и append в канонический потоковый формат
-  `events/events.jsonl` ([§12.10](docs/ARCHITECTURE.md#1210-event-serialization));
+  `events/events.jsonl`;
 * durable Event history и authoritative persistence порядка Events;
-* generic/serialized Event type/version dispatch для произвольных Events;
 * recovery и replay.
 
 Наличие пути `events/events.jsonl` в архитектуре или scaffold не означает, что
 работающий EventStore уже существует. На этапе MVP используется файловая
-система; переход на SQLite/PostgreSQL не должен требовать изменения Domain
-rules, поскольку persistence доступна через `StateStore` port.
+система; Domain rules не зависят от конкретной реализации persistence,
+поскольку она доступна только через `StateStore` port.
 
 ---
 
@@ -301,43 +280,10 @@ python -m mypy src/dnd_engine
 ```
 
 Runnable API появится на соответствующей фазе Roadmap; текущий Core repository
-проверяется установкой пакета и pytest. **Phase 2 — Basic Rules завершена в
-foundation scope** по [§3.24](docs/ARCHITECTURE.md#324-phase-2-closure-contract):
-реализованы reusable deterministic foundations для Ability Checks,
-Proficiency, Character Saving Throws/Skill Checks, Armor Class, Attack Rolls,
-State mutation, Creature HP, direct Damage/Healing и Condition State/Poisoned.
-Отдельные state-mutating slices включают direct `Damage → current_hp`
-(`ApplyDamageCommand` → `DamageApplied` V1, [§3.19](docs/ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a))
-и direct `Healing → current_hp` (`ApplyHealingCommand` → `HealingApplied` V1,
-[§3.20](docs/ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b));
-а также Apply/Remove Condition membership (§3.21). Все четыре concrete
-Creature-mutation handlers строят replacement snapshot через узкий §3.23
-helper и вызывают `StateStore.save()` до успешного результата. Более широкий
-D&D scope остаётся `PARTIAL` и связан с [`docs/DEFERRED.md`](docs/DEFERRED.md);
-он не переоткрывает Phase 2. Текущий этап — **Phase 3 Combat**, где первый
-concrete consumer, G7 (§3.25) — dice-rolled individual-participant Initiative
-(`StartCombatCommand` → `CombatStarted` V1, Poisoned-aware через существующую
-Ability Check Condition policy) и Turn Order advancement (`AdvanceTurnCommand`
-→ `TurnAdvanced` V1, gated по actor eligibility) поверх нового `CombatState`
-(State schema V5) — уже реализован. Второй concrete consumer, G8 (§3.26) —
-первый Monster-attacker / Character-target Attack: узкий
-`MonsterAttackDefinition` (Goblin Scimitar packaged), новый
-`resolve_monster_attack`/`MonsterAttackResult`/`MonsterAttackResolved` V1,
-достигаемые через неизменённый `AttackCommand`/`AttackHandler` (новая ветка
-по уже загруженному факту "есть ли у actor `CharacterState`"), с
-переиспользованием Poisoned Condition policy и `unarmored_character_armor_class`.
-Weapon attacks (Equipment/Inventory ownership, weapon proficiency, Finesse
-choice), broad Attack consequences (DEF-0013), zero-HP legality,
-`CombatEnded` и другие связанные механики продолжатся по Roadmap. G9 Groups
-2–3 (§3.27, DEC-0042) реализуют narrow Monster Scimitar consequence path:
-`MonsterAttackDamageResult`, normal/critical damage-dice semantics, zero
-source damage и exact ordered 1/2/3 Event branches. При positive source amount
-`AttackHandler` применяет неизменённый `DamageApplied` V1 к Character HP,
-строит replacement snapshot с сохранением `CombatState` и вызывает ровно один
-`StateStore.save()` до success. Character unarmed branch остаётся read-only;
-Group 4 real-adapter/filesystem proof подтверждён полным production
-round-trip (§3.27, DEC-0042), а broad Weapon attack/damage scope ещё не
-завершён.
+проверяется установкой пакета и pytest. **Phase 2 — Basic Rules** завершена в
+foundation scope, текущий этап — **Phase 3 — Combat**. Детальный статус
+реализованных и открытых capabilities — в [`docs/ROADMAP.md`](docs/ROADMAP.md);
+конкретная исполнимая `Current`/`Next` задача — в [`docs/TASK.md`](docs/TASK.md).
 
 ---
 
