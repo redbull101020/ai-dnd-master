@@ -1131,7 +1131,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0006
+- **Current:** TSK-0007
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0010
@@ -1145,119 +1145,15 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | --- | --- | --- | --- | --- | --- | --- |
 | `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
-| `TSK-0006` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Turn/action economy | Implement active-turn Attack gating |
-| `TSK-0007` | `Blocked` | `P1` | `M` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement zero-HP Attack eligibility |
+| `TSK-0007` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement zero-HP Attack eligibility |
 
 ---
 
 # Open task details
 
-## TSK-0006 — Implement active-turn Attack gating
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / Turn/action economy
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Turn/action economy
-- `ARCHITECTURE.md` §§3.25, 3.26, 3.27, 3.28
-- `DEC-0040`
-- `DEC-0043`
-
-**Depends on:** `TSK-0002`
-
-**Contract impact:** `none`; implement the already accepted §3.28 contract.
-
-### Goal
-
-Реализовать канонический §3.28 active-turn gate в существующем
-`AttackHandler` для двух уже поддерживаемых `AttackCommand` paths, не изменяя
-их successful Attack/Damage/HP semantics.
-
-### Why now
-
-Контракт уже принят, production gap конкретен, задача не требует нового
-архитектурного решения и разблокирует последующий TSK-0007, чей §3.31
-validation order прямо строится поверх §3.28.
-
-### Scope
-
-- `StateStore.load`;
-- actor `CreatureState` lookup остаётся первым semantic lookup;
-- если actor отсутствует — существующий `ENTITY_NOT_FOUND` остаётся раньше
-  Combat eligibility;
-- если `snapshot.combat is None`, текущие Attack paths продолжаются без
-  active-turn rejection;
-- если Combat существует, требовать:
-  `command.actor_id == snapshot.combat.active_creature_id`;
-- mismatch возвращает:
-  `ACTION_NOT_AVAILABLE`, `entity_id=command.actor_id`, `field=None`,
-  `events=()`;
-- gate расположен после actor lookup, но до Character/Monster routing;
-- rejection происходит до DefinitionSource, DiceEngine,
-  EventMetadataProvider, Events, State mutation и `StateStore.save()`;
-- существующие Character-unarmed и Monster-Scimitar successful paths после
-  успешного gate не менять.
-
-### Out of scope
-
-- action/bonus-action/reaction budgets и resets;
-- zero-HP eligibility — это TSK-0007;
-- Reactions и Opportunity Attacks;
-- movement/position/reach/targeting;
-- Combat start/end lifecycle;
-- новые Command/State/Event/ErrorCode/schema;
-- generic `ActionEligibilityService`;
-- generic validation pipeline;
-- shared helper только из-за похожей проверки в `AdvanceTurnHandler`;
-- unrelated refactoring.
-
-### Acceptance criteria
-
-- missing actor precedence;
-- no-Combat behavior unchanged;
-- active actor inside Combat continues normally;
-- inactive/absent-from-order actor inside Combat получает exact §3.28
-  failure;
-- rejection выполняется до routing/Definition/dice/metadata/Event/save side
-  effects;
-- Character и Monster current Attack paths используют одну и ту же §3.28
-  boundary;
-- successful existing Attack/Damage/HP behavior остаётся неизменным;
-- никакой generic eligibility abstraction не появляется.
-
-### Verification
-
-- targeted `AttackHandler` application tests для no Combat / active /
-  inactive actor;
-- call-order/side-effect assertions;
-- existing Character Attack regressions;
-- existing Monster Attack/Damage/HP regressions.
-
-### Expected touchpoints
-
-```text
-src/dnd_engine/application/handlers/attack.py
-tests/application/test_attack_handler.py
-docs/ARCHITECTURE.md
-docs/ROADMAP.md
-docs/TASK.md
-docs/DEVELOPMENT_LOG.md
-CLAUDE.md
-```
-
----
-
 ## TSK-0007 — Implement zero-HP Attack eligibility
 
-**Status:** `Blocked`
+**Status:** `Current`
 
 **Priority:** `P1`
 
@@ -1357,14 +1253,6 @@ TSK-0003 уже определил canonical contract. Production implementation
 - side-effect/call-order tests;
 - existing Attack/Monster consequence regressions.
 
-### Blocker
-
-Blocker:
-`TSK-0006 has not yet implemented the canonical §3.28 active-turn gate in AttackHandler.`
-
-Unblock condition:
-`TSK-0006 is Done on main and AttackHandler applies §3.28 after actor lookup and before Character/Monster routing.`
-
 ---
 
 # Recently completed
@@ -1376,6 +1264,7 @@ Unblock condition:
 | `TSK-0008` | Define minimal melee targeting and reach for the first Character Dagger attack | PR #70 / merge commit `24da875` |
 | `TSK-0009` | Deduplicate README/CLAUDE and remove redundant current data-flow projection | PR #71 / merge commit `e99d0dc` |
 | `TSK-0003` | Define zero-HP Attack eligibility by creature category | PR #72 / merge commit `7ac97f6` |
+| `TSK-0006` | Implement active-turn Attack gating | PR #75 / merge commit `d590056` |
 
 ---
 

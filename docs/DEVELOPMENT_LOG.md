@@ -4594,3 +4594,39 @@ contracts.
   review; `docs/TASK.md` remains unchanged until the accepted result lands
   on `main` and mandatory Task Closure (§18) runs. This entry does not mark
   `TSK-0006` `Done` and does not select `TSK-0007` as `Current`.
+
+## 2026-09-02 — Task Closure for TSK-0006 (PR #75 / merge commit d590056)
+
+- PR #75 (branch `claude/tsk-0006-active-turn-gating`) merged into `main` at
+  commit `d590056`, confirmed by `git fetch origin` and
+  `git merge-base --is-ancestor` before this closure began. The accepted
+  result — the §3.28 active-turn gate in `AttackHandler`, its targeted test
+  coverage, and the Architecture/Roadmap/CLAUDE reconciliation — is now on
+  `main`.
+- `docs/TASK.md` reconciled per §18: `TSK-0006` marked `Done` and moved to
+  `Recently completed` (evidence: PR #75 / merge commit `d590056`); its full
+  `Open task details` entry removed; its row removed from the `Open task
+  index` (Done tasks are not tracked there).
+- `TSK-0007` (Implement zero-HP Attack eligibility) selected as the next
+  `Current`: both its `Depends on` entries (`TSK-0003`, `TSK-0006`) are now
+  `Done` on `main`, no other blocker applies, and its existing full detail
+  already satisfies the readiness gate. Its `Blocked` status and `Blocker`/
+  `Unblock condition` fields were removed accordingly.
+- `Current position` updated to `Current: TSK-0007`; `Next` stays `—` (no
+  other `Ready` task exists — `TSK-0004`/`TSK-0005` remain `Backlog` at size
+  `L`); `Hard blockers` stays `—`; `Next free ID` stays `TSK-0010` (no new
+  ID was allocated by this closure); `Last reviewed` stays `2026-09-02`.
+- `docs/ROADMAP.md` and `docs/DEFERRED.md` were inspected and required no
+  further reconciliation: the Phase 3 "Attack active-turn gating
+  foundation" row and current-status wording already landed on `main` as
+  part of the merged PR, and no `DEFERRED.md` entry makes a
+  now-incorrect claim about §3.28 implementation status.
+- No production code was changed by this closure. No new architectural
+  Decision was recorded; DEC-0043 already covers the merged behavior.
+  `docs/DECISIONS.md`, `README.md`, and `CLAUDE.md` were not changed.
+- No new `TSK-*` was created for this closure step itself, per §5/§18.
+- Verification: `tests/architecture/test_documentation_references.py`
+  passes (2 tests); `git diff --check` reports no whitespace errors. The
+  full suite and `mypy` were not rerun for this Markdown-only reconciliation
+  since no Python or contract file changed; both already passed against
+  this exact merged state in the preceding TSK-0006 verification entry.
