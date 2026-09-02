@@ -1294,3 +1294,169 @@ def test_monster_attack_target_without_character_state_is_invalid_target() -> No
     assert dice.roll_calls == []
     assert metadata.next_calls == []
     assert store.save_calls == []
+
+
+# --- Active-turn eligibility gating (§3.28, TSK-0006) -------------------
+
+
+def test_missing_actor_is_rejected_before_active_turn_gate_when_combat_exists() -> None:
+    # Combat is active for an existing participant that is not the command's
+    # actor, and the actor itself has no CreatureState at all. Missing-actor
+    # precedence must still win over Combat eligibility.
+    target = make_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(target.id,),
+        active_index=0,
+    )
+    snapshot = make_snapshot(creatures=(target,), combat=combat)
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ENTITY_NOT_FOUND
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_active_character_inside_combat_reaches_existing_attack_path() -> None:
+    actor = make_actor()
+    target = make_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(actor.id, target.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert calls == ["load", "definition", "dice", "metadata"]
+    assert store.save_calls == []
+    assert result.success is True
+    assert result.outcome is not None
+    assert result.outcome.target_id == "monster_001"
+    assert len(result.events) == 1
+    assert result.events[0].type == "AttackResolved"
+
+
+def test_inactive_character_inside_combat_is_rejected_before_routing() -> None:
+    actor = make_actor()
+    target = make_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(target.id, actor.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_actor_absent_from_combat_order_is_rejected_same_as_inactive() -> None:
+    # A valid StateSnapshot where the actor exists but was never part of
+    # combat.order. §3.28 uses one equality against active_creature_id, so
+    # this must produce the exact same rejection as an inactive-but-present
+    # actor, with no separate membership-specific error.
+    actor = make_actor()
+    target = make_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(target.id,),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_inactive_monster_actor_is_rejected_before_monster_routing() -> None:
+    actor = make_monster_actor()
+    target = make_character_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(target.id, actor.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []

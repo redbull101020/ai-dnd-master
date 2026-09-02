@@ -4492,3 +4492,30 @@ contracts.
   part of this group and remains pending for a later review group.
 - `docs/TASK.md` was not modified; `TSK-0006` was not marked `Done`.
 - No commit, push, or pull request was performed as of this entry.
+
+## 2026-09-02 — TSK-0006 Group 2 — active-turn Attack application coverage
+
+- Group 1's production §3.28 gate already exists on this branch as commit
+  `75bd53f`; Group 2 did not modify `AttackHandler` or any other production
+  code.
+- Added five targeted `AttackHandler` tests to
+  `tests/application/test_attack_handler.py` covering: missing-actor
+  `ENTITY_NOT_FOUND` precedence even when Combat exists; an active Character
+  proceeding through the existing Attack path unchanged; an inactive
+  Character rejected before downstream processing; an existing actor absent
+  from `combat.order` receiving the same active-turn rejection as an
+  inactive-but-present actor, with no separate membership error; and an
+  inactive Monster rejected before Monster Definition lookup/routing side
+  effects.
+- Each rejection test asserts `ACTION_NOT_AVAILABLE`, the actor `entity_id`,
+  `field=None`, `events=()`, and the absence of any
+  DefinitionSource/DiceEngine/EventMetadataProvider/save call; no exact
+  `EngineError.message` was promoted into a test contract.
+- Existing no-Combat regressions and the existing active-Monster
+  Damage/HP/Combat-preservation regression
+  (`test_monster_attack_damage_preserves_existing_combat_state`) were
+  intentionally reused rather than duplicated.
+- Targeted `tests/application/test_attack_handler.py` result: 38 passed.
+- No production code, Architecture, Roadmap, Task, Decision, Deferred, or
+  `CLAUDE.md` changes were made in Group 2; `TSK-0006` remains not `Done`.
+- Group 2 was still uncommitted/unpushed at the time of this entry.
