@@ -4724,9 +4724,9 @@ These stayed open in G7 for later, separately evidenced Phase 3 consumers, per
 §3.6/§3.18's rule against introducing future-phase behaviour ahead of a
 concrete consumer. In particular, G7 did not change `AttackHandler` (§3.17):
 the first concrete Combat actor/action-eligibility consumer in that slice was
-`AdvanceTurnHandler`'s own turn-ownership gate, not Attack. The current
-active-turn contract for the supported `AttackCommand` paths is now defined
-separately in §3.28; its production implementation remains pending.
+`AdvanceTurnHandler`'s own turn-ownership gate, not Attack. The active-turn
+contract for the supported `AttackCommand` paths is defined and implemented
+separately in §3.28 (TSK-0006), not as part of this G7 slice.
 
 Initiative *is* explicitly in scope as a Dexterity check (SRD 5.1), so the
 already-implemented Poisoned Ability Check Condition policy (§3.22) already
@@ -5254,7 +5254,7 @@ Shortbow / any ranged Monster attack, range, reach
 Multiattack, recharge actions, saving-throw actions, area-of-effect actions
 Damage resolution, DamageApplied, HP mutation, causedBy chains (DEF-0013)
 Action selection among multiple supported Monster attacks
-CombatState / active-turn legality for AttackCommand (excluded from G8; the current contract is §3.28 and implementation is pending)
+CombatState / active-turn legality for AttackCommand (excluded from G8; the current contract is §3.28, implemented separately in TSK-0006)
 Zero-HP / combatant eligibility (DEF-0015)
 Equipment/Inventory State, Character weapon proficiency, Weapon attacks (DEF-0011 weapon path)
 ```
@@ -5557,7 +5557,7 @@ Multiattack or generic Monster actions
 resistance / immunity / vulnerability
 temporary HP, unconscious, death, or death saves
 zero-HP action eligibility
-active-turn Attack gating or action economy (excluded from G9; §3.28 now defines only the current AttackCommand gate and implementation is pending)
+active-turn Attack gating or action economy (excluded from G9; §3.28 defines and implements only the current AttackCommand gate, separately from G9; broader action economy remains open)
 generic damage-source abstraction
 generic Event orchestration framework
 EventStore or replay
@@ -5569,10 +5569,11 @@ State schema V6
 
 ### 3.28. Minimal Phase 3 Attack active-turn eligibility
 
-Implementation status: **Canonical contract defined; production implementation
-pending in TSK-0006.** This section defines eligibility only for the currently
-supported `AttackCommand` paths. It does not claim that the gate is already
-present in `AttackHandler`.
+Implementation status: **Implemented (TSK-0006).** `AttackHandler` applies
+this gate for both currently supported `AttackCommand` paths, immediately
+after actor lookup and before Character/Monster routing. This section defines
+eligibility only for those paths; it does not extend to future out-of-turn
+mechanics such as Reactions or Opportunity Attacks.
 
 #### Scope and authoritative inputs
 

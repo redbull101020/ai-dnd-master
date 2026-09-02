@@ -4468,3 +4468,129 @@ contracts.
   `pytest-of-redbu` permission artifact); configured `mypy` passes for
   `src/dnd_engine` (105 source files, no issues); `git diff --check` reports
   no whitespace errors. No formatter or linter is configured.
+
+## 2026-09-02 — TSK-0006 Group 1 — production active-turn Attack gate
+
+- Branch `claude/tsk-0006-active-turn-gating`, based on `origin/main` at
+  `bec4a2c70c40cef697c2919a8069e9557c73c947`.
+- Implemented the canonical §3.28 active-turn eligibility gate in
+  `AttackHandler`, immediately after the existing actor `CreatureState`
+  lookup (which still fails with `ENTITY_NOT_FOUND` before Combat
+  eligibility is evaluated) and before Character/Monster routing. When
+  `snapshot.combat is None`, the existing Attack behavior is unchanged. When
+  Combat exists, the actor must equal `combat.active_creature_id`; a
+  mismatch returns `ACTION_NOT_AVAILABLE` with the actor `entity_id`,
+  `field=None`, and `events=()`, before any `DefinitionSource`, `DiceEngine`,
+  `EventMetadataProvider`, Event creation, State mutation, or
+  `StateStore.save()`.
+- Did not change the Character or Monster path implementations, any Domain
+  resolver, or any Command/State/Event/`ErrorCode`/schema; did not introduce
+  a new helper or a generic eligibility abstraction.
+- Existing `tests/application/test_attack_handler.py` passed unmodified: 33
+  passed.
+- Canonical Architecture/Roadmap implementation-status reconciliation is not
+  part of this group and remains pending for a later review group.
+- `docs/TASK.md` was not modified; `TSK-0006` was not marked `Done`.
+- No commit, push, or pull request was performed as of this entry.
+
+## 2026-09-02 — TSK-0006 Group 2 — active-turn Attack application coverage
+
+- Group 1's production §3.28 gate already exists on this branch as commit
+  `75bd53f`; Group 2 did not modify `AttackHandler` or any other production
+  code.
+- Added five targeted `AttackHandler` tests to
+  `tests/application/test_attack_handler.py` covering: missing-actor
+  `ENTITY_NOT_FOUND` precedence even when Combat exists; an active Character
+  proceeding through the existing Attack path unchanged; an inactive
+  Character rejected before downstream processing; an existing actor absent
+  from `combat.order` receiving the same active-turn rejection as an
+  inactive-but-present actor, with no separate membership error; and an
+  inactive Monster rejected before Monster Definition lookup/routing side
+  effects.
+- Each rejection test asserts `ACTION_NOT_AVAILABLE`, the actor `entity_id`,
+  `field=None`, `events=()`, and the absence of any
+  DefinitionSource/DiceEngine/EventMetadataProvider/save call; no exact
+  `EngineError.message` was promoted into a test contract.
+- Existing no-Combat regressions and the existing active-Monster
+  Damage/HP/Combat-preservation regression
+  (`test_monster_attack_damage_preserves_existing_combat_state`) were
+  intentionally reused rather than duplicated.
+- Targeted `tests/application/test_attack_handler.py` result: 38 passed.
+- No production code, Architecture, Roadmap, Task, Decision, Deferred, or
+  `CLAUDE.md` changes were made in Group 2; `TSK-0006` remains not `Done`.
+- Group 2 was still uncommitted/unpushed at the time of this entry.
+
+## 2026-09-02 — TSK-0006 Group 3 — active-turn implementation-status reconciliation
+
+- Group 1 already implemented the production §3.28 gate and Group 2 already
+  added targeted `AttackHandler` application coverage for it; Group 3
+  changed no production Python and no tests.
+- Reconciled stale current-status statements in `docs/ARCHITECTURE.md`
+  §§3.25–3.28: removed statements that production active-turn integration
+  remained pending, and updated §3.28's own implementation-status line to
+  record the current `AttackHandler` implementation, while preserving the
+  historical facts that G7/G8/G9 themselves did not integrate Attack with
+  Combat.
+- Canonical §3.28 behavior itself was not changed: actor-first precedence,
+  no-Combat behavior, the equality against `active_creature_id`, the
+  existing `ACTION_NOT_AVAILABLE` rejection shape, the side-effect boundary,
+  and the current-`AttackCommand`-paths-only scope all remain exactly as
+  previously accepted.
+- `docs/ROADMAP.md` gained a completed narrow `Attack active-turn gating
+  foundation` item. The broad Turn/action economy/resource item remains
+  open, because action/bonus-action/reaction budgets and per-turn resets
+  are still unimplemented. Zero-HP Attack eligibility remains pending
+  TSK-0007.
+- No new architectural Decision was required: this is implementation/status
+  reconciliation of the already-accepted DEC-0043, not a new decision.
+- `docs/TASK.md`, `docs/DECISIONS.md`, `docs/DEFERRED.md`, `README.md`, and
+  `CLAUDE.md` were not changed in Group 3; `TSK-0006` was not marked `Done`.
+- Documentation reference test result: 2 passed.
+- Group 3 was still uncommitted/unpushed at the time of this entry.
+
+## 2026-09-02 — TSK-0006 — active-turn Attack gate implementation complete on branch
+
+- Implemented the canonical §3.28 active-turn eligibility gate in
+  `AttackHandler`. The gate runs after the existing actor `CreatureState`
+  lookup (a missing actor still fails `ENTITY_NOT_FOUND` first, preserving
+  actor-first precedence) and before Character/Monster routing.
+- Outside Combat (`snapshot.combat is None`), existing Attack behavior is
+  unchanged. Inside Combat, an actor that is inactive or absent from
+  `combat.order` is rejected via the same single equality against
+  `combat.active_creature_id`, returning the existing `ACTION_NOT_AVAILABLE`
+  (`entity_id=actor_id`, `field=None`, `events=()`).
+- Rejection happens before any `DefinitionSource` lookup, `DiceEngine` call,
+  `EventMetadataProvider` call, Event construction, State mutation, or
+  `StateStore.save()`. The Character-unarmed and Monster-Scimitar
+  `AttackCommand` paths share this one boundary; the existing Monster
+  Attack → Damage → HP ordering/mutation/persistence semantics (§3.27) are
+  unchanged.
+- No new Command, State, Event, `ErrorCode`, schema version, or resolver
+  contract was introduced, and no generic eligibility abstraction
+  (`ActionEligibilityService`, validation pipeline, or shared helper with
+  `AdvanceTurnHandler`) was added.
+- Added five targeted `AttackHandler` application tests covering
+  missing-actor precedence, an active Character reaching the existing path
+  unchanged, an inactive Character, an actor absent from `combat.order`, and
+  an inactive Monster rejected before Definition/dice/metadata/save side
+  effects. Existing active-Monster Damage/HP/Combat-preservation coverage
+  was intentionally reused rather than duplicated.
+- Reconciled Architecture §§3.25–3.28 and Roadmap Phase 3 current-status
+  wording to record the implementation, without changing canonical §3.28
+  behavior, the historical G7/G8/G9 scope, the broad Turn/action economy
+  Roadmap row (remains open), or zero-HP Attack eligibility (remains
+  pending TSK-0007). `CLAUDE.md`'s implemented-contract index gained one
+  pointer row: `Attack active-turn eligibility | §3.28`.
+- `docs/DECISIONS.md`, `docs/DEFERRED.md`, `README.md`, and `docs/TASK.md`
+  were not changed. No new architectural Decision was required: this
+  implements the already-accepted DEC-0043.
+- Final verification on branch `claude/tsk-0006-active-turn-gating`: full
+  suite passes (1592 passed; Python 3.12.13, repository `.venv`, run with a
+  writable `--basetemp` outside the default OS temp directory to avoid the
+  previously documented Windows `pytest-of-redbu` permission artifact);
+  configured `mypy` passes for `src/dnd_engine` (105 source files, no
+  issues); `git diff --check` reports no whitespace errors.
+- TSK-0006 implementation is complete on the feature branch and under
+  review; `docs/TASK.md` remains unchanged until the accepted result lands
+  on `main` and mandatory Task Closure (§18) runs. This entry does not mark
+  `TSK-0006` `Done` and does not select `TSK-0007` as `Current`.

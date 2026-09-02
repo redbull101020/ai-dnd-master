@@ -156,8 +156,9 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [x] Turn-order advancement foundation — `AdvanceTurnCommand` → `TurnAdvanced` V1 advances `active_index`/`round`, gated by an actor-eligibility check (§3.25).
 * [x] Monster → Character attack-roll foundation — Goblin Scimitar `MonsterAttackDefinition`, `resolve_monster_attack`, `MonsterAttackResolved` V1, reusing unchanged `AttackCommand`/Poisoned policy/`unarmored_character_armor_class` (§3.26). Also closes [DEF-0002](DEFERRED.md#def-0002) `Done` (typed authoritative Monster attack-bonus source); Monster save/skill proficiency remain separately open (DEF-0004).
 * [x] Monster Scimitar attack-consequence foundation — Attack → Damage → Character HP: `MonsterAttackResult` → `MonsterAttackDamageResult` (normal/critical source damage, zero-source branch) → optional `DamageResult`, emitted as the exact ordered/correlated `MonsterAttackResolved → MonsterAttackDamageResolved → optional DamageApplied` Event chain, applying `DamageApplied` V1 to Character `current_hp` and saving exactly once on positive damage, confirmed through a full real-adapter/filesystem production round trip (§3.27, DEC-0042). Broader Weapon attack/damage/critical scope beyond this one Monster attack remains open below.
+* [x] Attack active-turn gating foundation — `AttackHandler` applies the canonical §3.28/DEC-0043 gate for both currently supported `AttackCommand` paths (Character unarmed and Monster Scimitar), immediately after actor lookup and before Character/Monster routing: outside Combat, existing behavior is unchanged; inside Combat, a non-active actor is rejected with `ACTION_NOT_AVAILABLE` before any Definition/dice/Event/persistence side effects (TSK-0006). Action/bonus-action/reaction resource budgets and broader turn/action economy remain open below.
 * [ ] Initiative: SRD 5.1 grouped initiative for identical GM-controlled creatures — G7 is individual-participant only; a later concrete Monster/control consumer must evidence this before it is added.
-* [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn) — §3.28/DEC-0043 define only the canonical active-turn eligibility boundary for the currently supported `AttackCommand` paths; production `AttackHandler` integration and all action-resource budgets remain open.
+* [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn) — §3.28/DEC-0043 define and now implement the canonical active-turn eligibility boundary for the currently supported `AttackCommand` paths (row above, TSK-0006); action/bonus-action/reaction resource budgets, per-turn resets, and the broader action economy remain open.
 * [ ] Combat lifecycle / `CombatEnded` — G7 has no combat-ending Command or Event.
 * [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — the canonical Character/Monster zero-HP `AttackCommand` eligibility contract is now defined ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046), but production `AttackHandler` integration is still absent and remains TSK-0007; broader lifecycle, targetability, and death-save scope stay open under DEF-0005/DEF-0015.
 * [ ] Movement
@@ -175,14 +176,14 @@ G7 (§3.25) implements the first concrete Phase 3 Combat consumer: an
 individual-participant dice-rolled Initiative order (a Dexterity check, so
 Poisoned disadvantage already applies via the existing Ability Check
 Condition policy) and turn advancement, backed by a new minimal `CombatState`
-(round, order, active combatant) persisted in State schema V5. G7 left Attack
-(§3.17) unchanged, and production `AttackHandler` still does not consult
-`CombatState`; §3.28/DEC-0043 now define the canonical active-turn boundary for
-the currently supported `AttackCommand` paths, with implementation pending in
-TSK-0006. Grouped/identical-creature initiative, broader turn/action economy
-and resources, `CombatEnded`, zero-HP action eligibility, Death Saves,
-movement, reactions, and monster/weapon actions remain open for later concrete
-Combat consumers.
+(round, order, active combatant) persisted in State schema V5. G7 itself left
+Attack (§3.17) unchanged and did not integrate it with `CombatState`; §3.28/
+DEC-0043 separately define the canonical active-turn boundary for the
+currently supported `AttackCommand` paths, and TSK-0006 has now implemented
+that gate in production `AttackHandler` (row above). Grouped/identical-creature
+initiative, broader turn/action economy and resources, `CombatEnded`, zero-HP
+action eligibility, Death Saves, movement, reactions, and monster/weapon
+actions remain open for later concrete Combat consumers.
 
 G8 (§3.26) implements the first concrete Monster-as-attacker and
 Character-as-target Attack consumer. It adds a new narrow
