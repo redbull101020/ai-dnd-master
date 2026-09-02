@@ -231,6 +231,13 @@ The following are not sufficient:
 
 Until the accepted result is present on `main`, the task remains open.
 
+Landing the accepted result on `main` triggers mandatory Task Closure
+(§18): the accepted result existing on `main` is the defining condition for
+`Done`, while Task Closure reconciles the tracker to that fact. A feature
+branch must never assert that a not-yet-merged task is already `Done`. The
+tracker must be reconciled before implementation of the next `Current` task
+begins.
+
 ### 4.6 Superseded
 
 The task is no longer intended to be executed because its scope was:
@@ -286,6 +293,22 @@ on `main`.
 If multiple implementation steps must be completed sequentially before one
 merge, they should normally remain checkpoints inside a single task rather than
 becoming artificial dependent tasks.
+
+Post-merge Task Closure is an operational reconciliation step, not a new
+task lifecycle status and not a separate delivery task:
+
+```text
+Current
+→ implementation/review
+→ accepted result lands on main
+→ Done + mandatory tracker reconciliation
+→ next Current may begin implementation
+```
+
+Task Closure never gets its own `TSK-*`. Do not create administrative
+recursion such as `TSK-0011 — Close TSK-0010` whose only deliverable is
+updating the tracker after a merge; that reconciliation is Task Closure
+itself, performed per §18.
 
 ---
 
@@ -871,9 +894,16 @@ or dependencies.
 13. `Done` means the accepted result exists on `main`.
 14. `TASK.md` must not introduce or silently change canonical behavior.
 
+See §18 for the mandatory post-merge Task Closure reconciliation step.
+
 ---
 
-## 18. Completion and history
+## 18. Task closure and history
+
+Task Closure is a mandatory post-merge reconciliation step, not optional
+bookkeeping. After the accepted result of the current task lands on `main`,
+the Task Queue must be reconciled before implementation of the newly
+selected `Current` task begins. Closure does not receive its own `TSK-*`.
 
 When a task's accepted result lands on `main`:
 
@@ -884,8 +914,22 @@ When a task's accepted result lands on `main`:
    `DEVELOPMENT_LOG.md`;
 5. reconcile Roadmap/Deferred status if the delivered work changes them;
 6. select the next `Current`;
-7. recalculate `Next`;
-8. update `Next free ID` and `Last reviewed`.
+7. recalculate `Next` and `Hard blockers`;
+8. update `Next free ID` and `Last reviewed` — `Next free ID` changes only
+   when allocation state actually changed, not on every closure.
+
+```text
+accepted result on main
+→ close/reconcile that task in TASK.md
+→ select/reconcile Current + Next + blockers
+→ only then begin implementation of the next task
+```
+
+An implementation PR must not mark its own task `Done` before its accepted
+result exists on `main`. A separate follow-up documentation commit/PR that
+performs closure is normal and usually necessary, since the merge delivering
+the task cannot itself truthfully record its own post-merge status. Task
+Closure is part of the project workflow, not a new gameplay delivery task.
 
 Only the ten most recent completed tasks stay in this file.
 
@@ -931,7 +975,8 @@ iterations.
 
 Review and reconcile `TASK.md`:
 
-- after a task is merged;
+- immediately after a Current task is merged, before implementation of the
+  next task begins;
 - when Roadmap scope/status materially changes;
 - when a relevant Deferred concern changes state;
 - when a blocker or prerequisite changes;
@@ -950,6 +995,12 @@ During review:
 6. update `Hard blockers`;
 7. update `Next free ID`;
 8. update `Last reviewed`.
+
+A task merge must not leave `TASK.md` pointing indefinitely at an
+already-completed task as `Current`. Reconciliation is not required to land
+in the same merge commit that delivers the task — requiring that would force
+a false pre-merge `Done` — but it must happen before implementation of the
+next task begins.
 
 Do not churn the queue after every commit or minor implementation detail.
 
