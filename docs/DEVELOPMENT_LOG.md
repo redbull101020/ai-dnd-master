@@ -4332,3 +4332,61 @@ contracts.
   whitespace errors. No formatter or linter is configured. TSK-0003 remains
   `Current`, not `Done`, as of this entry: per `docs/TASK.md` policy a task
   becomes `Done` only once its accepted result exists on `main`.
+
+## 2026-09-02 — Task Queue reconciliation after TSK-0003 merge and TSK-0006/TSK-0007 refinement
+
+- Confirmed that PR #72 / merge commit
+  `7ac97f68e27606cd6c088ccc2868747f4dadefeb` accepted the TSK-0003 result
+  (Architecture §3.31, DEC-0046) on `main`; marked TSK-0003 `Done`, moved it
+  to `Recently completed`, and removed its full detail from the open queue.
+- Selected TSK-0006 as the new sole `Current` task. It stays `P1` / `M` /
+  `mechanics` and now has full executable detail (`Goal`, `Scope`,
+  `Out of scope`, `Acceptance criteria`, `Verification`, `Expected
+  touchpoints`) for implementing the already-accepted §3.28/DEC-0043
+  active-turn contract in `AttackHandler`, without redesigning it.
+- Refined TSK-0007 from `L` to `M` and moved it `Backlog → Blocked`, with
+  full detail for implementing the already-accepted §3.31/DEC-0046 zero-HP
+  eligibility contract. Its `Depends on` now names both `TSK-0003` and
+  `TSK-0006`: `TSK-0003` because its accepted result defined the
+  §3.31/DEC-0046 contract that TSK-0007 implements, and `TSK-0006` because
+  §3.31's validation precedence is layered directly on top of §3.28. Its
+  Blocker records the concrete reason: `AttackHandler`
+  does not yet implement the canonical §3.28 active-turn gate, and the
+  Unblock condition is `TSK-0006` landing on `main` with that gate applied
+  after actor lookup and before Character/Monster routing.
+- Left TSK-0004 and TSK-0005 unchanged at `Backlog` / `L` — no premature
+  refinement was performed on either in this iteration.
+- Recalculated `Current position`: `Current: TSK-0006`, `Next: —` (empty,
+  since `Next` may only hold `Ready` tasks and TSK-0007 is `Blocked` while
+  TSK-0004/TSK-0005 remain `L`), `Hard blockers: —` (TSK-0007's blocker does
+  not affect the current execution frontier because TSK-0006 is itself
+  executable), and `Next free ID: TSK-0010` (unchanged; no new `TSK-*` ID was
+  allocated).
+- This is a Task Queue planning/refinement iteration only. No canonical
+  gameplay contract changed: Architecture §3.28 and §3.31 remain exactly as
+  already accepted, and no new Decision was recorded — DEC-0043 and
+  DEC-0046 already cover the contracts TSK-0006/TSK-0007 will implement. No
+  production Python, test, or State schema behavior changed; `AttackHandler`
+  still does not implement either gate. No generic eligibility or
+  life-state abstraction was approved or added — TSK-0006 and TSK-0007
+  remain separate concrete implementation tasks in `AttackHandler` for
+  their respective already-accepted §3.28 and §3.31 contracts.
+- Reviewed `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `README.md`, and `CLAUDE.md`: none required a change.
+  Architecture §3.28/§3.31 already state that production implementation is
+  pending in TSK-0006/TSK-0007, which remains true; DEC-0043/DEC-0046 are
+  already-accepted decisions this iteration does not revise; Roadmap Phase 3
+  capability status is unchanged because the production gates are still not
+  implemented; DEF-0005/DEF-0015 stay `Deferred`; README does not track task
+  status; and `CLAUDE.md`'s "Индекс реализованных контрактов" correctly
+  continues to omit §3.28/§3.31 until a landed production implementation
+  exists.
+- Verification: `tests/architecture/test_documentation_references.py` passes
+  (2 tests); the full suite passes (Python 3.12.13, repository `.venv`, run
+  with a writable `--basetemp` outside the default OS temp directory to
+  avoid the previously documented Windows `pytest-of-redbu` permission
+  artifact); configured `mypy` passes for `src/dnd_engine`; `git diff
+  --check` reports no whitespace errors. No formatter or linter is
+  configured. TSK-0006 remains `Current`, not `Done`, as of this entry: per
+  `docs/TASK.md` policy a task becomes `Done` only once its accepted result
+  exists on `main`.
