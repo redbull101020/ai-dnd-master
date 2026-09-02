@@ -1080,8 +1080,8 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0009
-- **Next:** TSK-0003
+- **Current:** TSK-0003
+- **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0010
 - **Last reviewed:** 2026-09-02
@@ -1092,12 +1092,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0003` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
+| `TSK-0003` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define zero-HP Attack eligibility by creature category |
 | `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
 | `TSK-0006` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Turn/action economy | Implement active-turn Attack gating |
 | `TSK-0007` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement zero-HP Attack eligibility |
-| `TSK-0009` | `Current` | `P2` | `M` | `documentation` | Phase 3 / Combat documentation consistency | Deduplicate README/CLAUDE and remove redundant current data-flow projection |
 
 ---
 
@@ -1105,7 +1104,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 ## TSK-0003 — Define zero-HP Attack eligibility by creature category
 
-**Status:** `Ready`
+**Status:** `Current`
 
 **Priority:** `P1`
 
@@ -1118,14 +1117,15 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 **References:**
 
 - `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
-- `ARCHITECTURE.md` §§3.19, 3.20, 3.25, 3.27, 3.28
+- `ARCHITECTURE.md` §§3.19, 3.20, 3.25, 3.27, 3.28, 3.31
 - `DEF-0005`, `DEF-0015`
-- `DEC-0033`, `DEC-0034`, `DEC-0040`, `DEC-0042`, `DEC-0043`
+- `DEC-0033`, `DEC-0034`, `DEC-0040`, `DEC-0042`, `DEC-0043`, `DEC-0046`
 
 **Depends on:** `TSK-0002`
 
-**Contract impact:** Architecture update and new Decision required before
-implementation
+**Contract impact:** `ARCHITECTURE.md` §3.31 added and `DEC-0046` recorded.
+The canonical zero-HP Attack-eligibility contract is now defined;
+`AttackHandler` production behavior is unchanged until TSK-0007.
 
 ### Goal
 
@@ -1206,105 +1206,6 @@ CLAUDE.md (only if a reproduced canonical fact changes)
 
 ---
 
-## TSK-0009 — Deduplicate README/CLAUDE and remove redundant current data-flow projection
-
-**Status:** `Current`
-
-**Priority:** `P2`
-
-**Size:** `M`
-
-**Group:** `documentation`
-
-**Roadmap target:** Phase 3 / Combat documentation consistency
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 — Combat
-- `DEC-0016`, `DEC-0018`
-
-**Depends on:** `—`
-
-**Contract impact:** `none`
-
-### Goal
-
-Reduce maintenance-sensitive duplication between `README.md`, `CLAUDE.md`, and
-`AI_DND_DATA_FLOW_CURRENT.md` while preserving onboarding value and
-coding-agent guardrails.
-
-### Why now
-
-The user explicitly selected this documentation maintenance work before
-returning to the normal Phase 3 queue. `README.md` and `CLAUDE.md` have
-accumulated implementation-status detail beyond their stated roles, and
-`AI_DND_DATA_FLOW_CURRENT.md` has become another mutable current-state
-projection alongside the canonical Architecture/Roadmap documents. This task
-changes no gameplay behavior and no canonical architecture contract.
-
-### Scope
-
-- simplify `README.md` ownership to onboarding, high-level architecture, and
-  current-phase pointers;
-- restore `CLAUDE.md` to the narrow duplication policy of `DEC-0016`/`DEC-0018`;
-- remove `AI_DND_DATA_FLOW_CURRENT.md`;
-- preserve intentional duplication of stable guardrails;
-- preserve historical mentions of the removed file in append-only history;
-- update `docs/DEVELOPMENT_LOG.md` once the full task is complete;
-- run existing documentation-reference tests and the full repository test
-  suite.
-
-### Out of scope
-
-- changes to canonical gameplay behavior;
-- changes to `docs/ARCHITECTURE.md`;
-- changes to Roadmap scope/status;
-- changes to `DEC-0016` or `DEC-0018`;
-- a new Decision;
-- `AGENTS.md` policy changes;
-- `docs/DEFERRED.md` changes;
-- production code changes;
-- new frameworks or automated textual deduplication machinery;
-- replacement documents such as `OVERVIEW.md`, `CURRENT_ARCHITECTURE.md`, or
-  another data-flow document.
-
-### Acceptance criteria
-
-- `README.md` remains useful as first-entry onboarding but no longer carries
-  G5/G6/G7/G8/G9-style implementation census, handler inventories,
-  Event-version inventories, or State-schema history;
-- `CLAUDE.md` keeps the deliberately reproduced facts required by
-  `DEC-0016`/`DEC-0018` but removes detailed implementation narration;
-- `AI_DND_DATA_FLOW_CURRENT.md` is removed;
-- no active current-document reference requires that file;
-- historical references in append-only Decision/Development history remain
-  historical and are not rewritten;
-- Architecture, Roadmap scope, gameplay contracts, `AGENTS.md` policy,
-  `DEC-0016`, and `DEC-0018` remain unchanged;
-- existing documentation-reference tests pass without modifying their policy
-  merely to accommodate the cleanup;
-- full `pytest` passes;
-- `git diff --check` passes;
-- no production code changes.
-
-### Verification
-
-- `tests/architecture/test_documentation_references.py`;
-- full `pytest` suite;
-- `git diff --check`.
-
-### Expected touchpoints
-
-```text
-docs/TASK.md
-README.md
-CLAUDE.md
-AI_DND_DATA_FLOW_CURRENT.md
-docs/DEVELOPMENT_LOG.md
-```
-
----
-
 # Recently completed
 
 | ID | Title | Evidence |
@@ -1312,6 +1213,7 @@ docs/DEVELOPMENT_LOG.md
 | `TSK-0001` | Define the minimal authoritative Character weapon source | PR #69 / merge commit `f4dbc50` |
 | `TSK-0002` | Define active-turn gating for `AttackCommand` | PR #68 / merge commit `d8f86ed` |
 | `TSK-0008` | Define minimal melee targeting and reach for the first Character Dagger attack | PR #70 / merge commit `24da875` |
+| `TSK-0009` | Deduplicate README/CLAUDE and remove redundant current data-flow projection | PR #71 / merge commit `e99d0dc` |
 
 ---
 
