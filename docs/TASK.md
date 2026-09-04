@@ -217,9 +217,13 @@ Unblock condition:
 
 ### 4.5 Done
 
-A task becomes `Done` only when its accepted result exists on `main`.
+A task is authoritatively `Done` only when **both** its accepted result
+**and** the corresponding Task Closure (§18) exist on `main`. `main` is the
+authoritative operational state of the Task Queue; nothing on a delivery
+branch is a fact of the project until it lands there.
 
-The following are not sufficient:
+The following are not sufficient on their own to make a task authoritatively
+`Done`:
 
 - code was written;
 - local tests passed;
@@ -227,16 +231,30 @@ The following are not sufficient:
 - a commit exists;
 - the branch was pushed;
 - a pull request exists;
-- review approved the pull request.
+- review approved the pull request;
+- a delivery branch/PR already writes `Done` for its own task;
+- the accepted result exists on `main` but the corresponding Task Closure
+  has not yet landed there (the §18.2 fallback is in progress but not yet
+  merged).
 
-Until the accepted result is present on `main`, the task remains open.
+Once implementation has been accepted (tests/checks passed, diff reviewed),
+a delivery branch/PR may prepare its own Task Closure (§18.1) — including
+writing `Done` for its task, in that same branch/PR — before merge. This
+prepared state is **prospective**: it describes what `TASK.md` will become
+true if and when that exact PR merges. It carries no operational authority
+before merge: the task is not yet actually finished, implementation of the
+task the branch shows as the next `Current` must not begin, and no new
+delivery branch may be based on that prospective `Current`. If the PR is
+never merged, the prospective `Done` never becomes a fact of the project.
 
-Landing the accepted result on `main` triggers mandatory Task Closure
-(§18): the accepted result existing on `main` is the defining condition for
-`Done`, while Task Closure reconciles the tracker to that fact. A feature
-branch must never assert that a not-yet-merged task is already `Done`. The
-tracker must be reconciled before implementation of the next `Current` task
-begins.
+Once the delivery PR lands on `main`, its prepared `Done`/closure becomes
+authoritative as part of that same merge — no separate action is required,
+because both halves of the condition (accepted result and Task Closure)
+land together. If a task's accepted result instead lands on `main` without
+a prepared closure, the task is **not yet** authoritatively `Done`: Task
+Closure (§18.2) is mandatory as a fallback, and the tracker must be
+reconciled — landing the closure on `main` — before implementation of the
+next `Current` task begins.
 
 ### 4.6 Superseded
 
@@ -294,21 +312,34 @@ If multiple implementation steps must be completed sequentially before one
 merge, they should normally remain checkpoints inside a single task rather than
 becoming artificial dependent tasks.
 
-Post-merge Task Closure is an operational reconciliation step, not a new
-task lifecycle status and not a separate delivery task:
+Task Closure is an operational reconciliation step, not a new task
+lifecycle status and not a separate delivery task. The normal path prepares
+it before merge, in the same delivery branch/PR as the implementation:
 
 ```text
 Current
 → implementation/review
-→ accepted result lands on main
-→ Done + mandatory tracker reconciliation
+→ prepared Task Closure (§18.1) in the same delivery branch/PR
+→ review closure diff + revalidate current origin/main
+→ one merge lands implementation + closure together
+→ authoritative Done on main
 → next Current may begin implementation
 ```
 
-Task Closure never gets its own `TSK-*`. Do not create administrative
-recursion such as `TSK-0011 — Close TSK-0010` whose only deliverable is
-updating the tracker after a merge; that reconciliation is Task Closure
-itself, performed per §18.
+Fallback, used only when implementation lands on `main` without a prepared
+closure — by mistake or for an exceptional reason (§18.2):
+
+```text
+implementation lands on main without prepared closure
+→ mandatory post-merge reconciliation
+→ next task remains blocked from implementation until the tracker is
+  reconciled
+```
+
+Task Closure never gets its own `TSK-*`, whether prepared before merge or
+performed after. Do not create administrative recursion such as
+`TSK-0011 — Close TSK-0010` whose only deliverable is updating the tracker;
+that reconciliation is Task Closure itself, performed per §18.
 
 ---
 
@@ -891,23 +922,29 @@ or dependencies.
 11. A size `L` task cannot be `Ready` or `Current`.
 12. Every `Ready` or `Current` task must identify a current Roadmap target or
     explicit prerequisite for it.
-13. `Done` means the accepted result exists on `main`.
+13. `Done` means both the accepted result and the corresponding Task
+    Closure exist on `main` (§4.5).
 14. `TASK.md` must not introduce or silently change canonical behavior.
 
-See §18 for the mandatory post-merge Task Closure reconciliation step.
+See §18 for the mandatory Task Closure reconciliation step — normally
+prepared before merge in the same delivery branch/PR, with post-merge
+reconciliation as a fallback.
 
 ---
 
 ## 18. Task closure and history
 
-Task Closure is a mandatory post-merge reconciliation step, not optional
-bookkeeping. After the accepted result of the current task lands on `main`,
-the Task Queue must be reconciled before implementation of the newly
-selected `Current` task begins. Closure does not receive its own `TSK-*`.
+Task Closure is mandatory delivery reconciliation, not optional bookkeeping.
+It is normally prepared after implementation acceptance and before merge,
+becoming authoritative once the delivery PR lands on `main`; post-merge
+reconciliation remains a mandatory fallback for the exceptional case where
+closure was not prepared in time. Closure does not receive its own `TSK-*`
+either way.
 
-When a task's accepted result lands on `main`:
+The closure procedure itself, performed either pre-merge (§18.1, normal) or
+post-merge (§18.2, fallback):
 
-1. mark it `Done`;
+1. mark the completed task `Done`;
 2. add it to `Recently completed`;
 3. remove its full detail from `Open task details`;
 4. append the required factual development entry with its `TSK-*` ID to
@@ -918,18 +955,71 @@ When a task's accepted result lands on `main`:
 8. update `Next free ID` and `Last reviewed` — `Next free ID` changes only
    when allocation state actually changed, not on every closure.
 
+### 18.1 Normal path — closure prepared before merge
+
+Preparing Task Closure in the same delivery branch/PR as the implementation
+is allowed once all of the following hold:
+
+- the task's implementation is complete;
+- relevant tests/checks have passed;
+- the implementation diff has been reviewed/accepted;
+- the delivery PR already exists, so its PR number is already known and
+  usable as `Recently completed` evidence (§19) — do not invent a
+  placeholder merge SHA to fill that field early;
+- the closure edit lives in that same delivery branch/PR;
+- implementation and closure are intended for one atomic merge.
+
 ```text
-accepted result on main
+Current
+→ implementation/review
+→ prepared Task Closure in the same delivery branch/PR
+→ review closure diff + revalidate current origin/main
+→ one merge lands implementation + closure together
+→ authoritative Done on main
+→ next Current may begin implementation
+```
+
+Prepared closure is **prospective** until merge (§4.5): the `Done` status,
+`Recently completed` row, next-`Current` selection, and updated `Current
+position` written on the branch describe what `TASK.md` will become true if
+and when that exact PR merges. Before merge, `main` remains authoritative,
+the task is not actually finished, and no implementation may begin against
+the branch's prospective next `Current`.
+
+The closure diff itself must be reviewed before merge, exactly like the
+implementation diff — it is not exempt from review merely because it is
+tracker bookkeeping. As part of that review, before the final merge,
+re-check that `origin/main` has not materially changed Current/Next
+ordering, Roadmap scope, blockers, or any other fact the prepared closure
+depends on. If it has, the prepared closure is stale and must be
+reconciled against current `origin/main` before merging.
+
+### 18.2 Fallback path — post-merge reconciliation
+
+If a task's accepted result lands on `main` without a prepared closure — by
+mistake, or for an exceptional reason — reconciliation remains mandatory:
+perform the same closure procedure above, starting from current
+`origin/main`, through the normal branch/review/authorization workflow
+`AGENTS.md` establishes for any other change. This section does not
+authorize a direct commit or other substantive work on `main`; the
+reconciliation itself is prepared on a dedicated branch and reviewed/merged
+like any other change. Implementation of the next `Current` task must not
+begin until the tracker is reconciled.
+
+```text
+accepted result on main without prepared closure
+→ branch from current origin/main (normal AGENTS.md workflow)
 → close/reconcile that task in TASK.md
 → select/reconcile Current + Next + blockers
+→ review + merge the reconciliation
 → only then begin implementation of the next task
 ```
 
-An implementation PR must not mark its own task `Done` before its accepted
-result exists on `main`. A separate follow-up documentation commit/PR that
-performs closure is normal and usually necessary, since the merge delivering
-the task cannot itself truthfully record its own post-merge status. Task
-Closure is part of the project workflow, not a new gameplay delivery task.
+An implementation PR must not assert its task as authoritatively `Done`
+before its accepted result exists on `main` (§4.5); a prepared pre-merge
+closure is prospective, not an assertion of present fact. Task Closure —
+prepared pre-merge or performed post-merge as fallback — is part of the
+project workflow, not a new gameplay delivery task.
 
 Only the ten most recent completed tasks stay in this file.
 
@@ -952,9 +1042,15 @@ Last ten completions only.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-XXXX` | ... | PR #... / merge commit ... |
+| `TSK-XXXX` | ... | PR #... |
 
-Preferred evidence:
+`PR #123` alone is sufficient durable evidence. Task Closure is normally
+prepared after the delivery PR already exists and its implementation has
+been accepted (§18.1), so the PR number is already known at that point; a
+merge commit SHA is not required and no placeholder merge SHA should be
+written. Once merged, the merge commit SHA may be added as optional
+enrichment, but doing so is not required and never justifies a second
+post-merge edit on its own:
 
 ```text
 PR #123 / merge commit abcdef1
@@ -975,8 +1071,10 @@ iterations.
 
 Review and reconcile `TASK.md`:
 
-- immediately after a Current task is merged, before implementation of the
-  next task begins;
+- before merging a `Current` task's delivery PR, so Task Closure can be
+  prepared in that same PR (§18.1); or, as fallback, immediately after an
+  already-merged task is found unreconciled, before implementation of the
+  next task begins (§18.2);
 - when Roadmap scope/status materially changes;
 - when a relevant Deferred concern changes state;
 - when a blocker or prerequisite changes;
@@ -996,11 +1094,14 @@ During review:
 7. update `Next free ID`;
 8. update `Last reviewed`.
 
-A task merge must not leave `TASK.md` pointing indefinitely at an
-already-completed task as `Current`. Reconciliation is not required to land
-in the same merge commit that delivers the task — requiring that would force
-a false pre-merge `Done` — but it must happen before implementation of the
-next task begins.
+Task Closure is normally prepared in the same delivery PR that lands the
+implementation (§18.1), so reconciliation normally lands in the very merge
+that delivers the task; that pre-merge preparation is prospective, not
+false, because it only becomes authoritative once the PR actually merges
+(§4.5). When closure was not prepared before merge, reconciliation is still
+mandatory as a fallback (§18.2) before implementation of the next task
+begins. A task merge must never leave `TASK.md` pointing indefinitely at an
+already-completed task as `Current`.
 
 Do not churn the queue after every commit or minor implementation detail.
 

@@ -4717,3 +4717,68 @@ contracts.
   until the accepted result lands on `main` and mandatory Task Closure
   (§18) runs. This entry does not mark `TSK-0007` `Done` and does not
   select a next `Current` task.
+
+## 2026-09-04 — Process refinement — pre-merge Task Closure allowed in `TASK.md`
+
+- Under the previous `docs/TASK.md` §18 wording, Task Closure was defined
+  strictly as a mandatory *post-merge* step, and a feature branch was
+  explicitly forbidden from asserting `Done` for its own not-yet-merged
+  task. In practice this forced a second repository update after every
+  normal task merge: implementation lands on `main`, and only then can a
+  separate follow-up commit/PR mark the task `Done`, add it to `Recently
+  completed`, and select the next `Current`.
+- Reworded `docs/TASK.md` §4.5 (`Done`), §5 (Task lifecycle), §17's pointer
+  to §18, §18 itself (split into new `### 18.1` normal path and
+  `### 18.2` fallback path subsections), §19 (`Recently completed` /
+  Evidence), and §20 (Review triggers) so that Task Closure may normally be
+  prepared in the same delivery branch/PR as the implementation, once that
+  implementation has been accepted (tests/checks passed, diff reviewed),
+  and land on `main` atomically together with it.
+- The authoritative-state invariant is unchanged and was made more
+  explicit: a task is authoritatively `Done` only when both its accepted
+  result and the corresponding Task Closure exist on `main`. Writing
+  `Done`/closure on a delivery branch before
+  merge is now explicitly modeled as **prospective** state — it describes
+  what `TASK.md` will become true if and when that exact PR merges, and
+  carries no operational authority before merge. Implementation of the
+  task a branch shows as the next `Current` must not begin, and no new
+  delivery branch may be based on that prospective `Current`, until the
+  PR actually merges. §18.1 also adds an explicit stale-closure guard:
+  before the final merge, a prepared closure must be revalidated against
+  whatever `origin/main` actually looks like at that point.
+- Post-merge reconciliation (§18.2) is retained as a mandatory fallback for
+  the case where implementation lands on `main` without a prepared closure,
+  by mistake or for an exceptional reason; the next task's implementation
+  still cannot begin until the tracker is reconciled in that case.
+- §19's evidence rule was loosened from the previous "preferred"
+  `PR #123 / merge commit abcdef1` form to treat `PR #123` alone as
+  sufficient durable evidence, since pre-merge closure is normally
+  prepared once the PR already exists; the merge commit SHA remains
+  allowed as optional enrichment but is never required and no placeholder
+  merge SHA is introduced.
+- No new task status was introduced (`Backlog`/`Ready`/`Current`/`Blocked`/
+  `Done`/`Superseded` is unchanged); no new `TSK-*` lifecycle step was
+  added; Task Closure still never receives its own `TSK-*`. The `TASK.md`
+  document-authority hierarchy (Architecture → Roadmap → Task →
+  implementation) is unchanged.
+- `AGENTS.md` was inspected and intentionally left unchanged: it already
+  owns a separate commit/push/PR/merge authorization model unrelated to
+  Task Closure semantics, and contains no post-merge-only wording that
+  conflicts with this refinement.
+- Scope was limited to `docs/TASK.md` process wording and this Development
+  Log entry. `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/DECISIONS.md`,
+  `docs/DEFERRED.md`, `README.md`, `CLAUDE.md`, production code, and tests
+  were not changed — this is a repository workflow/task-tracker semantics
+  change, not a gameplay architecture change, so no new Architecture
+  section or Decision entry was added. The actual current operational
+  `TSK-0007` entry, `Current position`, `Open task index`, and `Recently
+  completed` table were left factually unchanged; only the surrounding
+  process rules were reworded.
+- Verification on branch `claude/task-closure-premerge-reconciliation`:
+  `tests/architecture/test_documentation_references.py` — 2 passed; full
+  suite — 1599 passed (Python 3.12.14, repository `.venv`, run with a
+  writable `--basetemp` outside the default OS temp directory to avoid the
+  previously documented Windows `pytest-of-redbu` permission artifact);
+  `git diff --check` reports no whitespace errors.
+- This process change is itself under review on its feature branch; no
+  commit, push, or pull request was performed as of this entry.
