@@ -498,6 +498,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   that `AdvanceTurn` remains unaffected. DEF-0005 stays `Deferred`: the
   death-save mechanic itself — timing, counters, outcomes, and persistence —
   is still undesigned and unimplemented.
+- **History:** 2026-09-04 — TSK-0007 implemented the current
+  Character/Monster `AttackCommand` zero-HP eligibility boundary (§3.31) in
+  production `AttackHandler`. DEF-0005 stays `Deferred`: the Character
+  death-save mechanic itself — timing, counters, outcomes, and persistence —
+  remains undesigned and unimplemented.
 
 ## DEF-0006
 
@@ -950,6 +955,13 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   behavior, and other action-eligibility consumers outside the current
   `AttackCommand` remain unresolved. Production `AttackHandler` integration of
   §3.31 itself remains TSK-0007.
+- **History:** 2026-09-04 — TSK-0007 implemented the current
+  Character/Monster `AttackCommand` zero-HP eligibility boundary defined by
+  §3.31/DEC-0046 in production `AttackHandler`. DEF-0015 stays `Deferred`:
+  targetability at zero HP, further-Damage consequences, stabilization/death,
+  Monster death/lifecycle policy, Healing recovery semantics, Combat
+  removal/end behavior, and other action-eligibility consumers outside the
+  current `AttackCommand` remain unresolved.
 
 ## DEF-0016
 

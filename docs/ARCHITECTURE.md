@@ -6478,10 +6478,11 @@ geometry, or validation-pipeline abstraction is introduced by this slice.
 
 ### 3.31. Minimal Phase 3 zero-HP Attack eligibility (TSK-0003)
 
-Implementation status: **Canonical contract defined; production
-implementation pending in TSK-0007.** This section defines eligibility only
-for the currently supported `AttackCommand` paths. It does not claim that the
-gate is already present in `AttackHandler`.
+Implementation status: **Implemented (TSK-0007).** `AttackHandler` applies
+this category-specific zero-HP gate for both currently supported
+`AttackCommand` paths, after §3.28 active-turn eligibility and after
+Character/Monster category establishment. This section defines eligibility
+only for those paths; it does not claim a broader zero-HP lifecycle.
 
 #### Scope
 
@@ -6708,7 +6709,7 @@ DEF-0005 (Character death saves) and the broader DEF-0015 concern (Monster
 death policy, stabilization, and targetability/lifecycle questions beyond
 this narrow Attack-eligibility rule) remain deferred; this section resolves
 only the narrow zero-HP Attack-eligibility question named in TSK-0003, with
-production implementation reserved for TSK-0007.
+production implementation delivered by TSK-0007.
 
 ---
 

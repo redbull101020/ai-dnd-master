@@ -160,7 +160,7 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Initiative: SRD 5.1 grouped initiative for identical GM-controlled creatures — G7 is individual-participant only; a later concrete Monster/control consumer must evidence this before it is added.
 * [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn) — §3.28/DEC-0043 define and now implement the canonical active-turn eligibility boundary for the currently supported `AttackCommand` paths (row above, TSK-0006); action/bonus-action/reaction resource budgets, per-turn resets, and the broader action economy remain open.
 * [ ] Combat lifecycle / `CombatEnded` — G7 has no combat-ending Command or Event.
-* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — the canonical Character/Monster zero-HP `AttackCommand` eligibility contract is now defined ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046), but production `AttackHandler` integration is still absent and remains TSK-0007; broader lifecycle, targetability, and death-save scope stay open under DEF-0005/DEF-0015.
+* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — `AttackHandler` now implements the canonical Character/Monster zero-HP `AttackCommand` eligibility contract ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046, TSK-0007), after §3.28 active-turn eligibility and Character/Monster category establishment. Still open under DEF-0005/DEF-0015: Character Death Saves, the broader Character zero-HP lifecycle, Monster death/stabilization/lifecycle policy, zero-HP targetability, other action-eligibility consumers beyond the current `AttackCommand`, and Combat removal/end.
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
@@ -240,10 +240,12 @@ contract for the two currently supported `AttackCommand` paths: a Character
 or Monster actor at `current_hp == 0` cannot use the current `AttackCommand`,
 decided as two separate category-specific rules layered on top of the
 already-accepted §3.28 active-turn boundary. It introduces no new State,
-Event, `ErrorCode`, or life-state model and changes no production code;
-`AttackHandler` integration remains open for TSK-0007. Broader lifecycle
-questions — Character death saves ([DEF-0005](DEFERRED.md#def-0005)) and
-Monster death policy, stabilization, and targetability at zero HP
+Event, `ErrorCode`, or life-state model and changed no production code by
+itself; TSK-0007 has now implemented that gate in production `AttackHandler`,
+after §3.28 active-turn eligibility and after Character/Monster category
+establishment (Zero-HP and combatant eligibility row above). Broader
+lifecycle questions — Character death saves ([DEF-0005](DEFERRED.md#def-0005))
+and Monster death policy, stabilization, and targetability at zero HP
 ([DEF-0015](DEFERRED.md#def-0015)) — remain open.
 
 ## Phase 4 — Magic

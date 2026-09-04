@@ -174,13 +174,14 @@ def make_creature(
 
 
 def make_actor(
-    *, conditions: frozenset[Condition] = frozenset()
+    *, conditions: frozenset[Condition] = frozenset(), current_hp: int = 20
 ) -> CreatureState:
     return make_creature(
         creature_id="character_001",
         definition_id="fighter",
         strength=16,
         conditions=conditions,
+        current_hp=current_hp,
     )
 
 
@@ -719,12 +720,13 @@ def test_metadata_failure_propagates_after_resolution_without_save() -> None:
 
 
 def make_monster_actor(
-    *, conditions: frozenset[Condition] = frozenset()
+    *, conditions: frozenset[Condition] = frozenset(), current_hp: int = 20
 ) -> CreatureState:
     return make_creature(
         creature_id="monster_001",
         definition_id="goblin",
         conditions=conditions,
+        current_hp=current_hp,
     )
 
 
@@ -1419,6 +1421,210 @@ def test_actor_absent_from_combat_order_is_rejected_same_as_inactive() -> None:
     assert result.errors[0].field is None
     assert calls == ["load"]
     assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+# --- Zero-HP Attack eligibility gating (§3.31, TSK-0007) ----------------
+
+
+def test_character_zero_hp_outside_combat_is_rejected_before_target_processing() -> None:
+    actor = make_actor(current_hp=0)
+    target = make_target()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_zero_hp_precedes_missing_target_lookup() -> None:
+    # A missing target would normally fail with ENTITY_NOT_FOUND(target_id).
+    # Once Character category is established, zero-HP eligibility must be
+    # evaluated first, so the observed failure is the zero-HP rejection, not
+    # the target-lookup error a bypassed gate would produce.
+    actor = make_actor(current_hp=0)
+    snapshot = make_snapshot(
+        creatures=(actor,),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_active_turn_gate_precedes_zero_hp_for_inactive_monster_actor() -> None:
+    # DefinitionSource is configured to raise if ever reached, so if §3.28
+    # did not return before Monster category establishment, this test would
+    # fail loudly via a propagated exception rather than silently passing.
+    actor = make_monster_actor(current_hp=0)
+    target = make_character_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(target.id, actor.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)),
+        calls,
+        error=DefinitionNotFoundError("must not be reached"),
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+@pytest.mark.parametrize(
+    ("definition_error", "expected_code", "expected_entity_id"),
+    [
+        (
+            DefinitionNotFoundError("missing definition"),
+            ErrorCode.DEFINITION_NOT_FOUND,
+            "goblin",
+        ),
+        (
+            DefinitionTypeMismatchError("wrong definition type"),
+            ErrorCode.INVALID_STATE,
+            "monster_001",
+        ),
+    ],
+)
+def test_monster_actor_definition_failures_take_precedence_over_zero_hp(
+    definition_error: Exception,
+    expected_code: ErrorCode,
+    expected_entity_id: str,
+) -> None:
+    actor = make_monster_actor(current_hp=0)
+    target = make_character_target()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)),
+        calls,
+        error=definition_error,
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is expected_code
+    assert result.errors[0].entity_id == expected_entity_id
+    assert result.errors[0].field == "definition_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_monster_zero_hp_takes_precedence_over_attacks_count_validation() -> None:
+    actor = make_monster_actor(current_hp=0)
+    snapshot = make_snapshot(creatures=(actor,))
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(make_monster_definition(attacks=()), calls)
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field is None
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_monster_zero_hp_outside_combat_is_rejected_before_target_processing() -> None:
+    actor = make_monster_actor(current_hp=0)
+    target = make_character_target()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field is None
+    assert calls == ["load", "definition"]
     assert dice.roll_calls == []
     assert metadata.next_calls == []
     assert store.save_calls == []
