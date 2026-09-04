@@ -62,6 +62,7 @@ def character_snapshot() -> StateSnapshot:
                 skill_proficiencies=frozenset(
                     {Skill.ATHLETICS, Skill.PERCEPTION}
                 ),
+                weapon_proficiencies=frozenset(),
             ),
         ),
     )

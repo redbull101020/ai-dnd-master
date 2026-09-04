@@ -10,6 +10,7 @@ class CharacterState:
     total_level: int
     saving_throw_proficiencies: frozenset[Ability]
     skill_proficiencies: frozenset[Skill]
+    weapon_proficiencies: frozenset[str]
 
     def __post_init__(self) -> None:
         if type(self.total_level) is not int:
@@ -32,4 +33,13 @@ class CharacterState:
         ):
             raise TypeError(
                 "skill_proficiencies must contain only Skill values"
+            )
+        if type(self.weapon_proficiencies) is not frozenset:
+            raise TypeError("weapon_proficiencies must be a frozenset")
+        if not all(
+            type(proficiency) is str
+            for proficiency in self.weapon_proficiencies
+        ):
+            raise TypeError(
+                "weapon_proficiencies must contain only str values"
             )

@@ -518,6 +518,7 @@ class StateSerializer:
             total_level=total_level,
             saving_throw_proficiencies=frozenset(proficiencies),
             skill_proficiencies=frozenset(skill_proficiencies),
+            weapon_proficiencies=frozenset(),
         )
 
     @staticmethod

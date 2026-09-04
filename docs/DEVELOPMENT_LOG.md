@@ -4839,3 +4839,38 @@ contracts.
 - No production Python, State serializer, or gameplay behavior changed in
   this planning/canonicalization checkpoint. Character Weapon Attack
   consumption and State schema V7 remain later work.
+
+## 2026-09-04 — TSK-0004 Group 1 — Domain weapon-source State
+
+- Added the minimal authoritative Domain projections
+  `InventoryItemState(id, definition_id)`, `InventoryState(owner_id, items)`,
+  and `EquipmentState(owner_id, equipped_weapon_id)` with strict intrinsic
+  type validation and no lifecycle, slot, quantity, Definition lookup, or
+  other broader Inventory/Equipment behavior.
+- Added required `CharacterState.weapon_proficiencies: frozenset[str]`
+  without a constructor default. Migrated every existing production/test
+  `CharacterState(...)` call site explicitly to empty membership unless a
+  focused Domain test intentionally uses non-empty membership.
+- Expanded the frozen `StateSnapshot` persistence grouping in canonical field
+  order with default-empty `inventories` and `equipment`. Added the approved
+  Character-owner, one-projection-per-owner, campaign-wide Item-ID uniqueness,
+  and same-owner equipped-item integrity checks while preserving valid absent,
+  empty, and null projections and keeping Definition dereference lazy.
+- Updated the sole positional four-argument `StateSnapshot(...)` construction
+  to keywords, and strengthened the existing snapshot-replacement regression
+  to prove Inventory and Equipment projections are preserved by identity.
+- Made only the interim V1–V5 reader compatibility change: legacy Character
+  decoding supplies `weapon_proficiencies=frozenset()`, while snapshot defaults
+  supply empty Inventory/Equipment projections. The production writer remains
+  exact V5; no V6 field sets, serialization, or version bump were added.
+- Added focused Domain tests for exact field sets, valid forms, strict types,
+  required Character membership, owner/uniqueness/equipped-item relations,
+  absent projections, and non-dereferenced Definition IDs. Existing
+  Character-unarmed and Monster Attack regressions remain unchanged.
+- Verification: focused Domain/serializer/replacement selection — 1346
+  passed; Attack handler/real-adapter regressions — 48 passed; full suite —
+  1659 passed after rerunning with writable dedicated pytest/pip-cache paths
+  (the first run's two packaging setup errors were solely the known Windows
+  system pip-cache `WinError 5`); configured `mypy` — success for 107 source
+  files. No production Attack Command/handler/rule/Event or Dagger Definition
+  file changed. Group 1 remains uncommitted and unpushed pending review.

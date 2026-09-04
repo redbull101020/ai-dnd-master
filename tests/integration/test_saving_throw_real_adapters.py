@@ -66,6 +66,7 @@ def test_saving_throw_uses_real_adapters_without_persisting_artifacts(
                 total_level=5,
                 saving_throw_proficiencies=frozenset({Ability.CONSTITUTION}),
                 skill_proficiencies=frozenset(),
+                weapon_proficiencies=frozenset(),
             ),
         ),
     )

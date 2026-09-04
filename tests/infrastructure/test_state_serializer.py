@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from copy import deepcopy
 
 import pytest
@@ -141,6 +142,7 @@ def character_state(character_id: str = "character_001") -> CharacterState:
         skill_proficiencies=frozenset(
             {Skill.ATHLETICS, Skill.PERCEPTION}
         ),
+        weapon_proficiencies=frozenset(),
     )
 
 
@@ -160,7 +162,12 @@ def snapshot(
     characters: tuple[CharacterState, ...] = (),
     combat: CombatState | None = None,
 ) -> StateSnapshot:
-    return StateSnapshot(campaign_state(), tuple(creatures), characters, combat)
+    return StateSnapshot(
+        campaign=campaign_state(),
+        creatures=tuple(creatures),
+        characters=characters,
+        combat=combat,
+    )
 
 
 def v5_data() -> dict[str, object]:
@@ -377,6 +384,17 @@ def test_deserialize_accepts_legacy_v2_with_empty_skill_membership() -> None:
     assert reconstructed.creatures[0].conditions == frozenset()
 
 
+@pytest.mark.parametrize("data_factory", [v2_data, v3_data, v4_data, v5_data])
+def test_v2_to_v5_deserialize_migrates_empty_weapon_source_state(
+    data_factory: Callable[[], dict[str, object]],
+) -> None:
+    reconstructed = StateSerializer.deserialize(data_factory())
+
+    assert reconstructed.characters[0].weapon_proficiencies == frozenset()
+    assert reconstructed.inventories == ()
+    assert reconstructed.equipment == ()
+
+
 def test_deserialize_v3_restores_skill_membership_and_empty_conditions() -> None:
     """Critical migration gate: a realistic V3 payload with non-empty
     skillProficiencies must still decode correctly under the V4 implementation,
@@ -448,6 +466,8 @@ def test_deserialize_accepts_exact_legacy_v1_without_inventing_character_state()
     assert reconstructed.campaign == campaign_state()
     assert reconstructed.creatures == (creature_state(),)
     assert reconstructed.characters == ()
+    assert reconstructed.inventories == ()
+    assert reconstructed.equipment == ()
     assert reconstructed.creatures[0].conditions == frozenset()
 
 

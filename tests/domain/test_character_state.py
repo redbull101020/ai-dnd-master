@@ -12,6 +12,7 @@ CANONICAL_FIELDS = (
     "total_level",
     "saving_throw_proficiencies",
     "skill_proficiencies",
+    "weapon_proficiencies",
 )
 
 
@@ -24,12 +25,14 @@ def character_state(
     skill_proficiencies: frozenset[Skill] = frozenset(
         {Skill.ATHLETICS, Skill.PERCEPTION}
     ),
+    weapon_proficiencies: frozenset[str] = frozenset({"dagger"}),
 ) -> CharacterState:
     return CharacterState(
         id="character_001",
         total_level=total_level,
         saving_throw_proficiencies=saving_throw_proficiencies,
         skill_proficiencies=skill_proficiencies,
+        weapon_proficiencies=weapon_proficiencies,
     )
 
 
@@ -43,6 +46,17 @@ def test_character_state_requires_explicit_skill_membership() -> None:
             id="character_001",
             total_level=5,
             saving_throw_proficiencies=frozenset(),
+            weapon_proficiencies=frozenset(),
+        )
+
+
+def test_character_state_requires_explicit_weapon_membership() -> None:
+    with pytest.raises(TypeError):
+        CharacterState(  # type: ignore[call-arg]
+            id="character_001",
+            total_level=5,
+            saving_throw_proficiencies=frozenset(),
+            skill_proficiencies=frozenset(),
         )
 
 
@@ -57,6 +71,7 @@ def test_character_state_accepts_canonical_values() -> None:
     assert character.skill_proficiencies == frozenset(
         {Skill.ATHLETICS, Skill.PERCEPTION}
     )
+    assert character.weapon_proficiencies == frozenset({"dagger"})
 
 
 @pytest.mark.parametrize("total_level", [True, 5.0, "5", None])
@@ -104,10 +119,12 @@ def test_character_state_accepts_empty_membership() -> None:
     character = character_state(
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
     )
 
     assert character.saving_throw_proficiencies == frozenset()
     assert character.skill_proficiencies == frozenset()
+    assert character.weapon_proficiencies == frozenset()
 
 
 def test_character_state_does_not_limit_effective_membership_count() -> None:
@@ -151,4 +168,38 @@ def test_character_state_does_not_limit_skill_membership_count() -> None:
     assert (
         character_state(skill_proficiencies=all_skills).skill_proficiencies
         == all_skills
+    )
+
+
+@pytest.mark.parametrize(
+    "proficiencies",
+    [
+        {"dagger"},
+        ("dagger",),
+        ["dagger"],
+    ],
+)
+def test_character_state_rejects_non_frozenset_weapon_membership(
+    proficiencies: object,
+) -> None:
+    with pytest.raises(TypeError):
+        character_state(  # type: ignore[arg-type]
+            weapon_proficiencies=proficiencies,
+        )
+
+
+@pytest.mark.parametrize("value", [1, True, None, Ability.STRENGTH])
+def test_character_state_rejects_non_string_weapon_members(value: object) -> None:
+    with pytest.raises(TypeError):
+        character_state(
+            weapon_proficiencies=frozenset({value}),  # type: ignore[arg-type]
+        )
+
+
+def test_character_state_does_not_limit_weapon_membership_count() -> None:
+    proficiencies = frozenset({"dagger", "longsword", "shortbow"})
+
+    assert (
+        character_state(weapon_proficiencies=proficiencies).weapon_proficiencies
+        == proficiencies
     )
