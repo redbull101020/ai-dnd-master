@@ -141,6 +141,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | Monster attack → Character vertical slice (G8) | §3.26 |
 | Monster Attack consequence → Damage → HP vertical slice (G9) | §3.27 |
 | Attack active-turn eligibility | §3.28 |
+| Zero-HP Attack eligibility by creature category | §3.31 |
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation

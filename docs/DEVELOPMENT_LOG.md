@@ -4630,3 +4630,90 @@ contracts.
   full suite and `mypy` were not rerun for this Markdown-only reconciliation
   since no Python or contract file changed; both already passed against
   this exact merged state in the preceding TSK-0006 verification entry.
+
+## 2026-09-04 — TSK-0007 — zero-HP Attack eligibility implementation complete on branch
+
+- Implemented the canonical §3.31 category-specific zero-HP Attack
+  eligibility gate in `AttackHandler` for both currently supported
+  `AttackCommand` paths, layered on top of the existing §3.28 active-turn
+  gate (TSK-0006), which retains its earlier precedence unchanged: if Combat
+  exists and the actor is not the active combatant, the existing §3.28
+  `ACTION_NOT_AVAILABLE` outcome is still returned before the zero-HP check
+  ever runs.
+- Character path: the zero-HP check (`actor_creature.current_hp == 0`) runs
+  as the first statement of `_handle_character_attack`, i.e. only after a
+  matching `CharacterState` has already confirmed Character category, and
+  before target lookup or any other target-specific processing.
+- Monster path: the zero-HP check runs inside `_handle_monster_attack`
+  immediately after the typed `MonsterDefinition` lookup succeeds (i.e.
+  after Monster category is confirmed) and before the existing
+  `len(monster_definition.attacks) != 1` validation, so it has precedence
+  over the attacks-specific `ACTION_NOT_AVAILABLE(field="attacks")`
+  failure. The existing Definition-lookup failures still retain precedence
+  over zero-HP for Monster category establishment: `DefinitionNotFoundError`
+  still returns `DEFINITION_NOT_FOUND` and `DefinitionTypeMismatchError`
+  still returns `INVALID_STATE`, regardless of `current_hp`.
+- Both zero-HP rejections use the canonical shape:
+  `ACTION_NOT_AVAILABLE`, `entity_id=command.actor_id`, `field=None`,
+  `events=()`, `success=False`, `outcome=None`, and occur before any
+  `DiceEngine` call, `EventMetadataProvider` call, Event construction, State
+  mutation, or `StateStore.save()`.
+- No new Command, State field, Event, `ErrorCode`, schema version,
+  life-state model, or generic eligibility abstraction
+  (`ActionEligibilityService`, validation pipeline, or shared
+  Character/Monster helper) was introduced; the two zero-HP return blocks
+  stay concrete, per the accepted §3.31 `KEEP CONCRETE` verdict. Existing
+  target-at-zero-HP Damage behavior (`0 → 0` semantics, §3.19) and
+  `AdvanceTurnCommand`/`AdvanceTurnHandler` (§3.25) are unchanged.
+- Added seven targeted `AttackHandler` tests to
+  `tests/application/test_attack_handler.py` covering: Character zero-HP
+  rejection outside Combat with no downstream side effects; Character
+  zero-HP precedence over a missing-target lookup (proving the rejection is
+  the zero-HP failure, not `ENTITY_NOT_FOUND(target_id)`); §3.28 active-turn
+  precedence over §3.31 for an inactive zero-HP Monster actor (with
+  `DefinitionSource` configured to raise if ever reached, so a precedence
+  bug would fail loudly rather than silently); Monster
+  `DEFINITION_NOT_FOUND`/`INVALID_STATE` precedence over zero-HP
+  (parameterized); Monster zero-HP precedence over the attacks-count
+  `ACTION_NOT_AVAILABLE(field="attacks")` failure; and Monster zero-HP
+  rejection outside Combat despite an otherwise-valid target. No exact
+  `EngineError.message` wording was promoted into a test contract. Existing
+  target-at-zero-HP Damage regression
+  (`test_monster_attack_positive_damage_at_zero_hp_still_applies_and_saves`)
+  and existing positive-HP Character/Monster success paths were reused
+  unmodified rather than duplicated. `make_actor`/`make_monster_actor` test
+  factories gained an optional `current_hp` parameter (default unchanged).
+  No production correction was required by any new test.
+- Reconciled stale current-status wording: `docs/ARCHITECTURE.md` §3.31's
+  implementation-status line and closing paragraph now record the TSK-0007
+  production implementation, without changing canonical §3.31 behavior
+  (Character/Monster category establishment, precedence rules, the
+  side-effect boundary, or scope). `docs/ROADMAP.md`'s existing Phase 3
+  `Zero-HP and combatant eligibility` bullet and its later TSK-0003 prose
+  paragraph were updated in place to record the implementation while
+  staying unchecked, because Character Death Saves, the broader Character
+  zero-HP lifecycle, Monster death/stabilization/lifecycle policy, zero-HP
+  targetability, other action-eligibility consumers, and Combat removal/end
+  remain open under DEF-0005/DEF-0015; no new Roadmap capability row was
+  added. `docs/DEFERRED.md` DEF-0005 and DEF-0015 each gained one new dated
+  History entry recording that TSK-0007 implemented the current
+  Character/Monster `AttackCommand` zero-HP eligibility boundary; both
+  remain `Deferred`, and no prior History entry was edited.
+  `CLAUDE.md`'s implemented-contract index gained one pointer row:
+  `Zero-HP Attack eligibility by creature category | §3.31`.
+- No new architectural Decision was required: this implements the
+  already-accepted DEC-0046. `docs/DECISIONS.md`, `README.md`, and
+  `docs/TASK.md` were not changed.
+- Final verification on branch `claude/tsk-0007-zero-hp-attack-eligibility`:
+  targeted `tests/application/test_attack_handler.py` — 45 passed;
+  `tests/integration/test_attack_real_adapters.py` — 3 passed; full suite —
+  1599 passed (Python 3.12.14, repository `.venv`, run with a writable
+  `--basetemp` outside the default OS temp directory to avoid the
+  previously documented Windows `pytest-of-redbu` permission artifact);
+  configured `mypy` passes for `src/dnd_engine` (105 source files, no
+  issues); `git diff --check` reports no whitespace errors.
+- TSK-0007 implementation and documentation reconciliation are complete on
+  the feature branch and under review; `docs/TASK.md` remains unchanged
+  until the accepted result lands on `main` and mandatory Task Closure
+  (§18) runs. This entry does not mark `TSK-0007` `Done` and does not
+  select a next `Current` task.
