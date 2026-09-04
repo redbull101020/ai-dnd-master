@@ -1232,11 +1232,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0007
+- **Current:** —
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0010
-- **Last reviewed:** 2026-09-02
+- **Last reviewed:** 2026-09-04
 
 ---
 
@@ -1246,113 +1246,12 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | --- | --- | --- | --- | --- | --- | --- |
 | `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
-| `TSK-0007` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement zero-HP Attack eligibility |
 
 ---
 
 # Open task details
 
-## TSK-0007 — Implement zero-HP Attack eligibility
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / Zero-HP and combatant eligibility
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
-- `ARCHITECTURE.md` §§3.17, 3.19, 3.20, 3.25, 3.26, 3.27, 3.28, 3.31
-- `DEF-0005`
-- `DEF-0015`
-- `DEC-0043`
-- `DEC-0046`
-
-**Depends on:** `TSK-0003`, `TSK-0006`
-
-**Contract impact:** `none`; implement the already accepted §3.31 contract.
-
-### Goal
-
-Реализовать category-specific zero-HP Attack eligibility §3.31 в
-существующем `AttackHandler` для обоих текущих `AttackCommand` paths,
-сохраняя более ранний §3.28 active-turn precedence.
-
-### Why now
-
-TSK-0003 уже определил canonical contract. Production implementation
-становится исполнимой после landing TSK-0006, потому что §3.31 прямо
-требует более ранний §3.28 gate.
-
-### Scope
-
-- §3.28 active-turn gate остаётся раньше zero-HP logic;
-- Character category сначала подтверждается matching `CharacterState`;
-- затем Character actor с `current_hp == 0` отклоняется до target lookup и
-  Character-path processing;
-- Monster category сначала подтверждается успешным typed
-  `MonsterDefinition` lookup;
-- missing Monster Definition / wrong Definition type сохраняют precedence
-  над zero-HP rejection;
-- после подтверждения Monster category `current_hp == 0` отклоняется до
-  existing `len(attacks) != 1` validation;
-- Monster zero-HP failure имеет precedence над attacks-specific
-  `ACTION_NOT_AVAILABLE(field="attacks")`;
-- canonical zero-HP failure: `ACTION_NOT_AVAILABLE`,
-  `entity_id=command.actor_id`, `field=None`, `events=()`;
-- zero-HP gate применяется и outside Combat после category establishment;
-- §3.31 проверяет actor HP, не target HP;
-- rejection выполняется до DiceEngine, Event metadata, Events, mutation и
-  save;
-- existing target-at-zero-HP Damage behavior не менять.
-
-### Out of scope
-
-- Death Saves;
-- unconscious/stable/dead или universal `LifeState`;
-- Monster death/stabilization policy;
-- zero-HP targetability;
-- further-Damage consequences;
-- Healing recovery semantics;
-- Combat removal/CombatEnded;
-- action resources;
-- Reactions/Opportunity Attacks;
-- Character weapon implementation;
-- movement/targeting/reach;
-- новые Command/Event/ErrorCode/State/schema;
-- generic eligibility/life-state abstractions;
-- shared Character/Monster eligibility helper без evidence.
-
-### Acceptance criteria
-
-- Character zero-HP rejection;
-- Character rejection до target-specific processing;
-- Monster Definition failure precedence;
-- Monster zero-HP rejection после category establishment;
-- Monster zero-HP precedence над `field="attacks"` failure;
-- §3.28 precedence над §3.31 при существующем Combat;
-- outside-Combat zero-HP behavior;
-- exact failure shape;
-- отсутствие dice/metadata/Event/save side effects;
-- target-at-zero-HP regression;
-- `AdvanceTurnCommand` unchanged;
-- positive-HP Character/Monster regressions;
-- отсутствие generic abstraction.
-
-### Verification
-
-- Character zero-HP tests;
-- Monster zero-HP tests;
-- Monster Definition precedence tests;
-- active-turn-vs-zero-HP precedence test;
-- target-zero-HP regression;
-- side-effect/call-order tests;
-- existing Attack/Monster consequence regressions.
+_(no `Current`, `Ready`, or `Blocked` task at this time)_
 
 ---
 
@@ -1366,6 +1265,7 @@ TSK-0003 уже определил canonical contract. Production implementation
 | `TSK-0009` | Deduplicate README/CLAUDE and remove redundant current data-flow projection | PR #71 / merge commit `e99d0dc` |
 | `TSK-0003` | Define zero-HP Attack eligibility by creature category | PR #72 / merge commit `7ac97f6` |
 | `TSK-0006` | Implement active-turn Attack gating | PR #75 / merge commit `d590056` |
+| `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 
 ---
 
