@@ -4819,3 +4819,23 @@ contracts.
   reconciliation since no Python or contract file changed; both already
   passed against this exact merged state in the preceding TSK-0007
   implementation verification entry.
+
+## 2026-09-04 — TSK-0004 Group 0 — exact State schema V6 contract and task refinement
+
+- Fixed the exact canonical State schema V6 wire contract in Architecture
+  §3.29: required top-level, Character, Inventory, Inventory Item, and
+  Equipment fields; exact string/null and collection requirements;
+  deterministic writer ordering; strict V1–V5 migration; and the unchanged
+  V5-shaped Combat boundary.
+- Added accepted DEC-0047 because §3.29/DEC-0044 previously reserved the
+  Domain/V6 additions without fixing enough wire detail for an unambiguous
+  persistence implementation. State schema V7 remains exclusively the later
+  additive spatial/`CombatPosition` schema under §3.30.
+- Refined TSK-0004 from `Backlog / P1 / L` to one coherent
+  `Current / P1 / M` cross-cutting task, rather than allocating new `TSK-*`
+  IDs for its implementation checkpoints. TSK-0004 was selected after
+  TSK-0007 Task Closure; `Next` and `Hard blockers` remain empty, TSK-0005
+  remains `Backlog / P1 / L`, and `Next free ID` remains TSK-0010.
+- No production Python, State serializer, or gameplay behavior changed in
+  this planning/canonicalization checkpoint. Character Weapon Attack
+  consumption and State schema V7 remain later work.
