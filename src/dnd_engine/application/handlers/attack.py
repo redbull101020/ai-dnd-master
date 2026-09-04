@@ -128,6 +128,21 @@ class AttackHandler:
         actor_creature: CreatureState,
         actor_character: CharacterState,
     ) -> ResolutionResult[AttackResult | MonsterAttackResult]:
+        if actor_creature.current_hp == 0:
+            return ResolutionResult(
+                success=False,
+                command_id=command.command_id,
+                outcome=None,
+                events=(),
+                errors=(
+                    EngineError(
+                        code=ErrorCode.ACTION_NOT_AVAILABLE,
+                        message="Attack actor has 0 current HP.",
+                        entity_id=command.actor_id,
+                    ),
+                ),
+            )
+
         target = next(
             (
                 candidate
@@ -257,6 +272,21 @@ class AttackHandler:
                         message="Attack actor Definition is not a MonsterDefinition.",
                         entity_id=actor_creature.id,
                         field="definition_id",
+                    ),
+                ),
+            )
+
+        if actor_creature.current_hp == 0:
+            return ResolutionResult(
+                success=False,
+                command_id=command.command_id,
+                outcome=None,
+                events=(),
+                errors=(
+                    EngineError(
+                        code=ErrorCode.ACTION_NOT_AVAILABLE,
+                        message="Attack actor has 0 current HP.",
+                        entity_id=command.actor_id,
                     ),
                 ),
             )
