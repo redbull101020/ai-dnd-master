@@ -1,12 +1,28 @@
 from dataclasses import dataclass
 
 
+@dataclass(frozen=True)
+class CombatPosition:
+    creature_id: str
+    x: int
+    y: int
+
+    def __post_init__(self) -> None:
+        if type(self.creature_id) is not str:
+            raise TypeError("creature_id must be a str")
+        if type(self.x) is not int:
+            raise TypeError("x must be an int")
+        if type(self.y) is not int:
+            raise TypeError("y must be an int")
+
+
 @dataclass
 class CombatState:
     id: str
     round: int
     order: tuple[str, ...]
     active_index: int
+    positions: tuple[CombatPosition, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.id) is not str:
@@ -27,6 +43,19 @@ class CombatState:
             raise TypeError("active_index must be an int")
         if not 0 <= self.active_index < len(self.order):
             raise ValueError("active_index must be a valid index into order")
+        if type(self.positions) is not tuple:
+            raise TypeError("positions must be a tuple")
+        if not all(
+            isinstance(position, CombatPosition) for position in self.positions
+        ):
+            raise TypeError("positions must contain only CombatPosition values")
+        position_creature_ids = [position.creature_id for position in self.positions]
+        if len(position_creature_ids) != len(set(position_creature_ids)):
+            raise ValueError("positions must not contain duplicate creature ids")
+        if not set(position_creature_ids).issubset(self.order):
+            raise ValueError(
+                "every positioned creature must be present in order"
+            )
 
     @property
     def active_creature_id(self) -> str:

@@ -143,10 +143,13 @@ State/Value Objects **полные, минимальные и закрытые**
 | Attack active-turn eligibility | §3.28 |
 | Zero-HP Attack eligibility by creature category | §3.31 |
 | Character weapon-source State + State schema V6 persistence (TSK-0004) | §3.29, §12.13 |
+| Combat-owned spatial State (`CombatPosition`, `CombatState.positions`) + State schema V7 persistence (TSK-0010) | §3.30, §12.13 |
 
-Character weapon-source State/persistence — реализовано; Character weapon
-Attack consumer (`AttackPayload`, `AttackHandler` branch, proficiency
-contribution, Finesse execution, §3.30 targeting/reach) — pending.
+Character weapon-source State/persistence и Combat-owned spatial State
+(`CombatPosition`/`CombatState.positions`, State schema V7) — реализованы;
+Character weapon Attack consumer (`AttackPayload`, `AttackHandler` branch,
+proficiency contribution, Finesse execution, §3.30 production 5-ft reach
+validation) — pending.
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation

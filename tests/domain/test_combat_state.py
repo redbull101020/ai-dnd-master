@@ -1,8 +1,8 @@
-from dataclasses import fields
+from dataclasses import FrozenInstanceError, fields
 
 import pytest
 
-from dnd_engine.domain.state.combat import CombatState
+from dnd_engine.domain.state.combat import CombatPosition, CombatState
 
 
 def make_combat(**overrides: object) -> CombatState:
@@ -22,6 +22,7 @@ def test_combat_state_has_exact_fields() -> None:
         "round",
         "order",
         "active_index",
+        "positions",
     )
 
 
@@ -71,3 +72,123 @@ def test_rejects_duplicate_order_entries() -> None:
 def test_rejects_out_of_range_active_index(active_index: int) -> None:
     with pytest.raises(ValueError, match="active_index"):
         make_combat(order=("a", "b"), active_index=active_index)
+
+
+def test_combat_position_has_exact_fields() -> None:
+    assert tuple(field.name for field in fields(CombatPosition)) == (
+        "creature_id",
+        "x",
+        "y",
+    )
+
+
+def test_combat_position_is_frozen() -> None:
+    position = CombatPosition(creature_id="character_001", x=0, y=0)
+
+    with pytest.raises(FrozenInstanceError):
+        position.x = 1  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("x", "y"),
+    [
+        (0, 0),
+        (5, 10),
+        (-5, -10),
+        (-1, 1),
+    ],
+)
+def test_combat_position_accepts_positive_zero_and_negative_coordinates(
+    x: int, y: int
+) -> None:
+    position = CombatPosition(creature_id="character_001", x=x, y=y)
+
+    assert position.x == x
+    assert position.y == y
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("creature_id", 1),
+        ("x", "0"),
+        ("y", "0"),
+        ("x", True),
+        ("y", False),
+        ("x", 1.0),
+        ("y", 1.0),
+    ],
+)
+def test_combat_position_rejects_wrong_runtime_types(
+    field_name: str, invalid_value: object
+) -> None:
+    values: dict[str, object] = {"creature_id": "character_001", "x": 0, "y": 0}
+    values[field_name] = invalid_value
+
+    with pytest.raises(TypeError):
+        CombatPosition(**values)  # type: ignore[arg-type]
+
+
+def test_combat_state_defaults_to_empty_positions() -> None:
+    combat = make_combat()
+
+    assert combat.positions == ()
+
+
+def test_combat_state_rejects_non_tuple_positions() -> None:
+    with pytest.raises(TypeError):
+        make_combat(
+            positions=[CombatPosition(creature_id="character_001", x=0, y=0)]
+        )
+
+
+def test_combat_state_rejects_wrong_position_member_type() -> None:
+    with pytest.raises(TypeError):
+        make_combat(positions=({"creature_id": "character_001", "x": 0, "y": 0},))
+
+
+def test_combat_state_rejects_duplicate_position_creature_ids() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        make_combat(
+            positions=(
+                CombatPosition(creature_id="character_001", x=0, y=0),
+                CombatPosition(creature_id="character_001", x=1, y=1),
+            )
+        )
+
+
+def test_combat_state_rejects_positioned_creature_outside_order() -> None:
+    with pytest.raises(ValueError, match="order"):
+        make_combat(
+            order=("character_001", "monster_001"),
+            positions=(CombatPosition(creature_id="monster_002", x=0, y=0),),
+        )
+
+
+def test_combat_state_accepts_empty_positions() -> None:
+    combat = make_combat(positions=())
+
+    assert combat.positions == ()
+
+
+def test_combat_state_accepts_partial_positions() -> None:
+    combat = make_combat(
+        order=("character_001", "monster_001"),
+        positions=(CombatPosition(creature_id="character_001", x=0, y=0),),
+    )
+
+    assert combat.positions == (
+        CombatPosition(creature_id="character_001", x=0, y=0),
+    )
+
+
+def test_combat_state_accepts_full_positions() -> None:
+    combat = make_combat(
+        order=("character_001", "monster_001"),
+        positions=(
+            CombatPosition(creature_id="character_001", x=0, y=0),
+            CombatPosition(creature_id="monster_001", x=5, y=5),
+        ),
+    )
+
+    assert len(combat.positions) == 2

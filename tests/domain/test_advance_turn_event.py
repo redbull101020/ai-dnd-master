@@ -12,7 +12,7 @@ from dnd_engine.domain.events.advance_turn import (
     build_turn_advanced_v1,
 )
 from dnd_engine.domain.rules.advance_turn import AdvanceTurnResult
-from dnd_engine.domain.state.combat import CombatState
+from dnd_engine.domain.state.combat import CombatPosition, CombatState
 from dnd_engine.infrastructure.persistence.json.event_serializer import (
     EventSerializer,
 )
@@ -131,6 +131,26 @@ def test_applier_advances_active_index_and_round() -> None:
         order=("character_001", "monster_001"),
         active_index=1,
     )
+
+
+def test_applier_preserves_positions_and_order_while_advancing() -> None:
+    """`apply_turn_advanced_v1` uses `dataclasses.replace(combat, round=...,
+    active_index=...)`, which passes every unspecified field (`order`,
+    `positions`) through unchanged; this proves that preservation holds for
+    a non-empty `positions` tuple, not just the empty default (§3.30)."""
+    positions = (
+        CombatPosition(creature_id="character_001", x=0, y=0),
+        CombatPosition(creature_id="monster_001", x=5, y=5),
+    )
+    combat = make_combat(active_index=0, round=1, positions=positions)
+    event = build_event()
+
+    updated = apply_turn_advanced_v1(combat, event)
+
+    assert updated.round == 1
+    assert updated.active_index == 1
+    assert updated.order == combat.order
+    assert updated.positions == positions
 
 
 def test_applier_advances_round_on_wraparound() -> None:

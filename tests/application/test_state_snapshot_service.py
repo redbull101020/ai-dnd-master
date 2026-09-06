@@ -7,7 +7,7 @@ from dnd_engine.application.services.state_snapshot import (
 )
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
-from dnd_engine.domain.state.combat import CombatState
+from dnd_engine.domain.state.combat import CombatPosition, CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.equipment import EquipmentState
 from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
@@ -54,6 +54,10 @@ def test_replaces_exactly_one_creature_and_preserves_snapshot_projections() -> N
         round=2,
         order=("monster_002", "character_001", "monster_001"),
         active_index=1,
+        positions=(
+            CombatPosition(creature_id="character_001", x=1, y=1),
+            CombatPosition(creature_id="monster_001", x=5, y=5),
+        ),
     )
     snapshot = StateSnapshot(
         campaign=campaign,
@@ -80,12 +84,14 @@ def test_replaces_exactly_one_creature_and_preserves_snapshot_projections() -> N
     assert result.equipment is snapshot.equipment
     assert result.equipment[0] is equipment
     assert result.combat is combat
+    assert result.combat.positions == combat.positions
     assert snapshot.creatures == (other, target, character_creature)
     assert snapshot.campaign is campaign
     assert snapshot.characters == (character,)
     assert snapshot.inventories == (inventory,)
     assert snapshot.equipment == (equipment,)
     assert snapshot.combat is combat
+    assert snapshot.combat.positions == combat.positions
     assert target.current_hp == 7
 
 
