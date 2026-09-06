@@ -4921,3 +4921,38 @@ contracts.
   `tests/architecture/test_documentation_references.py` — 2 passed;
   `git diff --check` — no whitespace errors. Ran under Python 3.12.9. Group 2
   remains uncommitted and unpushed pending review.
+
+## 2026-09-06 — TSK-0004 Group 3 — integration and regression hardening
+
+- Added real `FilesystemStateStore` V6 round-trip coverage for non-empty
+  Character weapon-source State (`test_save_load_v6_preserves_weapon_source_state`):
+  proved `weapon_proficiencies`, `InventoryState`, `InventoryItemState`, and
+  `EquipmentState` survive an exact Domain round-trip through actual on-disk
+  V6 JSON, not just an in-memory fake.
+- Added an explicit regression
+  (`test_load_does_not_dereference_inventory_item_definition_id`) proving
+  State persistence saves/loads a structurally valid V6 Inventory item whose
+  `definition_id` is not a packaged Item Definition, without ever calling
+  `DefinitionSource`.
+- Confirmed the existing snapshot-replacement regression
+  (`test_replaces_exactly_one_creature_and_preserves_snapshot_projections`,
+  from Group 1) already proves `campaign`/`characters`/`inventories`/
+  `equipment`/`combat` are preserved by identity when `replace_creature_in_snapshot`
+  replaces one Creature; `dataclasses.replace` already provides the correct
+  behavior, so no production change was needed.
+- Confirmed existing Attack/Damage/turn-gating regressions remain green with
+  no production Attack file touched: Attack domain/handler/integration
+  suites, Damage/Monster-Attack-Damage suites, and active-turn/advance-turn/
+  start-combat suites all pass unchanged.
+- Confirmed V6 still rejects (and does not require) V7 `positions` via the
+  existing `test_v6_deserialize_rejects_combat_positions_field` from Group 2.
+- No production Attack file, Definition lookup, new abstraction (engine,
+  repository, registry, resolver, or generic weapon-source service), or new
+  production dependency was added. Only `tests/infrastructure/test_state_store.py`
+  changed in this Group.
+- Verification: `tests/infrastructure/test_state_store.py` — 33 passed;
+  `tests/application/test_state_snapshot_service.py` — 3 passed; full suite
+  — 1720 passed; configured `mypy` — success for 107 source files;
+  `tests/architecture/test_documentation_references.py` — 2 passed;
+  `git diff --check` — no errors. Ran under Python 3.12.9. Group 3 remains
+  uncommitted and unpushed pending review.
