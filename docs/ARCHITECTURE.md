@@ -6024,7 +6024,9 @@ equippedWeaponId
 
 `equippedWeaponId` is always present and is either an exact string or `null`.
 
-The V6 writer serializes non-semantic collections deterministically:
+The V6 writer serializes non-semantic collections deterministically (the
+current V7 writer reuses this exact V6 ordering unchanged, and additionally
+sorts `combat.positions` by `creatureId`, §3.30):
 
 ```text
 characters          sorted by id
@@ -6052,16 +6054,21 @@ legacy StateSnapshot:
 
 Legacy reads never synthesize a Dagger, Inventory, Equipment, or weapon
 proficiency from class, Creature Definition, level, or any other legacy data.
-Now that the V6 writer is implemented, saving a successfully loaded legacy
-snapshot materializes the empty V6 additions in the V6 wire shape.
+When TSK-0004 first implemented the V6 writer, saving a successfully loaded
+legacy snapshot materialized the empty V6 additions in the V6 wire shape;
+the current V7 writer (TSK-0010, §3.30) now materializes those same empty
+additions in the V7 wire shape instead, additive over this V6 shape.
 
 V6 `combat` remains exactly the existing V5 Combat wire shape: `null`, or an
 object with exactly `id`, `round`, `order`, and `activeIndex`. V6 neither adds
-nor accepts `positions` or `CombatPosition`; those are exclusively the later,
-additive State schema V7 contract in §3.30.
+nor accepts `positions` or `CombatPosition`; those are exclusively the
+additive State schema V7 contract in §3.30, which reuses every V6 field
+defined above unchanged.
 
-The production writer is State schema V6, implemented by TSK-0004 (§12.13).
-No Attack Command, Event, or gameplay behavior changed.
+State schema V6 was implemented by TSK-0004 (§12.13) as this exact
+persistence contract. The current production writer is State schema V7
+(TSK-0010, §3.30), additive over this V6 shape. No Attack Command, Event,
+or gameplay behavior changed.
 
 #### Character weapon validation order
 
@@ -6142,15 +6149,22 @@ not collapse or pre-implement those stages.
 
 ### 3.30. Minimal Phase 3 Character Dagger melee targeting and reach (TSK-0008)
 
-Implementation status: **Canonical contract defined; production
-implementation pending.** This section defines the smallest authoritative
-targeting/reach contract required by the first future Character Dagger
-melee consumer described in §3.29. No production `CombatPosition`,
-`CombatState.positions`, State schema V7, `AttackHandler` branch, or
-resolver exists yet. The current production writer is State schema V6,
-implemented by TSK-0004 (§3.29/§12.13); V6 preserves the exact V5-shaped
-Combat wire contract without `positions`, and `CombatState` remains
-otherwise unchanged until a separate implementation task.
+Implementation status: **Partially implemented.** This section defines the
+smallest authoritative targeting/reach contract required by the first
+future Character Dagger melee consumer described in §3.29.
+
+Implemented (TSK-0010): `CombatPosition`, `CombatState.positions`, and
+State schema V7 persistence (additive over V6, §12.13) — the Combat-owned
+tactical-position foundation this section requires.
+
+Still pending: the Character Dagger Weapon Attack consumer (`AttackHandler`
+branch), production 5-ft reach validation using this spatial State, the
+Weapon Attack resolver, Movement/placement lifecycle, and broader targeting
+(ranged/thrown/ammunition, cover, visibility). No production resolver or
+`AttackHandler` branch exists yet. The current production writer is State
+schema V7 (TSK-0010), additive over V6 (implemented by TSK-0004,
+§3.29/§12.13); V6 remains the exact historical V5-shaped Combat wire
+contract without `positions`, preserved read-only.
 
 #### Consumer boundary
 
@@ -6189,7 +6203,7 @@ no `location_id`, no Map, and no World dependency.
 
 #### Minimal combat-local position representation
 
-The minimal planned immutable record is:
+The minimal immutable record, implemented by TSK-0010, is:
 
 ```python
 @dataclass(frozen=True)
@@ -6199,7 +6213,7 @@ class CombatPosition:
     y: int
 ```
 
-And the future extension of the existing `CombatState` (§3.25):
+And the implemented extension of the existing `CombatState` (§3.25):
 
 ```python
 positions: tuple[CombatPosition, ...] = ()
@@ -6432,13 +6446,14 @@ existing validation order.
 
 #### State schema consequence
 
-The current production writer is State schema V6, implemented by TSK-0004
-(§3.29/§12.13) for the weapon-source additions (`StateSnapshot.inventories`,
-`StateSnapshot.equipment`, `CharacterState.weapon_proficiencies`). V6 is not
-reused for spatial State.
+The current production writer is State schema V7, implemented by TSK-0010.
+State schema V6, implemented by TSK-0004 (§3.29/§12.13), added the
+weapon-source additions (`StateSnapshot.inventories`,
+`StateSnapshot.equipment`, `CharacterState.weapon_proficiencies`); V6 did
+not add spatial State and remains the exact historical Combat wire contract
+without `positions`, preserved read-only.
 
-The planned spatial evolution is a subsequent V7 contract, additive on top
-of V6:
+V7 implements this spatial evolution, additive on top of V6:
 
 ```text
 V6
@@ -6455,11 +6470,11 @@ V7 = V6 additions + positions
 
 V7 cannot exist as a schema that has lost the V6 additions.
 
-##### Planned V7 Combat wire shape
+##### V7 Combat wire shape (implemented)
 
-Once V7 is implemented, a non-null `combat` object serializes with a
-required `positions` array, additive on top of the existing V5/V6 Combat
-shape (`id`, `round`, `order`, `activeIndex`):
+A non-null `combat` object serializes with a required `positions` array,
+additive on top of the existing V5/V6 Combat shape (`id`, `round`, `order`,
+`activeIndex`):
 
 ```json
 {
@@ -6520,7 +6535,7 @@ This is distinct from `combat.order`, which remains the gameplay-semantic
 Initiative/turn order (§3.25) and is never reordered by the serializer —
 only `positions` is sorted for deterministic serialization.
 
-The future compatibility semantics, once V7 is implemented, are:
+The compatibility semantics are:
 
 ```text
 V1–V4: no CombatState → no combat positions
@@ -6530,9 +6545,10 @@ V6: weapon-source schema + existing CombatState without positions →
 V7: a non-null CombatState includes a required serialized positions array
 ```
 
-This is an architecture contract for a future persistence implementation.
-This slice does not change the production serializer, `SCHEMA_VERSION`,
-State classes, or their tests.
+This contract is implemented by the production serializer
+(`SCHEMA_VERSION = 7`) and State classes (TSK-0010). The Character Dagger
+Attack consumer that will exercise this spatial State for targeting/reach
+validation does not exist yet (see *Implementation status* above).
 
 #### Explicit exclusions / abstraction verdict
 
@@ -9607,11 +9623,12 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Текущий production writer — exact State schema V6
-(`SCHEMA_V6_VERSION`); его точный field-by-field контракт (top-level
-`inventories`, `equipment`, Character `weaponProficiencies`) канонически
-определён в §3.29 и не дублируется здесь. Ниже — historical V5 example
-(предшествует V6 additions), иллюстрирующий общую envelope-форму; это не
+filesystem I/O. Текущий production writer — exact State schema V7
+(`SCHEMA_V7_VERSION`), additive over V6; его точный field-by-field контракт
+(top-level `inventories`, `equipment`, Character `weaponProficiencies` —
+§3.29; non-null `combat.positions` — §3.30) канонически определён в
+§3.29/§3.30 и не дублируется здесь. Ниже — historical V5 example
+(предшествует V6/V7 additions), иллюстрирующий общую envelope-форму; это не
 current writer shape:
 
 ```json
@@ -9660,13 +9677,15 @@ current writer shape:
 }
 ```
 
-JSON использует camelCase. The current V6 writer always emits
-`schemaVersion: 6` and the exact V6 state fields defined in §3.29
+JSON использует camelCase. The current V7 writer always emits
+`schemaVersion: 7` and the exact V6 state fields defined in §3.29
 (`campaign`, `creatures`, `characters`, `inventories`, `equipment`,
-`combat`). V6 preserves the V5 campaign, creature, and combat shapes and
+`combat`), additionally requiring `positions` inside a non-null `combat`
+(§3.30). V6 preserves the V5 campaign, creature, and combat shapes and
 preserves the pre-existing Character fields/semantics, while adding the V6
 Character `weaponProficiencies` field and the top-level
-`inventories`/`equipment` projections defined in §3.29. Preserved fields
+`inventories`/`equipment` projections defined in §3.29; V7 preserves this
+exact V6 shape unchanged and adds only `combat.positions`. Preserved fields
 include `"characters": []` для пустой collection, `"conditions": []` для
 пустого Creature Condition membership (§3.21) и `"combat": null`, когда
 `StateSnapshot.combat is None` (§3.25). Creatures и Characters сортируются по runtime ID,
@@ -9676,21 +9695,24 @@ include `"characters": []` для пустой collection, `"conditions": []` д
 object с exact fields `id`, `round`, `order` (JSON array Creature ID strings в
 initiative-порядке) и `activeIndex`.
 
-Reader принимает шесть точных схем: legacy V1 с state fields `campaign` и
+Reader принимает семь точных схем: legacy V1 с state fields `campaign` и
 `creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
 обязательным дополнительным `skillProficiencies`, legacy V4 с обязательным
 `conditions` (без `combat`), legacy V5 с обязательным дополнительным
-`combat` (без `inventories`/`equipment`/Character `weaponProficiencies`), и
-current V6 с обязательными дополнительными top-level `inventories`,
-`equipment` и Character `weaponProficiencies` (exact field-by-field контракт
-— §3.29). V1–V5 сохраняют свои exact historical shapes без retroactive
-расширения V6-полями. Поле `characters` в V1 является unknown и запрещено.
-Успешное чтение V1 создаёт `StateSnapshot.characters=()` и не придумывает
-level или proficiency defaults. V2 Character entry сохраняет exact legacy
-fields `id`, `totalLevel` и `savingThrowProficiencies`; reader мигрирует его
-в canonical `CharacterState` с `skill_proficiencies=frozenset()`. V1–V3
-Creature entries не содержат поле `conditions` — оно unknown и запрещено для
-этих трёх версий; успешное чтение любой из них создаёт `CreatureState.
+`combat` (без `inventories`/`equipment`/Character `weaponProficiencies`,
+без `combat.positions`), legacy V6 с обязательными дополнительными
+top-level `inventories`, `equipment` и Character `weaponProficiencies`
+(exact field-by-field контракт — §3.29, без `combat.positions`), и current
+V7 с теми же V6 полями плюс обязательным `positions` внутри non-null
+`combat` (exact field-by-field контракт — §3.30). V1–V6 сохраняют свои
+exact historical shapes без retroactive расширения V7-полями. Поле
+`characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
+`StateSnapshot.characters=()` и не придумывает level или proficiency
+defaults. V2 Character entry сохраняет exact legacy fields `id`,
+`totalLevel` и `savingThrowProficiencies`; reader мигрирует его в canonical
+`CharacterState` с `skill_proficiencies=frozenset()`. V1–V3 Creature entries
+не содержат поле `conditions` — оно unknown и запрещено для этих трёх
+версий; успешное чтение любой из них создаёт `CreatureState.
 conditions == frozenset()` без выдумывания membership. V1–V4 не содержат
 `state.combat` — оно unknown для этих четырёх версий; успешное чтение любой
 из них создаёт `StateSnapshot.combat is None` без выдумывания Combat State.
@@ -9698,36 +9720,43 @@ V1–V5 не содержат `weaponProficiencies`, `inventories` или `equip
 unknown для этих пяти версий; успешное чтение любой из них создаёт
 `CharacterState.weapon_proficiencies = frozenset()`,
 `StateSnapshot.inventories = ()` и `StateSnapshot.equipment = ()` без синтеза
-weapon State (§3.29/§12.13).
+weapon State (§3.29/§12.13). V6 обязан сохранять реальные
+`weaponProficiencies`/`inventories`/`equipment` — они не empty defaults для
+этой версии. V5 и V6 `combat` записи не содержат `positions`
+— оно unknown и запрещено для этих версий; при непустом `combat` успешное
+чтение любой из них создаёт `CombatState.positions = ()` без синтеза
+tactical placement (§3.30).
 
-Для всех шести версий required fields и JSON primitive/container types
+Для всех семи версий required fields и JSON primitive/container types
 точны; unknown fields, defaults, type coercion, несовпадение outer
 `campaignId` с `state.campaign.id`, невалидные Domain values и duplicate IDs
-запрещены. V2–V6 дополнительно требуют, чтобы каждый Character ID ссылался
-на существующий Creature ID; V5–V6 дополнительно требуют, чтобы каждый
+запрещены. V2–V7 дополнительно требуют, чтобы каждый Character ID ссылался
+на существующий Creature ID; V5–V7 дополнительно требуют, чтобы каждый
 `combat.order` ID ссылался на существующий Creature ID. V3–V5 Character
 entry содержит identical exact fields `id`, `totalLevel`,
 `savingThrowProficiencies` и `skillProficiencies` — Character schema не
-менялась с V3 по V5; V6 Character entry дополнительно требует
-`weaponProficiencies` (§3.29). V4, V5 и V6 Creature entry дополнительно
-требуют `conditions`: JSON list точных строк, каждая — известное значение
-`Condition`, без дубликатов; malformed non-list, unknown-value и
-duplicate-value payloads отклоняются (§3.21).
+менялась с V3 по V5; V6 и V7 Character entry дополнительно требуют
+`weaponProficiencies` (§3.29) — эти два поля идентичны, §3.30 не меняет
+Character schema. V4–V7 Creature entry дополнительно требуют `conditions`:
+JSON list точных строк, каждая — известное значение `Condition`, без
+дубликатов; malformed non-list, unknown-value и duplicate-value payloads
+отклоняются (§3.21).
 
 Character decoding (включая ветку, читающую `skillProficiencies`) определяется
 явным сравнением с `LEGACY_SCHEMA_V2_VERSION`, а не сравнением только с
 текущим `SCHEMA_VERSION` — это защищает V3-чтение при будущих schema bump'ах.
-Симметрично, V4/V5/V6 Creature field set и `conditions` decoding определяются
-сравнением с fixed-identity множеством `{SCHEMA_V4_VERSION,
-SCHEMA_V5_VERSION, SCHEMA_V6_VERSION}`, а не с мутируемым `SCHEMA_VERSION`:
-`SCHEMA_VERSION = SCHEMA_V6_VERSION` сегодня, но эти имена не
-взаимозаменяемы — `SCHEMA_VERSION` обозначает current writer и используется
-только при записи, тогда как historical V4/V5/V6 read semantics
-зафиксированы на своих собственных fixed constants независимо от того,
-останется ли V6 current writer в будущем (§3.21 фиксирует эту
+Симметрично, V4/V5/V6/V7 Creature field set и `conditions` decoding
+определяются сравнением с fixed-identity множеством `{SCHEMA_V4_VERSION,
+SCHEMA_V5_VERSION, SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}`, а не с мутируемым
+`SCHEMA_VERSION`: `SCHEMA_VERSION = SCHEMA_V7_VERSION` сегодня, но эти имена
+не взаимозаменяемы — `SCHEMA_VERSION` обозначает current writer и
+используется только при записи, тогда как historical V4/V5/V6/V7 read
+semantics зафиксированы на своих собственных fixed constants независимо от
+того, останется ли V7 current writer в будущем (§3.21 фиксирует эту
 regression-защиту как часть G6C1; §3.25 применяет тот же constant-based
 discipline к своему V5 `combat` addition, G7; §3.29 применяет её же к своим
-V6 weapon-source additions, TSK-0004).
+V6 weapon-source additions, TSK-0004; §3.30 применяет её же к своему V7
+Combat `positions` addition, TSK-0010).
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -9899,7 +9928,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -9930,14 +9959,15 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 6` (§3.29/§12.13,
-TSK-0004: adds top-level `inventories`/`equipment` and Character
-`weaponProficiencies`); writer выпускает только V6. Reader также принимает
+Current State schema — exact integer `schemaVersion = 7` (§3.30/§12.13,
+TSK-0010: adds `combat.positions` when `combat` is non-null, additive over
+V6's §3.29/TSK-0004 top-level `inventories`/`equipment` and Character
+`weaponProficiencies`); writer выпускает только V7. Reader также принимает
 exact legacy integer `schemaVersion = 1`, `schemaVersion = 2`,
-`schemaVersion = 3`, `schemaVersion = 4` и `schemaVersion = 5`. Другие
-значения запрещены, а `bool` не считается integer version. Это версия
-storage schema, а не revision текущего State и не механизм concurrency
-control.
+`schemaVersion = 3`, `schemaVersion = 4`, `schemaVersion = 5` и
+`schemaVersion = 6`. Другие значения запрещены, а `bool` не считается
+integer version. Это версия storage schema, а не revision текущего State и
+не механизм concurrency control.
 
 ---
 
@@ -9975,25 +10005,38 @@ Migration
 State v3
 ```
 
-Текущие production migration paths читают exact legacy V1–V5 и current V6
+Текущие production migration paths читают exact legacy V1–V6 и current V7
 согласно их фиксированным wire-контрактам; production writer выпускает exact
-V6 (§3.29), реализованный TSK-0004. Reader сохраняет те же exact V1–V5
-shapes и добавляет отсутствующие Domain projections только как пустые
-migration results:
+V7 (§3.30), реализованный TSK-0010, additive поверх exact V6 (§3.29),
+реализованного TSK-0004. Reader сохраняет те же exact V1–V6 shapes и
+добавляет только те Domain projections, которых не было в исходной версии,
+как пустые migration results:
 
 ```text
-legacy CharacterState.weapon_proficiencies = frozenset()
-legacy StateSnapshot.inventories = ()
-legacy StateSnapshot.equipment = ()
+V1–V5:
+    CharacterState.weapon_proficiencies = frozenset()
+    StateSnapshot.inventories = ()
+    StateSnapshot.equipment = ()
+
+V5–V6 non-null combat:
+    CombatState.positions = ()
 ```
 
-Legacy migration не выводит Dagger, Inventory, Equipment или weapon
-proficiency из class, Creature Definition, level либо других старых данных.
-Успешно загруженный legacy snapshot при следующем сохранении записывается в
-exact V6 с пустыми V6 additions. Legacy wire schemas задним числом не
-расширяются; generic migration registry или framework не вводится. State
-schema V7 остаётся отдельным последующим additive spatial contract (§3.30) и
-не меняет V6 Combat shape.
+V6 обязан сохранять свои реальные `weaponProficiencies`/`inventories`/
+`equipment` — это не empty defaults для V6. Legacy migration не выводит
+Dagger, Inventory, Equipment, weapon proficiency или tactical placement из
+class, Creature Definition, level либо других старых данных. Успешно
+загруженный V1–V5 snapshot при следующем сохранении записывается в exact
+V7: projections, отсутствовавшие в исходной версии, получают canonical
+empty defaults, как указано выше. Успешно загруженный V6 snapshot при
+следующем сохранении сохраняет свои реальные `weaponProficiencies`/
+`inventories`/`equipment` без изменений и получает `combat.positions = ()`
+при непустом `combat`. Legacy wire schemas задним числом не расширяются;
+generic migration registry или framework не вводится. State schema V7
+(§3.30, TSK-0010) — additive spatial contract над V6: сохраняет все V6 поля
+(`weaponProficiencies`/`inventories`/`equipment`) без изменений и добавляет
+только обязательный `combat.positions` внутри non-null `combat`; V6
+остаётся exact historical Combat shape без `positions`.
 
 ---
 

@@ -173,10 +173,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   the broad Attack Rolls item. G8/G9 later added the narrow Monster Scimitar
   and Character-target path, §3.29 defines the Character weapon-source
   prerequisite, and §3.30 separately defines the canonical melee
-  targeting/reach prerequisite for the first Dagger consumer, but the
-  production Character weapon path, production spatial State/reach
-  validation, broader Monster actions, spells, and broader consequences
-  remain missing.
+  targeting/reach prerequisite for the first Dagger consumer — its
+  Combat-owned spatial State and additive State schema V7 persistence are
+  now implemented (TSK-0010) — but the production Character weapon path,
+  production reach validation, broader Monster actions, spells, and broader
+  consequences remain missing.
 - **Broader unimplemented scope:** [DEF-0011](#def-0011),
   [DEF-0012](#def-0012), [DEF-0013](#def-0013),
   [DEF-0014](#def-0014), [DEF-0021](#def-0021), and
@@ -671,17 +672,19 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   schema V6 persistence. Architecture §3.30 separately defines the minimal
   authoritative melee targeting/reach contract for the first Dagger consumer
   (Combat-owned `CombatPosition`/`CombatState.positions`, a narrow `dnd_5e`
-  5-ft squared-distance policy, and planned State schema V7 additive over
-  V6); its production implementation remains pending. The Character weapon
+  5-ft squared-distance policy, and State schema V7 additive over V6);
+  TSK-0010 has now implemented this Combat-owned spatial State and its
+  additive State schema V7 persistence in production. The Character weapon
   Attack consumer (proficiency contribution, Finesse execution, targeting/
-  reach, and Attack/Damage consequence) and broader ranged/thrown/ammunition
-  and other-weapon State remain separate unresolved prerequisites.
+  reach validation, and Attack/Damage consequence) and broader
+  ranged/thrown/ammunition and other-weapon State remain separate unresolved
+  prerequisites.
 - **Prerequisites:** The Character weapon `AttackHandler` branch and typed
   `WeaponDefinition` lookup consuming the now-implemented §3.29
-  Inventory/Equipment source, production implementation of the §3.30
-  targeting/reach contract (Combat-owned spatial State, State schema V7) for
-  the first Dagger consumer, and later source-specific facts for
-  ranged/ammunition consumers.
+  Inventory/Equipment source, production reach validation using the
+  now-implemented §3.30 Combat-owned spatial State (State schema V7,
+  TSK-0010) for the first Dagger consumer, and later source-specific facts
+  for ranged/ammunition consumers.
 - **Planned approach:** Keep one explicit Attack intent while deriving weapon
   attack inputs from authoritative State/Definitions; implement concrete
   weapon policies before considering shared abstractions.
@@ -734,6 +737,18 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   Finesse execution in Attack remain absent, and the §3.30 targeting/reach
   contract and the Character Dagger Attack→Damage→Monster HP continuation
   remain open. Status stays `Deferred` for the broader Weapon attack scope.
+  2026-09-06 — TSK-0010 implemented the production Combat-owned spatial
+  State part of the §3.30 prerequisite: `CombatPosition`,
+  `CombatState.positions`, and additive State schema V7 persistence (strict
+  V1–V6 compatibility, `positions` serialized deterministically sorted by
+  `creatureId`, `combat.order` unchanged), confirmed through a real
+  filesystem round trip and StartCombat/AdvanceTurn/Creature-replacement
+  preservation regressions. It intentionally implements no Character weapon
+  Attack consumer behavior: `AttackPayload` is unchanged, `AttackHandler`
+  gains no weapon or spatial-validation branch, and the 5-ft reach
+  production consumer, the Weapon Attack resolver, and the Character Dagger
+  Attack→Damage→Monster HP continuation remain open. Status stays
+  `Deferred` for the broader Weapon attack scope.
 
 ## DEF-0012
 

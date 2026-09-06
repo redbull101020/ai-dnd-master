@@ -5416,3 +5416,150 @@ already-merged delivery branch.
 - No commit, push, or pull request was created for this checkpoint; a
   `review.patch` was produced from the uncommitted working-tree diff for
   manual review before the next `TSK-0010` group begins.
+- Group 3 (including its changes-requested pass) was committed as
+  `523b8a7` on `feat/tsk-0010-combat-position-v7` and pushed to
+  `origin/feat/tsk-0010-combat-position-v7` under a post-review
+  authorization scoped to that reviewed diff only.
+
+## 2026-09-06 — TSK-0010 Group 4: documentation reconciliation and final verification
+
+- Fourth and final checkpoint for `TSK-0010`, continuing on
+  `feat/tsk-0010-combat-position-v7` after Group 3 (`523b8a7`). Goal:
+  reconcile implementation-status documentation with the now-real Group
+  1–3 implementation, without reopening or changing any already-accepted
+  canonical contract (§3.30/DEC-0045 rationale is unchanged) and without
+  performing Task Closure.
+- Revalidated before editing: re-read `docs/ARCHITECTURE.md` §3.30 and
+  §12.13, `docs/ROADMAP.md` Phase 3, the relevant `docs/DEFERRED.md`
+  entries (`P2-ATTACK-ROLLS`, `DEF-0011`), `CLAUDE.md`, `README.md`, and
+  TSK-0010 in `docs/TASK.md`; confirmed the cumulative Group 1–3
+  implementation (`CombatPosition`, `CombatState.positions`, State schema
+  V7 reader/writer, and the StartCombat/AdvanceTurn/Creature-replacement/
+  filesystem preservation regressions) actually satisfies the §3.30
+  acceptance criteria before touching any status text — no masking of an
+  unmet contract was needed because none was found.
+- **`docs/ARCHITECTURE.md` §3.30**: changed the implementation-status
+  paragraph from "Canonical contract defined; production implementation
+  pending" to "Partially implemented," with an explicit split —
+  Implemented (TSK-0010): `CombatPosition`, `CombatState.positions`, State
+  schema V7 persistence; Still pending: the Character Dagger Weapon Attack
+  consumer (`AttackHandler` branch), production 5-ft reach validation, the
+  Weapon Attack resolver, Movement/placement lifecycle, and broader
+  targeting. Updated "the current production writer is State schema V6"
+  to V7 (additive over V6, TSK-0004/TSK-0010). Updated "the minimal
+  planned immutable record"/"future extension of the existing
+  `CombatState`" to "implemented" wording. Renamed "Planned V7 Combat wire
+  shape" to "V7 Combat wire shape (implemented)" and removed the "once V7
+  is implemented"/"future compatibility semantics" framing, replacing the
+  closing "this is an architecture contract for a future persistence
+  implementation" sentence (now false) with a statement that the contract
+  is implemented by the production serializer and State classes. No
+  canonical spatial behavior, wire-field set, error mapping, validation
+  order, or exclusion list was changed; DEC-0045 was not rewritten.
+- **`docs/ARCHITECTURE.md` outside §3.30** (changes-requested follow-up
+  pass, same checkpoint): corrected remaining stale current-writer/
+  current-schema statements in §3.29's "State schema V6 and compatibility"
+  subsection and in the general serialization reference (§§12.9, 12.12,
+  12.13) that still asserted V6 as the present-day production writer/
+  schema. Specifically: "current production writer" and "Current State
+  schema" now read V7 (`SCHEMA_V7_VERSION = 7`) instead of V6 everywhere
+  they describe present-day behavior; the reader is now described as
+  accepting seven exact schemas (legacy V1–V6 plus current V7, was "six...
+  V1–V5 plus current V6"); the `V2–V6`/`V5–V6` reference-integrity ranges
+  extended to `V2–V7`/`V5–V7` since V7 inherits the identical semantics;
+  the Creature-`conditions` range extended from `V4/V5/V6` to `V4–V7`
+  (and the corresponding fixed-identity constant set gained
+  `SCHEMA_V7_VERSION`); the deterministic-serialization and legacy-
+  migration text now states V7 preserves every V6 field
+  (`weaponProficiencies`/`inventories`/`equipment`) unchanged and adds
+  only `combat.positions`; "saving a successfully loaded legacy snapshot
+  materializes... in the V6 wire shape" corrected to V7, with the
+  original V6-writer sentence kept as an explicit historical clause ("when
+  TSK-0004 first implemented the V6 writer..."); and the empty-
+  migration-results list gained `legacy CombatState.positions = ()`. The
+  exact historical V6 wire contract itself (its required fields, JSON
+  shape, sort order, and its explicit rejection of `positions`) was left
+  completely unchanged — only present-tense "this is what the writer does
+  today" claims were corrected. No canonical behavior, DEC-0045, or
+  `docs/TASK.md` was touched by this follow-up.
+- **`docs/ROADMAP.md`**: point-fixed the `Weapon attacks` and `Targeting`
+  Phase 3 bullets, the G9 narrative paragraph, and the TSK-0008 narrative
+  paragraph to state that the Combat-owned spatial State and additive
+  State schema V7 persistence are now implemented (TSK-0010), while
+  explicitly keeping the Character Dagger `AttackHandler` branch, reach
+  validation, Weapon Attack resolver, and Character Dagger
+  Attack→Damage→Monster HP continuation open. `Weapon attacks`, `Attack
+  consequences`, `Targeting`, and `Movement` checkboxes remain unchecked —
+  none is closed by this checkpoint.
+- **`docs/DEFERRED.md`**: corrected `P2-ATTACK-ROLLS`'s closure-assessment
+  sentence and `DEF-0011`'s "Why deferred"/"Prerequisites" fields to state
+  the Combat-owned spatial State/V7 persistence are implemented while the
+  Character weapon Attack consumer and reach validation remain missing;
+  appended one new dated (2026-09-06) `DEF-0011` History entry recording
+  TSK-0010's actual scope (`CombatPosition`, `CombatState.positions`,
+  additive V7 persistence; no `AttackHandler`/spatial-validation branch).
+  Left the 2026-08-31 History entry describing TSK-0008's original
+  "planned State schema V7" framing untouched, since History is an
+  append-only chronological log, not a current-state field. Deferred
+  broader targeting/ranged/ammunition/reach concerns are unchanged.
+- **`CLAUDE.md`**: added one compact index row — "Combat-owned spatial
+  State (`CombatPosition`, `CombatState.positions`) + State schema V7
+  persistence (TSK-0010) | §3.30, §12.13" — and updated the surrounding
+  sentence to say this State is now implemented while the Character
+  weapon Attack consumer (`AttackPayload`, `AttackHandler` branch,
+  proficiency contribution, Finesse execution, production 5-ft reach
+  validation) remains pending. No field list or wire schema was copied
+  into `CLAUDE.md`.
+- **`README.md`**: inspected for stale V6/V7/`CombatPosition`/schema-
+  version implementation claims; found none (README defers detailed
+  status to `ROADMAP.md`/`TASK.md` by design, per its own documented
+  role). No change made.
+- **`docs/DECISIONS.md`**: not touched. No new Decision was recorded;
+  DEC-0045 remains the accepted historical rationale for this contract
+  and was not rewritten to reflect the new implementation status.
+- **`docs/TASK.md`**: not touched. `Current`/`Next` unchanged; TSK-0010 was
+  not marked `Done`; TSK-0011 was not promoted to `Current`. Task Closure
+  (§18) is deliberately not performed in this checkpoint — per `TASK.md`
+  §18.1 it is normally prepared once a delivery PR already exists and its
+  implementation has been accepted, which has not yet happened for this
+  branch.
+- No canonical spatial/Combat/State-schema behavior changed in this
+  checkpoint: only implementation-status prose changed. The Character
+  Dagger Attack consumer and its production 5-ft reach validation remain
+  explicitly pending everywhere they are mentioned.
+- Verification (Python 3.12.14, repository `.venv`, external `--basetemp`
+  as in Groups 1–3): full suite — 1774 passed; `python -m mypy
+  src/dnd_engine` — success, no issues in 107 source files; `git diff
+  --check` — no whitespace errors. Re-ran eight targeted tests as an
+  explicit cumulative-behavior confirmation, all passed:
+  `test_v6_deserialize_rejects_combat_positions_field` (V6 still rejects
+  `positions`), `test_v5_deserialize_accepts_present_combat` and
+  `test_v6_deserialize_accepts_present_combat` (V5/V6 loads produce
+  `positions=()`), `test_v7_round_trip_combines_weapon_source_and_non_
+  empty_positions` (V7 retains V6 weapon-source fields alongside
+  positions), `test_serialize_sorts_positions_by_creature_id_without_
+  sorting_order` (deterministic `positions` sort; `combat.order`
+  unsorted), `test_applier_produces_combat_with_no_positions` (StartCombat
+  does not synthesize positions), `test_applier_preserves_positions_and_
+  order_while_advancing` (AdvanceTurn preserves positions),
+  `test_replaces_exactly_one_creature_and_preserves_snapshot_projections`
+  (Creature replacement preserves positions). Cumulative branch diff
+  against `origin/main` (`git diff --stat origin/main...HEAD`, committed
+  Groups 1–3 only) contains exactly the expected Domain State,
+  serializer, and test files — no Attack implementation, no
+  reach/geometry, no Movement, no new Event/Command, no new `ErrorCode`,
+  no generic framework, no production dependency, and no unrelated
+  refactor.
+- Follow-up-pass verification: `python -m pytest
+  tests/architecture/test_documentation_references.py` — 2 passed; `git
+  diff --check` — no whitespace errors; grep sweep for the stale
+  patterns `current writer ... V6`, `current State schema ... 6`, and
+  `writer ... only V6` outside §3.30 returned no matches after the fixes
+  above.
+- No commit, push, or pull request was created for this checkpoint; a
+  `review.patch` was produced from the uncommitted working-tree diff for
+  review. The next operational steps are, in order: a separate
+  authorization to commit/push this Group 4 documentation diff; a
+  separate authorization to open a draft PR; and only then preparing
+  prospective Task Closure (§18.1) for `TSK-0010` once that PR exists and
+  its implementation is accepted.
