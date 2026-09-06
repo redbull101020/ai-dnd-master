@@ -5171,3 +5171,171 @@ already-merged delivery branch.
 - No commit, push, or pull request was created for this checkpoint; a
   `review.patch` was produced from the uncommitted working-tree diff for
   manual review before the next `TSK-0010` group begins.
+- Group 1 was committed as `e29ae7d` on `feat/tsk-0010-combat-position-v7`
+  and pushed to `origin/feat/tsk-0010-combat-position-v7` under a
+  post-review authorization scoped to that reviewed diff only.
+
+## 2026-09-06 — TSK-0010 Group 2: exact State schema V7 reader/writer
+
+- Second of four sequential review checkpoints for `TSK-0010`, continuing
+  on `feat/tsk-0010-combat-position-v7` after Group 1 (`e29ae7d`). This
+  checkpoint promotes the production State writer from V6 to V7 and
+  implements strict, additive V7 spatial persistence (§3.30/DEC-0045,
+  §12.13) without touching Attack code, Commands/Events, Movement,
+  targeting services, or `docs/TASK.md`.
+- `src/dnd_engine/infrastructure/persistence/json/state_serializer.py`:
+  - added the fixed sentinel `SCHEMA_V7_VERSION = 7` and set
+    `SCHEMA_VERSION = SCHEMA_V7_VERSION`, following the same fixed-identity
+    rationale already used for V4/V5/V6 (historical semantics are keyed to
+    the fixed per-version sentinel, never to the mutable `SCHEMA_VERSION`).
+  - added `SCHEMA_V7_VERSION` to every version branch that inherits
+    unchanged V6/V4 semantics: the Creature-with-`conditions` set, the V6
+    top-level state field set (V7 adds no new top-level key — `positions`
+    lives inside the existing `combat` key), the V6 Character field set
+    (still requires `weaponProficiencies`), `weaponProficiencies`
+    decoding, and Inventory/Equipment decoding. Each pre-existing
+    `== SCHEMA_V6_VERSION` branch was reviewed individually and changed to
+    `in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}` only where V7 genuinely
+    reuses that exact V6 behavior; no generic migration registry/codec was
+    introduced.
+  - added `_V7_COMBAT_FIELDS = _COMBAT_FIELDS | {"positions"}` and
+    `_COMBAT_POSITION_FIELDS = {"creatureId", "x", "y"}`; `_COMBAT_FIELDS`
+    itself (the exact V5/V6 Combat shape) is unchanged, so V5/V6 combat
+    payloads keep strictly rejecting `positions`.
+  - `_deserialize_combat` now takes `schema_version` and selects the exact
+    field set per version; for V7 it additionally decodes `positions` (via
+    a new `_deserialize_combat_position`, producing Domain
+    `CombatPosition` values) and passes them into `CombatState`, letting
+    the already-existing Domain invariants (duplicate `creature_id`,
+    membership in `order`) do the rejection rather than duplicating that
+    logic in the serializer. V5/V6 loads keep constructing
+    `CombatState(..., positions=())` — no synthesized positions.
+  - `_serialize_combat` now always emits `positions` (the writer only ever
+    emits the current version), sorted by `creatureId` via a new
+    `_serialize_combat_position`; `combat.order` is left exactly as stored
+    (gameplay-semantic Initiative order, never sorted).
+  - `_validate_combat` (the independent pre-write re-validation of a
+    possibly-mutated `CombatState`, mirroring the existing
+    `_validate_weapon_source_relations` pattern) was extended with the
+    same spatial invariants as the Domain constructor: `positions` must be
+    an exact tuple of `CombatPosition` values with unique `creature_id`s,
+    each present in `combat.order` — defending against post-construction
+    mutation before every write, not just at construction time.
+- `tests/infrastructure/test_state_serializer.py`: restructured per the
+  historical-vs-current-writer split.
+  - **Now-V7 (current writer) tests**: writer-output/round-trip tests that
+    exercise `StateSerializer.serialize`/round-trip directly were renamed
+    and updated to V7 — `test_serialize_emits_exact_canonical_v7_mapping`,
+    `test_serialize_emits_empty_projections_in_v7`,
+    `test_serialize_uses_exact_v7_state_and_nested_fields` (now also
+    covers the exact Combat/position field sets),
+    `test_serialize_emits_exact_combat_fields_with_{empty,non_empty}_positions`,
+    `test_serialize_sorts_positions_by_creature_id_without_sorting_order`,
+    `test_v7_round_trip_*` (renamed from `test_v6_round_trip_*`, plus two
+    new positions-specific round-trips), and
+    `test_legacy_v{1..5}_reserializes_as_current_v7` (renamed from
+    `_v6`, literal `schemaVersion` updated 6→7). Added
+    `test_v7_round_trip_combines_weapon_source_and_non_empty_positions`,
+    the required single-snapshot regression proving `weaponProficiencies`
+    + Inventory + Equipment + non-empty `Combat.positions` are all additive
+    in one V7 round-trip. Added `test_v6_without_combat_reserializes_as_
+    current_v7` (a loaded historical V6 snapshot with no Combat re-saves
+    with `combat` still `null`) and `test_v6_combat_reserializes_as_
+    current_v7_with_empty_positions` (a loaded historical V6 snapshot with
+    a non-null Combat re-saves with an explicit empty `positions` list) —
+    split into two tests rather than one, since only the latter actually
+    has a Combat to attach `positions` to.
+  - **Kept-V6 (historical reader) tests**: all explicit V6-payload tests
+    under `# --- V6 state schema: strict reader ---` (built via
+    `v6_data()`), including the pre-existing
+    `test_v6_deserialize_rejects_combat_positions_field`, were left
+    unchanged — V6 continues to reject `positions` exactly as before.
+    Added explicit `.positions == ()` assertions to
+    `test_v5_deserialize_accepts_present_combat` and
+    `test_v6_deserialize_accepts_present_combat` for direct traceability
+    (previously proven only implicitly via full-object equality against a
+    default-`positions` `CombatState`).
+  - **Future-bump regressions**: `test_v4_creature_shape_...`,
+    `test_v5_state_shape_...`, and `test_v6_state_shape_..._survives_
+    future_schema_version_bump` now monkeypatch `SCHEMA_VERSION = 8`
+    (previously `7`, which is no longer hypothetical) with updated
+    docstrings; `test_deserialize_rejects_unsupported_schema_version`'s
+    parametrize changed `[0, 7, -1]` → `[0, 8, -1]` since `7` is now a
+    real supported version. Added the analogous
+    `test_v7_state_shape_is_fixed_and_survives_future_schema_version_bump`
+    (monkeypatches `SCHEMA_VERSION = 8`, decodes an explicit
+    `"schemaVersion": 7` payload with a non-null Combat and a non-empty
+    `positions` entry, and asserts the `CombatPosition` is reconstructed
+    correctly) — the same fixed-sentinel-vs-mutable-`SCHEMA_VERSION` proof
+    already applied to V4/V5/V6, now extended to V7 itself.
+  - **New V7 strict-reader coverage** under a new
+    `# --- V7 state schema: strict reader (Combat positions) ---` section:
+    missing/null/wrong-container `positions`; empty and non-empty
+    `positions` acceptance; missing/unknown position-entry fields; wrong
+    `creatureId`/coordinate types including explicit `bool` rejection;
+    duplicate `creatureId` rejection; and a position referencing a
+    creature outside `combat.order` — the last two verified via the
+    Domain `CombatState` invariants added in Group 1, not duplicated
+    serializer logic.
+  - **New serializer-side spatial mutation-defense coverage**, mirroring
+    the existing `combat.order`-mutation tests
+    (`test_serialize_rejects_mutated_invalid_combat_state`,
+    `test_serialize_rejects_mutated_duplicate_combat_order`): built a
+    valid `CombatState` with `positions`, corrupted it after construction
+    (a mutable dataclass), and proved `StateSerializer.serialize` rejects
+    it via the new `_validate_combat` spatial checks —
+    `test_serialize_rejects_mutated_positions_wrong_container` (`TypeError`),
+    `test_serialize_rejects_mutated_position_wrong_member_type`
+    (`TypeError`), `test_serialize_rejects_mutated_position_coordinate_
+    wrong_type` (`TypeError`, via `object.__setattr__` on the frozen
+    `CombatPosition`, the same bypass idiom already used elsewhere in the
+    test suite), `test_serialize_rejects_mutated_duplicate_position_
+    creature_ids` (`ValueError`), and `test_serialize_rejects_mutated_
+    position_outside_combat_order` (`ValueError`). Also corrected the
+    stale `"before ever writing it as V6"` wording in the pre-existing
+    `test_serialize_rejects_mutated_duplicate_combat_order` docstring to
+    `"before ever writing it through the current serializer"`, so it does
+    not go stale again at the next schema bump.
+  - Removed the `v7_data_with_inventory_and_equipment` and
+    `two_character_v7_data` fixture helpers added in the first draft of
+    this checkpoint: no test ended up needing them, and the project
+    convention is not to keep speculative test helpers for future groups.
+- `tests/infrastructure/test_state_store.py` (not in this checkpoint's
+  original touchpoint list, but a direct, unavoidable, mechanical
+  consequence of the real writer version bump): two real-filesystem
+  round-trip tests hardcoded `schemaVersion == 6` and would otherwise
+  regress. Updated both literals to `7` and renamed/re-documented
+  `test_save_load_v6_preserves_weapon_source_state` to
+  `test_save_load_v7_preserves_weapon_source_state` (no behavioral change
+  to the test itself, only the now-accurate version literal and name/
+  docstring).
+- No change to `AttackPayload`, `AttackHandler`, Weapon Attack resolution,
+  reach policy, `WeaponDefinition`, `ErrorCode`, Commands/Events,
+  Movement, targeting services, production dependencies, or
+  `docs/TASK.md`. No new Decision was recorded (§3.30/DEC-0045 already
+  cover this contract).
+- Verification (Python 3.12.14, repository `.venv`, run with a writable
+  `--basetemp` outside both the default OS temp directory and the repo
+  itself, to avoid both the previously documented Windows
+  `pytest-of-redbu` permission artifact and a self-referential
+  `shutil.copytree` recursion from the packaging test when basetemp is
+  placed inside the repo):
+  `python -m pytest tests/infrastructure/test_state_serializer.py` — 229
+  passed; `python -m pytest tests/infrastructure/test_state_store.py` —
+  33 passed; `python -m pytest tests/domain/test_combat_state.py
+  tests/domain/test_state_snapshot.py` — 66 passed;
+  `python -m mypy src/dnd_engine` — success, no issues in 107 source
+  files; `git diff --check` — no whitespace errors; full suite — 1772
+  passed (run as extra verification beyond this checkpoint's stated
+  minimum, given the real-filesystem/version-bump risk of this
+  checkpoint). A changes-requested pass on this still-uncommitted
+  checkpoint added the V7 future-bump regression, the spatial
+  mutation-defense tests, and the wording fixes described above before
+  these final counts.
+- No commit, push, or pull request was created for this checkpoint; a
+  `review.patch` was produced from the uncommitted working-tree diff for
+  manual review before the next `TSK-0010` group begins. Known follow-up:
+  `docs/ARCHITECTURE.md` §3.30/§12.13 still describe V6 as the production
+  writer and V7 as pending; reconciling that implementation-status text is
+  left to a later `TSK-0010` checkpoint, consistent with this checkpoint's
+  explicit touchpoint scope.
