@@ -175,9 +175,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   prerequisite, and §3.30 separately defines the canonical melee
   targeting/reach prerequisite for the first Dagger consumer — its
   Combat-owned spatial State and additive State schema V7 persistence are
-  now implemented (TSK-0010) — but the production Character weapon path,
-  production reach validation, broader Monster actions, spells, and broader
-  consequences remain missing.
+  now implemented (TSK-0010). Section 3.32/DEC-0048 now defines the exact
+  Character Dagger Attack Result/Event and source-Damage boundaries, but the
+  production Character weapon path and reach validation (TSK-0012), its
+  Attack→Damage→Monster HP continuation (TSK-0013), broader Monster actions,
+  spells, and broader consequences remain missing.
 - **Broader unimplemented scope:** [DEF-0011](#def-0011),
   [DEF-0012](#def-0012), [DEF-0013](#def-0013),
   [DEF-0014](#def-0014), [DEF-0021](#def-0021), and
@@ -193,7 +195,9 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   [Architecture §3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
   [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent),
   [Architecture §3.30](ARCHITECTURE.md#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008),
-  and [DEC-0045](DECISIONS.md#dec-0045--minimal-character-dagger-melee-targeting-uses-combat-owned-local-positions-and-a-narrow-5-foot-reach-policy).
+  [DEC-0045](DECISIONS.md#dec-0045--minimal-character-dagger-melee-targeting-uses-combat-owned-local-positions-and-a-narrow-5-foot-reach-policy),
+  [Architecture §3.32](ARCHITECTURE.md#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011),
+  and [DEC-0048](DECISIONS.md#dec-0048--character-dagger-reuses-character-attackresult-and-adds-concrete-weapon-attackdamage-events).
 
 ## P2-STATE-MUTATION
 
@@ -247,9 +251,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **Closure assessment:** This is sufficient for the first authoritative
   Damage-to-HP mutation slice. G9 later implemented narrow Monster Scimitar
   source orchestration and critical damage, but broad Damage remains
-  incomplete because the Character weapon/damage continuation and typed
-  defenses are absent. Section 3.29 defines only the Character weapon-source
-  prerequisite, not that production continuation.
+  incomplete because the Character weapon/damage production continuation and
+  typed defenses are absent. Section 3.32/DEC-0048 now defines the exact
+  Character Dagger source-Damage Result/Event, normal/critical/Finesse
+  continuity, zero-source behavior, and unchanged `DamageApplied` V1 handoff;
+  TSK-0013 production orchestration remains pending.
 - **Broader unimplemented scope:** Attack consequence and weapon/critical
   damage in [DEF-0013](#def-0013), typed defenses in
   [DEF-0017](#def-0017), and durable application history in
@@ -261,9 +267,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **References:** [Architecture §3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9),
   [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
+  [§3.32](ARCHITECTURE.md#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011),
   [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
   [DEC-0042](DECISIONS.md#dec-0042--monster-attack-consequences-preserve-separate-attack-resolution-damage-resolution-and-damage-application-stages),
-  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
+  [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent),
+  and [DEC-0048](DECISIONS.md#dec-0048--character-dagger-reuses-character-attackresult-and-adds-concrete-weapon-attackdamage-events).
 
 ## P2-HEALING
 
@@ -674,20 +682,25 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   (Combat-owned `CombatPosition`/`CombatState.positions`, a narrow `dnd_5e`
   5-ft squared-distance policy, and State schema V7 additive over V6);
   TSK-0010 has now implemented this Combat-owned spatial State and its
-  additive State schema V7 persistence in production. The Character weapon
-  Attack consumer (proficiency contribution, Finesse execution, targeting/
-  reach validation, and Attack/Damage consequence) and broader
-  ranged/thrown/ammunition and other-weapon State remain separate unresolved
-  prerequisites.
-- **Prerequisites:** The Character weapon `AttackHandler` branch and typed
-  `WeaponDefinition` lookup consuming the now-implemented §3.29
-  Inventory/Equipment source, production reach validation using the
-  now-implemented §3.30 Combat-owned spatial State (State schema V7,
-  TSK-0010) for the first Dagger consumer, and later source-specific facts
-  for ranged/ammunition consumers.
-- **Planned approach:** Keep one explicit Attack intent while deriving weapon
-  attack inputs from authoritative State/Definitions; implement concrete
-  weapon policies before considering shared abstractions.
+  additive State schema V7 persistence in production. Section 3.32/DEC-0048
+  now defines the exact Character Dagger Attack contract: unchanged
+  `AttackResult`, Definition-based proficiency contribution, explicit Finesse
+  execution, the §3.30 reach-validation handoff, and the concrete
+  `CharacterWeaponAttackResolved` V1 Event. The production Character Dagger
+  consumer remains pending TSK-0012; broader ranged/thrown/ammunition and
+  other-weapon behavior remain deferred.
+- **Prerequisites:** TSK-0012 must implement the Character weapon
+  `AttackHandler` branch and typed `WeaponDefinition` lookup from the
+  now-implemented §3.29 Inventory/Equipment source, apply the canonical
+  proficiency/Finesse Attack semantics from §3.32, and execute §3.30's 5-ft
+  reach validation using the now-implemented Combat-owned spatial State.
+  Later ranged/ammunition consumers still require their own source-specific
+  facts.
+- **Planned approach:** Implement the concrete §3.32 Character Dagger Attack
+  contract in TSK-0012 while deriving all weapon inputs from authoritative
+  State/Definitions and using §3.30's reach policy; keep one explicit Attack
+  intent and do not extract shared abstractions before additional consumers
+  provide evidence.
 - **Acceptance criteria:** Proficiency, Strength/Dexterity/Finesse choice,
   melee reach, ranged limits, ammunition consumption, Character AC lookup,
   failures, Events, and persistence side effects are explicit and tested.
@@ -696,11 +709,13 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
   [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
   [§3.30](ARCHITECTURE.md#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008),
+  [§3.32](ARCHITECTURE.md#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011),
   [DEC-0030](DECISIONS.md#dec-0030--shared-domain-ndm-parser-for-dice-engine-and-weapondefinition-g4b),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8),
   [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent),
-  and [DEC-0045](DECISIONS.md#dec-0045--minimal-character-dagger-melee-targeting-uses-combat-owned-local-positions-and-a-narrow-5-foot-reach-policy).
+  [DEC-0045](DECISIONS.md#dec-0045--minimal-character-dagger-melee-targeting-uses-combat-owned-local-positions-and-a-narrow-5-foot-reach-policy),
+  and [DEC-0048](DECISIONS.md#dec-0048--character-dagger-reuses-character-attackresult-and-adds-concrete-weapon-attackdamage-events).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) proves the
   Character-target part of this record (a real Attack resolving against
@@ -748,7 +763,13 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   gains no weapon or spatial-validation branch, and the 5-ft reach
   production consumer, the Weapon Attack resolver, and the Character Dagger
   Attack→Damage→Monster HP continuation remain open. Status stays
-  `Deferred` for the broader Weapon attack scope.
+  `Deferred` for the broader Weapon attack scope. 2026-09-06 — TSK-0011
+  (§3.32, DEC-0048) made the exact Character Dagger Attack Result/Event and
+  source-Damage boundaries canonical without implementing them. The
+  weapon-source and spatial State/persistence prerequisites remain
+  implemented; production proficiency/Finesse/reach/Attack Event behavior is
+  pending TSK-0012, and broader weapon/ranged/thrown/ammunition scope remains
+  deferred. Status stays `Deferred`.
 
 ## DEF-0012
 
@@ -814,19 +835,26 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   inputs, and TSK-0004 has implemented their production State
   (`InventoryItemState`, `InventoryState`, `EquipmentState`,
   `CharacterState.weapon_proficiencies`) and exact State schema V6
-  persistence. The Character weapon `AttackHandler` branch/consumer, the
-  typed weapon consumer execution path, and the broader Character Weapon
-  Attack→Damage path — including the Character Dagger Attack→Damage→Monster
-  HP continuation — remain absent.
-- **Prerequisites:** Relevant part of DEF-0011, a concrete damage source, and
-  an explicit Event ordering/causation design; DEF-0022 only if durability is
-  made part of the slice.
-- **Planned approach:** Preserve `Attack Resolution → Damage Resolution →
-  Damage Application` as separate decisions. Reuse the explicit Finesse
-  Ability selected for Attack when deriving later weapon damage rather than
-  selecting or maximizing it again; construct ordered correlated Events and
-  feed an already-resolved damage outcome into concrete State application
-  without re-rolling in the applier.
+  persistence. Section 3.32/DEC-0048 now defines the exact Character Dagger
+  source-Damage contract: `CharacterWeaponAttackDamageResult`,
+  `CharacterWeaponAttackDamageResolved` V1, Definition-driven normal/critical
+  damage, exact reuse of the Attack-selected Finesse Ability/modifier, the
+  zero-source branch, and the unchanged source-agnostic `DamageApplied` V1
+  handoff. The production Character Dagger Attack→Damage→Monster HP
+  continuation remains pending TSK-0013; broader Weapon consequences remain
+  deferred.
+- **Prerequisites:** For the first Character Dagger continuation, §3.32 now
+  supplies the concrete damage-source and exact Event ordering/causation
+  contract; production TSK-0012 Attack resolution must supply its successful
+  `AttackResult` and authoritatively resolved weapon facts before TSK-0013
+  orchestration. DEF-0022 is required only if durability becomes part of a
+  later slice.
+- **Planned approach:** Implement the exact preserved chain from §3.32:
+  `Attack Resolution → source Damage Resolution → optional source-agnostic
+  Damage Application`. Reuse the Attack-selected Finesse Ability/modifier,
+  emit ordered correlated source Events, and pass positive source damage
+  through unchanged `DamageResult` / `DamageApplied` V1 without re-rolling in
+  the applier.
 - **Acceptance criteria:** Miss produces no damage; hit and critical formulas
   are deterministic; dice use `DiceEngine`; Event order/`causedBy` are clear;
   HP changes only after concrete Damage application and successful save.
@@ -835,12 +863,14 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   [§3.26](ARCHITECTURE.md#326-minimal-phase-3-monster-attack--character-vertical-slice-g8),
   [§3.27](ARCHITECTURE.md#327-minimal-phase-3-monster-attack-consequence--damage--hp-vertical-slice-g9),
   [§3.29](ARCHITECTURE.md#329-minimal-authoritative-character-weapon-source-tsk-0001),
+  [§3.32](ARCHITECTURE.md#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011),
   [§12.11](ARCHITECTURE.md#1211-event-ordering),
   [DEC-0031](DECISIONS.md#dec-0031--first-character-unarmed-attack-roll--monster-slice-stays-concrete),
   [DEC-0033](DECISIONS.md#dec-0033--first-concrete-damage--hp-mutation-slice-g6a-stays-concrete),
   [DEC-0041](DECISIONS.md#dec-0041--first-monster-attacker-first-character-target-goblin-scimitar-g8),
   [DEC-0042](DECISIONS.md#dec-0042--monster-attack-consequences-preserve-separate-attack-resolution-damage-resolution-and-damage-application-stages),
-  and [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent).
+  [DEC-0044](DECISIONS.md#dec-0044--minimal-character-weapon-source-uses-runtime-inventoryequipment-ownership-definition-based-proficiency-and-explicit-finesse-intent),
+  and [DEC-0048](DECISIONS.md#dec-0048--character-dagger-reuses-character-attackresult-and-adds-concrete-weapon-attackdamage-events).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment. 2026-08-30 — G8 (§3.26) supplies
   two of this record's three named prerequisites. For "relevant part of
@@ -902,7 +932,14 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   canonical in §3.29/DEC-0044 without implementing it. The broader Character
   Weapon Attack→Damage→Monster HP path remains absent and must preserve the
   G9 stage separation; its explicit Finesse Ability must be reused by Damage,
-  not auto-selected again. DEF-0013 remains `Deferred`.
+  not auto-selected again. DEF-0013 remains `Deferred`. 2026-09-06 — TSK-0011
+  (§3.32, DEC-0048) canonized the exact Character Dagger continuation as
+  `Attack Resolution → source Damage Resolution → optional source-agnostic
+  Damage Application`, including concrete source-Damage Result/Event,
+  normal/critical/Finesse continuity, zero-source behavior, immediate
+  `causedBy` ordering, and unchanged `DamageApplied` V1. No production Event
+  or HP behavior changed; TSK-0013 remains pending and the broader concern
+  stays `Deferred`.
 
 ## DEF-0014
 

@@ -5652,3 +5652,29 @@ already-merged delivery branch.
   executable was unavailable in PATH, so the same required module invocation
   was run through `.venv\Scripts\python.exe`; pytest reported only its
   non-failing cache-write warning for `.pytest_cache`.
+
+## 2026-09-06 — TSK-0011 Roadmap/Deferred reconciliation
+
+- Reconciled the unchecked Phase 3 Weapon attacks, Attack consequences, and
+  Targeting rows with canonical §3.32/DEC-0048. The wording now separates
+  implemented weapon-source/spatial State and V6/V7 persistence from the
+  newly canonical but unimplemented Character Dagger Attack/Damage contracts,
+  and names TSK-0012/TSK-0013 as the pending production continuations.
+- Updated `P2-ATTACK-ROLLS`, directly linked `P2-DAMAGE`, DEF-0011, and
+  DEF-0013 to reference §3.32/DEC-0048. DEF-0011 and DEF-0013 remain
+  `Deferred`; their append-only History records that TSK-0011 defined the
+  exact concrete contracts without implementing them. The preserved
+  consequence chain is `Attack Resolution → source Damage Resolution →
+  optional source-agnostic Damage Application`, with unchanged
+  `DamageApplied` V1.
+- Reread `README.md` and `CLAUDE.md` after the canonical change. Neither
+  required editing: README remains a correct high-level overview, while
+  CLAUDE's deliberately reproduced index lists implemented contracts and its
+  pending Character weapon paragraph remains factually accurate.
+- No checkbox, Task status/queue entry, production code, test, State schema,
+  Event implementation, packaged Definition, or persistence behavior changed.
+  TSK-0011 remains `Current`; this iteration does not claim it is `Done`.
+- Verification on Python 3.12.14 from the repository `.venv`:
+  `python -m pytest tests/architecture/test_documentation_references.py` —
+  2 passed; `git diff --check` — no whitespace errors. Pytest reported only
+  the non-failing cache-write warning for `.pytest_cache`.
