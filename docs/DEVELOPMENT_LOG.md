@@ -5620,3 +5620,35 @@ already-merged delivery branch.
 - No commit, push, or merge was performed for this closure step, and PR
   #83 was not moved out of draft; a `review.patch` was produced from the
   uncommitted working-tree diff for review.
+
+## 2026-09-06 — TSK-0011 Character Dagger Attack/Damage contract
+
+- Added canonical Architecture §3.32 for the smallest sufficient Character
+  Dagger Attack Resolution, source-Damage Resolution, and positive Damage
+  Application boundaries, composing the existing §3.29 authoritative weapon
+  source/Finesse contract with §3.30's melee-only 5-ft reach contract.
+- Accepted DEC-0048: reuse unchanged `AttackResult`, preserve
+  `AttackResolved` V1 as the Character-unarmed Event, add a separate future
+  `CharacterWeaponAttackResolved` V1, and define the concrete future
+  `CharacterWeaponAttackDamageResult` /
+  `CharacterWeaponAttackDamageResolved` V1 source-Damage stage while keeping
+  `DamageResult` / `DamageApplied` V1 source-agnostic and unchanged.
+- Fixed normal/critical Definition-driven Dagger damage, exact Finesse
+  Ability/modifier continuity, miss/zero/positive branches, Event order and
+  immediate `causedBy` chain, and reuse of the existing positive Damage→HP
+  State application/save boundary. No generic Attack/Damage/source or
+  modifier/effect pipeline abstraction was introduced.
+- This was documentation-only: no production Python behavior changed, neither
+  new Event is actually emitted in production by this task, no State schema
+  changed (the current schema remains V7), and TSK-0012/TSK-0013 remain future
+  production implementation work. `AttackPayload` weapon fields were not
+  implemented.
+- Intentionally unchanged: production code, tests, packaged Definitions,
+  persistence, State schemas, `docs/TASK.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `README.md`, and `CLAUDE.md`.
+- Verification on Python 3.12.14 from the repository `.venv`:
+  `python -m pytest tests/architecture/test_documentation_references.py` —
+  2 passed; `git diff --check` — no whitespace errors. The bare `python`
+  executable was unavailable in PATH, so the same required module invocation
+  was run through `.venv\Scripts\python.exe`; pytest reported only its
+  non-failing cache-write warning for `.pytest_cache`.
