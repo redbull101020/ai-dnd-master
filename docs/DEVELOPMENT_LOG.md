@@ -5032,3 +5032,32 @@ synchronized into canonical/status documentation. TSK-0004 remains
   branch, `CombatPosition`, State schema V7, new dependency, or generic
   Inventory/Equipment framework was introduced. Ran under Python 3.12.9.
   Group 4 remains uncommitted and unpushed pending review.
+
+## 2026-09-06 — TSK-0004 Task Closure (post-merge, §18.2 fallback)
+
+TSK-0004 implementation and final cumulative review are complete. The
+delivery PR, [PR #80](https://github.com/redbull101020/ai-dnd-master/pull/80),
+has already merged to `main` as commit `d1b23de6fec79af0987455a1e01ca7d080c538da`
+— outside this branch's own review cycle and before its §18.1 prospective
+Task Closure was prepared. Per `docs/TASK.md` §18.2, this makes the closure
+reconciliation mandatory as a fallback, prepared on a dedicated branch cut
+from current `origin/main` rather than by adding commits to the
+already-merged delivery branch.
+
+- TSK-0004's implementation, State schema V6 persistence, and documentation
+  reconciliation are authoritative on `main` as of PR #80's merge; this
+  entry and the accompanying `docs/TASK.md` edit reconcile the tracker to
+  match that already-true fact and are themselves pending their own
+  review/merge.
+- `docs/TASK.md`: `Current` set to `—`; the `TSK-0004` row removed from the
+  Open task index and its full Open task detail section removed; `TSK-0004`
+  recorded once in Recently completed as `PR #80 / merge commit d1b23de`.
+- `TSK-0005` remains `Backlog` / `P1` / `L` — not promoted, not refined, not
+  moved to `Next`.
+- No next implementation task is selected: `Next` remains `—`, `Hard
+  blockers` remains `—`, `Next free ID` remains `TSK-0010`.
+- `docs/ROADMAP.md` and `docs/DEFERRED.md` implementation status were
+  already reconciled in TSK-0004 Group 4 (merged as part of PR #80) and
+  require no additional closure change here.
+- No production code, test, or other documentation file changed in this
+  closure step; only `docs/TASK.md` and this entry.
