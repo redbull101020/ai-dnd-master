@@ -5703,3 +5703,19 @@ already-merged delivery branch.
   temporary area because the host's default pytest temp/cache directories
   returned Windows access-denied errors; the successful rerun reported only
   the existing non-failing `.pytest_cache` write warning.
+
+## 2026-09-06 — TSK-0011 prospective Task Closure
+
+- Prepared the normal `TASK.md` §18.1 closure for TSK-0011 in draft PR #84.
+  The delivery defines the canonical Character Dagger Attack and Damage
+  contracts in §3.32/DEC-0048; production implementation remains explicitly
+  split between TSK-0012 and TSK-0013.
+- Removed TSK-0011 from the open index/details, recorded it in Recently
+  completed with PR #84 evidence, and recalculated the Phase 3 queue:
+  TSK-0012 is `Current`, TSK-0013 remains dependency-blocked `Backlog`, and
+  `Next` / hard blockers remain empty. `Next free ID` remains TSK-0014, and
+  the ten-most-recent retention limit required no eviction.
+- This prepared `Done` / current-queue state is prospective and becomes
+  authoritative only when PR #84 merges. No merge SHA is claimed; no
+  production behavior, broad Roadmap capability status, or Deferred status
+  changed in this closure iteration.

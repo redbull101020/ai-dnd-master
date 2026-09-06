@@ -1232,7 +1232,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0011
+- **Current:** TSK-0012
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0014
@@ -1244,136 +1244,16 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0011` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Weapon attacks and Attack consequences | Define exact Character Dagger Attack and Damage contracts |
-| `TSK-0012` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Weapon attacks | Implement Character Dagger weapon Attack resolution |
+| `TSK-0012` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Weapon attacks | Implement Character Dagger weapon Attack resolution |
 | `TSK-0013` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Attack consequences | Implement Character Dagger Attack → Damage → Monster HP consequence |
 
 ---
 
 # Open task details
 
-## TSK-0011 — Define exact Character Dagger Attack and Damage contracts
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `architecture`
-
-**Roadmap target:** Phase 3 / Weapon attacks and Attack consequences
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Weapon attacks
-- `ROADMAP.md` — Phase 3 / Attack consequences
-- `ARCHITECTURE.md` §3.27
-- `ARCHITECTURE.md` §3.29
-- `ARCHITECTURE.md` §3.30
-- `DEC-0042`
-- `DEC-0044`
-- `DEC-0045`
-- `DEF-0011`
-- `DEF-0013`
-
-**Depends on:** `—`
-
-**Contract impact:** `decision required before implementation`
-
-### Goal
-
-Resolve only the exact remaining canonical contracts required before
-TSK-0012/TSK-0013 can become executable Character Dagger implementation
-tasks.
-
-The architecture task must decide, with current repository evidence:
-
-Attack-resolution boundary:
-
-- whether the Character weapon path reuses or extends the existing
-  `AttackResult`;
-- whether `AttackResolved` evolves or a separate concrete Character/Weapon
-  Attack Event is justified;
-- which weapon-source identity facts, if any, belong in the resolved
-  result/event;
-- exact invariants and compatibility with existing unarmed `AttackResolved`
-  V1;
-- `AttackHandler` outcome typing.
-
-Weapon-Damage boundary:
-
-- exact Character Dagger normal-damage formula;
-- exact critical-damage formula;
-- how the already-selected Finesse Ability is reused by Damage rather than
-  selected again;
-- source `damage_type`;
-- concrete Damage result type;
-- concrete source-Damage Event type/payload;
-- zero-source-damage behavior;
-- exact Event causality/order;
-- reuse of unchanged source-agnostic `DamageApplied` V1.
-
-The task must compare alternatives rather than presuppose names such as
-`CharacterWeaponAttackResult` or `CharacterWeaponAttackResolved`.
-
-### Why now
-
-Inventory/Equipment/V6 and the Dagger spatial contract are already
-established. Production Character weapon implementation would otherwise
-require unapproved Result/Event and Weapon Damage contracts, and `TASK.md`
-explicitly forbids marking such implementation `Ready`.
-
-### Scope
-
-- inspect current `AttackResult`, `AttackResolved` V1, Monster Attack
-  contracts, G9 Damage contracts, and the existing `DamageApplied` contract;
-- compare minimal concrete alternatives;
-- choose and document the smallest sufficient Character Dagger
-  Attack/Damage contract;
-- update `ARCHITECTURE.md`;
-- append a new accepted Decision;
-- reconcile Roadmap/Deferred wording only where the new canonical contract
-  requires it;
-- refine future implementation tasks only after the decision exists.
-
-### Out of scope
-
-- production Python implementation;
-- State schema V7 implementation;
-- ranged/thrown/ammunition;
-- additional weapons;
-- resistance/immunity/vulnerability;
-- temporary HP or death lifecycle;
-- generic `AttackSource` hierarchy;
-- generic `Action` hierarchy;
-- generic modifier/damage/effect pipelines;
-- unrelated abstraction extraction.
-
-### Acceptance criteria
-
-- one explicit chosen Attack Result/Event boundary;
-- one explicit Character Dagger Damage Result/Event boundary;
-- normal/critical/Finesse semantics unambiguous;
-- exact causality/order through existing `DamageApplied` V1 unambiguous;
-- backward compatibility with already-published existing Events explicitly
-  addressed;
-- no speculative generic abstraction without current evidence;
-- Architecture and Decision Log agree;
-- TSK-0012/TSK-0013 can subsequently be refined without inventing a
-  canonical contract during implementation.
-
-### Verification
-
-- documentation-reference tests;
-- consistency checks against current code contracts;
-- `git diff --check`.
-
----
-
 ## TSK-0012 — Implement Character Dagger weapon Attack resolution
 
-**Status:** `Backlog`
+**Status:** `Current`
 
 **Priority:** `P1`
 
@@ -1641,6 +1521,7 @@ HP contract.
 | `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 | `TSK-0004` | Implement the approved minimal Character weapon source and persistence | PR #80 / merge commit `d1b23de` |
 | `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
+| `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
 
 ---
 
