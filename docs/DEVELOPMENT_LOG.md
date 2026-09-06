@@ -5678,3 +5678,28 @@ already-merged delivery branch.
   `python -m pytest tests/architecture/test_documentation_references.py` —
   2 passed; `git diff --check` — no whitespace errors. Pytest reported only
   the non-failing cache-write warning for `.pytest_cache`.
+
+## 2026-09-06 — TSK-0011 future implementation-task refinement
+
+- Expanded backlog TSK-0012 into the executable, contract-preserving
+  Character Dagger Attack-only slice: approved payload evolution and routing,
+  authoritative weapon lookup, proficiency/Finesse/reach resolution,
+  unchanged `AttackResult`, one `CharacterWeaponAttackResolved` V1, exact
+  pre-resolution side-effect boundaries, and deterministic test expectations.
+- Expanded dependent backlog TSK-0013 into the separate Character Dagger
+  consequence slice: concrete source-Damage Result/Event, authoritative
+  Definition dice/type, exact Finesse continuity, normal/critical/zero-source
+  behavior, ordered causality, unchanged positive-only `DamageApplied` V1,
+  copy-on-write Monster HP application, save counts, and real-adapter evidence.
+- This iteration only refines future executable task definitions. It adds no
+  canonical gameplay contract beyond the Group-1 §3.32/DEC-0048 decision and
+  no production implementation. TSK-0012/TSK-0013 remain `Backlog`, while
+  TSK-0011 remains `Current` and `Next` remains empty; no Task Closure was
+  performed.
+- Verification on Python 3.12.14: documentation-reference tests — 2 passed;
+  full suite — 1774 passed; configured `mypy` — no issues in 107 source
+  files; `git diff --check` — no whitespace errors. Formatter and linter are
+  not configured. The full-suite rerun used an isolated writable pytest/pip
+  temporary area because the host's default pytest temp/cache directories
+  returned Windows access-denied errors; the successful rerun reported only
+  the existing non-failing `.pytest_cache` write warning.
