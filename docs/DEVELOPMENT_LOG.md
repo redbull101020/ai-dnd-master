@@ -4874,3 +4874,50 @@ contracts.
   system pip-cache `WinError 5`); configured `mypy` — success for 107 source
   files. No production Attack Command/handler/rule/Event or Dagger Definition
   file changed. Group 1 remains uncommitted and unpushed pending review.
+
+## 2026-09-06 — TSK-0004 Group 2 — exact State schema V6 writer/reader
+
+- State schema V6 is now the production writer on this branch: fixed
+  `SCHEMA_V6_VERSION = 6` sentinel with `SCHEMA_VERSION = SCHEMA_V6_VERSION`,
+  following the existing fixed-version-sentinel pattern so historical V4/V5
+  decoding stays keyed to `SCHEMA_V4_VERSION`/`SCHEMA_V5_VERSION`, never to
+  the mutable `SCHEMA_VERSION`.
+- Implemented exact V6 Character `weaponProficiencies` (required JSON array,
+  no compatibility default), Inventory (`ownerId`, `items`), Inventory Item
+  (`id`, `definitionId`), and Equipment (`ownerId`, `equippedWeaponId`)
+  persistence, with strict reader validation: exact field sets, no unknown
+  fields, no bool/string coercion, no duplicate weapon-proficiency or
+  Inventory-Item-ID membership.
+- Implemented the approved deterministic V6 writer ordering: `characters` by
+  `id`, `inventories` by `ownerId`, `inventory.items` by `id`, `equipment` by
+  `ownerId`, `weaponProficiencies` sorted lexicographically.
+- Extended `StateSerializer.serialize()` with a narrow
+  `_validate_weapon_source_relations` helper that independently re-checks all
+  approved cross-snapshot weapon-source invariants (owner-exists,
+  one-projection-per-owner, campaign-wide Item-ID uniqueness, same-owner
+  equipped-item integrity) using current values at serialization time. This
+  closes a review finding: `StateSnapshot` is frozen, but its nested
+  Inventory/Equipment dataclasses are mutable, so a snapshot valid at
+  construction could otherwise become relationally invalid before a later
+  write. No generic validation framework, registry, or new Domain
+  abstraction was introduced; the canonical Domain invariants in
+  `StateSnapshot.__post_init__` are unchanged.
+- Exact V1–V5 legacy reads remain supported unchanged: legacy Character
+  decoding still supplies `weapon_proficiencies=frozenset()`, and legacy
+  snapshots still supply empty `inventories`/`equipment`, with no synthesized
+  weapon State. Legacy wire shapes reject V6-only fields as unknown, and a
+  successfully loaded legacy snapshot re-serializes as exact V6 with empty
+  new projections.
+- V6 `combat` remains exactly the existing V5-shaped wire contract (`id`,
+  `round`, `order`, `activeIndex`); V6 neither adds nor accepts `positions`.
+- Not implemented in this Group: State schema V7/spatial State
+  (`CombatPosition`), and any Character Weapon Attack consumer behavior
+  (`AttackPayload` fields, `AttackHandler` weapon routing, a Weapon Attack
+  resolver, Finesse execution, or weapon Damage). `FilesystemStateStore` and
+  Attack Command/handler/rule/Event files were not changed.
+- Verification: `tests/infrastructure/test_state_serializer.py` — 199
+  passed; `tests/infrastructure/test_state_store.py` — 31 passed; full suite
+  — 1718 passed; configured `mypy` — success for 107 source files;
+  `tests/architecture/test_documentation_references.py` — 2 passed;
+  `git diff --check` — no whitespace errors. Ran under Python 3.12.9. Group 2
+  remains uncommitted and unpushed pending review.

@@ -172,8 +172,10 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 5
+    assert data["schemaVersion"] == 6
     assert data["state"]["characters"] == []
+    assert data["state"]["inventories"] == []
+    assert data["state"]["equipment"] == []
     assert data["state"]["combat"] is None
 
 
@@ -321,7 +323,7 @@ def test_invalid_snapshot_json_raises_invalid_snapshot(tmp_path: Path) -> None:
 
 def test_unsupported_schema_version_raises_invalid_snapshot(tmp_path: Path) -> None:
     data = valid_data()
-    data["schemaVersion"] = 6
+    data["schemaVersion"] = 7
     write_json(tmp_path / "campaign_001" / "state.json", data)
 
     with pytest.raises(InvalidStateSnapshotError):
