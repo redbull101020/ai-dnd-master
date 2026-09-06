@@ -5061,3 +5061,61 @@ already-merged delivery branch.
   require no additional closure change here.
 - No production code, test, or other documentation file changed in this
   closure step; only `docs/TASK.md` and this entry.
+
+## 2026-09-06 — TSK-0005 decomposition and Phase 3 queue refinement
+
+- After TSK-0004's authoritative closure landed on `main`, `docs/TASK.md`
+  had `Current: —`, `Next: —`, and the sole remaining live task was the
+  broad `TSK-0005` (`Backlog` / `P1` / `L`) — the Character Dagger
+  `Attack → Damage → Monster HP` continuation.
+- That continuation combined several independently reviewable boundaries
+  (Attack/Damage Result and Event contract choices, weapon Attack
+  resolution, and the Damage/Monster HP consequence orchestration) and was
+  too large to execute coherently as one task under `docs/TASK.md`'s size
+  and readiness rules (§7, §12); a Size `L` task cannot become `Ready` or
+  `Current` and must be decomposed first.
+- `TSK-0005` was superseded by this decomposition before any implementation
+  started, not completed; its ID remains permanently reserved and it is not
+  recorded in `Recently completed`.
+- Allocated four narrower task identities from `Next free ID`:
+  - `TSK-0010` — implement the already-approved Combat-owned tactical
+    position State and additive State schema V7 (§3.30, DEC-0045).
+  - `TSK-0011` — resolve the still-open exact Character Dagger
+    Attack/Damage Result and Event contracts (an `architecture` task, not
+    implementation).
+  - `TSK-0012` — later implement Character Dagger weapon Attack
+    resolution.
+  - `TSK-0013` — later implement Character Dagger
+    `Attack → Damage → Monster HP` consequences.
+- Selected `TSK-0010` as the new `Current` task, with `Depends on:
+  TSK-0004, TSK-0008` (both already `Done` on `main`) and full task detail
+  (`Goal`, `Scope`, `Out of scope`, `Acceptance criteria`, `Verification`).
+- Selected `TSK-0011` as `Ready` and placed it in `Next`, with `Depends on:
+  —` since §3.30 is already canonical and TSK-0011 does not require the
+  TSK-0010 implementation itself to resolve the remaining Attack/Damage
+  contract questions.
+- Kept `TSK-0012` and `TSK-0013` as compact `Backlog` rows only, per
+  progressive elaboration (§21) — no Commands, Events, Result/Event types,
+  or payloads were pre-invented for either.
+- Advanced `Next free ID` to `TSK-0014` and set `Last reviewed:
+  2026-09-06`.
+- This is a Task Queue planning/refinement iteration only. No gameplay
+  contract, production code, Roadmap capability status, Deferred concern
+  status, or architecture Decision changed: Architecture §§3.27, 3.29,
+  3.30, and 3.31 remain exactly as already accepted, and no new Decision
+  was recorded — task decomposition/sequencing is not itself a new
+  architectural decision.
+- Reviewed `docs/ROADMAP.md`, `docs/DEFERRED.md` (DEF-0011, DEF-0013),
+  `docs/ARCHITECTURE.md` (§§3.27, 3.29, 3.30, 3.31), `docs/DECISIONS.md`,
+  `README.md`, and `CLAUDE.md`: none reference `TSK-0005` as the live
+  executable task, and none required a change. `docs/DEVELOPMENT_LOG.md`'s
+  own earlier entries that describe `TSK-0005`'s prior `Backlog` status are
+  historical execution history and are left unchanged.
+- Verification: `tests/architecture/test_documentation_references.py`
+  passes (2 tests); the full suite passes (Python 3.12.14, repository
+  `.venv`, run with a writable `--basetemp` outside the default OS temp
+  directory to avoid the previously documented Windows `pytest-of-redbu`
+  permission artifact): 1720 passed. `git diff --check` reports no
+  whitespace errors. No production code, test, or other canonical
+  documentation file changed; only `docs/TASK.md` (committed separately)
+  and this entry.
