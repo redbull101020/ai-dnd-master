@@ -5563,3 +5563,60 @@ already-merged delivery branch.
   separate authorization to open a draft PR; and only then preparing
   prospective Task Closure (§18.1) for `TSK-0010` once that PR exists and
   its implementation is accepted.
+- Group 4 (including its two changes-requested follow-up passes) was
+  committed as `c7db572` on `feat/tsk-0010-combat-position-v7` and pushed
+  to `origin/feat/tsk-0010-combat-position-v7`. Draft PR
+  [#83](https://github.com/redbull101020/ai-dnd-master/pull/83) was then
+  opened for the branch against `main`, bundling all four `TSK-0010`
+  groups (`e29ae7d`, `1f1732a`, `523b8a7`, `c7db572`).
+
+## 2026-09-06 — TSK-0010 prospective Task Closure (§18.1, pre-merge)
+
+- With `TSK-0010`'s implementation accepted (Groups 1–4 reviewed and
+  committed) and delivery PR [#83](https://github.com/redbull101020/ai-dnd-master/pull/83)
+  now open (draft) against `main`, this prepares `docs/TASK.md`'s Task
+  Closure (§18.1) for `TSK-0010` in the same delivery branch/PR, ahead of
+  merge, per the normal pre-merge closure path.
+- Revalidated before editing: `git fetch origin` confirmed `origin/main`
+  was still at `5b8b3ec59d0e346f36c1146af2dd92463c72ac23` (unchanged since
+  this branch was cut), and `origin/main`'s `docs/TASK.md` still had
+  exactly the facts this closure depends on — `Current: TSK-0010`,
+  `Next: TSK-0011`, `TSK-0011 = Ready`, `TSK-0012`/`TSK-0013 = Backlog`,
+  `Hard blockers: —`, `Next free ID: TSK-0014` — with no conflicting
+  change on `main` since. The worktree was clean before editing.
+- `docs/TASK.md` changes (prospective — authoritative only once PR #83
+  merges, per §4.5):
+  - marked `TSK-0010` `Done`: removed its row from the Open task index
+    and its full detail section from Open task details; added it to
+    Recently completed as `| \`TSK-0010\` | Implement Combat-owned
+    positioning and State schema V7 | PR #83 |` (no merge commit SHA
+    invented, per §19 — the PR number alone is sufficient evidence at
+    this stage).
+  - selected `TSK-0011` as the new `Current` (`Status: Ready → Current`
+    in both its index row and detail section); its own content
+    (`Goal`/`Scope`/`Out of scope`/`Acceptance criteria`/etc.) was not
+    otherwise changed.
+  - recalculated `Current position`: `Current: TSK-0011`, `Next: —`
+    (no other `Ready` task exists to queue), `Hard blockers: —`
+    unchanged, `Next free ID: TSK-0014` unchanged (no new ID was
+    allocated), `Last reviewed: 2026-09-06`.
+  - left `TSK-0012` and `TSK-0013` exactly as `Backlog` — neither was
+    refined or promoted to `Ready`, per instruction.
+  - no new `TSK-*` was created.
+- No change to `docs/ROADMAP.md`, `docs/DEFERRED.md`, `CLAUDE.md`,
+  production code, or tests in this closure step: the implementation-
+  status reconciliation for `TSK-0010`'s delivered scope already landed
+  as part of PR #83's Group 4 commit (`c7db572`), so no additional
+  Roadmap/Deferred change was required here.
+- **This state is prospective, not yet authoritative** (§4.5/§18.1):
+  `main` remains the authoritative source of truth for the Task Queue
+  until PR #83 actually merges. Implementation of `TSK-0011` must not
+  begin against this prospective `Current` before that merge, and no new
+  delivery branch may be based on it until then.
+- Verification: `python -m pytest
+  tests/architecture/test_documentation_references.py` — passed; `git
+  diff --check` — no whitespace errors. Confirmed the fresh closure diff
+  touches only `docs/TASK.md` and this entry.
+- No commit, push, or merge was performed for this closure step, and PR
+  #83 was not moved out of draft; a `review.patch` was produced from the
+  uncommitted working-tree diff for review.

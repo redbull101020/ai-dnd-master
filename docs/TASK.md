@@ -1232,8 +1232,8 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0010
-- **Next:** TSK-0011
+- **Current:** TSK-0011
+- **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0014
 - **Last reviewed:** 2026-09-06
@@ -1244,8 +1244,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0010` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Targeting prerequisite for Weapon attacks | Implement Combat-owned positioning and State schema V7 |
-| `TSK-0011` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Weapon attacks and Attack consequences | Define exact Character Dagger Attack and Damage contracts |
+| `TSK-0011` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Weapon attacks and Attack consequences | Define exact Character Dagger Attack and Damage contracts |
 | `TSK-0012` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Weapon attacks | Implement Character Dagger weapon Attack resolution |
 | `TSK-0013` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Attack consequences | Implement Character Dagger Attack → Damage → Monster HP consequence |
 
@@ -1253,115 +1252,9 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 # Open task details
 
-## TSK-0010 — Implement Combat-owned positioning and State schema V7
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / Targeting prerequisite for Weapon attacks
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Weapon attacks and Targeting
-- `ARCHITECTURE.md` §3.30
-- `ARCHITECTURE.md` §12.13, where relevant to State schema evolution
-- `DEC-0045`
-
-**Depends on:**
-
-- `TSK-0004`
-- `TSK-0008`
-
-**Contract impact:** `none`
-
-### Goal
-
-Implement the minimal Combat-owned tactical-position State and exact
-additive State schema V7 persistence required by the first Character Dagger
-melee consumer.
-
-### Why now
-
-The weapon-source/V6 prerequisite is implemented by TSK-0004 and the
-spatial contract is already approved by TSK-0008/§3.30. Production spatial
-State is the nearest missing prerequisite before the Character Dagger
-consumer.
-
-### Scope
-
-- immutable `CombatPosition(creature_id, x, y)`;
-- `CombatState.positions: tuple[CombatPosition, ...] = ()`;
-- exact canonical invariants from §3.30;
-- StateSnapshot integrity required by that contract;
-- additive State schema V7 over V6;
-- strict V1–V6 backward compatibility;
-- deterministic V7 position serialization sorted by `creatureId`;
-- relevant Domain/serializer/filesystem tests;
-- regressions proving existing Combat replacement/turn behavior preserves
-  positions;
-- directly caused documentation/status updates when implementation is
-  delivered.
-
-### Out of scope
-
-- `AttackPayload.weapon_item_id`;
-- `AttackPayload.weapon_ability`;
-- Character weapon `AttackHandler` branch;
-- Weapon Attack resolver;
-- Weapon Attack Result/Event design;
-- weapon proficiency execution;
-- Finesse execution;
-- the 5-ft reach policy production consumer, since it has no actual
-  Character Dagger Attack consumer yet;
-- Weapon Damage;
-- critical Damage;
-- Monster HP consequence orchestration;
-- Movement Commands/Events;
-- position lifecycle / placement Commands;
-- World/Location/Map state;
-- ranged/thrown/ammunition behavior;
-- generic targeting, geometry, placement, or validation frameworks.
-
-### Acceptance criteria
-
-- `CombatPosition` exact types and immutability;
-- negative coordinates allowed;
-- bool rejected as a coordinate;
-- position `creature_id` uniqueness;
-- every positioned creature is in `combat.order`;
-- positions may cover only a subset of combat participants;
-- missing participant position does not make CombatState structurally
-  invalid;
-- V7 requires `combat.positions`;
-- V7 position entries have exact `creatureId`/`x`/`y` fields;
-- V5/V6 successful reads produce existing Combat state with `positions=()`;
-- older schemas are not retroactively extended;
-- V7 writer sorts positions by `creatureId`;
-- `combat.order` remains gameplay-semantic and unsorted;
-- real filesystem V7 round-trip works;
-- existing StartCombat behavior does not synthesize arbitrary tactical
-  positions;
-- existing turn advancement and relevant snapshot replacement preserve
-  positions.
-
-### Verification
-
-- narrow Domain State tests;
-- State serializer compatibility tests;
-- real filesystem round-trip;
-- relevant Combat regressions;
-- the full test suite as final implementation verification.
-
----
-
 ## TSK-0011 — Define exact Character Dagger Attack and Damage contracts
 
-**Status:** `Ready`
+**Status:** `Current`
 
 **Priority:** `P1`
 
@@ -1490,6 +1383,7 @@ explicitly forbids marking such implementation `Ready`.
 | `TSK-0006` | Implement active-turn Attack gating | PR #75 / merge commit `d590056` |
 | `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 | `TSK-0004` | Implement the approved minimal Character weapon source and persistence | PR #80 / merge commit `d1b23de` |
+| `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
 
 ---
 
