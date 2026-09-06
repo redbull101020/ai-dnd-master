@@ -4956,3 +4956,79 @@ contracts.
   `tests/architecture/test_documentation_references.py` — 2 passed;
   `git diff --check` — no errors. Ran under Python 3.12.9. Group 3 remains
   uncommitted and unpushed pending review.
+
+## 2026-09-06 — TSK-0004 Group 4 — implementation-status documentation sync
+
+TSK-0004's production/test delivery (Groups 1–3) is summarized here and
+synchronized into canonical/status documentation. TSK-0004 remains
+`Current`; no Task Closure was performed and no PR was created.
+
+- Domain State additions: `InventoryItemState(id, definition_id)`,
+  `InventoryState(owner_id, items)`, `EquipmentState(owner_id,
+  equipped_weapon_id)`, and required `CharacterState.weapon_proficiencies:
+  frozenset[str]` with no constructor default, all with strict intrinsic
+  type validation and no lifecycle/slot/quantity/Definition-lookup behavior.
+- `StateSnapshot` integrity: `inventories`/`equipment` projections added in
+  canonical field order (default-empty); enforces Character-owner,
+  one-projection-per-owner, campaign-wide Item-ID uniqueness, and
+  same-owner equipped-item integrity, re-validated independently by
+  `StateSerializer.serialize()` (`_validate_weapon_source_relations`)
+  against post-construction mutation of the frozen snapshot's mutable
+  nested State objects.
+- State schema V6 is the production writer: exact Character
+  `weaponProficiencies`, Inventory, Inventory Item, and Equipment fields;
+  deterministic ordering (`characters` by id, `inventories` by ownerId,
+  `items` by id, `equipment` by ownerId, `weaponProficiencies` sorted
+  lexicographically); V6 Combat remains exactly the V5-shaped wire contract
+  (`id`, `round`, `order`, `activeIndex`) with no `positions`.
+- Exact V1–V5 legacy reads remain supported unchanged, with empty
+  weapon-source migration (`weapon_proficiencies=frozenset()`,
+  `inventories=()`, `equipment=()`) and no synthesized weapon State; legacy
+  shapes reject V6-only fields as unknown; a loaded legacy snapshot
+  re-serializes as exact V6.
+- Real filesystem persistence evidence: a `FilesystemStateStore` save/load
+  round-trip with non-empty `weapon_proficiencies`, `InventoryState`,
+  `InventoryItemState`, and `EquipmentState` proves an exact Domain
+  round-trip through actual on-disk V6 JSON.
+- Snapshot replacement preservation: `replace_creature_in_snapshot` (via
+  `dataclasses.replace`) preserves `campaign`/`characters`/`inventories`/
+  `equipment`/`combat` by identity when replacing one Creature; no
+  production change was needed.
+- Lazy Definition boundary: a structurally valid V6 Inventory item
+  referencing a `definition_id` that is not a packaged Item Definition
+  saves/loads successfully through the real store; State persistence never
+  calls `DefinitionSource`.
+- Explicitly not implemented: `AttackPayload` weapon fields, the Character
+  weapon `AttackHandler` branch, a Weapon Attack resolver, weapon
+  proficiency contribution and Finesse execution in Attack, the §3.30
+  targeting/reach contract, `CombatPosition`/State schema V7, and the
+  Character Dagger Attack→Damage→Monster HP continuation. No production
+  Attack file differs from `origin/main`.
+- Documentation synchronized to match the above: `docs/ARCHITECTURE.md`
+  §3.29 implementation status now distinguishes implemented State/
+  persistence from the still-pending Character weapon consumer, §3.29/§3.30
+  stale "current writer remains V5" sentences corrected to V6, and §12.12/
+  §12.13 now state V6 as the current production writer; `docs/ROADMAP.md`
+  Phase 3 "Weapon attacks"/"Attack consequences" rows and the G9/TSK-0008
+  narrative now record the §3.29 State/persistence foundation as
+  implemented while keeping the broader Weapon attacks item unchecked;
+  `docs/DEFERRED.md` DEF-0011 "Why deferred"/"Prerequisites" text and a new
+  dated History entry record the same distinction, Status remains
+  `Deferred`; `CLAUDE.md`'s implementation index gains one row for the
+  now-implemented contract without duplicating field lists. `docs/TASK.md`
+  was inspected and needed no correction (no factual mismatch found);
+  TSK-0004 stays `Current`, TSK-0005 stays `Backlog`/`L`. `README.md` was
+  inspected and needed no change.
+- Verification: focused suites, each run as a separate invocation and all
+  passing — `test_character_state.py` 35, `test_inventory_state.py` 22,
+  `test_equipment_state.py` 11, `test_state_snapshot.py` 30,
+  `test_state_snapshot_service.py` 3, `test_state_serializer.py` 199,
+  `test_state_store.py` 33; full suite — 1720 passed; configured `mypy` —
+  success for 107 source files;
+  `tests/architecture/test_documentation_references.py` — 2 passed;
+  `git diff --check` — no errors. Cumulative branch diff against
+  `origin/main` touches only Domain State, the State serializer,
+  documentation, and tests; no `AttackPayload`, `AttackHandler` weapon
+  branch, `CombatPosition`, State schema V7, new dependency, or generic
+  Inventory/Equipment framework was introduced. Ran under Python 3.12.9.
+  Group 4 remains uncommitted and unpushed pending review.

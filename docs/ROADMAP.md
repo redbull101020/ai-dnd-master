@@ -164,9 +164,9 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
-* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target part is proven by G8; §3.29/DEC-0044 define the canonical Character Inventory/Equipment ownership, runtime weapon selection, effective weapon proficiency, explicit Finesse choice, and State schema V6 compatibility prerequisites, and §3.30/DEC-0045 separately define the canonical melee targeting/reach prerequisite (Combat-owned `CombatPosition`/`CombatState.positions`, a narrow `dnd_5e` 5-ft squared-distance policy, planned State schema V7 additive over V6). Production implementation of both remains open; Character Dagger Attack→Damage→Monster HP, ranged/ammunition, and other weapons are not implemented.
+* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target part is proven by G8. §3.29/DEC-0044's authoritative Character weapon-source State and exact State schema V6 persistence are now implemented (TSK-0004): `InventoryItemState`, `InventoryState`, `EquipmentState`, `CharacterState.weapon_proficiencies`, `StateSnapshot.inventories`/`equipment`, and strict V1–V5 compatibility. §3.30/DEC-0045 separately defines the canonical melee targeting/reach prerequisite (Combat-owned `CombatPosition`/`CombatState.positions`, a narrow `dnd_5e` 5-ft squared-distance policy, planned State schema V7 additive over V6); its production implementation remains open. Still open: the Character weapon `AttackHandler` branch, weapon-proficiency contribution and explicit Finesse execution in Attack, §3.30 targeting/reach, Character Dagger Attack→Damage→Monster HP, ranged/ammunition, and other weapons.
 * [ ] Monster actions beyond the Goblin Scimitar attack-roll foundation ([DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012)) — multiple/ambiguous actions, multiattack, recharge, saving-throw/AoE actions, ranged/reach, and Monster save/skill proficiency remain open.
-* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path is implemented and evidenced through real adapters (§3.27, DEC-0042; foundation row above). The §3.29 Character weapon-source prerequisite is canonical but not implemented; the Character Dagger Attack→Damage→Monster HP continuation remains open and must preserve `Attack Resolution → Damage Resolution → Damage Application`, reusing the explicit Finesse Ability for Damage rather than auto-selecting it again.
+* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path is implemented and evidenced through real adapters (§3.27, DEC-0042; foundation row above). The §3.29 Character weapon-source State/persistence prerequisite is now implemented (TSK-0004); the Character weapon Attack consumer, Weapon Damage, and the Character Dagger Attack→Damage→Monster HP continuation remain open and must preserve `Attack Resolution → Damage Resolution → Damage Application`, reusing the explicit Finesse Ability for Damage rather than auto-selecting it again.
 * [ ] Conditions expansion ([DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
 * [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls)) — §3.30/DEC-0045 define the canonical melee targeting/reach prerequisite for the first Character Dagger consumer only (Combat-owned `CombatPosition`, a narrow `dnd_5e` 5-ft policy); production spatial State/validation and broader ranged, cover, and visibility targeting remain open.
 * [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
@@ -215,18 +215,20 @@ the real `FilesystemStateStore`, `PackagedDefinitionSource`, and
 `PythonDiceEngine` adapters. G9's own narrow Goblin Scimitar scope is
 therefore complete, but broader Weapon attack/damage/critical scope remains
 open. Section 3.29/DEC-0044 defines its minimal Character weapon-source
-prerequisite, and §3.30/DEC-0045 separately defines the canonical melee
-targeting/reach prerequisite; production Inventory/Equipment/proficiency/
-Finesse State and behavior, production spatial State/reach validation, and
-the Character Dagger Attack→Damage→Monster HP path are still absent. The
-broad Weapon attacks and Attack consequences rows and DEF-0013 therefore stay
-incomplete.
+prerequisite, now implemented by TSK-0004 as production
+Inventory/Equipment/weapon-proficiency State and exact State schema V6
+persistence; §3.30/DEC-0045 separately defines the canonical melee
+targeting/reach prerequisite, whose production spatial State/reach
+validation remains open. Character weapon Attack consumer behavior
+(proficiency contribution, Finesse execution) and the Character Dagger
+Attack→Damage→Monster HP path are still absent. The broad Weapon attacks and
+Attack consequences rows and DEF-0013 therefore stay incomplete.
 
 TSK-0008 (§3.30, DEC-0045) defines the canonical first Character Dagger
 melee targeting/reach prerequisite: the Dagger is melee-only for this
 consumer, the authoritative tactical position is Combat-owned
 (`CombatPosition`/`CombatState.positions`, planned as State schema V7,
-strictly additive over the reserved V6 weapon-source schema), effective
+strictly additive over the now-implemented V6 weapon-source schema), effective
 reach is a narrow `dnd_5e` 5-foot squared-distance policy rather than a
 `WeaponDefinition` field, and target Combat membership becomes an explicit
 Dagger-specific prerequisite without changing §3.28 active-turn eligibility.
