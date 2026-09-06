@@ -149,6 +149,17 @@ def test_applier_creates_fresh_combat_state_at_round_one_active_first() -> None:
     )
 
 
+def test_applier_produces_combat_with_no_positions() -> None:
+    """StartCombat does not synthesize tactical placement; applying
+    CombatStarted V1 produces `CombatState.positions == ()` (§3.30/
+    DEC-0045)."""
+    event = build_event()
+
+    combat = apply_combat_started_v1(event)
+
+    assert combat.positions == ()
+
+
 def test_applier_rejects_wrong_event_type_or_version() -> None:
     from dataclasses import replace
 

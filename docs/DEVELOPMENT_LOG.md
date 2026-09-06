@@ -5339,3 +5339,80 @@ already-merged delivery branch.
   writer and V7 as pending; reconciling that implementation-status text is
   left to a later `TSK-0010` checkpoint, consistent with this checkpoint's
   explicit touchpoint scope.
+- Group 2 (including its changes-requested pass) was committed as
+  `1f1732a` on `feat/tsk-0010-combat-position-v7` and pushed to
+  `origin/feat/tsk-0010-combat-position-v7` under a post-review
+  authorization scoped to that reviewed diff only.
+
+## 2026-09-06 — TSK-0010 Group 3: V7 integration and spatial-state preservation regressions
+
+- Third of four sequential review checkpoints for `TSK-0010`, continuing
+  on `feat/tsk-0010-combat-position-v7` after Group 2 (`1f1732a`). Goal:
+  prove the already-implemented V7 spatial State is actually preserved by
+  the real filesystem adapter and by the existing Combat/State
+  replacement flows, without refactoring code that already preserves it
+  correctly.
+- Re-read `apply_combat_started_v1`
+  (`src/dnd_engine/domain/events/start_combat.py`), `apply_turn_advanced_v1`
+  (`src/dnd_engine/domain/events/advance_turn.py`), and
+  `replace_creature_in_snapshot`
+  (`src/dnd_engine/application/services/state_snapshot.py`) before writing
+  any test: `apply_combat_started_v1` constructs a fresh `CombatState`
+  without ever passing `positions` (so it already defaults to `()`);
+  `apply_turn_advanced_v1` calls `dataclasses.replace(combat, round=...,
+  active_index=...)`, which passes every unspecified field — including
+  `order` and `positions` — through unchanged; `replace_creature_in_snapshot`
+  calls `dataclasses.replace(snapshot, creatures=...)`, leaving
+  `snapshot.combat` (and therefore its `positions`) untouched. All three
+  behaviors were already correct for V7 spatial State with no code change
+  required — confirmed by the regressions below, not assumed.
+- **No production code was changed in this checkpoint.**
+- `tests/domain/test_start_combat_event.py`: added
+  `test_applier_produces_combat_with_no_positions`, proving
+  `apply_combat_started_v1(...).positions == ()` — StartCombat does not
+  synthesize tactical placement (§3.30/DEC-0045).
+- `tests/domain/test_advance_turn_event.py`: added
+  `test_applier_preserves_positions_and_order_while_advancing`, building a
+  `CombatState` with a non-empty `positions` tuple, applying the existing
+  `TurnAdvanced` flow, and proving `round`/`active_index` change per the
+  event while `order` and `positions` are preserved by value.
+- `tests/application/test_state_snapshot_service.py`: extended the
+  existing `combat` fixture in
+  `test_replaces_exactly_one_creature_and_preserves_snapshot_projections`
+  with two non-empty `CombatPosition` entries, and added explicit
+  `result.combat.positions == combat.positions` /
+  `snapshot.combat.positions == combat.positions` assertions alongside the
+  pre-existing `result.combat is combat` / `snapshot.combat is combat`
+  identity checks — proving Creature replacement preserves `Combat.positions`
+  and leaves the loaded snapshot unmutated.
+- `tests/infrastructure/test_state_store.py`: extended and renamed
+  `test_save_load_v7_preserves_weapon_source_state` (already renamed off
+  `_v6` in the Group 2 changes-requested pass) to
+  `test_save_load_v7_preserves_weapon_source_state_and_combat_positions`,
+  adding a `CombatState` with one non-empty `CombatPosition` to the same
+  snapshot already covering non-empty `weapon_proficiencies`, a real
+  `InventoryState`/`InventoryItemState`, and an `EquipmentState` with an
+  equipped weapon. A single real on-disk `save()`/`load()` round-trip now
+  proves all four together survive exactly, and the raw persisted JSON is
+  asserted to have `schemaVersion == 7` and an exact `state.combat`
+  mapping including `positions`. No other filesystem tests were touched,
+  to avoid duplicating the full serializer unit-suite at the filesystem
+  layer.
+- Out of scope, per this checkpoint's boundary, and not touched: placement
+  Command/Event, Movement, reach, `AttackHandler`, geometry, targeting, a
+  generic Combat snapshot-replacement helper, a migration framework,
+  production dependencies, and `docs/TASK.md`.
+- Verification (Python 3.12.14, repository `.venv`, external `--basetemp`
+  as in Groups 1-2): `python -m pytest
+  tests/infrastructure/test_state_store.py` — 33 passed; `python -m
+  pytest tests/domain/test_start_combat_event.py
+  tests/domain/test_advance_turn_event.py` — 21 passed; `python -m pytest
+  tests/application/test_state_snapshot_service.py` — 3 passed; `python -m
+  mypy src/dnd_engine` — success, no issues in 107 source files; `git diff
+  --check` — no whitespace errors; full suite — 1774 passed (run as extra
+  verification; no narrow suite required by this checkpoint's own
+  production-code policy needed expanding since no production code
+  changed).
+- No commit, push, or pull request was created for this checkpoint; a
+  `review.patch` was produced from the uncommitted working-tree diff for
+  manual review before the next `TSK-0010` group begins.
