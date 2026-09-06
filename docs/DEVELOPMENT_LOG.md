@@ -5119,3 +5119,55 @@ already-merged delivery branch.
   whitespace errors. No production code, test, or other canonical
   documentation file changed; only `docs/TASK.md` (committed separately)
   and this entry.
+
+## 2026-09-06 — TSK-0010 Group 1: `CombatPosition` / `CombatState.positions` Domain State
+
+- First of four sequential review checkpoints for `TSK-0010`, on branch
+  `feat/tsk-0010-combat-position-v7` from `origin/main` at `5b8b3ec`. This
+  checkpoint materializes only the already-approved §3.30/DEC-0045 Domain
+  State shape; no schema V7, serializer, `AttackHandler`, reach, geometry,
+  Movement, or new Command/Event was introduced.
+- `src/dnd_engine/domain/state/combat.py`:
+  - added `CombatPosition(creature_id: str, x: int, y: int)` as a frozen
+    dataclass next to `CombatState`, with exact-type validation
+    (`type(...) is not str`/`int`) so `bool` is rejected as a coordinate
+    while negative and zero coordinates are accepted; no coordinate bounds
+    were introduced.
+  - added `CombatState.positions: tuple[CombatPosition, ...] = ()` as the
+    trailing defaulted field, preserving the meaning of the existing four
+    positional parameters and all existing call sites.
+  - `CombatState.__post_init__` now also rejects a non-tuple `positions`,
+    a non-`CombatPosition` member, a duplicate `creature_id` within
+    `positions`, and a positioned `creature_id` absent from `order`; an
+    empty or partial `positions` (a strict subset of `order`) remains
+    valid, and full order coverage is not required.
+- `tests/domain/test_combat_state.py`: extended with `CombatPosition`
+  exact-fields/frozen/coordinate-type coverage (including explicit `bool`
+  and `float` rejection) and `CombatState.positions` default, non-tuple,
+  wrong-member-type, duplicate-`creature_id`, outside-`order`,
+  empty-positions, partial-positions, and full-positions cases; the
+  existing exact-fields, `active_creature_id`, round/order/active-index
+  behavior tests are unchanged and still pass.
+- `tests/domain/test_state_snapshot.py`: added one test constructing a
+  `CombatState` with a non-empty `positions` inside a `StateSnapshot` and
+  asserting the positioned `creature_id`s are a subset of the snapshot's
+  creature IDs — proving the existing `combat.order ⊆ StateSnapshot`
+  creature-ID invariant transitively covers `positions` (since
+  `positions ⊆ order` is already enforced inside `CombatState`) without
+  duplicating that intrinsic check inside `StateSnapshot` itself.
+- No changes to `StateSnapshot`'s own validation logic, State schema
+  version, serializer, `AttackPayload`, `AttackHandler`, Weapon Attack
+  resolution, Damage, Monster HP consequence orchestration, Movement,
+  placement lifecycle, Map/World/Location State, or any generic
+  targeting/geometry abstraction. `docs/TASK.md` was not modified by this
+  checkpoint.
+- Verification (Python 3.12.14, repository `.venv`):
+  `python -m pytest tests/domain/test_combat_state.py
+  tests/domain/test_state_snapshot.py` — 66 passed;
+  `python -m mypy src/dnd_engine` — success, no issues in 107 source
+  files; `git diff --check` — no whitespace errors. Full-suite
+  verification is deferred to the final `TSK-0010` checkpoint per the
+  task's own narrow-first verification plan.
+- No commit, push, or pull request was created for this checkpoint; a
+  `review.patch` was produced from the uncommitted working-tree diff for
+  manual review before the next `TSK-0010` group begins.

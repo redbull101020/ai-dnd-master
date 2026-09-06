@@ -4,7 +4,7 @@ import pytest
 
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
-from dnd_engine.domain.state.combat import CombatState
+from dnd_engine.domain.state.combat import CombatPosition, CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.equipment import EquipmentState
 from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
@@ -452,3 +452,25 @@ def test_snapshot_rejects_combat_participant_without_matching_creature() -> None
             creatures=(creature_state("monster_001"),),
             combat=combat_state("monster_002"),
         )
+
+
+def test_snapshot_accepts_combat_positions_transitively_within_creatures() -> None:
+    creature = creature_state("monster_001")
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=("monster_001",),
+        active_index=0,
+        positions=(CombatPosition(creature_id="monster_001", x=3, y=4),),
+    )
+
+    snapshot = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature,),
+        combat=combat,
+    )
+
+    assert snapshot.combat is combat
+    positioned_ids = {position.creature_id for position in snapshot.combat.positions}
+    creature_ids = {c.id for c in snapshot.creatures}
+    assert positioned_ids.issubset(creature_ids)
