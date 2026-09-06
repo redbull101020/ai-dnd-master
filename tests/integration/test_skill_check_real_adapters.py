@@ -68,6 +68,7 @@ def test_skill_check_uses_real_adapters_without_persisting_artifacts(
                 total_level=5,
                 saving_throw_proficiencies=frozenset(),
                 skill_proficiencies=frozenset({Skill.INTIMIDATION}),
+                weapon_proficiencies=frozenset(),
             ),
         ),
     )

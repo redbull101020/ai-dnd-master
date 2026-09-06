@@ -114,6 +114,7 @@ def make_character(
         total_level=5,
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=proficiencies,
+        weapon_proficiencies=frozenset(),
     )
 
 

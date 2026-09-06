@@ -5705,12 +5705,21 @@ separate eligibility contract when they are implemented.
 
 ### 3.29. Minimal authoritative Character weapon source (TSK-0001)
 
-Implementation status: **Canonical foundation defined; production
-implementation pending.** This section defines the smallest authoritative
-weapon source required by the first future Character Dagger consumer. The
-current production writer remains State schema V5, and the current
-`CharacterState`, `StateSnapshot`, `AttackPayload`, and `AttackHandler` remain
-unchanged until a separate implementation task.
+Implementation status: **State/persistence foundation implemented by
+TSK-0004; Character weapon consumer remains pending.** This section defines
+the smallest authoritative weapon source required by the first future
+Character Dagger consumer.
+
+Implemented: `InventoryItemState`, `InventoryState`, `EquipmentState`,
+`CharacterState.weapon_proficiencies`, `StateSnapshot.inventories`,
+`StateSnapshot.equipment`, the exact State schema V6 persistence contract
+below (§12.13), and strict V1–V5 compatibility.
+
+Still pending: the `AttackPayload` weapon fields, the Character weapon
+`AttackHandler` branch, the `WeaponDefinition` consumer path, weapon
+proficiency contribution in Attack, explicit Dagger Finesse execution, the
+§3.30 targeting/reach implementation, Weapon Attack resolution, Weapon
+Damage, and the Monster HP consequence continuation.
 
 This foundation preserves the existing separation between immutable
 Definitions, runtime State, intent-level Commands, deterministic resolution,
@@ -5723,7 +5732,7 @@ implementing their broader future responsibilities.
 A Definition ID identifies immutable rules/content. A runtime Item ID
 identifies one campaign item instance. They are never interchangeable.
 
-The minimal future runtime record is:
+The minimal runtime record is:
 
 ```python
 @dataclass
@@ -5779,10 +5788,10 @@ This slice introduces no main-hand/off-hand split, slot Enum, armor or shield
 model, dual wielding, two-handed rules, or generic equipment-slot framework.
 Inventory ownership and equipped selection remain distinct State-owner facts.
 
-#### Planned StateSnapshot invariants
+#### StateSnapshot invariants
 
-The V6 implementation will add separate snapshot projections rather than
-nesting them in `CampaignState` or `CharacterState`:
+State schema V6 adds separate snapshot projections rather than nesting them
+in `CampaignState` or `CharacterState`:
 
 ```python
 @dataclass(frozen=True)
@@ -5819,7 +5828,7 @@ projection remains owned by the Creature domain.
 
 #### Character weapon proficiency
 
-The future Character projection gains exactly one effective-membership field:
+The Character projection includes exactly one effective-membership field:
 
 ```python
 @dataclass
@@ -5945,33 +5954,114 @@ ability-selection framework.
 
 #### State schema V6 and compatibility
 
-Production implementation of this foundation requires State schema V6. The
-current production writer remains V5 until that separate task lands. V6 will
-add:
+State schema V6 is the exact persistence contract for this authoritative
+weapon-source foundation. Its canonical outer envelope remains the existing
+State envelope:
 
-```text
-StateSnapshot.inventories
-StateSnapshot.equipment
-CharacterState.weapon_proficiencies
+```json
+{
+  "schemaVersion": 6,
+  "campaignId": "campaign_001",
+  "state": {
+    "campaign": {},
+    "creatures": [],
+    "characters": [],
+    "inventories": [],
+    "equipment": [],
+    "combat": null
+  }
+}
 ```
 
-The compatibility policy is:
+The V6 `state` object has exactly these required fields, and unknown fields
+remain forbidden:
 
 ```text
-V1–V5 remain readable
+campaign
+creatures
+characters
+inventories
+equipment
+combat
+```
 
+V6 preserves the existing Campaign and Creature wire shapes. Each V6
+Character entry has exactly these required fields:
+
+```text
+id
+totalLevel
+savingThrowProficiencies
+skillProficiencies
+weaponProficiencies
+```
+
+`weaponProficiencies` is a required JSON array. Every member must be an exact
+string Weapon Definition ID; duplicate members are invalid. The writer sorts
+members lexicographically and emits `[]` for empty membership. This boundary
+representation maps to the required Domain field
+`CharacterState.weapon_proficiencies: frozenset[str]`; the Domain constructor
+has no compatibility default. Legacy emptiness belongs to reader migration,
+not Domain construction.
+
+Each V6 Inventory entry has exactly these required fields:
+
+```text
+ownerId
+items
+```
+
+`items` is a required JSON array. Each member has exactly the required fields
+`id` and `definitionId`. V6 Inventory entries contain no quantity, slot,
+weight, container, durability, currency, lifecycle, or other fields.
+
+Each V6 Equipment entry has exactly these required fields:
+
+```text
+ownerId
+equippedWeaponId
+```
+
+`equippedWeaponId` is always present and is either an exact string or `null`.
+
+The V6 writer serializes non-semantic collections deterministically:
+
+```text
+characters          sorted by id
+inventories         sorted by ownerId
+inventory.items     sorted by id
+equipment           sorted by ownerId
+weaponProficiencies sorted lexicographically
+```
+
+This ordering is a persistence guarantee, not gameplay meaning.
+`combat.order` remains the gameplay-semantic Initiative order and the writer
+must not reorder it.
+
+The exact V1–V5 wire contracts remain unchanged: none gains optional V6 fields
+retroactively. Reading any successful legacy snapshot produces:
+
+```text
 legacy CharacterState:
     weapon_proficiencies = frozenset()
 
-legacy snapshot:
+legacy StateSnapshot:
     inventories = ()
     equipment = ()
 ```
 
-Legacy reads must not synthesize a Dagger, Inventory, Equipment, or weapon
-proficiency. V6 serialization/deserialization and current-writer changes are
-part of the later production implementation task, not this architecture-only
-slice.
+Legacy reads never synthesize a Dagger, Inventory, Equipment, or weapon
+proficiency from class, Creature Definition, level, or any other legacy data.
+Now that the V6 writer is implemented, saving a successfully loaded legacy
+snapshot materializes the empty V6 additions in the V6 wire shape.
+
+V6 `combat` remains exactly the existing V5 Combat wire shape: `null`, or an
+object with exactly `id`, `round`, `order`, and `activeIndex`. V6 neither adds
+nor accepts `positions` or `CombatPosition`; those are exclusively the later,
+additive State schema V7 contract in §3.30.
+
+The production writer is State schema V6, implemented by TSK-0004 (§12.13).
+No Attack Command, Event, or gameplay behavior changed.
 
 #### Character weapon validation order
 
@@ -6027,13 +6117,14 @@ code is introduced.
 
 #### Boundary with later implementation
 
-This architecture slice does not implement production State classes,
-serializer changes, the `AttackHandler` weapon branch, a Character weapon
-resolver, a Weapon Attack Event, a Weapon Damage Result/Event, critical-damage
-code, `DamageApplied` orchestration, Monster HP mutation,
-targeting/distance/reach (now scoped for the Dagger melee case by §3.30),
-Movement, ranged/thrown/ammunition rules, a generic `AttackSource`, or
-generic modifier/equipment frameworks.
+TSK-0004 implemented the production State classes and the State schema V6
+serializer described above. This architecture slice still does not
+implement the `AttackHandler` weapon branch, a Character weapon resolver, a
+Weapon Attack Event, a Weapon Damage Result/Event, critical-damage code,
+`DamageApplied` orchestration, Monster HP mutation, targeting/distance/reach
+(now scoped for the Dagger melee case by §3.30), Movement,
+ranged/thrown/ammunition rules, a generic `AttackSource`, or generic
+modifier/equipment frameworks.
 
 The Character weapon continuation must preserve the G9 staged architecture:
 
@@ -6056,9 +6147,10 @@ implementation pending.** This section defines the smallest authoritative
 targeting/reach contract required by the first future Character Dagger
 melee consumer described in §3.29. No production `CombatPosition`,
 `CombatState.positions`, State schema V7, `AttackHandler` branch, or
-resolver exists yet; the current production writer remains State schema V5
-and the current `CombatState`/`StateSnapshot` are unchanged until a separate
-implementation task.
+resolver exists yet. The current production writer is State schema V6,
+implemented by TSK-0004 (§3.29/§12.13); V6 preserves the exact V5-shaped
+Combat wire contract without `positions`, and `CombatState` remains
+otherwise unchanged until a separate implementation task.
 
 #### Consumer boundary
 
@@ -6340,10 +6432,10 @@ existing validation order.
 
 #### State schema consequence
 
-The current production writer remains State schema V5. §3.29 already
-reserves the future State schema V6 for the weapon-source additions
-(`StateSnapshot.inventories`, `StateSnapshot.equipment`,
-`CharacterState.weapon_proficiencies`). V6 is not reused for spatial State.
+The current production writer is State schema V6, implemented by TSK-0004
+(§3.29/§12.13) for the weapon-source additions (`StateSnapshot.inventories`,
+`StateSnapshot.equipment`, `CharacterState.weapon_proficiencies`). V6 is not
+reused for spatial State.
 
 The planned spatial evolution is a subsequent V7 contract, additive on top
 of V6:
@@ -9515,7 +9607,12 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Каноническая current V5 schema:
+filesystem I/O. Текущий production writer — exact State schema V6
+(`SCHEMA_V6_VERSION`); его точный field-by-field контракт (top-level
+`inventories`, `equipment`, Character `weaponProficiencies`) канонически
+определён в §3.29 и не дублируется здесь. Ниже — historical V5 example
+(предшествует V6 additions), иллюстрирующий общую envelope-форму; это не
+current writer shape:
 
 ```json
 {
@@ -9563,58 +9660,74 @@ filesystem I/O. Каноническая current V5 schema:
 }
 ```
 
-JSON использует camelCase. Writer всегда выпускает `schemaVersion: 5` и exact
-V5 state fields `campaign`, `creatures`, `characters`, `combat`, включая
-`"characters": []` для пустой collection, `"conditions": []` для пустого
-Creature Condition membership (§3.21) и `"combat": null`, когда `StateSnapshot.
-combat is None` (§3.25). Creatures и Characters сортируются по runtime ID,
+JSON использует camelCase. The current V6 writer always emits
+`schemaVersion: 6` and the exact V6 state fields defined in §3.29
+(`campaign`, `creatures`, `characters`, `inventories`, `equipment`,
+`combat`). V6 preserves the V5 campaign, creature, and combat shapes and
+preserves the pre-existing Character fields/semantics, while adding the V6
+Character `weaponProficiencies` field and the top-level
+`inventories`/`equipment` projections defined in §3.29. Preserved fields
+include `"characters": []` для пустой collection, `"conditions": []` для
+пустого Creature Condition membership (§3.21) и `"combat": null`, когда
+`StateSnapshot.combat is None` (§3.25). Creatures и Characters сортируются по runtime ID,
 `savingThrowProficiencies` — по `Ability.value`, `skillProficiencies` — по
 `Skill.value`, а `conditions` — по `Condition.value`. Пустые membership
 сериализуются как JSON arrays `[]`. Когда combat присутствует, `combat` —
 object с exact fields `id`, `round`, `order` (JSON array Creature ID strings в
 initiative-порядке) и `activeIndex`.
 
-Reader принимает пять точных схем: legacy V1 с state fields `campaign` и
+Reader принимает шесть точных схем: legacy V1 с state fields `campaign` и
 `creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
 обязательным дополнительным `skillProficiencies`, legacy V4 с обязательным
-`conditions` (без `combat`), и current V5 с обязательным дополнительным
-`combat`. Поле `characters` в V1 является unknown и запрещено. Успешное
-чтение V1 создаёт `StateSnapshot.characters=()` и не придумывает level или
-proficiency defaults. V2 Character entry сохраняет exact legacy fields `id`,
-`totalLevel` и `savingThrowProficiencies`; reader мигрирует его в canonical
-`CharacterState` с `skill_proficiencies=frozenset()`. V1–V3 Creature entries
-не содержат поле `conditions` — оно unknown и запрещено для этих трёх версий;
-успешное чтение любой из них создаёт `CreatureState.conditions ==
-frozenset()` без выдумывания membership. V1–V4 не содержат `state.combat` —
-оно unknown для этих четырёх версий; успешное чтение любой из них создаёт
-`StateSnapshot.combat is None` без выдумывания Combat State.
+`conditions` (без `combat`), legacy V5 с обязательным дополнительным
+`combat` (без `inventories`/`equipment`/Character `weaponProficiencies`), и
+current V6 с обязательными дополнительными top-level `inventories`,
+`equipment` и Character `weaponProficiencies` (exact field-by-field контракт
+— §3.29). V1–V5 сохраняют свои exact historical shapes без retroactive
+расширения V6-полями. Поле `characters` в V1 является unknown и запрещено.
+Успешное чтение V1 создаёт `StateSnapshot.characters=()` и не придумывает
+level или proficiency defaults. V2 Character entry сохраняет exact legacy
+fields `id`, `totalLevel` и `savingThrowProficiencies`; reader мигрирует его
+в canonical `CharacterState` с `skill_proficiencies=frozenset()`. V1–V3
+Creature entries не содержат поле `conditions` — оно unknown и запрещено для
+этих трёх версий; успешное чтение любой из них создаёт `CreatureState.
+conditions == frozenset()` без выдумывания membership. V1–V4 не содержат
+`state.combat` — оно unknown для этих четырёх версий; успешное чтение любой
+из них создаёт `StateSnapshot.combat is None` без выдумывания Combat State.
+V1–V5 не содержат `weaponProficiencies`, `inventories` или `equipment` — они
+unknown для этих пяти версий; успешное чтение любой из них создаёт
+`CharacterState.weapon_proficiencies = frozenset()`,
+`StateSnapshot.inventories = ()` и `StateSnapshot.equipment = ()` без синтеза
+weapon State (§3.29/§12.13).
 
-Для всех пяти версий required fields и JSON primitive/container types точны;
-unknown fields, defaults, type coercion, несовпадение outer `campaignId` с
-`state.campaign.id`, невалидные Domain values и duplicate IDs запрещены. V2–V5
-дополнительно требуют, чтобы каждый Character ID ссылался на существующий
-Creature ID; V5 дополнительно требует, чтобы каждый `combat.order` ID
-ссылался на существующий Creature ID. V3–V5 Character entry содержит
-identical exact fields `id`, `totalLevel`, `savingThrowProficiencies` и
-`skillProficiencies` — Character schema не менялась с V3; duplicate
-serialized abilities и skills запрещены до преобразования списков в
-соответствующие `frozenset`. V4 и V5 Creature entry дополнительно требует
-`conditions`: JSON list точных строк, каждая — известное значение `Condition`,
-без дубликатов; malformed non-list, unknown-value и duplicate-value payloads
-отклоняются (§3.21).
+Для всех шести версий required fields и JSON primitive/container types
+точны; unknown fields, defaults, type coercion, несовпадение outer
+`campaignId` с `state.campaign.id`, невалидные Domain values и duplicate IDs
+запрещены. V2–V6 дополнительно требуют, чтобы каждый Character ID ссылался
+на существующий Creature ID; V5–V6 дополнительно требуют, чтобы каждый
+`combat.order` ID ссылался на существующий Creature ID. V3–V5 Character
+entry содержит identical exact fields `id`, `totalLevel`,
+`savingThrowProficiencies` и `skillProficiencies` — Character schema не
+менялась с V3 по V5; V6 Character entry дополнительно требует
+`weaponProficiencies` (§3.29). V4, V5 и V6 Creature entry дополнительно
+требуют `conditions`: JSON list точных строк, каждая — известное значение
+`Condition`, без дубликатов; malformed non-list, unknown-value и
+duplicate-value payloads отклоняются (§3.21).
 
 Character decoding (включая ветку, читающую `skillProficiencies`) определяется
 явным сравнением с `LEGACY_SCHEMA_V2_VERSION`, а не сравнением только с
 текущим `SCHEMA_VERSION` — это защищает V3-чтение при будущих schema bump'ах.
-Симметрично, V4/V5 Creature field set и `conditions` decoding определяются
+Симметрично, V4/V5/V6 Creature field set и `conditions` decoding определяются
 сравнением с fixed-identity множеством `{SCHEMA_V4_VERSION,
-SCHEMA_V5_VERSION}`, а не с мутируемым `SCHEMA_VERSION`: `SCHEMA_VERSION =
-SCHEMA_V5_VERSION` сегодня, но эти имена не взаимозаменяемы — `SCHEMA_VERSION`
-обозначает current writer и используется только при записи, тогда как
-historical V4/V5 read semantics зафиксированы на своих собственных fixed
-constants независимо от того, останется ли V5 current writer в будущем (§3.21
-фиксирует эту regression-защиту как часть G6C1; §3.25 применяет тот же
-constant-based discipline к своему V5 `combat` addition, G7).
+SCHEMA_V5_VERSION, SCHEMA_V6_VERSION}`, а не с мутируемым `SCHEMA_VERSION`:
+`SCHEMA_VERSION = SCHEMA_V6_VERSION` сегодня, но эти имена не
+взаимозаменяемы — `SCHEMA_VERSION` обозначает current writer и используется
+только при записи, тогда как historical V4/V5/V6 read semantics
+зафиксированы на своих собственных fixed constants независимо от того,
+останется ли V6 current writer в будущем (§3.21 фиксирует эту
+regression-защиту как часть G6C1; §3.25 применяет тот же constant-based
+discipline к своему V5 `combat` addition, G7; §3.29 применяет её же к своим
+V6 weapon-source additions, TSK-0004).
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -9638,9 +9751,10 @@ revision fields и file/process/distributed locks отсутствуют.
 EventStore, replay и transaction ordering между Event persistence и State
 projection отложены до отдельного будущего решения.
 
-Текущая V5 schema содержит `CampaignState`, collection `CreatureState`
+Текущая V6 schema содержит `CampaignState`, collection `CreatureState`
 (включая `conditions`, §3.21), character-specific collection `CharacterState`
-и optional `CombatState` (§3.25). По мере появления следующих State domains
+(включая `weapon_proficiencies`, §3.29), collections `InventoryState` и
+`EquipmentState` (§3.29) и optional `CombatState` (§3.25). По мере появления следующих State domains
 snapshot schema должна расширяться отдельным версионируемым контрактом, не
 превращая `CampaignState` в God Object.
 
@@ -9785,7 +9899,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -9816,12 +9930,14 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 5` (§3.25, G7: adds
-top-level `state.combat`); writer выпускает только V5. Reader также принимает
+Current State schema — exact integer `schemaVersion = 6` (§3.29/§12.13,
+TSK-0004: adds top-level `inventories`/`equipment` and Character
+`weaponProficiencies`); writer выпускает только V6. Reader также принимает
 exact legacy integer `schemaVersion = 1`, `schemaVersion = 2`,
-`schemaVersion = 3` и `schemaVersion = 4`. Другие значения запрещены, а `bool`
-не считается integer version. Это версия storage schema, а не revision
-текущего State и не механизм concurrency control.
+`schemaVersion = 3`, `schemaVersion = 4` и `schemaVersion = 5`. Другие
+значения запрещены, а `bool` не считается integer version. Это версия
+storage schema, а не revision текущего State и не механизм concurrency
+control.
 
 ---
 
@@ -9859,12 +9975,25 @@ Migration
 State v3
 ```
 
-Текущие explicit minimal migration paths читают exact legacy V1 как
-`StateSnapshot(..., characters=())` без выведения character progression из
-`definitionId` и exact legacy V2 с
-`CharacterState.skill_proficiencies=frozenset()`. После следующего сохранения
-writer выпускает только exact V3. Legacy wire schemas задним числом не
-расширяются; generic migration registry или framework не вводится.
+Текущие production migration paths читают exact legacy V1–V5 и current V6
+согласно их фиксированным wire-контрактам; production writer выпускает exact
+V6 (§3.29), реализованный TSK-0004. Reader сохраняет те же exact V1–V5
+shapes и добавляет отсутствующие Domain projections только как пустые
+migration results:
+
+```text
+legacy CharacterState.weapon_proficiencies = frozenset()
+legacy StateSnapshot.inventories = ()
+legacy StateSnapshot.equipment = ()
+```
+
+Legacy migration не выводит Dagger, Inventory, Equipment или weapon
+proficiency из class, Creature Definition, level либо других старых данных.
+Успешно загруженный legacy snapshot при следующем сохранении записывается в
+exact V6 с пустыми V6 additions. Legacy wire schemas задним числом не
+расширяются; generic migration registry или framework не вводится. State
+schema V7 остаётся отдельным последующим additive spatial contract (§3.30) и
+не меняет V6 Combat shape.
 
 ---
 

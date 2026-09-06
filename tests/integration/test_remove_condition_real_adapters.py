@@ -102,6 +102,7 @@ def test_remove_condition_handler_persists_through_real_filesystem_state_store(
         total_level=5,
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
     )
     snapshot = StateSnapshot(
         campaign=CampaignState(

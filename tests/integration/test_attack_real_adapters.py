@@ -77,6 +77,7 @@ def test_attack_uses_real_state_definition_and_dice_adapters_read_only(
                 total_level=5,
                 saving_throw_proficiencies=frozenset(),
                 skill_proficiencies=frozenset(),
+                weapon_proficiencies=frozenset(),
             ),
         ),
     )
@@ -210,6 +211,7 @@ def test_goblin_scimitar_attacks_character_using_real_packaged_adapters(
                 total_level=5,
                 saving_throw_proficiencies=frozenset(),
                 skill_proficiencies=frozenset(),
+                weapon_proficiencies=frozenset(),
             ),
         ),
     )
@@ -369,6 +371,7 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
         total_level=5,
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
     )
     bystander_monster = CreatureState(
         id="monster_002",
@@ -403,6 +406,7 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
         total_level=3,
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
     )
     combat = CombatState(
         id="combat_001",

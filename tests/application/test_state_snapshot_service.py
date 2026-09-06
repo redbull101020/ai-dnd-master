@@ -9,6 +9,8 @@ from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
+from dnd_engine.domain.state.equipment import EquipmentState
+from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 
@@ -37,6 +39,15 @@ def test_replaces_exactly_one_creature_and_preserves_snapshot_projections() -> N
         total_level=1,
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
+    )
+    inventory = InventoryState(
+        owner_id="character_001",
+        items=(InventoryItemState(id="item_001", definition_id="dagger"),),
+    )
+    equipment = EquipmentState(
+        owner_id="character_001",
+        equipped_weapon_id="item_001",
     )
     combat = CombatState(
         id="combat_001",
@@ -48,6 +59,8 @@ def test_replaces_exactly_one_creature_and_preserves_snapshot_projections() -> N
         campaign=campaign,
         creatures=(other, target, character_creature),
         characters=(character,),
+        inventories=(inventory,),
+        equipment=(equipment,),
         combat=combat,
     )
     replacement = replace(target, current_hp=3)
@@ -62,10 +75,16 @@ def test_replaces_exactly_one_creature_and_preserves_snapshot_projections() -> N
     assert result.creatures[2] is character_creature
     assert result.characters is snapshot.characters
     assert result.characters[0] is character
+    assert result.inventories is snapshot.inventories
+    assert result.inventories[0] is inventory
+    assert result.equipment is snapshot.equipment
+    assert result.equipment[0] is equipment
     assert result.combat is combat
     assert snapshot.creatures == (other, target, character_creature)
     assert snapshot.campaign is campaign
     assert snapshot.characters == (character,)
+    assert snapshot.inventories == (inventory,)
+    assert snapshot.equipment == (equipment,)
     assert snapshot.combat is combat
     assert target.current_hp == 7
 

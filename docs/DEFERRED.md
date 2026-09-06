@@ -76,9 +76,11 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   Character consumers because bonus derivation and membership sources are
   explicit and persisted. It is not sufficient to close broad Proficiency:
   source provenance, Expertise/half proficiency, Monster save/skill sources,
-  and production Character weapon proficiency remain absent. Architecture
-  §3.29 now defines the future effective weapon-proficiency membership and
-  contribution semantics, but does not implement them.
+  and production Character weapon-proficiency contribution in Attack remain
+  absent. Architecture §3.29 defines the effective weapon-proficiency
+  membership and contribution semantics; TSK-0004 has implemented the
+  persisted membership (`CharacterState.weapon_proficiencies`), but the
+  Attack-time contribution remains unimplemented.
 - **Broader unimplemented scope:** [DEF-0001](#def-0001),
   [DEF-0003](#def-0003), remaining Monster save/skill proficiency in
   [DEF-0004](#def-0004), and the production weapon-proficiency portion of
@@ -663,19 +665,23 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   proficiency and has no equipment, weapon, or spatial inputs.
 - **Why deferred:** Architecture §3.29 defines the minimal authoritative
   Inventory/Equipment ownership, runtime weapon-instance selection, effective
-  Character weapon proficiency, explicit Finesse choice, and State schema
-  compatibility contract. Architecture §3.30 separately defines the minimal
+  Character weapon proficiency, explicit Finesse choice, and State schema V6
+  compatibility contract; TSK-0004 has now implemented its production
+  Inventory/Equipment/weapon-proficiency persisted State and exact State
+  schema V6 persistence. Architecture §3.30 separately defines the minimal
   authoritative melee targeting/reach contract for the first Dagger consumer
   (Combat-owned `CombatPosition`/`CombatState.positions`, a narrow `dnd_5e`
   5-ft squared-distance policy, and planned State schema V7 additive over
-  V6). Production implementation of both is still pending; broader
-  ranged/thrown/ammunition and arbitrary weapon-reach State remain separate
-  unresolved prerequisites.
-- **Prerequisites:** Production implementation of the §3.29
-  equipment/inventory source and typed weapon lookup, production
-  implementation of the §3.30 targeting/reach contract (Combat-owned spatial
-  State, State schema V7) for the first Dagger consumer, and later
-  source-specific facts for ranged/ammunition consumers.
+  V6); its production implementation remains pending. The Character weapon
+  Attack consumer (proficiency contribution, Finesse execution, targeting/
+  reach, and Attack/Damage consequence) and broader ranged/thrown/ammunition
+  and other-weapon State remain separate unresolved prerequisites.
+- **Prerequisites:** The Character weapon `AttackHandler` branch and typed
+  `WeaponDefinition` lookup consuming the now-implemented §3.29
+  Inventory/Equipment source, production implementation of the §3.30
+  targeting/reach contract (Combat-owned spatial State, State schema V7) for
+  the first Dagger consumer, and later source-specific facts for
+  ranged/ammunition consumers.
 - **Planned approach:** Keep one explicit Attack intent while deriving weapon
   attack inputs from authoritative State/Definitions; implement concrete
   weapon policies before considering shared abstractions.
@@ -717,7 +723,17 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   Production spatial State, reach validation, and the broader Weapon attack
   continuation remain pending; ranged, thrown, ammunition, and arbitrary
   weapon reach remain deferred. Status stays `Deferred` for the broader
-  Weapon attack scope.
+  Weapon attack scope. 2026-09-06 — TSK-0004 implemented the production
+  State/persistence part of the §3.29 prerequisite: `InventoryItemState`,
+  `InventoryState`, `EquipmentState`, `CharacterState.weapon_proficiencies`,
+  `StateSnapshot.inventories`/`equipment`, exact State schema V6
+  persistence, and strict V1–V5 compatibility, confirmed through a real
+  filesystem round trip. It intentionally implements no Character weapon
+  Attack consumer behavior: `AttackPayload` is unchanged, `AttackHandler`
+  gains no weapon branch, weapon-proficiency contribution and explicit
+  Finesse execution in Attack remain absent, and the §3.30 targeting/reach
+  contract and the Character Dagger Attack→Damage→Monster HP continuation
+  remain open. Status stays `Deferred` for the broader Weapon attack scope.
 
 ## DEF-0012
 
@@ -780,8 +796,13 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **Why deferred:** The narrow Monster Scimitar Application consequence path
   is implemented and confirmed by real-adapter/filesystem G9 evidence
   (Group 4). Section 3.29 now defines the canonical Character weapon-source
-  inputs, but their production State/handler/resolver implementation and the
-  broader Character Weapon Attack→Damage path remain absent.
+  inputs, and TSK-0004 has implemented their production State
+  (`InventoryItemState`, `InventoryState`, `EquipmentState`,
+  `CharacterState.weapon_proficiencies`) and exact State schema V6
+  persistence. The Character weapon `AttackHandler` branch/consumer, the
+  typed weapon consumer execution path, and the broader Character Weapon
+  Attack→Damage path — including the Character Dagger Attack→Damage→Monster
+  HP continuation — remain absent.
 - **Prerequisites:** Relevant part of DEF-0011, a concrete damage source, and
   an explicit Event ordering/causation design; DEF-0022 only if durability is
   made part of the slice.

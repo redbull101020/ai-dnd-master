@@ -1232,7 +1232,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0004
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0010
@@ -1244,14 +1244,124 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0004` | `Backlog` | `P1` | `L` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
+| `TSK-0004` | `Current` | `P1` | `M` | `cross-cutting` | Cross-cutting prerequisite for Phase 3 / Weapon attacks | Implement the approved minimal Character weapon source and persistence |
 | `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
 
 ---
 
 # Open task details
 
-_(no `Current`, `Ready`, or `Blocked` task at this time)_
+## TSK-0004 — Implement the approved minimal Character weapon source and persistence
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `cross-cutting`
+
+**Roadmap target:**
+Cross-cutting prerequisite for Phase 3 / Weapon attacks
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Weapon attacks
+- `ARCHITECTURE.md` §3.29
+- `ARCHITECTURE.md` §12.13
+- `DEC-0044`
+- `DEC-0047`
+- `DEF-0011`
+
+**Depends on:**
+
+- `TSK-0001`
+
+**Contract impact:** implements the already-approved §3.29 weapon-source State
+contract and the approved exact State schema V6 persistence contract; no new
+gameplay behavior
+
+### Goal
+
+Implement the minimal authoritative Character weapon-source State and State
+schema V6 persistence so that a later Character Weapon Attack consumer can
+derive runtime weapon ownership, equipped selection, Definition identity, and
+weapon proficiency from authoritative State rather than caller-supplied
+derived values.
+
+### Why now
+
+TSK-0007 is closed, and this approved cross-cutting source is the nearest
+unimplemented prerequisite for the Phase 3 Character Weapon Attack
+continuation.
+
+### Scope
+
+- Add `InventoryItemState`, `InventoryState`, and `EquipmentState`.
+- Add required `CharacterState.weapon_proficiencies`.
+- Add `StateSnapshot.inventories` and `StateSnapshot.equipment` with the
+  approved cross-State integrity relations.
+- Implement exact State schema V6 and strict V1–V5 legacy migration.
+- Preserve deterministic V6 persistence and prove a real filesystem
+  round-trip.
+- Preserve the new projections through existing snapshot replacement.
+- Update only implementation-status documentation directly caused by the
+  delivered implementation.
+
+### Out of scope
+
+- `AttackPayload.weapon_item_id`, `AttackPayload.weapon_ability`, the
+  Character weapon branch in `AttackHandler`, and a Weapon Attack resolver.
+- Finesse execution, attack-bonus calculation, weapon Damage, critical Damage,
+  and Monster HP consequence orchestration.
+- `CombatPosition`, melee-reach implementation, and State schema V7.
+- Inventory/Equipment Commands or Events; equip/unequip, item
+  creation/destruction/transfer, or any other lifecycle.
+- Quantity, weight, containers, currency, durability, loot, or equipment-slot
+  expansion.
+- New generic Inventory/Equipment repositories or frameworks and new
+  production dependencies.
+
+### Acceptance criteria
+
+1. The exact approved Domain State types and required field types exist.
+2. `StateSnapshot` enforces the approved owner, uniqueness, and equipped-item
+   integrity relations.
+3. Absent Inventory/Equipment projections and the approved empty/null forms
+   remain valid.
+4. Structural State validation does not dereference `definition_id`; Definition
+   lookup remains lazy at the later consumer boundary.
+5. The current writer emits exact, deterministic State schema V6.
+6. Exact V1–V5 payloads remain readable with empty V6 projections and no
+   synthesized weapon State.
+7. A V6 snapshot completes a real filesystem save/load round-trip.
+8. Existing snapshot replacement preserves `inventories` and `equipment`.
+9. Existing Character-unarmed and Monster Attack behavior remains unchanged.
+10. No V7 spatial State or Character Weapon Attack consumer behavior is added.
+
+### Verification
+
+- Focused Domain State tests.
+- Serializer V6 shape, strict-validation, deterministic-order, and V1–V5
+  migration tests.
+- Real filesystem V6 round-trip.
+- Snapshot replacement regression coverage.
+- Existing Character-unarmed and Monster Attack regressions.
+
+### Expected touchpoints
+
+- `src/dnd_engine/domain/state/`
+- `src/dnd_engine/infrastructure/persistence/json/state_serializer.py`
+- existing snapshot-replacement application service
+- focused Domain, persistence, filesystem, and Attack regression tests
+- directly affected implementation-status documentation
+
+### Execution checkpoints
+
+1. Domain weapon-source State and legacy-reader construction compatibility.
+2. Exact State schema V6 persistence and migration behavior.
+3. Filesystem/replacement integration and existing Attack regressions.
+4. Implementation-status reconciliation and final verification.
 
 ---
 

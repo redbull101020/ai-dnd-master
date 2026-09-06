@@ -6,6 +6,8 @@ from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
+from dnd_engine.domain.state.equipment import EquipmentState
+from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
@@ -46,6 +48,31 @@ def character_state(character_id: str) -> CharacterState:
             {Ability.STRENGTH, Ability.CONSTITUTION}
         ),
         skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
+    )
+
+
+def inventory_item_state(
+    item_id: str,
+    definition_id: str = "dagger",
+) -> InventoryItemState:
+    return InventoryItemState(id=item_id, definition_id=definition_id)
+
+
+def inventory_state(
+    owner_id: str,
+    *items: InventoryItemState,
+) -> InventoryState:
+    return InventoryState(owner_id=owner_id, items=items)
+
+
+def equipment_state(
+    owner_id: str,
+    equipped_weapon_id: str | None,
+) -> EquipmentState:
+    return EquipmentState(
+        owner_id=owner_id,
+        equipped_weapon_id=equipped_weapon_id,
     )
 
 
@@ -57,6 +84,8 @@ def test_snapshot_accepts_campaign_and_zero_creatures() -> None:
     assert snapshot.campaign is campaign
     assert snapshot.creatures == ()
     assert snapshot.characters == ()
+    assert snapshot.inventories == ()
+    assert snapshot.equipment == ()
 
 
 def test_snapshot_accepts_multiple_creatures_as_tuple() -> None:
@@ -174,8 +203,215 @@ def test_snapshot_has_only_persistence_grouping_fields() -> None:
         "campaign",
         "creatures",
         "characters",
+        "inventories",
+        "equipment",
         "combat",
     )
+
+
+def test_snapshot_accepts_authoritative_weapon_source_relations() -> None:
+    character = character_state("character_001")
+    item = inventory_item_state("item_001")
+    inventory = inventory_state(character.id, item)
+    equipment = equipment_state(character.id, item.id)
+
+    snapshot = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature_state(character.id),),
+        characters=(character,),
+        inventories=(inventory,),
+        equipment=(equipment,),
+    )
+
+    assert snapshot.inventories == (inventory,)
+    assert snapshot.equipment == (equipment,)
+
+
+def test_snapshot_accepts_absent_or_empty_weapon_source_projections() -> None:
+    character = character_state("character_001")
+    creature = creature_state(character.id)
+
+    absent = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature,),
+        characters=(character,),
+    )
+    empty_inventory = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature,),
+        characters=(character,),
+        inventories=(inventory_state(character.id),),
+    )
+    empty_equipment_without_inventory = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature,),
+        characters=(character,),
+        equipment=(equipment_state(character.id, None),),
+    )
+
+    assert absent.inventories == ()
+    assert absent.equipment == ()
+    assert empty_inventory.inventories[0].items == ()
+    assert (
+        empty_equipment_without_inventory.equipment[0].equipped_weapon_id
+        is None
+    )
+
+
+@pytest.mark.parametrize("field_name", ["inventories", "equipment"])
+def test_snapshot_rejects_non_tuple_weapon_source_projections(
+    field_name: str,
+) -> None:
+    character = character_state("character_001")
+    kwargs: dict[str, object] = {
+        "campaign": campaign_state(),
+        "creatures": (creature_state(character.id),),
+        "characters": (character,),
+        field_name: [],
+    }
+
+    with pytest.raises(TypeError):
+        StateSnapshot(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field_name", ["inventories", "equipment"])
+def test_snapshot_rejects_wrong_weapon_source_projection_members(
+    field_name: str,
+) -> None:
+    character = character_state("character_001")
+    kwargs: dict[str, object] = {
+        "campaign": campaign_state(),
+        "creatures": (creature_state(character.id),),
+        "characters": (character,),
+        field_name: (object(),),
+    }
+
+    with pytest.raises(TypeError):
+        StateSnapshot(**kwargs)  # type: ignore[arg-type]
+
+
+def test_snapshot_rejects_inventory_owner_without_character() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("monster_001"),),
+            inventories=(inventory_state("character_001"),),
+        )
+
+
+def test_snapshot_rejects_equipment_owner_without_character() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("monster_001"),),
+            equipment=(equipment_state("character_001", None),),
+        )
+
+
+def test_snapshot_rejects_duplicate_inventory_owner() -> None:
+    character = character_state("character_001")
+
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state(character.id),),
+            characters=(character,),
+            inventories=(
+                inventory_state(character.id),
+                inventory_state(character.id),
+            ),
+        )
+
+
+def test_snapshot_rejects_duplicate_equipment_owner() -> None:
+    character = character_state("character_001")
+
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state(character.id),),
+            characters=(character,),
+            equipment=(
+                equipment_state(character.id, None),
+                equipment_state(character.id, None),
+            ),
+        )
+
+
+def test_snapshot_rejects_campaign_wide_duplicate_item_id() -> None:
+    first_character = character_state("character_001")
+    second_character = character_state("character_002")
+
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(
+                creature_state(first_character.id),
+                creature_state(second_character.id),
+            ),
+            characters=(first_character, second_character),
+            inventories=(
+                inventory_state(
+                    first_character.id,
+                    inventory_item_state("item_001"),
+                ),
+                inventory_state(
+                    second_character.id,
+                    inventory_item_state("item_001"),
+                ),
+            ),
+        )
+
+
+def test_snapshot_rejects_equipped_item_missing_from_owner_inventory() -> None:
+    character = character_state("character_001")
+
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state(character.id),),
+            characters=(character,),
+            inventories=(inventory_state(character.id),),
+            equipment=(equipment_state(character.id, "item_001"),),
+        )
+
+
+def test_snapshot_rejects_equipped_item_owned_by_another_character() -> None:
+    first_character = character_state("character_001")
+    second_character = character_state("character_002")
+
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(
+                creature_state(first_character.id),
+                creature_state(second_character.id),
+            ),
+            characters=(first_character, second_character),
+            inventories=(
+                inventory_state(first_character.id),
+                inventory_state(
+                    second_character.id,
+                    inventory_item_state("item_001"),
+                ),
+            ),
+            equipment=(equipment_state(first_character.id, "item_001"),),
+        )
+
+
+def test_snapshot_does_not_dereference_inventory_item_definition_id() -> None:
+    character = character_state("character_001")
+    item = inventory_item_state("item_001", definition_id="does_not_exist")
+
+    snapshot = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature_state(character.id),),
+        characters=(character,),
+        inventories=(inventory_state(character.id, item),),
+        equipment=(equipment_state(character.id, item.id),),
+    )
+
+    assert snapshot.inventories[0].items[0].definition_id == "does_not_exist"
 
 
 def test_snapshot_defaults_to_no_combat() -> None:

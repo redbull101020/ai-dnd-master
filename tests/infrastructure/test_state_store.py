@@ -62,6 +62,7 @@ def character_snapshot() -> StateSnapshot:
                 skill_proficiencies=frozenset(
                     {Skill.ATHLETICS, Skill.PERCEPTION}
                 ),
+                weapon_proficiencies=frozenset(),
             ),
         ),
     )
@@ -171,8 +172,10 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 5
+    assert data["schemaVersion"] == 6
     assert data["state"]["characters"] == []
+    assert data["state"]["inventories"] == []
+    assert data["state"]["equipment"] == []
     assert data["state"]["combat"] is None
 
 
@@ -223,6 +226,118 @@ def test_save_load_v3_preserves_character_state(tmp_path: Path) -> None:
     store.save(original)
 
     assert store.load("campaign_001") == original
+
+
+def test_save_load_v6_preserves_weapon_source_state(tmp_path: Path) -> None:
+    """Real filesystem round-trip evidence for TSK-0004: proves non-empty
+    weapon_proficiencies, InventoryState, InventoryItemState, and
+    EquipmentState survive an exact Domain round-trip through actual
+    on-disk V6 JSON, not just an in-memory fake."""
+    from dnd_engine.domain.state.equipment import EquipmentState
+    from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
+
+    store = FilesystemStateStore(tmp_path)
+    creature = CreatureState(
+        id="character_001",
+        definition_id="fighter",
+        ability_scores=AbilityScores(16, 12, 14, 10, 10, 8),
+        current_hp=28,
+        max_hp=28,
+    )
+    character = CharacterState(
+        id="character_001",
+        total_level=5,
+        saving_throw_proficiencies=frozenset(
+            {Ability.STRENGTH, Ability.CONSTITUTION}
+        ),
+        skill_proficiencies=frozenset({Skill.ATHLETICS, Skill.PERCEPTION}),
+        weapon_proficiencies=frozenset({"dagger"}),
+    )
+    inventory = InventoryState(
+        owner_id="character_001",
+        items=(InventoryItemState(id="item_001", definition_id="dagger"),),
+    )
+    equipment = EquipmentState(
+        owner_id="character_001", equipped_weapon_id="item_001"
+    )
+    original = StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
+        creatures=(creature,),
+        characters=(character,),
+        inventories=(inventory,),
+        equipment=(equipment,),
+    )
+
+    store.save(original)
+    loaded = FilesystemStateStore(tmp_path).load("campaign_001")
+
+    assert loaded == original
+    assert loaded.characters[0].weapon_proficiencies == frozenset({"dagger"})
+    assert loaded.inventories == (inventory,)
+    assert loaded.equipment == (equipment,)
+
+    state_path = tmp_path / "campaign_001" / "state.json"
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    assert data["schemaVersion"] == 6
+    assert data["state"]["characters"][0]["weaponProficiencies"] == ["dagger"]
+    assert data["state"]["inventories"] == [
+        {
+            "ownerId": "character_001",
+            "items": [{"id": "item_001", "definitionId": "dagger"}],
+        }
+    ]
+    assert data["state"]["equipment"] == [
+        {"ownerId": "character_001", "equippedWeaponId": "item_001"}
+    ]
+
+
+def test_load_does_not_dereference_inventory_item_definition_id(
+    tmp_path: Path,
+) -> None:
+    """Lazy Definition boundary regression: a structurally valid V6
+    Inventory item referencing a `definition_id` that is not a packaged
+    Item Definition must still save/load successfully through the real
+    FilesystemStateStore. State persistence never calls DefinitionSource;
+    Definition lookup is lazy and belongs to a later consumer boundary."""
+    from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
+
+    store = FilesystemStateStore(tmp_path)
+    creature = CreatureState(
+        id="character_001",
+        definition_id="fighter",
+        ability_scores=AbilityScores(16, 12, 14, 10, 10, 8),
+        current_hp=28,
+        max_hp=28,
+    )
+    character = CharacterState(
+        id="character_001",
+        total_level=5,
+        saving_throw_proficiencies=frozenset(),
+        skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
+    )
+    inventory = InventoryState(
+        owner_id="character_001",
+        items=(
+            InventoryItemState(
+                id="item_001",
+                definition_id="definition_that_is_not_packaged",
+            ),
+        ),
+    )
+    original = StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
+        creatures=(creature,),
+        characters=(character,),
+        inventories=(inventory,),
+    )
+
+    store.save(original)
+    loaded = FilesystemStateStore(tmp_path).load("campaign_001")
+
+    assert loaded.inventories[0].items[0].definition_id == (
+        "definition_that_is_not_packaged"
+    )
 
 
 def test_save_load_v5_preserves_combat_state(tmp_path: Path) -> None:
@@ -320,7 +435,7 @@ def test_invalid_snapshot_json_raises_invalid_snapshot(tmp_path: Path) -> None:
 
 def test_unsupported_schema_version_raises_invalid_snapshot(tmp_path: Path) -> None:
     data = valid_data()
-    data["schemaVersion"] = 6
+    data["schemaVersion"] = 7
     write_json(tmp_path / "campaign_001" / "state.json", data)
 
     with pytest.raises(InvalidStateSnapshotError):

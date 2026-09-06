@@ -4,6 +4,8 @@ from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
+from dnd_engine.domain.state.equipment import EquipmentState
+from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
@@ -25,15 +27,27 @@ SCHEMA_V4_VERSION = 4
 # semantics compare against this fixed sentinel, never against the mutable
 # SCHEMA_VERSION below.
 SCHEMA_V5_VERSION = 5
-SCHEMA_VERSION = SCHEMA_V5_VERSION
+# Fixed identity of the V6 state shape (adds the top-level `inventories` and
+# `equipment` keys plus Character `weaponProficiencies`, §3.29/§12.13). Same
+# rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION above: historical V6
+# semantics compare against this fixed sentinel, never against the mutable
+# SCHEMA_VERSION below.
+SCHEMA_V6_VERSION = 6
+SCHEMA_VERSION = SCHEMA_V6_VERSION
 # The V4 Creature shape (with `conditions`) is unchanged by the V5 state-level
-# `combat` addition; both versions decode Creature payloads the same way.
-_CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {SCHEMA_V4_VERSION, SCHEMA_V5_VERSION}
+# `combat` addition and the V6 weapon-source additions; all three versions
+# decode Creature payloads the same way.
+_CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {
+    SCHEMA_V4_VERSION,
+    SCHEMA_V5_VERSION,
+    SCHEMA_V6_VERSION,
+}
 
 _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
 _V2_STATE_FIELDS = {"campaign", "creatures", "characters"}
 _V5_STATE_FIELDS = _V2_STATE_FIELDS | {"combat"}
+_V6_STATE_FIELDS = _V5_STATE_FIELDS | {"inventories", "equipment"}
 _CAMPAIGN_FIELDS = {"id", "rulesetId", "rulesetVersion"}
 _CREATURE_FIELDS = {
     "id",
@@ -49,6 +63,7 @@ _V2_CHARACTER_FIELDS = {
     "savingThrowProficiencies",
 }
 _V3_CHARACTER_FIELDS = _V2_CHARACTER_FIELDS | {"skillProficiencies"}
+_V6_CHARACTER_FIELDS = _V3_CHARACTER_FIELDS | {"weaponProficiencies"}
 _ABILITY_SCORE_FIELDS = {
     "strength",
     "dexterity",
@@ -58,6 +73,9 @@ _ABILITY_SCORE_FIELDS = {
     "charisma",
 }
 _COMBAT_FIELDS = {"id", "round", "order", "activeIndex"}
+_INVENTORY_FIELDS = {"ownerId", "items"}
+_INVENTORY_ITEM_FIELDS = {"id", "definitionId"}
+_EQUIPMENT_FIELDS = {"ownerId", "equippedWeaponId"}
 
 
 def _require_mapping(value: object, location: str) -> Mapping[str, object]:
@@ -157,6 +175,93 @@ def _validate_character(character: CharacterState) -> None:
         raise TypeError(
             "character skill_proficiencies must contain only Skill values"
         )
+    if type(character.weapon_proficiencies) is not frozenset:
+        raise TypeError("character weapon_proficiencies must be a frozenset")
+    if not all(
+        type(proficiency) is str
+        for proficiency in character.weapon_proficiencies
+    ):
+        raise TypeError(
+            "character weapon_proficiencies must contain only str values"
+        )
+
+
+def _validate_inventory_item(item: InventoryItemState, location: str) -> None:
+    if not isinstance(item, InventoryItemState):
+        raise TypeError(f"{location} must be an InventoryItemState")
+    _require_str(item.id, f"{location}.id")
+    _require_str(item.definition_id, f"{location}.definition_id")
+
+
+def _validate_inventory(inventory: InventoryState) -> None:
+    if not isinstance(inventory, InventoryState):
+        raise TypeError("snapshot inventories must contain only InventoryState values")
+    _require_str(inventory.owner_id, "inventory.owner_id")
+    if type(inventory.items) is not tuple:
+        raise TypeError("inventory.items must be a tuple")
+    for item_index, item in enumerate(inventory.items):
+        _validate_inventory_item(item, f"inventory.items[{item_index}]")
+
+
+def _validate_equipment(equipment: EquipmentState) -> None:
+    if not isinstance(equipment, EquipmentState):
+        raise TypeError("snapshot equipment must contain only EquipmentState values")
+    _require_str(equipment.owner_id, "equipment.owner_id")
+    if (
+        equipment.equipped_weapon_id is not None
+        and type(equipment.equipped_weapon_id) is not str
+    ):
+        raise TypeError("equipment.equipped_weapon_id must be a str or None")
+
+
+def _validate_weapon_source_relations(
+    snapshot: StateSnapshot, character_ids: set[str]
+) -> None:
+    """`StateSnapshot.__post_init__` checks these same relations, but only
+    once, at construction. Its nested Inventory/Equipment dataclasses are
+    mutable, so a snapshot that was valid when built can be mutated into a
+    relationally invalid one before this write; re-check independently here
+    using the current values, mirroring the canonical Domain invariants
+    exactly rather than introducing a new validation abstraction."""
+    inventory_owner_ids = [inventory.owner_id for inventory in snapshot.inventories]
+    if len(inventory_owner_ids) != len(set(inventory_owner_ids)):
+        raise ValueError("at most one InventoryState is allowed per owner")
+    if not set(inventory_owner_ids).issubset(character_ids):
+        raise ValueError(
+            "every InventoryState owner must have a corresponding CharacterState"
+        )
+
+    equipment_owner_ids = [equipment.owner_id for equipment in snapshot.equipment]
+    if len(equipment_owner_ids) != len(set(equipment_owner_ids)):
+        raise ValueError("at most one EquipmentState is allowed per owner")
+    if not set(equipment_owner_ids).issubset(character_ids):
+        raise ValueError(
+            "every EquipmentState owner must have a corresponding CharacterState"
+        )
+
+    item_ids = [
+        item.id for inventory in snapshot.inventories for item in inventory.items
+    ]
+    if len(item_ids) != len(set(item_ids)):
+        raise ValueError(
+            "InventoryItemState IDs must be unique within a StateSnapshot"
+        )
+
+    inventories_by_owner = {
+        inventory.owner_id: inventory for inventory in snapshot.inventories
+    }
+    for equipment in snapshot.equipment:
+        if equipment.equipped_weapon_id is None:
+            continue
+        owner_inventory = inventories_by_owner.get(equipment.owner_id)
+        if owner_inventory is None or not any(
+            item.id == equipment.equipped_weapon_id
+            for item in owner_inventory.items
+        ):
+            raise ValueError(
+                "equipped_weapon_id must reference an item in the same owner's "
+                "InventoryState"
+            )
 
 
 def _serialize_ability_scores(ability_scores: AbilityScores) -> dict[str, object]:
@@ -205,6 +310,29 @@ def _serialize_character(character: CharacterState) -> dict[str, object]:
                 key=lambda skill: skill.value,
             )
         ],
+        "weaponProficiencies": sorted(character.weapon_proficiencies),
+    }
+
+
+def _serialize_inventory_item(item: InventoryItemState) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "definitionId": item.definition_id,
+    }
+
+
+def _serialize_inventory(inventory: InventoryState) -> dict[str, object]:
+    items = sorted(inventory.items, key=lambda item: item.id)
+    return {
+        "ownerId": inventory.owner_id,
+        "items": [_serialize_inventory_item(item) for item in items],
+    }
+
+
+def _serialize_equipment(equipment: EquipmentState) -> dict[str, object]:
+    return {
+        "ownerId": equipment.owner_id,
+        "equippedWeaponId": equipment.equipped_weapon_id,
     }
 
 
@@ -268,10 +396,20 @@ class StateSerializer:
                 )
             character_ids.add(character.id)
 
+        for inventory in snapshot.inventories:
+            _validate_inventory(inventory)
+        for equipment in snapshot.equipment:
+            _validate_equipment(equipment)
+        _validate_weapon_source_relations(snapshot, character_ids)
+
         _validate_combat(snapshot.combat, creature_ids)
 
         creatures = sorted(snapshot.creatures, key=lambda creature: creature.id)
         characters = sorted(snapshot.characters, key=lambda character: character.id)
+        inventories = sorted(snapshot.inventories, key=lambda inventory: inventory.owner_id)
+        equipment_entries = sorted(
+            snapshot.equipment, key=lambda equipment: equipment.owner_id
+        )
         return {
             "schemaVersion": SCHEMA_VERSION,
             "campaignId": snapshot.campaign.id,
@@ -286,6 +424,12 @@ class StateSerializer:
                 ],
                 "characters": [
                     _serialize_character(character) for character in characters
+                ],
+                "inventories": [
+                    _serialize_inventory(inventory) for inventory in inventories
+                ],
+                "equipment": [
+                    _serialize_equipment(equipment) for equipment in equipment_entries
                 ],
                 "combat": _serialize_combat(snapshot.combat),
             },
@@ -303,6 +447,7 @@ class StateSerializer:
             LEGACY_SCHEMA_V3_VERSION,
             SCHEMA_V4_VERSION,
             SCHEMA_V5_VERSION,
+            SCHEMA_V6_VERSION,
         }:
             raise ValueError(f"unsupported schemaVersion: {schema_version}")
 
@@ -310,6 +455,8 @@ class StateSerializer:
         state = _require_mapping(root["state"], "state")
         if schema_version == LEGACY_SCHEMA_VERSION:
             state_fields = _V1_STATE_FIELDS
+        elif schema_version == SCHEMA_V6_VERSION:
+            state_fields = _V6_STATE_FIELDS
         elif schema_version == SCHEMA_V5_VERSION:
             state_fields = _V5_STATE_FIELDS
         else:
@@ -355,14 +502,37 @@ class StateSerializer:
                 )
                 for index, character_data in enumerate(characters_data)
             )
-        if schema_version == SCHEMA_V5_VERSION:
+        if schema_version in {SCHEMA_V5_VERSION, SCHEMA_V6_VERSION}:
             combat = StateSerializer._deserialize_combat(state["combat"])
         else:
             combat = None
+
+        if schema_version == SCHEMA_V6_VERSION:
+            inventories_data = state["inventories"]
+            if type(inventories_data) is not list:
+                raise TypeError("state.inventories must be a list")
+            inventories: tuple[InventoryState, ...] = tuple(
+                StateSerializer._deserialize_inventory(inventory_data, index)
+                for index, inventory_data in enumerate(inventories_data)
+            )
+
+            equipment_data = state["equipment"]
+            if type(equipment_data) is not list:
+                raise TypeError("state.equipment must be a list")
+            equipment: tuple[EquipmentState, ...] = tuple(
+                StateSerializer._deserialize_equipment(entry_data, index)
+                for index, entry_data in enumerate(equipment_data)
+            )
+        else:
+            inventories = ()
+            equipment = ()
+
         return StateSnapshot(
             campaign=campaign,
             creatures=creatures,
             characters=characters,
+            inventories=inventories,
+            equipment=equipment,
             combat=combat,
         )
 
@@ -442,11 +612,12 @@ class StateSerializer:
         schema_version: int,
     ) -> CharacterState:
         character = _require_mapping(data, f"state.characters[{index}]")
-        character_fields = (
-            _V2_CHARACTER_FIELDS
-            if schema_version == LEGACY_SCHEMA_V2_VERSION
-            else _V3_CHARACTER_FIELDS
-        )
+        if schema_version == LEGACY_SCHEMA_V2_VERSION:
+            character_fields = _V2_CHARACTER_FIELDS
+        elif schema_version == SCHEMA_V6_VERSION:
+            character_fields = _V6_CHARACTER_FIELDS
+        else:
+            character_fields = _V3_CHARACTER_FIELDS
         _require_exact_fields(character, character_fields, "character")
 
         total_level = _require_int(
@@ -513,11 +684,94 @@ class StateSerializer:
                     )
                 skill_proficiencies.append(skill)
 
+        # V1-V5 predate `weaponProficiencies`; legacy migration always yields
+        # empty weapon-source membership (§12.13), never a synthesized value.
+        weapon_proficiencies: list[str] = []
+        if schema_version == SCHEMA_V6_VERSION:
+            weapon_proficiencies_data = character["weaponProficiencies"]
+            if type(weapon_proficiencies_data) is not list:
+                raise TypeError(
+                    f"state.characters[{index}].weaponProficiencies must be a list"
+                )
+            for proficiency_index, value in enumerate(weapon_proficiencies_data):
+                weapon_value = _require_str(
+                    value,
+                    "state.characters"
+                    f"[{index}].weaponProficiencies[{proficiency_index}]",
+                )
+                if weapon_value in weapon_proficiencies:
+                    raise ValueError(
+                        "weaponProficiencies must not contain duplicates"
+                    )
+                weapon_proficiencies.append(weapon_value)
+
         return CharacterState(
             id=_require_str(character["id"], f"state.characters[{index}].id"),
             total_level=total_level,
             saving_throw_proficiencies=frozenset(proficiencies),
             skill_proficiencies=frozenset(skill_proficiencies),
+            weapon_proficiencies=frozenset(weapon_proficiencies),
+        )
+
+    @staticmethod
+    def _deserialize_inventory_item(
+        data: object,
+        inventory_index: int,
+        item_index: int,
+    ) -> InventoryItemState:
+        item = _require_mapping(
+            data, f"state.inventories[{inventory_index}].items[{item_index}]"
+        )
+        _require_exact_fields(item, _INVENTORY_ITEM_FIELDS, "inventory item")
+        return InventoryItemState(
+            id=_require_str(
+                item["id"],
+                f"state.inventories[{inventory_index}].items[{item_index}].id",
+            ),
+            definition_id=_require_str(
+                item["definitionId"],
+                f"state.inventories[{inventory_index}].items[{item_index}]"
+                ".definitionId",
+            ),
+        )
+
+    @staticmethod
+    def _deserialize_inventory(data: object, index: int) -> InventoryState:
+        inventory = _require_mapping(data, f"state.inventories[{index}]")
+        _require_exact_fields(inventory, _INVENTORY_FIELDS, "inventory")
+
+        items_data = inventory["items"]
+        if type(items_data) is not list:
+            raise TypeError(f"state.inventories[{index}].items must be a list")
+        items = tuple(
+            StateSerializer._deserialize_inventory_item(item_data, index, item_index)
+            for item_index, item_data in enumerate(items_data)
+        )
+
+        return InventoryState(
+            owner_id=_require_str(
+                inventory["ownerId"], f"state.inventories[{index}].ownerId"
+            ),
+            items=items,
+        )
+
+    @staticmethod
+    def _deserialize_equipment(data: object, index: int) -> EquipmentState:
+        equipment = _require_mapping(data, f"state.equipment[{index}]")
+        _require_exact_fields(equipment, _EQUIPMENT_FIELDS, "equipment")
+
+        equipped_weapon_id_value = equipment["equippedWeaponId"]
+        if equipped_weapon_id_value is not None:
+            equipped_weapon_id_value = _require_str(
+                equipped_weapon_id_value,
+                f"state.equipment[{index}].equippedWeaponId",
+            )
+
+        return EquipmentState(
+            owner_id=_require_str(
+                equipment["ownerId"], f"state.equipment[{index}].ownerId"
+            ),
+            equipped_weapon_id=equipped_weapon_id_value,
         )
 
     @staticmethod
