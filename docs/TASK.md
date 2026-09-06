@@ -1232,10 +1232,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
-- **Next:** —
+- **Current:** TSK-0010
+- **Next:** TSK-0011
 - **Hard blockers:** —
-- **Next free ID:** TSK-0010
+- **Next free ID:** TSK-0014
 - **Last reviewed:** 2026-09-06
 
 ---
@@ -1244,13 +1244,237 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0005` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Weapon attacks and Attack consequences | Implement the Character Dagger Attack → Damage → Monster HP continuation |
+| `TSK-0010` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Targeting prerequisite for Weapon attacks | Implement Combat-owned positioning and State schema V7 |
+| `TSK-0011` | `Ready` | `P1` | `M` | `architecture` | Phase 3 / Weapon attacks and Attack consequences | Define exact Character Dagger Attack and Damage contracts |
+| `TSK-0012` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Weapon attacks | Implement Character Dagger weapon Attack resolution |
+| `TSK-0013` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Attack consequences | Implement Character Dagger Attack → Damage → Monster HP consequence |
 
 ---
 
 # Open task details
 
-_(no `Current`, `Ready`, or `Blocked` task at this time)_
+## TSK-0010 — Implement Combat-owned positioning and State schema V7
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `mechanics`
+
+**Roadmap target:** Phase 3 / Targeting prerequisite for Weapon attacks
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Weapon attacks and Targeting
+- `ARCHITECTURE.md` §3.30
+- `ARCHITECTURE.md` §12.13, where relevant to State schema evolution
+- `DEC-0045`
+
+**Depends on:**
+
+- `TSK-0004`
+- `TSK-0008`
+
+**Contract impact:** `none`
+
+### Goal
+
+Implement the minimal Combat-owned tactical-position State and exact
+additive State schema V7 persistence required by the first Character Dagger
+melee consumer.
+
+### Why now
+
+The weapon-source/V6 prerequisite is implemented by TSK-0004 and the
+spatial contract is already approved by TSK-0008/§3.30. Production spatial
+State is the nearest missing prerequisite before the Character Dagger
+consumer.
+
+### Scope
+
+- immutable `CombatPosition(creature_id, x, y)`;
+- `CombatState.positions: tuple[CombatPosition, ...] = ()`;
+- exact canonical invariants from §3.30;
+- StateSnapshot integrity required by that contract;
+- additive State schema V7 over V6;
+- strict V1–V6 backward compatibility;
+- deterministic V7 position serialization sorted by `creatureId`;
+- relevant Domain/serializer/filesystem tests;
+- regressions proving existing Combat replacement/turn behavior preserves
+  positions;
+- directly caused documentation/status updates when implementation is
+  delivered.
+
+### Out of scope
+
+- `AttackPayload.weapon_item_id`;
+- `AttackPayload.weapon_ability`;
+- Character weapon `AttackHandler` branch;
+- Weapon Attack resolver;
+- Weapon Attack Result/Event design;
+- weapon proficiency execution;
+- Finesse execution;
+- the 5-ft reach policy production consumer, since it has no actual
+  Character Dagger Attack consumer yet;
+- Weapon Damage;
+- critical Damage;
+- Monster HP consequence orchestration;
+- Movement Commands/Events;
+- position lifecycle / placement Commands;
+- World/Location/Map state;
+- ranged/thrown/ammunition behavior;
+- generic targeting, geometry, placement, or validation frameworks.
+
+### Acceptance criteria
+
+- `CombatPosition` exact types and immutability;
+- negative coordinates allowed;
+- bool rejected as a coordinate;
+- position `creature_id` uniqueness;
+- every positioned creature is in `combat.order`;
+- positions may cover only a subset of combat participants;
+- missing participant position does not make CombatState structurally
+  invalid;
+- V7 requires `combat.positions`;
+- V7 position entries have exact `creatureId`/`x`/`y` fields;
+- V5/V6 successful reads produce existing Combat state with `positions=()`;
+- older schemas are not retroactively extended;
+- V7 writer sorts positions by `creatureId`;
+- `combat.order` remains gameplay-semantic and unsorted;
+- real filesystem V7 round-trip works;
+- existing StartCombat behavior does not synthesize arbitrary tactical
+  positions;
+- existing turn advancement and relevant snapshot replacement preserve
+  positions.
+
+### Verification
+
+- narrow Domain State tests;
+- State serializer compatibility tests;
+- real filesystem round-trip;
+- relevant Combat regressions;
+- the full test suite as final implementation verification.
+
+---
+
+## TSK-0011 — Define exact Character Dagger Attack and Damage contracts
+
+**Status:** `Ready`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Weapon attacks and Attack consequences
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Weapon attacks
+- `ROADMAP.md` — Phase 3 / Attack consequences
+- `ARCHITECTURE.md` §3.27
+- `ARCHITECTURE.md` §3.29
+- `ARCHITECTURE.md` §3.30
+- `DEC-0042`
+- `DEC-0044`
+- `DEC-0045`
+- `DEF-0011`
+- `DEF-0013`
+
+**Depends on:** `—`
+
+**Contract impact:** `decision required before implementation`
+
+### Goal
+
+Resolve only the exact remaining canonical contracts required before
+TSK-0012/TSK-0013 can become executable Character Dagger implementation
+tasks.
+
+The architecture task must decide, with current repository evidence:
+
+Attack-resolution boundary:
+
+- whether the Character weapon path reuses or extends the existing
+  `AttackResult`;
+- whether `AttackResolved` evolves or a separate concrete Character/Weapon
+  Attack Event is justified;
+- which weapon-source identity facts, if any, belong in the resolved
+  result/event;
+- exact invariants and compatibility with existing unarmed `AttackResolved`
+  V1;
+- `AttackHandler` outcome typing.
+
+Weapon-Damage boundary:
+
+- exact Character Dagger normal-damage formula;
+- exact critical-damage formula;
+- how the already-selected Finesse Ability is reused by Damage rather than
+  selected again;
+- source `damage_type`;
+- concrete Damage result type;
+- concrete source-Damage Event type/payload;
+- zero-source-damage behavior;
+- exact Event causality/order;
+- reuse of unchanged source-agnostic `DamageApplied` V1.
+
+The task must compare alternatives rather than presuppose names such as
+`CharacterWeaponAttackResult` or `CharacterWeaponAttackResolved`.
+
+### Why now
+
+Inventory/Equipment/V6 and the Dagger spatial contract are already
+established. Production Character weapon implementation would otherwise
+require unapproved Result/Event and Weapon Damage contracts, and `TASK.md`
+explicitly forbids marking such implementation `Ready`.
+
+### Scope
+
+- inspect current `AttackResult`, `AttackResolved` V1, Monster Attack
+  contracts, G9 Damage contracts, and the existing `DamageApplied` contract;
+- compare minimal concrete alternatives;
+- choose and document the smallest sufficient Character Dagger
+  Attack/Damage contract;
+- update `ARCHITECTURE.md`;
+- append a new accepted Decision;
+- reconcile Roadmap/Deferred wording only where the new canonical contract
+  requires it;
+- refine future implementation tasks only after the decision exists.
+
+### Out of scope
+
+- production Python implementation;
+- State schema V7 implementation;
+- ranged/thrown/ammunition;
+- additional weapons;
+- resistance/immunity/vulnerability;
+- temporary HP or death lifecycle;
+- generic `AttackSource` hierarchy;
+- generic `Action` hierarchy;
+- generic modifier/damage/effect pipelines;
+- unrelated abstraction extraction.
+
+### Acceptance criteria
+
+- one explicit chosen Attack Result/Event boundary;
+- one explicit Character Dagger Damage Result/Event boundary;
+- normal/critical/Finesse semantics unambiguous;
+- exact causality/order through existing `DamageApplied` V1 unambiguous;
+- backward compatibility with already-published existing Events explicitly
+  addressed;
+- no speculative generic abstraction without current evidence;
+- Architecture and Decision Log agree;
+- TSK-0012/TSK-0013 can subsequently be refined without inventing a
+  canonical contract during implementation.
+
+### Verification
+
+- documentation-reference tests;
+- consistency checks against current code contracts;
+- `git diff --check`.
 
 ---
 
