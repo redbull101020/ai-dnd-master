@@ -6094,3 +6094,62 @@ already-merged delivery branch.
 - TSK-0013 is not marked complete. No commit or push was performed for
   this group; a `review.patch` containing only the fresh Group 4 changes
   was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 5: documentation synchronization
+
+- Synchronized implementation-status wording across `docs/ARCHITECTURE.md`
+  §§3.27/3.29/3.32, `docs/ROADMAP.md` Phase 3, `docs/DEFERRED.md`
+  (P2-PROFICIENCY, P2-ATTACK-ROLLS, P2-DAMAGE, DEF-0011, DEF-0013), and
+  `CLAUDE.md`'s implementation index, now that TSK-0013 Groups 1-4 have
+  implemented the narrow Character Dagger Attack → source Damage →
+  optional `DamageApplied`/Monster HP consequence chain. Only status
+  prose changed: the §3.32 normative payload fields, causality contract,
+  critical dice-count-doubling formula, Finesse-continuity rule, unchanged
+  `DamageApplied` V1 contract, and State schema were not touched, and no
+  new architectural decision was made — implementation follows the
+  already-accepted DEC-0042/DEC-0048.
+- Broad `Weapon attacks` and `Attack consequences` remain unchecked in
+  `docs/ROADMAP.md` Phase 3: TSK-0013 proves one narrow Character Dagger
+  consequence slice, not all Attack consequences or all weapons; other
+  weapons, ranged/thrown/ammunition, other Monster actions, and typed
+  defenses/temporary HP remain open.
+- `docs/DEFERRED.md` DEF-0013 stays `Status: Deferred` (not `Done`): a new
+  dated History entry records that TSK-0013 closes the narrow Character
+  Dagger Attack→Damage→Monster HP consequence entirely, while DEF-0013's
+  own remaining scope — the broader Weapon attack/damage/critical
+  continuation (other weapons, ranged/thrown/ammunition) — stays explicitly
+  open. Other Monster actions, resistance/immunity/vulnerability, and
+  temporary HP are not part of DEF-0013's own remaining scope; they are
+  separately tracked by their own Roadmap/Deferred records. DEF-0011
+  similarly gained a new dated History entry for the same TSK-0013
+  continuation and remains `Deferred` for broader weapon scope. No existing
+  History bullet was rewritten; only new append-only entries were added.
+- Corrected stale pre-existing inconsistencies identified during review,
+  present since before this task on the TSK-0012-completed baseline: P2-
+  PROFICIENCY's closure assessment claimed production Character
+  weapon-proficiency contribution in Attack was still absent, and
+  P2-ATTACK-ROLLS's closure assessment (plus a matching passage in
+  `docs/ROADMAP.md`'s G9 narrative) claimed the production Character
+  weapon path and reach validation for TSK-0012 remained missing — both
+  were already false on that baseline, since TSK-0012 had already
+  implemented Attack-time weapon-proficiency contribution and production
+  5-ft reach validation. Both are now corrected to reflect the actual
+  TSK-0012 implementation, without broadening scope beyond the Character
+  Dagger and existing TSK-0012/TSK-0013 evidence.
+- No canonical contract changed: `docs/DECISIONS.md` was not touched (no
+  new decision was made), `docs/TASK.md`'s `Current`/queue/completion
+  evidence were left unchanged (Task Closure remains a later group), and
+  `README.md` was left unchanged (no concrete high-level claim it makes is
+  contradicted by TSK-0013). No production Python code or test file was
+  changed in this group.
+- Verification on Python 3.12.14 (with `--basetemp` pointed at a writable
+  scratch directory to work around this machine's pre-existing local
+  Windows `pytest-of-redbu` temp-directory `PermissionError`, unrelated to
+  this change): `pytest tests/architecture/test_documentation_references.py`
+  — passed; `git diff --check` — no whitespace errors. Manual diff
+  inspection confirms only `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `CLAUDE.md`, and this `docs/DEVELOPMENT_LOG.md` entry
+  changed.
+- TSK-0013 is not marked complete. No commit or push was performed for this
+  group; a `review.patch` containing only the fresh Group 5 documentation
+  changes was produced for review.

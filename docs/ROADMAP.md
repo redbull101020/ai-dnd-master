@@ -164,9 +164,9 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
-* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target resolution is proven by G8. Already implemented are §3.29/DEC-0044's authoritative Inventory/Equipment weapon-source and weapon-proficiency State with exact State schema V6 persistence (TSK-0004), plus §3.30/DEC-0045's Combat-owned spatial State and additive State schema V7 persistence (TSK-0010). TSK-0012 now implements the narrow §3.32/DEC-0048 Character Dagger Attack Result/Event boundary in production: unchanged `AttackResult`, Definition-based weapon-proficiency contribution, explicit Finesse execution, the §3.30 production reach-validation handoff, and `CharacterWeaponAttackResolved` V1, evidenced through deterministic Domain/Application tests and a real-adapter round trip. Character Dagger Damage remains pending in TSK-0013; other weapons and ranged/thrown/ammunition remain open. This broad capability stays unchecked.
+* [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target resolution is proven by G8. Already implemented are §3.29/DEC-0044's authoritative Inventory/Equipment weapon-source and weapon-proficiency State with exact State schema V6 persistence (TSK-0004), plus §3.30/DEC-0045's Combat-owned spatial State and additive State schema V7 persistence (TSK-0010). TSK-0012 implemented the narrow §3.32/DEC-0048 Character Dagger Attack Result/Event boundary in production: unchanged `AttackResult`, Definition-based weapon-proficiency contribution, explicit Finesse execution, the §3.30 production reach-validation handoff, and `CharacterWeaponAttackResolved` V1, evidenced through deterministic Domain/Application tests and a real-adapter round trip. TSK-0013 has since implemented the narrow Character Dagger source-Damage continuation on top of it: `resolve_character_weapon_attack_damage`, `CharacterWeaponAttackDamageResolved` V1, and the optional unchanged `DamageApplied` V1/Monster HP application, evidenced through deterministic Domain/Application tests and a real-adapter/filesystem round trip. Other weapons and ranged/thrown/ammunition remain open. This broad capability stays unchecked.
 * [ ] Monster actions beyond the Goblin Scimitar attack-roll foundation ([DEF-0004](DEFERRED.md#def-0004), [DEF-0012](DEFERRED.md#def-0012)) — multiple/ambiguous actions, multiattack, recharge, saving-throw/AoE actions, ranged/reach, and Monster save/skill proficiency remain open.
-* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path remains implemented and evidenced through real adapters (§3.27, DEC-0042; foundation row above). §3.32/DEC-0048 now canonically defines the concrete Character Dagger source-Damage Result/Event, exact normal/critical dice-count semantics, reuse of the Attack-selected Finesse Ability/modifier, zero-source branch, and `Attack Resolution → source Damage Resolution → optional source-agnostic Damage Application`. TSK-0012 has implemented the Attack Resolution half of that chain in production (Weapon attacks row above); Character Dagger source Damage Resolution and Monster HP application remain pending in TSK-0013. `DamageApplied` V1 remains the unchanged canonical HP-transition Event, and this broad capability stays unchecked.
+* [ ] Attack consequences ([DEF-0013](DEFERRED.md#def-0013)) — the narrow Monster Scimitar Attack→Damage→Character HP path remains implemented and evidenced through real adapters (§3.27, DEC-0042; foundation row above). §3.32/DEC-0048 canonically defines the concrete Character Dagger source-Damage Result/Event, exact normal/critical dice-count semantics, reuse of the Attack-selected Finesse Ability/modifier, zero-source branch, and `Attack Resolution → source Damage Resolution → optional source-agnostic Damage Application`. TSK-0012 implemented the Attack Resolution half of that chain in production (Weapon attacks row above); TSK-0013 has now implemented the remaining Character Dagger source-Damage Resolution and optional Monster HP application, confirmed through a full real-adapter/filesystem round trip. `DamageApplied` V1 remains the unchanged canonical HP-transition Event. Both narrow Character-Dagger and Monster-Scimitar consequence paths are now implemented, but broader Attack consequences (other weapons, other Monster actions, resistance/immunity/vulnerability, temporary HP) remain open, so this broad capability stays unchecked.
 * [ ] Conditions expansion ([DEF-0020](DEFERRED.md#def-0020), [DEF-0021](DEFERRED.md#def-0021))
 * [ ] Targeting ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls)) — §3.30/DEC-0045's exact narrow 5-ft Dagger reach contract remains canonical, and its Combat-owned `CombatPosition`/`CombatState.positions` foundation plus additive State schema V7 persistence are implemented (TSK-0010). TSK-0012 now implements production Character Dagger reach validation for exactly that one melee case, gating the Attack before RollMode derivation and dice use; broader ranged, cover, and visibility targeting remain open. This capability stays unchecked.
 * [ ] Cover ([P2-ATTACK-ROLLS](DEFERRED.md#p2-attack-rolls))
@@ -220,15 +220,19 @@ Inventory/Equipment/weapon-proficiency State and exact State schema V6
 persistence; §3.30/DEC-0045 separately defines the canonical melee
 targeting/reach prerequisite, whose Combat-owned spatial State
 (`CombatPosition`/`CombatState.positions`) and additive State schema V7
-persistence are now implemented (TSK-0010), while the Character Dagger
-Attack consumer's reach validation remains open. Section 3.32/DEC-0048 now
-defines the exact Character Dagger Attack Result/Event and source-Damage
-Result/Event boundaries, Definition-based proficiency contribution, explicit
-Finesse continuity, normal/critical damage, zero-source branch, and unchanged
-`DamageApplied` V1 handoff. TSK-0012 has implemented the production
-Attack/reach behavior; Character Dagger Attack→Damage→Monster HP remains
-pending in TSK-0013. The broad Weapon attacks and Attack consequences rows
-and DEF-0013 therefore stay incomplete.
+persistence are now implemented (TSK-0010), and the Character Dagger Attack
+consumer's reach validation is now implemented in production (TSK-0012).
+Section 3.32/DEC-0048 defines the exact Character Dagger Attack Result/Event
+and source-Damage Result/Event boundaries, Definition-based proficiency
+contribution, explicit Finesse continuity, normal/critical damage,
+zero-source branch, and unchanged `DamageApplied` V1 handoff. TSK-0012
+implemented the production Attack/reach behavior, and TSK-0013 has since
+implemented the Character Dagger Attack→Damage→Monster HP continuation,
+confirmed through deterministic Domain/Application tests and a
+real-adapter/filesystem round trip. The broad Weapon attacks and Attack
+consequences rows and DEF-0013 remain unchecked/`Deferred`, because other
+weapons, ranged/thrown/ammunition, and broader Monster/Attack consequence
+scope beyond these two narrow consumers stay open.
 
 TSK-0008 (§3.30, DEC-0045) defines the canonical first Character Dagger
 melee targeting/reach prerequisite: the Dagger is melee-only for this
@@ -242,10 +246,12 @@ It changed no production code, no `CombatState`, and no existing
 Character-unarmed or Monster-Scimitar behavior at the time; TSK-0010 has
 since implemented this Combat-owned spatial State and its additive State
 schema V7 persistence in production, and TSK-0012 has since implemented the
-Character Dagger Attack consumer's reach validation on top of it. The
-Character Dagger Attack→Damage→Monster HP continuation remains pending in
-TSK-0013. Section 3.32/DEC-0048 defined the exact contracts those production
-tasks implement without changing this capability's unchecked status.
+Character Dagger Attack consumer's reach validation on top of it. TSK-0013
+has since implemented the Character Dagger Attack→Damage→Monster HP
+continuation on top of that. Section 3.32/DEC-0048 defined the exact
+contracts those production tasks implement without changing this
+capability's unchecked status, since this narrow Dagger melee reach
+prerequisite does not cover broader ranged, cover, or visibility targeting.
 
 TSK-0003 (§3.31, DEC-0046) defines the canonical zero-HP Attack-eligibility
 contract for the two currently supported `AttackCommand` paths: a Character
