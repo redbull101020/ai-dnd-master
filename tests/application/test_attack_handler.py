@@ -6,8 +6,11 @@ import pytest
 from dnd_engine.application.handlers.attack import AttackHandler
 from dnd_engine.application.services.event_metadata import EventMetadata
 from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
+from dnd_engine.domain.definitions.base import Definition
+from dnd_engine.domain.definitions.item import ItemDefinition
 from dnd_engine.domain.definitions.monster import MonsterDefinition
 from dnd_engine.domain.definitions.monster_attack import MonsterAttackDefinition
+from dnd_engine.domain.definitions.weapon import WeaponDefinition
 from dnd_engine.domain.errors import ErrorCode
 from dnd_engine.domain.services.definitions import (
     DefinitionNotFoundError,
@@ -16,9 +19,12 @@ from dnd_engine.domain.services.definitions import (
 from dnd_engine.domain.services.state_store import StateStoreError
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
-from dnd_engine.domain.state.combat import CombatState
+from dnd_engine.domain.state.combat import CombatPosition, CombatState
 from dnd_engine.domain.state.creature import CreatureState
+from dnd_engine.domain.state.equipment import EquipmentState
+from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
 from dnd_engine.domain.state.snapshot import StateSnapshot
+from dnd_engine.domain.value_objects.ability import Ability
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 from dnd_engine.domain.value_objects.condition import Condition
 from dnd_engine.domain.value_objects.d20 import RollMode
@@ -92,14 +98,29 @@ class ScriptedDiceEngine:
 
 
 class SpyDefinitionSource:
+    """Fake DefinitionSource.
+
+    With no `extra_definitions`, this preserves the original narrow behavior:
+    any `get_definition` call (regardless of `definition_id`/`expected_type`)
+    returns the single configured `definition`. Passing `extra_definitions`
+    (even as an empty tuple) switches to id-keyed lookup across `definition`
+    plus those extras, raising `DefinitionNotFoundError`/
+    `DefinitionTypeMismatchError` like a real DefinitionSource would. This is
+    test-helper generalization only, needed because the Character weapon path
+    resolves two different Definition ids/types (Monster target AC, then Item
+    Definition) through the same injected source.
+    """
+
     def __init__(
         self,
-        definition: MonsterDefinition,
+        definition: Definition,
         calls: list[str],
         *,
         error: Exception | None = None,
+        extra_definitions: tuple[Definition, ...] | None = None,
     ) -> None:
         self._definition = definition
+        self._extra_definitions = extra_definitions
         self._calls = calls
         self._error = error
         self.get_calls: list[dict[str, object]] = []
@@ -110,8 +131,8 @@ class SpyDefinitionSource:
         ruleset_id: str,
         ruleset_version: str,
         definition_id: str,
-        expected_type: type[MonsterDefinition],
-    ) -> MonsterDefinition:
+        expected_type: type[Definition],
+    ) -> Definition:
         self._calls.append("definition")
         self.get_calls.append(
             {
@@ -123,7 +144,21 @@ class SpyDefinitionSource:
         )
         if self._error is not None:
             raise self._error
-        return self._definition
+        if self._extra_definitions is None:
+            return self._definition
+
+        definitions_by_id = {
+            candidate.id: candidate
+            for candidate in (self._definition, *self._extra_definitions)
+        }
+        candidate = definitions_by_id.get(definition_id)
+        if candidate is None:
+            raise DefinitionNotFoundError(f"no Definition for {definition_id!r}")
+        if not isinstance(candidate, expected_type):
+            raise DefinitionTypeMismatchError(
+                f"Definition {definition_id!r} is not a {expected_type.__name__}"
+            )
+        return candidate
 
 
 class FixedEventMetadataProvider:
@@ -196,14 +231,17 @@ def make_target() -> CreatureState:
 
 
 def make_character(
-    *, character_id: str = "character_001", total_level: int = 5
+    *,
+    character_id: str = "character_001",
+    total_level: int = 5,
+    weapon_proficiencies: frozenset[str] = frozenset(),
 ) -> CharacterState:
     return CharacterState(
         id=character_id,
         total_level=total_level,
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
-        weapon_proficiencies=frozenset(),
+        weapon_proficiencies=weapon_proficiencies,
     )
 
 
@@ -248,6 +286,8 @@ def make_snapshot(
     *,
     creatures: tuple[CreatureState, ...] = (),
     characters: tuple[CharacterState, ...] = (),
+    inventories: tuple[InventoryState, ...] = (),
+    equipment: tuple[EquipmentState, ...] = (),
     combat: CombatState | None = None,
 ) -> StateSnapshot:
     return StateSnapshot(
@@ -258,6 +298,8 @@ def make_snapshot(
         ),
         creatures=creatures,
         characters=characters,
+        inventories=inventories,
+        equipment=equipment,
         combat=combat,
     )
 
@@ -271,6 +313,77 @@ def make_command() -> AttackCommand:
     )
 
 
+def make_weapon_command(
+    *,
+    target_id: str = "monster_001",
+    weapon_item_id: str | None = "item_001",
+    weapon_ability: Ability | None = Ability.STRENGTH,
+) -> AttackCommand:
+    return AttackCommand(
+        command_id="command_000001",
+        campaign_id="campaign_001",
+        actor_id="character_001",
+        payload=AttackPayload(
+            target_id=target_id,
+            weapon_item_id=weapon_item_id,
+            weapon_ability=weapon_ability,
+        ),
+    )
+
+
+def make_dagger_definition(
+    *, definition_id: str = "dagger"
+) -> WeaponDefinition:
+    return WeaponDefinition(
+        id=definition_id,
+        version=1,
+        name="Dagger",
+        damage_dice="1d4",
+        damage_type=DamageType.PIERCING,
+        properties=("finesse", "light", "thrown"),
+    )
+
+
+def make_torch_item_definition(*, definition_id: str = "torch") -> ItemDefinition:
+    return ItemDefinition(id=definition_id, version=1, name="Torch")
+
+
+def make_inventory(
+    *,
+    owner_id: str = "character_001",
+    items: tuple[InventoryItemState, ...] = (
+        InventoryItemState(id="item_001", definition_id="dagger"),
+    ),
+) -> InventoryState:
+    return InventoryState(owner_id=owner_id, items=items)
+
+
+def make_equipment(
+    *,
+    owner_id: str = "character_001",
+    equipped_weapon_id: str | None = "item_001",
+) -> EquipmentState:
+    return EquipmentState(owner_id=owner_id, equipped_weapon_id=equipped_weapon_id)
+
+
+def make_dagger_combat(
+    *,
+    order: tuple[str, ...] = ("character_001", "monster_001"),
+    active_index: int = 0,
+    positions: tuple[CombatPosition, ...] = (
+        CombatPosition(creature_id="character_001", x=0, y=0),
+        CombatPosition(creature_id="monster_001", x=3, y=4),
+    ),
+) -> CombatState:
+    return CombatState(
+        id="combat_001",
+        round=1,
+        order=order,
+        active_index=active_index,
+        positions=positions,
+    )
+
+
 def make_dependencies(
     snapshot: StateSnapshot,
     *,
@@ -279,6 +392,7 @@ def make_dependencies(
     monster_armor_class: int = 15,
     monster_attacks: tuple[MonsterAttackDefinition, ...] = (),
     definition_error: Exception | None = None,
+    extra_definitions: tuple[Definition, ...] | None = None,
     dice_fail: bool = False,
     metadata_fail: bool = False,
 ) -> tuple[
@@ -297,6 +411,7 @@ def make_dependencies(
             ),
             calls,
             error=definition_error,
+            extra_definitions=extra_definitions,
         ),
         ScriptedDiceEngine(
             raw_roll,
@@ -321,6 +436,21 @@ def handle_with(
         dice=dice,
         event_metadata_provider=metadata,
     ).handle(make_command())
+
+
+def handle_weapon_with(
+    store: SpyStateStore,
+    definitions: SpyDefinitionSource,
+    dice: ScriptedDiceEngine,
+    metadata: FixedEventMetadataProvider,
+    command: AttackCommand | None = None,
+):
+    return AttackHandler(
+        state_store=store,
+        definition_source=definitions,
+        dice=dice,
+        event_metadata_provider=metadata,
+    ).handle(command or make_weapon_command())
 
 
 def test_ordinary_hit_uses_exact_lookup_order_and_returns_consistent_event() -> None:
@@ -1666,4 +1796,942 @@ def test_inactive_monster_actor_is_rejected_before_monster_routing() -> None:
     assert definitions.get_calls == []
     assert dice.roll_calls == []
     assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+# --- Character Dagger weapon Attack (§§3.29-3.32, TSK-0012 Group 3) -----
+
+
+def make_weapon_actor(
+    *,
+    strength: int = 16,
+    dexterity: int = 14,
+    current_hp: int = 20,
+    conditions: frozenset[Condition] = frozenset(),
+) -> CreatureState:
+    return make_creature(
+        creature_id="character_001",
+        definition_id="fighter",
+        strength=strength,
+        dexterity=dexterity,
+        current_hp=current_hp,
+        conditions=conditions,
+    )
+
+
+# --- Routing / payload -----------------------------------------------
+
+
+def test_character_route_with_no_weapon_fields_uses_unarmed_path() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+    command = AttackCommand(
+        command_id="command_000001",
+        campaign_id="campaign_001",
+        actor_id="character_001",
+        payload=AttackPayload(target_id="monster_001"),
+    )
+
+    result = AttackHandler(
+        state_store=store,
+        definition_source=definitions,
+        dice=dice,
+        event_metadata_provider=metadata,
+    ).handle(command)
+
+    assert result.success is True
+    assert len(result.events) == 1
+    assert result.events[0].type == "AttackResolved"
+
+
+def test_character_weapon_ability_without_item_returns_invalid_command() -> None:
+    snapshot = make_snapshot(
+        creatures=(make_actor(), make_target()),
+        characters=(make_character(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(snapshot)
+    command = AttackCommand(
+        command_id="command_000001",
+        campaign_id="campaign_001",
+        actor_id="character_001",
+        payload=AttackPayload(
+            target_id="monster_001",
+            weapon_ability=Ability.DEXTERITY,
+        ),
+    )
+
+    result = AttackHandler(
+        state_store=store,
+        definition_source=definitions,
+        dice=dice,
+        event_metadata_provider=metadata,
+    ).handle(command)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_COMMAND
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "weapon_ability"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+@pytest.mark.parametrize(
+    ("weapon_item_id", "weapon_ability", "expected_field"),
+    [
+        ("item_001", None, "weapon_item_id"),
+        (None, Ability.DEXTERITY, "weapon_ability"),
+    ],
+)
+def test_monster_attack_with_character_weapon_field_returns_invalid_command(
+    weapon_item_id: str | None,
+    weapon_ability: Ability | None,
+    expected_field: str,
+) -> None:
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), make_character_target()),
+        characters=(make_character(),),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+    command = AttackCommand(
+        command_id="command_000001",
+        campaign_id="campaign_001",
+        actor_id="monster_001",
+        payload=AttackPayload(
+            target_id="character_001",
+            weapon_item_id=weapon_item_id,
+            weapon_ability=weapon_ability,
+        ),
+    )
+
+    result = AttackHandler(
+        state_store=store,
+        definition_source=definitions,
+        dice=dice,
+        event_metadata_provider=metadata,
+    ).handle(command)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_COMMAND
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field == expected_field
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+# --- Authoritative Character weapon source (§3.29) ---------------------
+
+
+def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
+    actor = make_weapon_actor(strength=16, dexterity=14)
+    target = make_target()
+    character = make_character(weapon_proficiencies=frozenset({"dagger"}))
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    before = deepcopy(snapshot)
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=10,
+        extra_definitions=(make_dagger_definition(),),
+    )
+
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(weapon_ability=Ability.STRENGTH),
+    )
+
+    assert calls == ["load", "definition", "definition", "dice", "metadata"]
+    assert definitions.get_calls == [
+        {
+            "ruleset_id": "dnd_5e",
+            "ruleset_version": "5.1",
+            "definition_id": "goblin",
+            "expected_type": MonsterDefinition,
+        },
+        {
+            "ruleset_id": "dnd_5e",
+            "ruleset_version": "5.1",
+            "definition_id": "dagger",
+            "expected_type": ItemDefinition,
+        },
+    ]
+    assert dice.roll_calls == ["1d20"]
+    assert metadata.next_calls == ["campaign_001"]
+    assert store.save_calls == []
+    assert store.snapshot == before
+
+    assert result.success is True
+    assert result.errors == ()
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.ability is Ability.STRENGTH
+    assert outcome.ability_modifier == 3
+    assert outcome.proficiency_bonus == 3
+    assert outcome.total == 16
+    assert outcome.target_armor_class == 15
+    assert outcome.hit is True
+    assert outcome.critical_hit is False
+
+    assert len(result.events) == 1
+    event = result.events[0]
+    assert event.type == "CharacterWeaponAttackResolved"
+    assert event.version == 1
+    assert event.command_id == "command_000001"
+    assert event.campaign_id == "campaign_001"
+    assert event.actor_id == "character_001"
+    assert event.caused_by is None
+    assert event.payload == {
+        "targetId": "monster_001",
+        "weaponItemId": "item_001",
+        "weaponDefinitionId": "dagger",
+        "roll": {"mode": "normal", "rolls": (10,), "selected": 10},
+        "ability": "strength",
+        "abilityModifier": 3,
+        "proficiencyBonus": 3,
+        "total": 16,
+        "targetArmorClass": 15,
+        "hit": True,
+        "criticalHit": False,
+    }
+
+
+def test_character_weapon_missing_inventory_returns_action_not_available() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        equipment=(),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "weapon_item_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_missing_selected_item_returns_action_not_available() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(items=()),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "item_001"
+    assert result.errors[0].field == "weapon_item_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_missing_equipment_returns_action_not_available() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "weapon_item_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_item_not_equipped_returns_action_not_available() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(
+            make_inventory(
+                items=(
+                    InventoryItemState(id="item_001", definition_id="dagger"),
+                    InventoryItemState(id="item_002", definition_id="dagger"),
+                )
+            ),
+        ),
+        equipment=(make_equipment(equipped_weapon_id="item_002"),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "item_001"
+    assert result.errors[0].field == "weapon_item_id"
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_missing_definition_returns_definition_not_found() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(
+            make_inventory(
+                items=(
+                    InventoryItemState(
+                        id="item_001", definition_id="phantom_weapon"
+                    ),
+                )
+            ),
+        ),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=()
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.DEFINITION_NOT_FOUND
+    assert result.errors[0].entity_id == "phantom_weapon"
+    assert result.errors[0].field == "definition_id"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_item_definition_wrong_category_returns_invalid_state() -> (
+    None
+):
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(
+            make_inventory(
+                items=(InventoryItemState(id="item_001", definition_id="goblin"),)
+            ),
+        ),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=()
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_STATE
+    assert result.errors[0].entity_id == "item_001"
+    assert result.errors[0].field == "definition_id"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_non_weapon_item_definition_returns_action_not_available() -> (
+    None
+):
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(
+            make_inventory(
+                items=(InventoryItemState(id="item_001", definition_id="torch"),)
+            ),
+        ),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_torch_item_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "item_001"
+    assert result.errors[0].field == "weapon_item_id"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_non_dagger_weapon_definition_returns_action_not_available() -> (
+    None
+):
+    # A valid, correctly equipped WeaponDefinition other than the packaged
+    # Dagger is not yet a supported production consumer (TSK-0012 explicitly
+    # excludes other weapons): the guard fires after both authoritative
+    # Definition lookups but before proficiency, Finesse, spatial, or dice.
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    longsword = WeaponDefinition(
+        id="longsword",
+        version=1,
+        name="Longsword",
+        damage_dice="1d8",
+        damage_type=DamageType.SLASHING,
+        properties=("versatile",),
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(
+            make_inventory(
+                items=(InventoryItemState(id="item_001", definition_id="longsword"),)
+            ),
+        ),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(longsword,)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "item_001"
+    assert result.errors[0].field == "weapon_item_id"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+# --- Proficiency / Finesse ----------------------------------------------
+
+
+def test_character_weapon_non_proficient_contribution_is_zero() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character(weapon_proficiencies=frozenset())
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, raw_roll=10, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.proficiency_bonus == 0
+    assert outcome.total == 10 + 3 + 0
+
+
+@pytest.mark.parametrize(
+    ("ability", "strength", "dexterity", "expected_modifier"),
+    [
+        (Ability.STRENGTH, 8, 20, -1),
+        (Ability.DEXTERITY, 8, 20, 5),
+    ],
+)
+def test_character_weapon_uses_explicit_finesse_choice_without_auto_maximizing(
+    ability: Ability,
+    strength: int,
+    dexterity: int,
+    expected_modifier: int,
+) -> None:
+    actor = make_weapon_actor(strength=strength, dexterity=dexterity)
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=10,
+        monster_armor_class=100,
+        extra_definitions=(make_dagger_definition(),),
+    )
+
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(weapon_ability=ability),
+    )
+
+    assert result.success is True
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.ability is ability
+    assert outcome.ability_modifier == expected_modifier
+    assert outcome.total == 10 + expected_modifier + 0
+
+
+@pytest.mark.parametrize("weapon_ability", [None, Ability.CONSTITUTION])
+def test_character_weapon_missing_or_unsupported_ability_returns_invalid_command(
+    weapon_ability: Ability | None,
+) -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(weapon_ability=weapon_ability),
+    )
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_COMMAND
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "weapon_ability"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+# --- Spatial (§3.30) -----------------------------------------------------
+
+
+def test_character_weapon_no_combat_returns_action_not_available() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_missing_actor_position_returns_action_not_available() -> (
+    None
+):
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat(
+        positions=(CombatPosition(creature_id="monster_001", x=3, y=4),)
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field == "position"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_target_not_in_combat_order_returns_invalid_target() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat(
+        order=("character_001",),
+        positions=(CombatPosition(creature_id="character_001", x=0, y=0),),
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_TARGET
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field == "target_id"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_missing_target_position_returns_invalid_target() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat(
+        positions=(CombatPosition(creature_id="character_001", x=0, y=0),)
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_TARGET
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field == "position"
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_out_of_range_fails_before_roll_mode_and_dice() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat(
+        positions=(
+            CombatPosition(creature_id="character_001", x=0, y=0),
+            CombatPosition(creature_id="monster_001", x=6, y=0),
+        )
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.OUT_OF_RANGE
+    assert result.errors[0].entity_id == "monster_001"
+    assert result.errors[0].field is None
+    assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_weapon_poisoned_actor_uses_disadvantage() -> None:
+    actor = make_weapon_actor(conditions=frozenset({Condition.POISONED}))
+    target = make_target()
+    character = make_character(weapon_proficiencies=frozenset({"dagger"}))
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=17,
+        additional_rolls=(6,),
+        extra_definitions=(make_dagger_definition(),),
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert calls == [
+        "load",
+        "definition",
+        "definition",
+        "dice",
+        "dice",
+        "metadata",
+    ]
+    assert dice.roll_calls == ["1d20", "1d20"]
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.roll.mode is RollMode.DISADVANTAGE
+    assert outcome.roll.rolls == (17, 6)
+    assert outcome.roll.selected == 6
+    assert result.events[0].payload["roll"] == {
+        "mode": "disadvantage",
+        "rolls": (17, 6),
+        "selected": 6,
+    }
+    assert store.save_calls == []
+
+
+# --- Resolution ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw_roll", "expected_hit", "expected_critical"),
+    [
+        (8, False, False),
+        (1, False, False),
+        (20, True, True),
+    ],
+)
+def test_character_weapon_gameplay_outcomes_are_successful_processing(
+    raw_roll: int,
+    expected_hit: bool,
+    expected_critical: bool,
+) -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, raw_roll=raw_roll, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert result.errors == ()
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.hit is expected_hit
+    assert outcome.critical_hit is expected_critical
+    assert len(result.events) == 1
+    assert result.events[0].type == "CharacterWeaponAttackResolved"
+    assert result.events[0].payload["hit"] is expected_hit
+    assert result.events[0].payload["criticalHit"] is expected_critical
+    assert store.save_calls == []
+
+
+def test_character_weapon_does_not_mutate_loaded_snapshot() -> None:
+    actor = make_weapon_actor()
+    target = make_target()
+    character = make_character(weapon_proficiencies=frozenset({"dagger"}))
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    before = deepcopy(snapshot)
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, raw_roll=10, extra_definitions=(make_dagger_definition(),)
+    )
+
+    handle_weapon_with(store, definitions, dice, metadata)
+
+    assert store.snapshot == before
+    assert store.save_calls == []
+
+
+def test_character_weapon_attack_against_zero_hp_target_still_resolves() -> None:
+    actor = make_weapon_actor()
+    target = make_creature(
+        creature_id="monster_001",
+        definition_id="goblin",
+        current_hp=0,
+        max_hp=7,
+    )
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot, raw_roll=10, extra_definitions=(make_dagger_definition(),)
+    )
+
+    result = handle_weapon_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert len(result.events) == 1
     assert store.save_calls == []
