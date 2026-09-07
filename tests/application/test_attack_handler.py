@@ -1956,6 +1956,7 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
     store, definitions, dice, metadata, calls = make_dependencies(
         snapshot,
         raw_roll=10,
+        additional_rolls=(2,),
         extra_definitions=(make_dagger_definition(),),
     )
 
@@ -1967,7 +1968,17 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
         make_weapon_command(weapon_ability=Ability.STRENGTH),
     )
 
-    assert calls == ["load", "definition", "definition", "dice", "metadata"]
+    assert calls == [
+        "load",
+        "definition",
+        "definition",
+        "dice",
+        "dice",
+        "metadata",
+        "metadata",
+        "metadata",
+        "save",
+    ]
     assert definitions.get_calls == [
         {
             "ruleset_id": "dnd_5e",
@@ -1982,10 +1993,18 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
             "expected_type": ItemDefinition,
         },
     ]
-    assert dice.roll_calls == ["1d20"]
-    assert metadata.next_calls == ["campaign_001"]
-    assert store.save_calls == []
-    assert store.snapshot == before
+    assert dice.roll_calls == ["1d20", "1d4"]
+    assert metadata.next_calls == ["campaign_001"] * 3
+    assert snapshot == before
+    assert target.current_hp == 7
+    assert len(store.save_calls) == 1
+    saved_snapshot = store.save_calls[0]
+    saved_target = next(
+        creature for creature in saved_snapshot.creatures if creature.id == "monster_001"
+    )
+    assert saved_target.current_hp == 2
+    assert saved_target is not target
+    assert saved_snapshot.creatures[0] is actor
 
     assert result.success is True
     assert result.errors == ()
@@ -1999,15 +2018,25 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
     assert outcome.hit is True
     assert outcome.critical_hit is False
 
-    assert len(result.events) == 1
-    event = result.events[0]
-    assert event.type == "CharacterWeaponAttackResolved"
-    assert event.version == 1
-    assert event.command_id == "command_000001"
-    assert event.campaign_id == "campaign_001"
-    assert event.actor_id == "character_001"
-    assert event.caused_by is None
-    assert event.payload == {
+    assert len(result.events) == 3
+    attack_event, damage_event, applied_event = result.events
+    assert [event.type for event in result.events] == [
+        "CharacterWeaponAttackResolved",
+        "CharacterWeaponAttackDamageResolved",
+        "DamageApplied",
+    ]
+    assert [event.event_id for event in result.events] == [
+        "event_000123",
+        "event_000124",
+        "event_000125",
+    ]
+    assert attack_event.caused_by is None
+    assert damage_event.caused_by == attack_event.event_id
+    assert applied_event.caused_by == damage_event.event_id
+    assert all(event.command_id == "command_000001" for event in result.events)
+    assert all(event.campaign_id == "campaign_001" for event in result.events)
+    assert all(event.actor_id == "character_001" for event in result.events)
+    assert attack_event.payload == {
         "targetId": "monster_001",
         "weaponItemId": "item_001",
         "weaponDefinitionId": "dagger",
@@ -2019,6 +2048,23 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
         "targetArmorClass": 15,
         "hit": True,
         "criticalHit": False,
+    }
+    assert damage_event.payload == {
+        "targetId": "monster_001",
+        "weaponItemId": "item_001",
+        "weaponDefinitionId": "dagger",
+        "roll": {"expression": "1d4", "rolls": (2,), "total": 2},
+        "ability": "strength",
+        "abilityModifier": 3,
+        "damageType": "piercing",
+        "criticalHit": False,
+        "amount": 5,
+    }
+    assert applied_event.payload == {
+        "targetId": "monster_001",
+        "amount": 5,
+        "previousHp": 7,
+        "newHp": 2,
     }
 
 
@@ -2648,10 +2694,9 @@ def test_character_weapon_poisoned_actor_uses_disadvantage() -> None:
     [
         (8, False, False),
         (1, False, False),
-        (20, True, True),
     ],
 )
-def test_character_weapon_gameplay_outcomes_are_successful_processing(
+def test_character_weapon_gameplay_miss_outcomes_are_successful_processing(
     raw_roll: int,
     expected_hit: bool,
     expected_critical: bool,
@@ -2679,11 +2724,200 @@ def test_character_weapon_gameplay_outcomes_are_successful_processing(
     assert outcome is not None
     assert outcome.hit is expected_hit
     assert outcome.critical_hit is expected_critical
+    assert dice.roll_calls == ["1d20"]
+    assert metadata.next_calls == ["campaign_001"]
     assert len(result.events) == 1
     assert result.events[0].type == "CharacterWeaponAttackResolved"
     assert result.events[0].payload["hit"] is expected_hit
     assert result.events[0].payload["criticalHit"] is expected_critical
     assert store.save_calls == []
+
+
+def test_character_weapon_critical_hit_doubles_dice_count_and_applies_modifier_once() -> (
+    None
+):
+    actor = make_weapon_actor(strength=16, dexterity=14)
+    target = make_creature(
+        creature_id="monster_001",
+        definition_id="goblin",
+        dexterity=30,
+        current_hp=20,
+        max_hp=20,
+    )
+    character = make_character()
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=20,
+        additional_rolls=((3, 4),),
+        extra_definitions=(make_dagger_definition(),),
+    )
+
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(weapon_ability=Ability.STRENGTH),
+    )
+
+    assert dice.roll_calls == ["1d20", "2d4"]
+    outcome = result.outcome
+    assert outcome is not None
+    assert outcome.critical_hit is True
+    assert len(result.events) == 3
+    assert [event.type for event in result.events] == [
+        "CharacterWeaponAttackResolved",
+        "CharacterWeaponAttackDamageResolved",
+        "DamageApplied",
+    ]
+    assert result.events[1].caused_by == result.events[0].event_id
+    assert result.events[2].caused_by == result.events[1].event_id
+    assert result.events[1].payload["roll"] == {
+        "expression": "2d4",
+        "rolls": (3, 4),
+        "total": 7,
+    }
+    assert result.events[1].payload["abilityModifier"] == 3
+    assert result.events[1].payload["criticalHit"] is True
+    assert result.events[1].payload["amount"] == 10
+    assert result.events[2].payload["previousHp"] == 20
+    assert result.events[2].payload["newHp"] == 10
+    assert len(store.save_calls) == 1
+
+
+def test_character_weapon_zero_source_damage_emits_two_events_without_save() -> None:
+    actor = make_weapon_actor(strength=16, dexterity=8)
+    target = make_target()
+    character = make_character(weapon_proficiencies=frozenset({"dagger"}))
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=13,
+        additional_rolls=(1,),
+        extra_definitions=(make_dagger_definition(),),
+    )
+
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(weapon_ability=Ability.DEXTERITY),
+    )
+
+    assert result.success is True
+    assert result.outcome is not None and result.outcome.hit is True
+    assert dice.roll_calls == ["1d20", "1d4"]
+    assert metadata.next_calls == ["campaign_001"] * 2
+    assert [event.type for event in result.events] == [
+        "CharacterWeaponAttackResolved",
+        "CharacterWeaponAttackDamageResolved",
+    ]
+    assert result.events[1].caused_by == result.events[0].event_id
+    assert result.events[1].payload["amount"] == 0
+    assert store.save_calls == []
+    assert target.current_hp == 7
+
+
+def test_character_weapon_lethal_damage_floors_hp_at_zero() -> None:
+    actor = make_weapon_actor(strength=16, dexterity=14)
+    target = make_creature(
+        creature_id="monster_001",
+        definition_id="goblin",
+        dexterity=30,
+        current_hp=3,
+        max_hp=7,
+    )
+    character = make_character(weapon_proficiencies=frozenset({"dagger"}))
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        raw_roll=10,
+        additional_rolls=(4,),
+        extra_definitions=(make_dagger_definition(),),
+    )
+
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(weapon_ability=Ability.STRENGTH),
+    )
+
+    assert len(result.events) == 3
+    assert result.events[2].payload == {
+        "targetId": "monster_001",
+        "amount": 7,
+        "previousHp": 3,
+        "newHp": 0,
+    }
+    saved_target = next(
+        creature
+        for creature in store.save_calls[0].creatures
+        if creature.id == target.id
+    )
+    assert saved_target.current_hp == 0
+    assert len(store.save_calls) == 1
+
+
+def test_character_weapon_save_failure_propagates_and_keeps_loaded_state() -> None:
+    actor = make_weapon_actor(strength=16, dexterity=14)
+    target = make_target()
+    character = make_character(weapon_proficiencies=frozenset({"dagger"}))
+    combat = make_dagger_combat()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    loaded_before = deepcopy(snapshot)
+    calls: list[str] = []
+    store = SaveFailingStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(),
+        calls,
+        extra_definitions=(make_dagger_definition(),),
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(2,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    with pytest.raises(StateStoreError, match="backend unavailable"):
+        AttackHandler(
+            state_store=store,
+            definition_source=definitions,
+            dice=dice,
+            event_metadata_provider=metadata,
+        ).handle(make_weapon_command(weapon_ability=Ability.STRENGTH))
+
+    assert calls.count("save") == 1
+    assert len(store.save_calls) == 1
+    assert store.snapshot == loaded_before
+    assert target.current_hp == 7
 
 
 def test_character_weapon_does_not_mutate_loaded_snapshot() -> None:
@@ -2700,13 +2934,17 @@ def test_character_weapon_does_not_mutate_loaded_snapshot() -> None:
     )
     before = deepcopy(snapshot)
     store, definitions, dice, metadata, calls = make_dependencies(
-        snapshot, raw_roll=10, extra_definitions=(make_dagger_definition(),)
+        snapshot,
+        raw_roll=10,
+        additional_rolls=(2,),
+        extra_definitions=(make_dagger_definition(),),
     )
 
     handle_weapon_with(store, definitions, dice, metadata)
 
-    assert store.snapshot == before
-    assert store.save_calls == []
+    assert snapshot == before
+    assert len(store.save_calls) == 1
+    assert store.save_calls[0] != before
 
 
 def test_character_weapon_attack_against_zero_hp_target_still_resolves() -> None:
@@ -2727,11 +2965,27 @@ def test_character_weapon_attack_against_zero_hp_target_still_resolves() -> None
         combat=combat,
     )
     store, definitions, dice, metadata, calls = make_dependencies(
-        snapshot, raw_roll=10, extra_definitions=(make_dagger_definition(),)
+        snapshot,
+        raw_roll=15,
+        additional_rolls=(3,),
+        extra_definitions=(make_dagger_definition(),),
     )
 
-    result = handle_weapon_with(store, definitions, dice, metadata)
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(weapon_ability=Ability.STRENGTH),
+    )
 
     assert result.success is True
-    assert len(result.events) == 1
-    assert store.save_calls == []
+    assert len(result.events) == 3
+    assert [event.type for event in result.events] == [
+        "CharacterWeaponAttackResolved",
+        "CharacterWeaponAttackDamageResolved",
+        "DamageApplied",
+    ]
+    assert result.events[2].payload["previousHp"] == 0
+    assert result.events[2].payload["newHp"] == 0
+    assert len(store.save_calls) == 1

@@ -5926,3 +5926,93 @@ already-merged delivery branch.
 - TSK-0013 is not marked complete. No commit or push was performed for
   this group; a `review.patch` containing only the fresh Group 2 changes
   was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 3: Character weapon Damage Application orchestration
+
+- Integrated the approved Group 1/2 Character weapon source-Damage Domain
+  contracts into `AttackHandler` per §§3.18/3.19/3.27/3.32 and
+  DEC-0042/DEC-0048, following the existing Monster consequence
+  orchestration style exactly (`src/dnd_engine/application/handlers/attack.py`).
+  `_handle_character_attack` now passes its already-loaded target
+  `CreatureState` into `_handle_character_weapon_attack` (no second target
+  lookup, no reload, no re-resolution of the Monster or Weapon Definition).
+  After existing Inventory/Equipment/Definition/Dagger/proficiency/Finesse/
+  Combat/reach validation, the weapon branch resolves pure outcomes before
+  any Event construction: Attack, then (on a hit) source Damage via
+  `resolve_character_weapon_attack_damage`, then (only for a positive
+  amount) the existing source-agnostic `resolve_damage_amount`. Event
+  metadata/Events are allocated only after the applicable pure resolution
+  completes, mirroring `_handle_monster_attack`'s ordering.
+- The three successful branches now match §3.32 exactly: a miss emits only
+  `CharacterWeaponAttackResolved` with no Damage roll, Event, or save; a hit
+  with zero source amount adds `CharacterWeaponAttackDamageResolved(amount=0)`
+  with no `DamageApplied`/HP mutation/save; a hit with positive source
+  damage adds unchanged `resolve_damage_amount` → `DamageResult` →
+  `build_damage_applied_from_attack_v1` → `apply_damage_applied_v1` →
+  `replace_creature_in_snapshot` → exactly one `StateStore.save()`. Causality
+  is exactly `CharacterWeaponAttackResolved.causedBy=null` →
+  `CharacterWeaponAttackDamageResolved.causedBy=<attack event id>` →
+  `DamageApplied.causedBy=<damage event id>`, never skipping the source-Damage
+  Event. The loaded snapshot and loaded target are never mutated in place;
+  the positive branch builds one replacement Creature/snapshot via the
+  existing copy-on-write helpers. `ResolutionResult[AttackResult |
+  MonsterAttackResult]` and `result.outcome` (`AttackResult`) are unchanged;
+  no new outcome type, tuple, or Character weapon result hierarchy was
+  introduced. No abstraction from the exclusion list (shared Monster/
+  Character consequence helper, `AttackContext`/`DamageContext`, generic
+  State mutation pipeline, Event registry, new `DamageApplied` version,
+  resistance/temp-HP/death policy, other weapons, ranged/thrown/ammunition)
+  was added.
+- Updated `tests/application/test_attack_handler.py` narrowly: the existing
+  proficient-hit test
+  (`test_character_weapon_valid_equipped_dagger_hits_with_proficiency`) now
+  covers the full positive-damage three-Event chain, authoritative
+  Dagger dice/type, reused Attack-selected Ability/modifier, proficiency
+  contributing to Attack total but not Damage, HP reduction, and one save.
+  The former single `raw_roll=20` case in the gameplay-outcomes parametrize
+  was split out into a dedicated
+  `test_character_weapon_critical_hit_doubles_dice_count_and_applies_modifier_once`
+  covering natural-20 auto-hit, `NdM -> (2*N)dM` dice-count doubling, the
+  Ability modifier applied once, exact Event order/causality, and one save;
+  the remaining miss cases gained explicit `dice.roll_calls`/
+  `metadata.next_calls` assertions. Added
+  `test_character_weapon_zero_source_damage_emits_two_events_without_save`
+  (a negative-Finesse-modifier hit clamped to `amount=0`, proving 2 metadata
+  allocations, no `DamageApplied`, no HP mutation, no save),
+  `test_character_weapon_lethal_damage_floors_hp_at_zero` (positive Damage
+  flooring target HP at zero through the unchanged Damage contract), and
+  `test_character_weapon_save_failure_propagates_and_keeps_loaded_state`
+  (a failing `StateStore.save()` on the positive branch propagates, the
+  loaded snapshot/target stay unchanged, and exactly one save is attempted,
+  mirroring the existing Monster save-failure regression). Updated the
+  TSK-0012 "does not mutate loaded snapshot" test to additionally assert
+  exactly one save of a distinct replacement snapshot for a positive hit,
+  and updated the zero-HP-target test to a guaranteed hit producing the
+  three-Event chain with `DamageApplied.previousHp == newHp == 0` and one
+  save, without adding any new target-eligibility rule. All pre-resolution
+  regression tests (missing Inventory/Item/Equipment, non-equipped Item,
+  missing/wrong Definition, non-Weapon Item, non-Dagger Definition, invalid/
+  missing Ability, no Combat, missing positions, out-of-range, active-turn
+  gate, Character zero-HP) were left unchanged and still fail before any
+  Damage roll. Poisoned is not a pre-resolution rejection: it remains a
+  successful Attack-resolution path that rolls with disadvantage; in the
+  existing scripted test the selected roll is a miss, so no Damage roll
+  follows, and that test was left unchanged.
+- Verification on Python 3.12.14: full `tests/application/test_attack_handler.py`
+  — 77 passed; combined with Group 1/2 and existing Character/Monster
+  Attack/Damage/Event Domain tests — 318 passed together; full suite —
+  `1538 passed, 4 errors`, where the 4 errors are the reproduced
+  pre-existing local Windows pytest temp-directory `PermissionError`
+  (`pytest-of-redbu`), unrelated to this Group 3 change; `mypy
+  src/dnd_engine` — no issues in 111 source files; `git diff --check` — no
+  whitespace errors. Manual diff inspection confirms
+  `src/dnd_engine/application/handlers/attack.py` and
+  `tests/application/test_attack_handler.py` are the only
+  production/test files changed, with `docs/DEVELOPMENT_LOG.md` as the
+  only additional (append-only documentation) change, and that
+  `ResolutionResult[AttackResult | MonsterAttackResult]`, `AttackResult`,
+  `DamageResult`, `DamageApplied` V1, and `CharacterWeaponAttackResolved`
+  V1 were not modified.
+- TSK-0013 is not marked complete. No commit or push was performed for this
+  group; a `review.patch` containing only the fresh Group 3 changes was
+  produced for review.
