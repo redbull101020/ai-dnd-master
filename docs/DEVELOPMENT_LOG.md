@@ -5824,3 +5824,388 @@ already-merged delivery branch.
   closure diff touches only `docs/TASK.md` and this entry.
 - No merge was performed and PR #85 was not moved out of draft; a
   `review.patch` scoped to only the closure commit was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 1: pure Character weapon source-Damage Domain slice
+
+- Implemented the pure Domain half of TSK-0013 per §3.32/DEC-0048: added
+  `CharacterWeaponAttackDamageResult` (`target_id`, `weapon_item_id`,
+  `weapon_definition_id`, `roll`, `ability`, `ability_modifier`,
+  `damage_type`, `critical_hit`, `amount`) and the concrete resolver
+  `resolve_character_weapon_attack_damage(attack_outcome, weapon_item_id,
+  weapon, dice)` in new
+  `src/dnd_engine/domain/rules/character_weapon_attack_damage.py`.
+- The resolver requires a successful `AttackResult`, reuses exactly
+  `attack_outcome.ability`/`ability_modifier`/`critical_hit` without
+  reselecting Strength/Dexterity or adding proficiency, and reads
+  `WeaponDefinition.damage_dice`/`damage_type` as the sole authoritative
+  damage source. Normal damage rolls the Definition's `NdM` unchanged;
+  critical damage doubles only the dice count to `(2*N)dM` and applies the
+  Ability modifier exactly once. `amount = max(0, roll.total +
+  ability_modifier)`, with `amount == 0` a valid result. Mirrors the
+  existing `resolve_monster_attack_damage` defensive-validation pattern
+  (runtime type checks, dice-response expression consistency, miss
+  rejection before any roll). No `AttackHandler` integration, source-Damage
+  Event, HP mutation, or State/StateStore access was added — those remain
+  the rest of TSK-0013.
+- No canonical contract changed: `AttackResult`, `AttackCommand`,
+  `DamageResult`, `DamageApplied`, State classes/schema, and
+  `WeaponDefinition` are unchanged. No abstraction from §3.6/DEC-0048's
+  exclusion list (`AttackSource`, `DamageSource`, `AttackContext`, a
+  generic critical-damage helper, etc.) was introduced.
+- Added `tests/domain/test_character_weapon_attack_damage.py` (27 tests)
+  covering normal/critical damage, explicit Strength and Dexterity/Finesse
+  continuity, authoritative dice/type, runtime Item and Definition identity
+  propagation, negative-modifier zero-clamping, miss rejection without a
+  roll, dice-response consistency, exact result field set/immutability/type
+  validation, inconsistent-`amount` rejection, and non-mutation of the
+  input `AttackResult`/`WeaponDefinition`.
+- Verification on Python 3.12.14: new test file — 27 passed;
+  `tests/domain/test_attack.py`, `test_monster_attack_damage.py`,
+  `test_character_weapon_attack_event.py`, `test_attack_event.py`,
+  `test_attack_command.py` — 175 passed; `mypy src/dnd_engine` — no issues
+  in 110 source files; `git diff --check` — no whitespace errors. A
+  pre-existing local Windows temp-directory permission error
+  (`pytest-of-redbu`) blocks unrelated infrastructure/integration/packaging
+  tests on this machine independent of this change (reproduced identically
+  on the unmodified base commit); it does not affect any file touched here.
+- TSK-0013 is not marked complete. No commit or push was performed; a
+  `review.patch` containing only this Group 1 slice was produced for
+  review.
+
+## 2026-09-07 — TSK-0013 Group 2: `CharacterWeaponAttackDamageResolved` V1 Event
+
+- Implemented the concrete Character weapon source-Damage Event contract
+  fixed by §3.32/DEC-0048: added
+  `CharacterWeaponAttackDamageResolvedPayloadV1` (`target_id`,
+  `weapon_item_id`, `weapon_definition_id`, `roll`, `ability`,
+  `ability_modifier`, `damage_type`, `critical_hit`, `amount`) and
+  `build_character_weapon_attack_damage_resolved_v1(...)` in new
+  `src/dnd_engine/domain/events/character_weapon_attack_damage.py`.
+- The builder consumes Event metadata, the original `AttackCommand`, the
+  Group 1 `CharacterWeaponAttackDamageResult`, and an explicit `caused_by`;
+  it emits `type="CharacterWeaponAttackDamageResolved"`, `version=1`, the
+  original `command_id`/`campaign_id`/`actor_id`, and requires `caused_by`
+  to be a non-null `str`, which it records unchanged on the Event (a
+  required `str`, never `None`, mirroring
+  `build_monster_attack_damage_resolved_v1`). The builder itself does not
+  verify that `caused_by` is the immediately preceding
+  `CharacterWeaponAttackResolved.event_id`; supplying that exact value is
+  the responsibility of the future Application orchestration required by
+  §3.32, not of this Group 2 builder. It validates that the outcome
+  `target_id` matches the Command payload target and that the outcome
+  `weapon_item_id` matches the Command's selected `weapon_item_id`; it does
+  not accept or re-validate `weaponDefinitionId` against the Command,
+  because that fact is Engine-resolved by Group 1, never caller intent.
+  `roll` serializes using the existing `DiceRoll` wire shape
+  (`expression`/`rolls`/`total`); `ability`/`damageType` serialize by
+  `.value`. The payload carries no `proficiencyBonus`, Attack `total`,
+  target Armor Class, `previousHp`, or `newHp`; a zero `amount` remains a
+  valid Event. `CharacterWeaponAttackResolved` V1, `DamageApplied` V1,
+  `AttackResult`, and `DamageResult` are unchanged; no Event registry,
+  generic payload inheritance, or generic source-Damage Event was
+  introduced, and `EventSerializer` required no change.
+- Added `tests/domain/test_character_weapon_attack_damage_event.py`
+  (26 tests) covering exact `type`/`version`/`commandId`/campaign/actor
+  correlation, exact immediate `causedBy`, exact canonical payload field
+  set, exact `DiceRoll` representation, `Ability`/`DamageType`
+  by-value serialization, runtime weapon Item and Definition identity,
+  zero-amount validity, absence of `previousHp`/`newHp`/`proficiencyBonus`,
+  target and weapon-Item mismatch rejection, invalid `caused_by` rejection,
+  payload exact fields/immutability/runtime-type validation, inconsistent-
+  `amount` rejection, generic `GameEvent` immutability, and
+  `EventSerializer.serialize()` producing the exact JSON-compatible
+  payload.
+- No `AttackHandler` integration and no Monster HP mutation were added in
+  this group; those remain the rest of TSK-0013.
+- Verification on Python 3.12.14: new Event test file — 26 passed;
+  `test_character_weapon_attack_damage.py`,
+  `test_character_weapon_attack_event.py`, `test_monster_attack_damage_event.py`,
+  `test_attack_event.py`, `test_monster_attack_damage.py`, `test_attack.py`,
+  `test_damage_event.py` — 241 passed together; `mypy src/dnd_engine` — no
+  issues in 111 source files; `git diff --check` — no whitespace errors.
+- TSK-0013 is not marked complete. No commit or push was performed for
+  this group; a `review.patch` containing only the fresh Group 2 changes
+  was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 3: Character weapon Damage Application orchestration
+
+- Integrated the approved Group 1/2 Character weapon source-Damage Domain
+  contracts into `AttackHandler` per §§3.18/3.19/3.27/3.32 and
+  DEC-0042/DEC-0048, following the existing Monster consequence
+  orchestration style exactly (`src/dnd_engine/application/handlers/attack.py`).
+  `_handle_character_attack` now passes its already-loaded target
+  `CreatureState` into `_handle_character_weapon_attack` (no second target
+  lookup, no reload, no re-resolution of the Monster or Weapon Definition).
+  After existing Inventory/Equipment/Definition/Dagger/proficiency/Finesse/
+  Combat/reach validation, the weapon branch resolves pure outcomes before
+  any Event construction: Attack, then (on a hit) source Damage via
+  `resolve_character_weapon_attack_damage`, then (only for a positive
+  amount) the existing source-agnostic `resolve_damage_amount`. Event
+  metadata/Events are allocated only after the applicable pure resolution
+  completes, mirroring `_handle_monster_attack`'s ordering.
+- The three successful branches now match §3.32 exactly: a miss emits only
+  `CharacterWeaponAttackResolved` with no Damage roll, Event, or save; a hit
+  with zero source amount adds `CharacterWeaponAttackDamageResolved(amount=0)`
+  with no `DamageApplied`/HP mutation/save; a hit with positive source
+  damage adds unchanged `resolve_damage_amount` → `DamageResult` →
+  `build_damage_applied_from_attack_v1` → `apply_damage_applied_v1` →
+  `replace_creature_in_snapshot` → exactly one `StateStore.save()`. Causality
+  is exactly `CharacterWeaponAttackResolved.causedBy=null` →
+  `CharacterWeaponAttackDamageResolved.causedBy=<attack event id>` →
+  `DamageApplied.causedBy=<damage event id>`, never skipping the source-Damage
+  Event. The loaded snapshot and loaded target are never mutated in place;
+  the positive branch builds one replacement Creature/snapshot via the
+  existing copy-on-write helpers. `ResolutionResult[AttackResult |
+  MonsterAttackResult]` and `result.outcome` (`AttackResult`) are unchanged;
+  no new outcome type, tuple, or Character weapon result hierarchy was
+  introduced. No abstraction from the exclusion list (shared Monster/
+  Character consequence helper, `AttackContext`/`DamageContext`, generic
+  State mutation pipeline, Event registry, new `DamageApplied` version,
+  resistance/temp-HP/death policy, other weapons, ranged/thrown/ammunition)
+  was added.
+- Updated `tests/application/test_attack_handler.py` narrowly: the existing
+  proficient-hit test
+  (`test_character_weapon_valid_equipped_dagger_hits_with_proficiency`) now
+  covers the full positive-damage three-Event chain, authoritative
+  Dagger dice/type, reused Attack-selected Ability/modifier, proficiency
+  contributing to Attack total but not Damage, HP reduction, and one save.
+  The former single `raw_roll=20` case in the gameplay-outcomes parametrize
+  was split out into a dedicated
+  `test_character_weapon_critical_hit_doubles_dice_count_and_applies_modifier_once`
+  covering natural-20 auto-hit, `NdM -> (2*N)dM` dice-count doubling, the
+  Ability modifier applied once, exact Event order/causality, and one save;
+  the remaining miss cases gained explicit `dice.roll_calls`/
+  `metadata.next_calls` assertions. Added
+  `test_character_weapon_zero_source_damage_emits_two_events_without_save`
+  (a negative-Finesse-modifier hit clamped to `amount=0`, proving 2 metadata
+  allocations, no `DamageApplied`, no HP mutation, no save),
+  `test_character_weapon_lethal_damage_floors_hp_at_zero` (positive Damage
+  flooring target HP at zero through the unchanged Damage contract), and
+  `test_character_weapon_save_failure_propagates_and_keeps_loaded_state`
+  (a failing `StateStore.save()` on the positive branch propagates, the
+  loaded snapshot/target stay unchanged, and exactly one save is attempted,
+  mirroring the existing Monster save-failure regression). Updated the
+  TSK-0012 "does not mutate loaded snapshot" test to additionally assert
+  exactly one save of a distinct replacement snapshot for a positive hit,
+  and updated the zero-HP-target test to a guaranteed hit producing the
+  three-Event chain with `DamageApplied.previousHp == newHp == 0` and one
+  save, without adding any new target-eligibility rule. All pre-resolution
+  regression tests (missing Inventory/Item/Equipment, non-equipped Item,
+  missing/wrong Definition, non-Weapon Item, non-Dagger Definition, invalid/
+  missing Ability, no Combat, missing positions, out-of-range, active-turn
+  gate, Character zero-HP) were left unchanged and still fail before any
+  Damage roll. Poisoned is not a pre-resolution rejection: it remains a
+  successful Attack-resolution path that rolls with disadvantage; in the
+  existing scripted test the selected roll is a miss, so no Damage roll
+  follows, and that test was left unchanged.
+- Verification on Python 3.12.14: full `tests/application/test_attack_handler.py`
+  — 77 passed; combined with Group 1/2 and existing Character/Monster
+  Attack/Damage/Event Domain tests — 318 passed together; full suite —
+  `1538 passed, 4 errors`, where the 4 errors are the reproduced
+  pre-existing local Windows pytest temp-directory `PermissionError`
+  (`pytest-of-redbu`), unrelated to this Group 3 change; `mypy
+  src/dnd_engine` — no issues in 111 source files; `git diff --check` — no
+  whitespace errors. Manual diff inspection confirms
+  `src/dnd_engine/application/handlers/attack.py` and
+  `tests/application/test_attack_handler.py` are the only
+  production/test files changed, with `docs/DEVELOPMENT_LOG.md` as the
+  only additional (append-only documentation) change, and that
+  `ResolutionResult[AttackResult | MonsterAttackResult]`, `AttackResult`,
+  `DamageResult`, `DamageApplied` V1, and `CharacterWeaponAttackResolved`
+  V1 were not modified.
+- TSK-0013 is not marked complete. No commit or push was performed for this
+  group; a `review.patch` containing only the fresh Group 3 changes was
+  produced for review.
+
+## 2026-09-07 — TSK-0013 Group 4: real-adapter evidence for Character Dagger Attack -> Damage -> Monster HP
+
+- Proved the complete Character Dagger `Attack -> source Damage ->
+  DamageApplied -> Monster HP persistence` path introduced by TSK-0013
+  through real adapters and a real filesystem round trip, by evolving the
+  existing TSK-0012 read-only Character Dagger real-adapter test in
+  `tests/integration/test_attack_real_adapters.py` rather than adding a
+  parallel test/framework. The deterministic setup (Character Strength 16/
+  Dexterity 14 with Dagger proficiency, explicit Dexterity Finesse choice,
+  equipped runtime `item_001`, packaged Dagger/Goblin Definitions, Goblin
+  starting HP 7, Character `(0, 0)`/Monster `(3, 4)` positions, seed
+  `20260901`) was preserved unchanged. Verified against the actual
+  `PythonDiceEngine`/`resolve_d20_roll` implementation rather than assumed:
+  with `random.Random(20260901)`, the first `1d20` is `15` and the
+  following `1d4` is `1`; with Dexterity 14 (modifier +2), source Damage is
+  `1 + 2 = 3` and Goblin HP goes `7 -> 4`. The test now uses the existing
+  `SequentialEventMetadataProvider` (distinct Event IDs) instead of the
+  single-ID `FixedEventMetadataProvider`, which remains in use by the
+  file's other unrelated tests.
+- The renamed
+  `test_character_dagger_hit_applies_damage_and_persists_through_real_adapters`
+  asserts, all through real `FilesystemStateStore` (State schema V7),
+  `PackagedDefinitionSource`, and `PythonDiceEngine` (no mocked Domain
+  resolver): the Attack keeps the explicit Dexterity selection, the
+  proficiency contribution, and a hit, publishing `CharacterWeaponAttackResolved`
+  V1; exactly one authoritative `1d4` Dagger Damage roll follows the `1d20`,
+  publishing `CharacterWeaponAttackDamageResolved` V1 with preserved runtime
+  Item (`item_001`) and Dagger Definition identity, Dexterity/+2 reused
+  unchanged, `damageType="piercing"`, `criticalHit=false`, and
+  `amount=3`; and the unchanged `DamageApplied` V1 records
+  `previousHp=7`/`newHp=4`/`amount=3`. `result.events` is exactly
+  `[CharacterWeaponAttackResolved, CharacterWeaponAttackDamageResolved,
+  DamageApplied]` with `caused_by` chained `null -> attack event id ->
+  damage event id` and three distinct Event IDs, all sharing the original
+  `command_id`/`campaign_id`/`actor_id`. Exactly one `StateStore.save()`
+  occurs and the on-disk `state.json` is no longer byte-identical; a
+  **new** `FilesystemStateStore` instance then reloads the campaign from
+  disk and the test asserts against that fresh reload (not the in-memory
+  save argument): Goblin `current_hp == 4` with `max_hp` unchanged,
+  Character Creature/Character-projection/Inventory/Equipment/Combat
+  order/positions all unchanged, and no JSONL Event-history file or other
+  EventStore artifact (and no leftover atomic-write temp file) exists
+  alongside `state.json`.
+- The existing Character Dagger out-of-range real-adapter regression
+  (`test_character_dagger_attack_out_of_range_via_real_adapters_rejects_before_roll`)
+  was preserved unchanged: it still asserts `OUT_OF_RANGE`, an untouched
+  RNG state (covering both no `1d20` and no Damage roll), no Event metadata
+  allocation, no save, and a byte-identical state file, proving TSK-0013
+  did not move Damage resolution ahead of existing Attack prerequisites.
+  The Monster Scimitar consequence real-adapter test was left unchanged and
+  re-run as regression evidence. No new integration framework, EventStore
+  implementation, or duplicated per-branch (miss/critical/zero-source/HP-
+  floor/save-failure) integration coverage was added; those remain covered
+  by the existing deterministic Application/Domain tests from Groups 1-3.
+- No production code changed in this group: no defect was found in the
+  approved Groups 1-3 implementation, and all stated deterministic roll/
+  modifier/HP assumptions matched actual behavior on first run.
+- Verification on Python 3.12.14 (with `--basetemp` pointed at a writable
+  scratch directory to work around this machine's pre-existing local
+  Windows `pytest-of-redbu` temp-directory `PermissionError`, unrelated to
+  this change): full `tests/integration/test_attack_real_adapters.py` — 5
+  passed, including the updated Character Dagger consequence test, the
+  preserved Character Dagger out-of-range regression, and the preserved
+  Monster Scimitar consequence regression; combined with the Group 1-3
+  targeted Domain/Application tests
+  (`test_character_weapon_attack_damage.py`,
+  `test_character_weapon_attack_damage_event.py`,
+  `test_attack_handler.py`) — 135 passed together; `mypy src/dnd_engine` —
+  no issues in 111 source files; `git diff --check` — no whitespace
+  errors. Manual diff inspection confirms
+  `tests/integration/test_attack_real_adapters.py` is the only
+  production/test file changed in this group, with `docs/DEVELOPMENT_LOG.md`
+  as the only additional (append-only documentation) change, and that no
+  other test in that file was altered.
+- TSK-0013 is not marked complete. No commit or push was performed for
+  this group; a `review.patch` containing only the fresh Group 4 changes
+  was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 5: documentation synchronization
+
+- Synchronized implementation-status wording across `docs/ARCHITECTURE.md`
+  §§3.27/3.29/3.32, `docs/ROADMAP.md` Phase 3, `docs/DEFERRED.md`
+  (P2-PROFICIENCY, P2-ATTACK-ROLLS, P2-DAMAGE, DEF-0011, DEF-0013), and
+  `CLAUDE.md`'s implementation index, now that TSK-0013 Groups 1-4 have
+  implemented the narrow Character Dagger Attack → source Damage →
+  optional `DamageApplied`/Monster HP consequence chain. Only status
+  prose changed: the §3.32 normative payload fields, causality contract,
+  critical dice-count-doubling formula, Finesse-continuity rule, unchanged
+  `DamageApplied` V1 contract, and State schema were not touched, and no
+  new architectural decision was made — implementation follows the
+  already-accepted DEC-0042/DEC-0048.
+- Broad `Weapon attacks` and `Attack consequences` remain unchecked in
+  `docs/ROADMAP.md` Phase 3: TSK-0013 proves one narrow Character Dagger
+  consequence slice, not all Attack consequences or all weapons; other
+  weapons, ranged/thrown/ammunition, other Monster actions, and typed
+  defenses/temporary HP remain open.
+- `docs/DEFERRED.md` DEF-0013 stays `Status: Deferred` (not `Done`): a new
+  dated History entry records that TSK-0013 closes the narrow Character
+  Dagger Attack→Damage→Monster HP consequence entirely, while DEF-0013's
+  own remaining scope — the broader Weapon attack/damage/critical
+  continuation (other weapons, ranged/thrown/ammunition) — stays explicitly
+  open. Other Monster actions, resistance/immunity/vulnerability, and
+  temporary HP are not part of DEF-0013's own remaining scope; they are
+  separately tracked by their own Roadmap/Deferred records. DEF-0011
+  similarly gained a new dated History entry for the same TSK-0013
+  continuation and remains `Deferred` for broader weapon scope. No existing
+  History bullet was rewritten; only new append-only entries were added.
+- Corrected stale pre-existing inconsistencies identified during review,
+  present since before this task on the TSK-0012-completed baseline: P2-
+  PROFICIENCY's closure assessment claimed production Character
+  weapon-proficiency contribution in Attack was still absent, and
+  P2-ATTACK-ROLLS's closure assessment (plus a matching passage in
+  `docs/ROADMAP.md`'s G9 narrative) claimed the production Character
+  weapon path and reach validation for TSK-0012 remained missing — both
+  were already false on that baseline, since TSK-0012 had already
+  implemented Attack-time weapon-proficiency contribution and production
+  5-ft reach validation. Both are now corrected to reflect the actual
+  TSK-0012 implementation, without broadening scope beyond the Character
+  Dagger and existing TSK-0012/TSK-0013 evidence.
+- No canonical contract changed: `docs/DECISIONS.md` was not touched (no
+  new decision was made), `docs/TASK.md`'s `Current`/queue/completion
+  evidence were left unchanged (Task Closure remains a later group), and
+  `README.md` was left unchanged (no concrete high-level claim it makes is
+  contradicted by TSK-0013). No production Python code or test file was
+  changed in this group.
+- Verification on Python 3.12.14 (with `--basetemp` pointed at a writable
+  scratch directory to work around this machine's pre-existing local
+  Windows `pytest-of-redbu` temp-directory `PermissionError`, unrelated to
+  this change): `pytest tests/architecture/test_documentation_references.py`
+  — passed; `git diff --check` — no whitespace errors. Manual diff
+  inspection confirms only `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `CLAUDE.md`, and this `docs/DEVELOPMENT_LOG.md` entry
+  changed.
+- TSK-0013 is not marked complete. No commit or push was performed for this
+  group; a `review.patch` containing only the fresh Group 5 documentation
+  changes was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 6: final verification and Task Closure
+
+- Ran final verification on Python 3.12.14 (with `--basetemp` pointed at a
+  writable scratch directory to work around this machine's pre-existing
+  local Windows `pytest-of-redbu` temp-directory `PermissionError`,
+  unrelated to this branch): targeted Domain suites (source-Damage,
+  source-Damage Event, Attack, Character weapon Attack Event, Monster
+  Attack Damage/Event, Damage, Damage Event) — 245 passed; full
+  `tests/application/test_attack_handler.py` — 77 passed; full
+  `tests/integration/test_attack_real_adapters.py` — 5 passed; full
+  `tests/architecture/` — 7 passed; complete repository suite
+  (`python -m pytest --basetemp="<writable scratch directory>"`, the same
+  writable-`--basetemp` workaround noted above) — **1953 passed, 0
+  errors**; `python -m mypy src/dnd_engine` — no issues in 111 source
+  files; `git diff --check` — no whitespace errors. Cumulative branch scope
+  against `origin/main`
+  (`14dc354..HEAD`) is exactly the expected 12 TSK-0013 production/test/
+  documentation files, with no unrelated refactor, dependency, schema,
+  infrastructure, or formatting churn.
+- Manually audited every TSK-0013 acceptance criterion against code and
+  tests — miss, normal positive hit, critical, zero source, HP floor,
+  exact Event sequence/causality, copy-on-write State handling and save
+  counts, and unchanged compatibility of `AttackResult`,
+  `ResolutionResult[AttackResult | MonsterAttackResult]`, `DamageResult`,
+  `DamageApplied` V1, State schema V7, `EventSerializer`, and existing
+  Monster consequence behavior — all **PASS**. No scope-exclusion item
+  (death/unconscious/death saves, zero-HP targetability expansion,
+  resistance/immunity/vulnerability, temporary HP, other weapons,
+  ranged/thrown/ammunition, EventStore/JSONL durable history, or a generic
+  Attack/Damage/source/modifier/effect abstraction) was implemented.
+- Opened draft PR [#86](https://github.com/redbull101020/ai-dnd-master/pull/86)
+  (`claude/tsk-0013-character-dagger-damage` → `main`) so its number could
+  serve as durable `Recently completed` evidence per §19, without inventing
+  a placeholder PR number or merge SHA.
+- Performed the normal pre-merge Task Closure (`docs/TASK.md` §18.1) for
+  TSK-0013: removed it from the `Open task index`/`Open task details`
+  (both now empty — no other refined `Ready`/`Backlog` task exists
+  anywhere in the file to promote), and added it to `Recently completed`
+  with `PR #86` evidence (no merge SHA invented). Keeping the ten-row
+  retention limit removed the oldest entry, `TSK-0002` (`PR #68`). `Current`
+  and `Next` are set to `—` because no already-refined eligible task exists
+  in `TASK.md` to select — no `TSK-0014` content was invented. `Next free
+  ID` remains `TSK-0014` (no new ID allocated), and `Last reviewed` is set
+  to 2026-09-07. This closure is **prospective** until PR #86 actually
+  merges (§4.5/§18.1): TSK-0013 is not yet authoritatively `Done` on
+  `main`, and no new delivery branch may be based on this prospective
+  empty `Current`.
+- No canonical contract changed in this group. `docs/ARCHITECTURE.md`,
+  `docs/ROADMAP.md`, `docs/DEFERRED.md`, and `CLAUDE.md` were already
+  synchronized in Group 5 and were not touched again here.
+- Verification for this closure step: `pytest tests/architecture/` — 7
+  passed; `git diff --check` — no whitespace errors.
+- No commit, push, or merge was performed for this group; a `review.patch`
+  containing only the fresh `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
+  entry was produced for review.

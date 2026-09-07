@@ -75,16 +75,19 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **Closure assessment:** The foundation is sufficient for the implemented
   Character consumers because bonus derivation and membership sources are
   explicit and persisted. It is not sufficient to close broad Proficiency:
-  source provenance, Expertise/half proficiency, Monster save/skill sources,
-  and production Character weapon-proficiency contribution in Attack remain
-  absent. Architecture §3.29 defines the effective weapon-proficiency
-  membership and contribution semantics; TSK-0004 has implemented the
-  persisted membership (`CharacterState.weapon_proficiencies`), but the
-  Attack-time contribution remains unimplemented.
+  source provenance, Expertise/half proficiency, and Monster save/skill
+  sources remain absent. Architecture §3.29 defines the effective
+  weapon-proficiency membership and contribution semantics; TSK-0004
+  implemented the persisted membership (`CharacterState.weapon_proficiencies`),
+  and TSK-0012 implemented the production Attack-time contribution for the
+  narrow Character Dagger consumer (`character_proficiency_bonus` applied to
+  `AttackResult.proficiency_bonus` when the Dagger Definition ID is a member).
+  Weapon-proficiency contribution for weapons beyond the Dagger remains
+  unimplemented.
 - **Broader unimplemented scope:** [DEF-0001](#def-0001),
   [DEF-0003](#def-0003), remaining Monster save/skill proficiency in
-  [DEF-0004](#def-0004), and the production weapon-proficiency portion of
-  [DEF-0011](#def-0011).
+  [DEF-0004](#def-0004), and the remaining broader weapon-proficiency scope
+  (beyond the narrow Character Dagger consumer) in [DEF-0011](#def-0011).
 - **Motivation:** Character level, monster challenge/profiles, and weapon
   training are materially different sources and must not be forced through a
   universal Creature formula.
@@ -175,11 +178,13 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   prerequisite, and §3.30 separately defines the canonical melee
   targeting/reach prerequisite for the first Dagger consumer — its
   Combat-owned spatial State and additive State schema V7 persistence are
-  now implemented (TSK-0010). Section 3.32/DEC-0048 now defines the exact
-  Character Dagger Attack Result/Event and source-Damage boundaries, but the
-  production Character weapon path and reach validation (TSK-0012), its
-  Attack→Damage→Monster HP continuation (TSK-0013), broader Monster actions,
-  spells, and broader consequences remain missing.
+  now implemented (TSK-0010). Section 3.32/DEC-0048 defines the exact
+  Character Dagger Attack Result/Event and source-Damage boundaries;
+  TSK-0012 implemented the production Character weapon path and reach
+  validation, and TSK-0013 has since implemented its Attack→Damage→Monster
+  HP continuation, confirmed through a real-adapter/filesystem round trip.
+  Broader Monster actions, spells, other weapons, and broader consequences
+  remain missing.
 - **Broader unimplemented scope:** [DEF-0011](#def-0011),
   [DEF-0012](#def-0012), [DEF-0013](#def-0013),
   [DEF-0014](#def-0014), [DEF-0021](#def-0021), and
@@ -250,12 +255,14 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   applied by a concrete Creature applier, and persisted through the G5 flow.
 - **Closure assessment:** This is sufficient for the first authoritative
   Damage-to-HP mutation slice. G9 later implemented narrow Monster Scimitar
-  source orchestration and critical damage, but broad Damage remains
-  incomplete because the Character weapon/damage production continuation and
-  typed defenses are absent. Section 3.32/DEC-0048 now defines the exact
-  Character Dagger source-Damage Result/Event, normal/critical/Finesse
-  continuity, zero-source behavior, and unchanged `DamageApplied` V1 handoff;
-  TSK-0013 production orchestration remains pending.
+  source orchestration and critical damage, and TSK-0013 has since
+  implemented the narrow Character Dagger weapon/damage production
+  continuation on top of §3.32/DEC-0048's exact source-Damage Result/Event,
+  normal/critical/Finesse continuity, zero-source behavior, and unchanged
+  `DamageApplied` V1 handoff, confirmed through a real-adapter/filesystem
+  round trip. Broad Damage remains incomplete because typed defenses
+  (resistance/immunity/vulnerability), temporary HP, and weapon/Monster
+  damage sources beyond these two narrow consumers are absent.
 - **Broader unimplemented scope:** Attack consequence and weapon/critical
   damage in [DEF-0013](#def-0013), typed defenses in
   [DEF-0017](#def-0017), and durable application history in
@@ -687,16 +694,21 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   `AttackResult`, Definition-based proficiency contribution, explicit Finesse
   execution, the §3.30 reach-validation handoff, and the concrete
   `CharacterWeaponAttackResolved` V1 Event. TSK-0012 has implemented that
-  production Character Dagger Attack consumer; broader ranged/thrown/ammunition
-  and other-weapon behavior remain deferred, and the Character Dagger
-  Attack→Damage→Monster HP continuation remains pending TSK-0013.
+  production Character Dagger Attack consumer, and TSK-0013 has since
+  implemented its Attack→Damage→Monster HP continuation (source-Damage
+  Resolution, `CharacterWeaponAttackDamageResolved` V1, and optional
+  `DamageApplied` V1/Monster HP application), confirmed through a
+  real-adapter/filesystem round trip. Broader ranged/thrown/ammunition and
+  other-weapon behavior remain deferred.
 - **Prerequisites:** The prerequisite for the first Character Dagger consumer
   is now satisfied: TSK-0012 implemented the Character weapon `AttackHandler`
   branch and typed `WeaponDefinition` lookup from the §3.29 Inventory/Equipment
   source, applied the canonical proficiency/Finesse Attack semantics from
   §3.32, and executed §3.30's 5-ft reach validation using the Combat-owned
-  spatial State. Future ranged/ammunition/other-weapon consumers each still
-  require their own source-specific prerequisites.
+  spatial State; TSK-0013 has since consumed that successful `AttackResult`
+  and those authoritatively resolved weapon facts to implement the
+  Attack→Damage→Monster HP continuation. Future ranged/ammunition/other-weapon
+  consumers each still require their own source-specific prerequisites.
 - **Planned approach:** The concrete §3.32 Character Dagger Attack
   implementation delivered by TSK-0012 stays as is. Future weapon/ranged/
   thrown/ammunition consumers are added only when a concrete consumer
@@ -786,7 +798,20 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   mutation, and no `StateStore.save()` for the Character weapon path. Broader
   ranged/thrown/ammunition and other-weapon behavior remain deferred, and the
   Character Dagger Attack→Damage→Monster HP continuation remains pending
-  TSK-0013. Status stays `Deferred` for that broader scope.
+  TSK-0013. Status stays `Deferred` for that broader scope. 2026-09-07 —
+  TSK-0013 implemented the Character Dagger Attack→Damage→Monster HP
+  continuation canonicalized by §3.32/DEC-0048 on top of TSK-0012's Attack
+  Resolution: the pure `resolve_character_weapon_attack_damage` resolver and
+  `CharacterWeaponAttackDamageResult`, the `CharacterWeaponAttackDamageResolved`
+  V1 Event, and `AttackHandler` orchestration that reuses the unchanged
+  `resolve_damage_amount`/`DamageResult`/`DamageApplied` V1/
+  `apply_damage_applied_v1`/`replace_creature_in_snapshot` boundary for
+  positive source damage only, confirmed through deterministic Domain/
+  Application tests and a real-adapter (`FilesystemStateStore`,
+  `PackagedDefinitionSource`, `PythonDiceEngine`) filesystem round trip. This
+  closes the narrow Character Dagger part of this record's own scope
+  entirely. Ranged/thrown/ammunition and other-weapon Attack/Damage behavior
+  remain unimplemented. Status stays `Deferred` for that broader scope.
 
 ## DEF-0012
 
@@ -852,22 +877,30 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   inputs, and TSK-0004 has implemented their production State
   (`InventoryItemState`, `InventoryState`, `EquipmentState`,
   `CharacterState.weapon_proficiencies`) and exact State schema V6
-  persistence. Section 3.32/DEC-0048 now defines the exact Character Dagger
+  persistence. Section 3.32/DEC-0048 defines the exact Character Dagger
   source-Damage contract: `CharacterWeaponAttackDamageResult`,
   `CharacterWeaponAttackDamageResolved` V1, Definition-driven normal/critical
   damage, exact reuse of the Attack-selected Finesse Ability/modifier, the
   zero-source branch, and the unchanged source-agnostic `DamageApplied` V1
-  handoff. TSK-0012 has implemented the production Character Dagger Attack
-  Resolution half of this chain; the source-Damage Resolution and Monster HP
-  application continuation remains pending TSK-0013; broader Weapon
-  consequences remain deferred.
+  handoff. TSK-0012 implemented the production Character Dagger Attack
+  Resolution half of this chain, and TSK-0013 has since implemented the
+  remaining source-Damage Resolution and Monster HP application continuation,
+  confirmed through deterministic Domain/Application tests and a
+  real-adapter/filesystem round trip. This closes the narrow Character
+  Dagger consumer entirely; the broader Weapon attack/damage/critical
+  continuation (other weapons, ranged/thrown/ammunition) remains deferred.
+  Other Monster actions, resistance/immunity/vulnerability, and temporary HP
+  are separately tracked by their own Roadmap/Deferred records and are not
+  part of DEF-0013's own remaining scope.
 - **Prerequisites:** For the first Character Dagger continuation, §3.32
-  supplies the concrete damage-source and exact Event ordering/causation
-  contract; TSK-0012 has supplied the required successful `AttackResult` and
+  supplied the concrete damage-source and exact Event ordering/causation
+  contract; TSK-0012 supplied the required successful `AttackResult` and
   authoritatively resolved weapon facts (`weapon_item_id`,
-  `weapon_definition_id`, selected Ability/modifier) that TSK-0013
-  orchestration consumes. DEF-0022 is required only if durability becomes
-  part of a later slice.
+  `weapon_definition_id`, selected Ability/modifier), which TSK-0013
+  orchestration has now consumed to implement that continuation. Future
+  weapon consequence consumers (other weapons, ranged/thrown/ammunition)
+  each still require their own source-specific prerequisites. DEF-0022 is
+  required only if durability becomes part of a later slice.
 - **Planned approach:** Implement the exact preserved chain from §3.32:
   `Attack Resolution → source Damage Resolution → optional source-agnostic
   Damage Application`. Reuse the Attack-selected Finesse Ability/modifier,
@@ -966,6 +999,31 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   `CharacterWeaponAttackDamageResolved` Event, no Monster HP mutation, and no
   `StateStore.save()`. The source-Damage Resolution and Monster HP application
   continuation remain pending TSK-0013, so DEF-0013 stays `Deferred`.
+  2026-09-07 — TSK-0013 implemented the remaining source-Damage Resolution
+  and Monster HP application continuation canonicalized by §3.32/DEC-0048:
+  the pure `resolve_character_weapon_attack_damage` resolver and
+  `CharacterWeaponAttackDamageResult` (reusing the Attack-selected Ability/
+  modifier without reselecting or maximizing it, and never adding
+  proficiency to Damage), the `CharacterWeaponAttackDamageResolved` V1
+  Event, and `AttackHandler` orchestration for all three miss/zero-source/
+  positive-source branches — the positive branch reuses unchanged
+  `resolve_damage_amount`/`DamageResult`/`build_damage_applied_from_attack_v1`/
+  `apply_damage_applied_v1`/`replace_creature_in_snapshot` and performs
+  exactly one `StateStore.save()`. Confirmed through deterministic Domain/
+  Application tests and a real-adapter (`FilesystemStateStore`,
+  `PackagedDefinitionSource`, `PythonDiceEngine`) filesystem round trip
+  showing the exact `CharacterWeaponAttackResolved → CharacterWeaponAttackDamageResolved
+  → DamageApplied` Event chain and causation, and Goblin `current_hp`
+  durably changed after a fresh reload. This closes the narrow Character
+  Dagger Attack→Damage→Monster HP consequence entirely, using DEC-0042/
+  DEC-0048 as its accepted architectural rationale; no new Decision record
+  was needed. DEF-0013 remains `Deferred` specifically for the unfinished
+  broader Weapon attack/damage/critical continuation: other weapons and
+  ranged/thrown/ammunition remain unimplemented. Other Monster actions
+  beyond the Goblin Scimitar, resistance/immunity/vulnerability, and
+  temporary HP are not part of DEF-0013's own remaining scope and are
+  separately tracked by their own Roadmap/Deferred records. DEF-0013's
+  status is not changed to `Done`.
 
 ## DEF-0014
 

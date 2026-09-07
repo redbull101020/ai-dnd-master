@@ -5312,13 +5312,16 @@ implemented and confirmed through a full production round-trip (real
 `FilesystemStateStore`, `PackagedDefinitionSource`, and `PythonDiceEngine`
 adapters). G9's narrow Goblin Scimitar consequence path — hit/critical
 resolution, source damage resolution, and optional Character HP application —
-is complete. DEF-0013 remains `Deferred` for the broader Weapon
-attack/damage/critical continuation (a concrete Character Weapon damage
-source and its Attack→Damage application, Equipment/Inventory ownership,
-Character weapon proficiency, and the explicit Finesse choice). Other Monster
-actions and other Combat mechanics remain separately tracked by their
-existing Roadmap/Deferred records, not by DEF-0013.** This section fixes the
-concrete contracts that keep Monster Attack Resolution, Damage Resolution,
+is complete. The narrow Character Dagger Weapon attack/damage/critical
+continuation (§3.32) — a concrete Character Weapon damage source and its
+Attack→Damage application, Equipment/Inventory ownership, Character weapon
+proficiency, and the explicit Finesse choice — is also implemented
+(TSK-0011–TSK-0013). DEF-0013 remains `Deferred` for the broader Weapon
+attack/damage/critical continuation beyond these two narrow consumers (other
+weapons, ranged/thrown/ammunition). Other Monster actions and other Combat
+mechanics remain separately tracked by their existing Roadmap/Deferred
+records, not by DEF-0013.** This section fixes the concrete contracts that
+keep Monster Attack Resolution, Damage Resolution,
 and Damage Application as three separate stages. It extends the G8
 Monster→Character source (§3.26), the Group 2 Domain/Event foundation, and
 the existing positive Damage→HP foundation (§3.19) through the concrete
@@ -5709,20 +5712,23 @@ separate eligibility contract when they are implemented.
 
 Implementation status: **State/persistence foundation implemented by
 TSK-0004; the production Character Dagger weapon Attack consumer is
-implemented by TSK-0012.** This section defines the authoritative weapon
-source that Dagger Attack consumer uses; broader Weapon attacks beyond the
-Dagger remain open (`docs/ROADMAP.md`).
+implemented by TSK-0012; the Character Dagger weapon Damage Resolution and
+Monster HP consequence continuation is implemented by TSK-0013.** This section
+defines the authoritative weapon source that Dagger Attack consumer uses;
+broader Weapon attacks beyond the Dagger remain open (`docs/ROADMAP.md`).
 
 Implemented: `InventoryItemState`, `InventoryState`, `EquipmentState`,
 `CharacterState.weapon_proficiencies`, `StateSnapshot.inventories`,
 `StateSnapshot.equipment`, the exact State schema V6 persistence contract
-below (§12.13), strict V1–V5 compatibility, and (TSK-0012) the
-`AttackPayload` weapon fields, the Character Dagger `AttackHandler` branch,
-the `WeaponDefinition` consumer path, weapon proficiency contribution in
-Attack, and explicit Dagger Finesse execution.
+below (§12.13), strict V1–V5 compatibility, (TSK-0012) the `AttackPayload`
+weapon fields, the Character Dagger `AttackHandler` branch, the
+`WeaponDefinition` consumer path, weapon proficiency contribution in Attack,
+explicit Dagger Finesse execution, and (TSK-0013) the source-Damage
+resolver/Event and the optional Monster HP consequence continuation from
+§3.32.
 
-Still pending: Character weapon Damage Resolution and the Monster HP
-consequence continuation (TSK-0013, §3.32).
+Broader Weapon attacks beyond the Dagger (other weapons, ranged/thrown/
+ammunition) remain open.
 
 This foundation preserves the existing separation between immutable
 Definitions, runtime State, intent-level Commands, deterministic resolution,
@@ -6131,13 +6137,14 @@ TSK-0004 implemented the production State classes and the State schema V6
 serializer described above. TSK-0012 has since implemented the
 `AttackHandler` Dagger weapon branch, the Character Dagger weapon Attack
 resolver, the `CharacterWeaponAttackResolved` V1 Event, and production 5-ft
-reach validation (§3.30) using that State. This architecture slice still does not
-implement a Weapon Damage Result/Event, critical-damage code for Damage,
-`DamageApplied` orchestration for this path, Monster HP mutation, Movement,
+reach validation (§3.30) using that State. TSK-0013 has since implemented the
+Weapon Damage Result/Event, critical-damage code for Damage, `DamageApplied`
+orchestration for this path, and Monster HP mutation for the narrow Dagger
+consumer. This architecture slice still does not implement Movement,
 ranged/thrown/ammunition rules, a generic `AttackSource`, or generic
 modifier/equipment frameworks.
 
-The Character weapon continuation must preserve the G9 staged architecture:
+The Character weapon continuation preserves the G9 staged architecture:
 
 ```text
 Attack Resolution
@@ -6146,10 +6153,11 @@ Attack Resolution
 ```
 
 The exact concrete result/Event contracts are defined by §3.32. TSK-0012
-implements the production Attack resolver and Application orchestration;
-Damage Resolution and the Monster HP consequence continuation remain later
-TSK-0013 work. This foundation supplies authoritative inputs; it does not
-collapse or pre-implement that later stage.
+implemented the production Attack resolver and Application orchestration;
+TSK-0013 has since implemented Damage Resolution and the Monster HP
+consequence continuation for that same narrow Dagger consumer. This
+foundation supplies authoritative inputs that stage consumes; broader Weapon
+Damage sources beyond the Dagger remain open.
 
 ---
 
@@ -6834,11 +6842,14 @@ production implementation delivered by TSK-0007.
 
 Implementation status: **Character weapon Attack Resolution and
 `CharacterWeaponAttackResolved` V1 implemented by TSK-0012; Character weapon
-Damage Resolution, `CharacterWeaponAttackDamageResolved` V1, and the Monster
-HP consequence continuation remain pending in TSK-0013.** This section
-composes the authoritative runtime weapon source and explicit Finesse
-choice from §3.29 with the Dagger-only melee targeting/reach contract from
-§3.30. It preserves DEC-0042's separate stages:
+Damage Resolution, `CharacterWeaponAttackDamageResolved` V1, and the optional
+Monster HP consequence continuation are implemented by TSK-0013, confirmed
+through deterministic Domain/Application tests and a real-adapter/filesystem
+round trip. Broader weapon consequences beyond this one Dagger consumer
+remain open.** This section composes the authoritative runtime weapon source
+and explicit Finesse choice from §3.29 with the Dagger-only melee
+targeting/reach contract from §3.30. It preserves DEC-0042's separate
+stages:
 
 ```text
 Attack Resolution
@@ -6989,7 +7000,8 @@ class CharacterWeaponAttackDamageResult:
     amount: int
 ```
 
-The future Character weapon Damage resolver receives:
+The Character weapon Damage resolver (implemented by TSK-0013 as
+`resolve_character_weapon_attack_damage`) receives:
 
 ```text
 successful AttackResult
@@ -7101,7 +7113,8 @@ CharacterWeaponAttackDamageResolved.causedBy =
 
 #### Miss, zero-source, and positive-source branches
 
-The future Application orchestration has exactly three successful branches.
+The Application orchestration (implemented by TSK-0013 in `AttackHandler`)
+has exactly three successful branches.
 
 ##### Miss
 
@@ -7191,9 +7204,9 @@ AttackHandler outcome type           ResolutionResult[AttackResult | MonsterAtta
 TSK-0011 defined documentation contracts only. TSK-0012 has since
 implemented the `AttackPayload.weapon_item_id`/`weapon_ability` fields from
 §3.29 and causes `CharacterWeaponAttackResolved` V1 to be emitted in
-production. TSK-0013 remains the production implementation work for Character
-weapon Damage Resolution, `CharacterWeaponAttackDamageResolved` V1, and the
-Monster HP consequence continuation.
+production. TSK-0013 has since implemented the production Character weapon
+Damage Resolution, `CharacterWeaponAttackDamageResolved` V1, and the optional
+Monster HP consequence continuation for this same narrow Dagger consumer.
 
 #### Explicit exclusions and abstraction verdict
 

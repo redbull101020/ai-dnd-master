@@ -11,6 +11,9 @@ from dnd_engine.domain.events.attack import build_attack_resolved_v1
 from dnd_engine.domain.events.character_weapon_attack import (
     build_character_weapon_attack_resolved_v1,
 )
+from dnd_engine.domain.events.character_weapon_attack_damage import (
+    build_character_weapon_attack_damage_resolved_v1,
+)
 from dnd_engine.domain.events.damage import (
     apply_damage_applied_v1,
     build_damage_applied_from_attack_v1,
@@ -27,6 +30,9 @@ from dnd_engine.domain.rules.attack import (
     AttackResult,
     resolve_character_unarmed_attack,
     resolve_character_weapon_attack,
+)
+from dnd_engine.domain.rules.character_weapon_attack_damage import (
+    resolve_character_weapon_attack_damage,
 )
 from dnd_engine.domain.rules.condition_roll_mode import (
     attack_roll_mode_from_conditions,
@@ -268,7 +274,7 @@ class AttackHandler:
             )
 
         return self._handle_character_weapon_attack(
-            command, snapshot, actor_creature, actor_character, target_armor_class
+            command, snapshot, actor_creature, actor_character, target, target_armor_class
         )
 
     def _handle_character_weapon_attack(
@@ -277,6 +283,7 @@ class AttackHandler:
         snapshot: StateSnapshot,
         actor_creature: CreatureState,
         actor_character: CharacterState,
+        target: CreatureState,
         target_armor_class: int,
     ) -> ResolutionResult[AttackResult | MonsterAttackResult]:
         weapon_item_id = command.payload.weapon_item_id
@@ -587,21 +594,86 @@ class AttackHandler:
             target_armor_class=target_armor_class,
             roll_mode=roll_mode,
         )
-        metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
-        event = build_character_weapon_attack_resolved_v1(
-            event_id=metadata.event_id,
-            timestamp=metadata.timestamp,
+
+        damage_outcome = None
+        damage_result = None
+        if outcome.hit:
+            damage_outcome = resolve_character_weapon_attack_damage(
+                outcome,
+                weapon_item_id,
+                weapon_definition,
+                self._dice,
+            )
+            if damage_outcome.amount > 0:
+                damage_result = resolve_damage_amount(
+                    target,
+                    amount=damage_outcome.amount,
+                )
+
+        attack_metadata = self._event_metadata_provider.next_metadata(
+            command.campaign_id
+        )
+        attack_event = build_character_weapon_attack_resolved_v1(
+            event_id=attack_metadata.event_id,
+            timestamp=attack_metadata.timestamp,
             command=command,
             outcome=outcome,
             weapon_item_id=weapon_item_id,
             weapon_definition_id=weapon_definition.id,
         )
 
+        if damage_outcome is None:
+            return ResolutionResult(
+                success=True,
+                command_id=command.command_id,
+                outcome=outcome,
+                events=(attack_event,),
+                errors=(),
+            )
+
+        damage_metadata = self._event_metadata_provider.next_metadata(
+            command.campaign_id
+        )
+        damage_event = build_character_weapon_attack_damage_resolved_v1(
+            event_id=damage_metadata.event_id,
+            timestamp=damage_metadata.timestamp,
+            command=command,
+            outcome=damage_outcome,
+            caused_by=attack_event.event_id,
+        )
+
+        if damage_result is None:
+            return ResolutionResult(
+                success=True,
+                command_id=command.command_id,
+                outcome=outcome,
+                events=(attack_event, damage_event),
+                errors=(),
+            )
+
+        application_metadata = self._event_metadata_provider.next_metadata(
+            command.campaign_id
+        )
+        application_event = build_damage_applied_from_attack_v1(
+            event_id=application_metadata.event_id,
+            timestamp=application_metadata.timestamp,
+            command=command,
+            outcome=damage_result,
+            caused_by=damage_event.event_id,
+        )
+
+        replacement_target = apply_damage_applied_v1(target, application_event)
+        replacement_snapshot = replace_creature_in_snapshot(
+            snapshot,
+            replacement_target,
+        )
+        self._state_store.save(replacement_snapshot)
+
         return ResolutionResult(
             success=True,
             command_id=command.command_id,
             outcome=outcome,
-            events=(event,),
+            events=(attack_event, damage_event, application_event),
             errors=(),
         )
 

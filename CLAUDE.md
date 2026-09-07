@@ -145,14 +145,22 @@ State/Value Objects **полные, минимальные и закрытые**
 | Character weapon-source State + State schema V6 persistence (TSK-0004) | §3.29, §12.13 |
 | Combat-owned spatial State (`CombatPosition`, `CombatState.positions`) + State schema V7 persistence (TSK-0010) | §3.30, §12.13 |
 | Character Dagger weapon Attack consumer + `CharacterWeaponAttackResolved` V1 (TSK-0012) | §3.29, §3.30, §3.32 |
+| Character Dagger source-Damage Resolution + `CharacterWeaponAttackDamageResolved` V1 + Monster HP consequence continuation (TSK-0013) | §3.29, §3.32 |
 
 Character weapon-source State/persistence, Combat-owned spatial State
 (`CombatPosition`/`CombatState.positions`, State schema V7) и production
 Character Dagger weapon Attack consumer (`AttackPayload.weapon_item_id`/
 `weapon_ability`, `AttackHandler` weapon branch, proficiency contribution,
 explicit Finesse execution, §3.30 production 5-ft reach validation,
-`CharacterWeaponAttackResolved` V1) — реализованы. Character weapon Damage
-Resolution и Monster HP consequence continuation остаются pending (TSK-0013).
+`CharacterWeaponAttackResolved` V1) — реализованы. Character Dagger source
+Damage Resolution также реализована (TSK-0013): pure resolver
+`resolve_character_weapon_attack_damage`/`CharacterWeaponAttackDamageResult`,
+`CharacterWeaponAttackDamageResolved` V1, и `AttackHandler`-оркестрация всех
+трёх веток. Positive source Damage проходит через неизменённый
+`DamageApplied` V1 и мутирует/персистит Monster `current_hp` ровно одним
+`StateStore.save()`; zero source создаёт source-Damage Event, но не
+`DamageApplied`, HP-мутацию и save. Broader Character weapon behavior
+(другое оружие, ranged/thrown/ammunition) остаётся pending.
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation
