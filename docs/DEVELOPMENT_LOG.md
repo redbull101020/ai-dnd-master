@@ -6366,3 +6366,78 @@ already-merged delivery branch.
   entry. No commit, push, or merge was performed for this group; a
   `review.patch` containing only the fresh Group-2 documentation changes was
   produced for review.
+
+## 2026-09-07 — TSK-0014 prospective Task Closure and TSK-0015 refinement
+
+- The TSK-0014 §3.33/DEC-0049 documentation (Group 2, including its three
+  review-requested revision rounds) was reviewed and approved. Group 2 was
+  committed (`0f2ffc3`) and pushed to
+  `claude/tsk-0014-current-turn-action-contract`, then opened as draft
+  [PR #88](https://github.com/redbull101020/ai-dnd-master/pull/88)
+  (`claude/tsk-0014-current-turn-action-contract` → `main`) under separate
+  authorization, so its number could serve as durable `Recently completed`
+  evidence per §19 without inventing a placeholder PR number or merge SHA.
+- Before preparing closure, re-fetched `origin/main` and confirmed it was
+  still exactly `5a29911` (unchanged since this branch's base): `Current:
+  TSK-0014`, `TSK-0014` status `Current`, `Next free ID: TSK-0015`, and no
+  new blocker or conflicting task. Roadmap Phase 3 ordering/frontier had not
+  materially changed.
+- Ran full final verification before closure: `pytest tests/architecture/`
+  — 7 passed; full `pytest` — 1953 passed; `mypy src/dnd_engine` — no issues
+  in 111 source files; `git diff --check` — no whitespace errors (working
+  tree clean at this point, verifying the already-committed Group 2 state).
+  Re-read §3.33 in full end to end and cross-checked it against §§3.25,
+  3.28, 3.31, 3.32, 10.7, 12.11, 12.13, and DEC-0049, and against
+  `docs/ROADMAP.md`/`docs/DEFERRED.md`/`CLAUDE.md`/`README.md`/
+  `docs/TASK.md`: confirmed production Python is unchanged (`git diff
+  origin/main..HEAD --stat -- src/ tests/` is empty), the current production
+  writer remains exact V7 (`SCHEMA_VERSION = SCHEMA_V7_VERSION` in
+  `state_serializer.py`, no `action_spent`/`TurnActionSpent` in `src/`),
+  planned V8 and `TurnActionSpent` are consistently marked planned/
+  decision-only nowhere claimed as implemented, the Roadmap `Turn/action
+  economy and turn resources` checkbox remains unchecked, no generic
+  action/resource framework was introduced, and every open question named
+  in TSK-0014's own `Scope` has a canonical answer in §3.33/DEC-0049 with no
+  unresolved decision left in that narrow slice.
+- Prepared prospective Task Closure for `TSK-0014` per `docs/TASK.md`
+  §18.1, in this same branch: marked `TSK-0014` `Done`; removed it from the
+  `Open task index` and `Open task details`; added it to `Recently
+  completed` with `PR #88` evidence (no merge SHA invented); the ten-row
+  retention limit removed the oldest entry, `TSK-0008` (`PR #70`). Updated
+  `Current position` to `Current: TSK-0015`, `Next: —` (no other refined
+  `Ready` task exists to queue), `Hard blockers: —`, `Next free ID:
+  TSK-0016`, `Last reviewed: 2026-09-07`. This closure is **prospective**
+  until PR #88 actually merges (§4.5/§18.1): `TSK-0014` is not yet
+  authoritatively `Done` on `main`, and implementation of `TSK-0015` must
+  not begin against this prospective `Current` before that merge.
+- Refined and allocated `TSK-0015 — Implement minimal current-turn Action
+  expenditure for existing AttackCommand consumers` as the next `Current`
+  task (`P1`, `M`, `mechanics`, Roadmap target `Phase 3 / Turn/action
+  economy and turn resources`, `Depends on: TSK-0014`, `Contract impact:
+  none`) with a full `Open task details` entry: its Goal, Scope, Out of
+  scope, Acceptance criteria, and Verification implement exactly the
+  already-approved §3.33/DEC-0049 contract (`CombatState.action_spent`,
+  `TurnActionSpent` V1 and its applier, the `AttackHandler` Action gate and
+  consumption for all three current `AttackCommand` paths, Action-aware
+  `CombatStarted`/`TurnAdvanced` projections, combined HP+Action atomicity,
+  and State schema V8 read/write with V1–V7 compatibility) without
+  reopening or re-deciding that contract. Bonus Actions, Reactions,
+  Opportunity Attacks, Movement, Extra Attack, Action Surge, Multiattack,
+  spell action economy, `EventStore`, and any generic transaction/resource
+  framework remain explicit `Out of scope`. Refinement surfaced no new
+  canonical decision this narrow implementation would require, so
+  `TSK-0015` was allocated as prospective `Current` rather than `Blocked`.
+  Production implementation of `TSK-0015` has **not** begun in this branch.
+- Roadmap's already-synchronized `Turn/action economy and turn resources`
+  row and Phase 3 contract links (Group 2) were not rewritten; they already
+  correctly record §3.33/DEC-0049 as architecture-defined and
+  implementation-pending. `docs/DEFERRED.md` was reviewed and required no
+  change: no factual status became stale as a result of this closure.
+- This group changed only `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
+  entry. No production Python, `docs/ARCHITECTURE.md`, or `docs/DECISIONS.md`
+  changed. No new pull request was opened, and PR #88 was not merged.
+- Verification for this closure step: `pytest tests/architecture/` — 7
+  passed; `git diff --check` — no whitespace errors.
+- No commit, push, or merge was performed for this group; a `review.patch`
+  containing only the fresh `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
+  entry was produced for review.

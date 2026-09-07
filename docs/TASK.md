@@ -1232,10 +1232,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0014
+- **Current:** TSK-0015
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0015
+- **Next free ID:** TSK-0016
 - **Last reviewed:** 2026-09-07
 
 ---
@@ -1244,13 +1244,13 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0014` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Turn/action economy and turn resources | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers |
+| `TSK-0015` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Turn/action economy and turn resources | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers |
 
 ---
 
 # Open task details
 
-## TSK-0014 — Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers
+## TSK-0015 — Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers
 
 **Status:** `Current`
 
@@ -1258,174 +1258,211 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 **Size:** `M`
 
-**Group:** `architecture`
+**Group:** `mechanics`
 
 **Roadmap target:** Phase 3 / Turn/action economy and turn resources
 
 **References:**
 
 - `ROADMAP.md` — Phase 3 / Turn/action economy and turn resources
-- `ARCHITECTURE.md` §3.8 (Atomicity)
 - `ARCHITECTURE.md` §3.25 (Combat Initiative/Turn Order vertical slice, G7)
 - `ARCHITECTURE.md` §3.28 (Attack active-turn eligibility)
 - `ARCHITECTURE.md` §3.31 (zero-HP Attack eligibility)
 - `ARCHITECTURE.md` §3.32 (Character Dagger Attack and Damage contracts)
-- `ARCHITECTURE.md` §3.33 (current-turn ordinary Action expenditure — decision recorded by this task)
-- `ARCHITECTURE.md` §10.7 (Combat State Owner — already names `turn resources` as `CombatEngine` responsibility)
+- `ARCHITECTURE.md` §3.33 (current-turn ordinary Action expenditure — the approved contract this task implements)
+- `ARCHITECTURE.md` §3.8 (Atomicity)
+- `ARCHITECTURE.md` §10.7 (Combat State Owner)
 - `ARCHITECTURE.md` §12.11 (Event Ordering)
 - `ARCHITECTURE.md` §12.13 (Versioning Principle)
-- `DEC-0040` (G7 Initiative/Turn Order)
-- `DEC-0043` (Attack active-turn gate)
-- `DEC-0046` (zero-HP Attack eligibility)
-- `DEC-0048` (Character Dagger Attack/Damage contracts)
-- `DEC-0049` (current-turn ordinary Action expenditure — decision recorded by this task)
-- `TSK-0006` (evidence: production active-turn gate implementation)
-- `TSK-0012` (evidence: production Character Dagger Attack Resolution)
-- `TSK-0013` (evidence: production Character Dagger Damage Resolution / Monster HP consequence)
+- `DEC-0049` (current-turn ordinary Action expenditure)
 
-**Depends on:** `—`
+**Depends on:** `TSK-0014`
 
-**Contract impact:** `decision required before implementation`
+**Contract impact:** `none`
 
 ### Goal
 
-Determine and canonically fix, in `docs/ARCHITECTURE.md`, the minimal
-ordinary-Action resource contract needed by the currently implemented
-in-Combat `AttackCommand` consumers (Character unarmed §3.17, Monster
-Goblin Scimitar §§3.26–3.28, Character Dagger §3.32), so that a following
-implementation task can be refined without requiring any new architectural
-decision for this narrow scope.
-
-This task's own deliverable is the decision and the canonical Architecture
-text plus its Decision record. This task must not itself implement
-production behavior, and `docs/TASK.md` must not become a second
-`docs/ARCHITECTURE.md`: this task detail records the questions the decision
-must answer, not the answers themselves.
+Implement the already-approved §3.33/DEC-0049 contract in production for the
+three currently implemented in-Combat `AttackCommand` consumers (Character
+unarmed, Monster Goblin Scimitar, Character Dagger): `CombatState.action_spent`,
+the `TurnActionSpent` V1 Event and its applier, the `AttackHandler` Action-
+availability gate and consumption, Action-aware `CombatStarted`/`TurnAdvanced`
+projections, combined HP+Action atomic persistence, and State schema V8
+read/write with V5–V7 compatibility defaults — introducing no new
+architectural decision.
 
 ### Why now
 
-The Roadmap `Turn/action economy and turn resources` capability is the
-next open item directly after the consumer-blocked grouped-initiative row,
-and three concrete `AttackCommand` consumers already exist
-(Character unarmed, Monster Goblin Scimitar, Character Dagger) with no
-action-resource gating at all. §10.7 already assigns `turn resources` to
-`CombatEngine` ownership, but no concrete State fact, Event, or consumer
-boundary has been defined. Per `TASK.md` §12 (Readiness gate) and §16
-(Queue selection), implementation work that would require an unresolved
-architectural decision cannot become `Ready`; resolving this decision now,
-narrowly scoped to the already-evidenced consumers, is the correct next
-`Current` slice. This task must resolve only the ordinary-Action contract
-for the already-existing Attack consumers, without pulling Extra Attack,
-Action Surge, Multiattack, Bonus Action, Reaction, or Movement into this
-slice and without predetermining their future contracts.
+§3.33/DEC-0049 (TSK-0014) fixed every open question this implementation
+needs — State owner/fact, consumer boundary, validation precedence,
+consume/no-consume semantics, Event contract/ordering/causality, Combat-
+start/turn-advance reset, atomicity, and the planned schema/legacy-
+compatibility consequence — for exactly these three existing consumers.
+Per `TASK.md` §16 (Queue selection), this is preferred over starting
+unrelated scope because it gives a real, already-decided narrow contract
+its first concrete production consumer, and no other `Ready` task exists in
+the queue.
 
 ### Scope
 
-The resulting Architecture decision/section must answer, for exactly the
-three currently implemented `AttackCommand` consumers named above:
-
-- the exact State owner and the minimal persisted State fact representing
-  an ordinary Action (per turn, per actor);
-- the first concrete consumer boundary (which existing `AttackCommand`
-  path(s) read/consume it, and where in `AttackHandler`);
-- exact validation precedence relative to the already-accepted §3.28
-  active-turn gate and §3.31 zero-HP eligibility;
-- consume vs. no-consume semantics (when an ordinary Action is spent vs.
-  not spent by an `AttackCommand`);
-- the Event contract for spending/resetting the resource and its
-  Event → State projection;
-- Event ordering/causality relative to the existing Attack/Damage Event
-  chains (§3.8, §3.27, §3.32, §12.11);
-- Combat-start initialization and turn-advance reset semantics (interaction
-  with `StartCombatCommand`/`AdvanceTurnCommand`, §3.25);
-- atomicity when Action consumption is combined with the existing
-  Damage/HP mutation in the same `AttackCommand` (§3.8);
-- the persistence/State-schema consequence (schema version impact, if any,
-  per §12.12/§12.13);
-- legacy State compatibility for snapshots saved before this contract
-  exists;
-- the exact boundary separating this narrow ordinary-Action contract from
-  Extra Attack, Action Surge, and Multiattack, so those remain undecided.
-
-Required documentation: an update to `docs/ARCHITECTURE.md` fixing the
-above as a canonical contract, and a new append-only entry in
-`docs/DECISIONS.md` recording the rationale. `docs/ROADMAP.md` may gain a
-scope-accurate row/annotation once the decision exists, per the normal
-`AGENTS.md` documentation-update discipline — but that update belongs to
-this task's own eventual execution, not to this allocation step.
+- **Domain State:** add the approved `CombatState.action_spent: bool =
+  False` field; preserve all existing `CombatState` invariants; no generic
+  `TurnResource`/`ActionState` abstraction.
+- **Event:** implement `TurnActionSpent` V1 with the exact payload,
+  correlation, and integrity-check guards fixed in §3.33, and its concrete
+  `apply_turn_action_spent_v1` applier.
+- **Existing turn Events:** `CombatStarted` V1 and `TurnAdvanced` V1 keep
+  their exact existing Event schema; their appliers become Action-aware per
+  §3.33 (Combat start → `action_spent=False`; turn advance → reset
+  `action_spent=False` for the new active turn).
+- **Event ordering:** for every successfully resolved in-Combat
+  `AttackCommand`, the existing Attack/Damage Event chain is preserved as an
+  unchanged prefix, and `TurnActionSpent` V1 is appended last in the
+  returned Event tuple; `TurnActionSpent.causedBy` points at the
+  corresponding Attack-resolution Event, never at a Damage Event. Linear
+  Event ordering (position in the tuple) and `causedBy` causality (the
+  explicit edge) remain two separate contracts. Minimal expected sequences
+  per §3.33: Character unarmed miss/hit → existing Attack-resolution
+  Event(s) → `TurnActionSpent`; Character Dagger miss →
+  `CharacterWeaponAttackResolved` → `TurnActionSpent`; Character Dagger
+  zero-source damage → `CharacterWeaponAttackResolved` →
+  `CharacterWeaponAttackDamageResolved` → `TurnActionSpent`; Character
+  Dagger positive damage → `CharacterWeaponAttackResolved` →
+  `CharacterWeaponAttackDamageResolved` → `DamageApplied` →
+  `TurnActionSpent`; the Monster Goblin Scimitar paths follow the identical
+  shape, substituting `MonsterAttackResolved`/`MonsterAttackDamageResolved`,
+  and likewise end with `TurnActionSpent`. No new Event type is introduced
+  by this ordering requirement.
+- **Application:** add the ordinary-Action gate to `AttackHandler`
+  immediately after the existing §3.28 active-turn gate, for all three
+  currently supported in-Combat `AttackCommand` paths; a spent-Action
+  rejection must reach no `DefinitionSource`, `DiceEngine`,
+  `EventMetadataProvider`, Event construction, State mutation, or
+  `StateStore.save()`; a successfully resolved miss/hit/critical/zero-
+  damage/positive-damage Attack consumes the Action exactly per §3.33.
+- **Atomicity:** the miss and zero-damage branches, which today mutate no
+  State inside Combat, must now mutate/save `action_spent`; the positive-
+  damage branch must save the combined HP+Action replacement snapshot with
+  exactly one `StateStore.save()` call; no `UnitOfWork`/`TransactionManager`.
+- **Persistence:** implement exact State schema V8 (`combat.actionSpent`)
+  additive over V7; preserve the exact historical V1–V7 wire shapes;
+  non-null V5–V7 Combat decodes to `action_spent=False`; the production
+  writer becomes V8 only as a result of this task.
+- Update `docs/ARCHITECTURE.md`/`docs/ROADMAP.md`/`CLAUDE.md` implementation-status
+  stamps for §3.33 and the Roadmap `Turn/action economy and turn resources`
+  row once this lands, per the normal `AGENTS.md` documentation-update
+  discipline — without reopening or re-deciding the §3.33/DEC-0049 contract
+  itself.
 
 ### Out of scope
 
-- production Python implementation of any part of this contract;
-- State schema implementation (only the schema *consequence* is decided
-  here, not written as code);
+- new gameplay architecture or any new canonical decision beyond §3.33;
 - Bonus Actions;
 - Reactions;
 - Opportunity Attacks;
-- Movement resources;
+- Movement;
 - Dash / Dodge / Disengage / Ready;
 - Extra Attack implementation;
 - Action Surge implementation;
 - Multiattack implementation;
 - spell action economy;
-- a generic `Action`, `ActionResource`, `TurnResource`, resource-pool, or
-  eligibility framework;
-- unrelated refactoring or infrastructure work.
+- a new generic resource/eligibility framework;
+- unrelated refactoring;
+- `EventStore`;
+- `UnitOfWork` or another generic transaction framework.
 
 ### Acceptance criteria
 
-- Exactly one explicit State/resource contract for an ordinary Action is
-  fixed in `docs/ARCHITECTURE.md`, with a corresponding `docs/DECISIONS.md`
-  entry.
-- The consumer boundary (which `AttackCommand` path(s), and where in
-  `AttackHandler`) and its validation precedence relative to §3.28/§3.31
-  are unambiguous.
-- Consume vs. no-consume cases for an `AttackCommand` are unambiguous.
-- The Event/State transition and its ordering/causality relative to
-  existing Attack/Damage Events are unambiguous.
-- Combat-start initialization and turn-advance reset semantics are
-  unambiguous.
-- Persistence/schema consequence and legacy-State compatibility are
-  unambiguous.
-- Extra Attack, Action Surge, and Multiattack are not accidentally
-  predetermined by this decision.
-- Bonus Action, Reaction, and Movement remain explicitly out of scope of
-  the resulting contract.
-- A following implementation task for this exact narrow slice can be
-  refined to `Ready` without requiring a further architectural decision.
-- No speculative shared abstraction (generic `Action`/resource-pool/
-  eligibility framework) is introduced by the decision.
+- `CombatState.action_spent` exists exactly as §3.33 defines, and existing
+  `CombatState` invariants/tests remain green.
+- `TurnActionSpent` V1 and its applier exist with the exact payload and
+  integrity checks from §3.33.
+- The Action-availability gate sits exactly where §3.33 fixes it (after
+  §3.28, before Character/Monster routing) for all three current
+  `AttackCommand` paths; rejection has zero Definition/dice/Event/State/
+  save side effects.
+- Every successfully resolved in-Combat miss/hit/critical/zero-damage/
+  positive-damage Attack consumes the Action; outside Combat, behavior is
+  completely unchanged and no `action_spent` fact is touched.
+- `CombatStarted` initializes `action_spent=False`; `TurnAdvanced` resets
+  `action_spent=False` for the new active turn; both keep their exact
+  existing Event schema.
+- For every successfully resolved in-Combat Attack, the returned Event
+  tuple preserves the existing Attack/Damage Event chain as an unchanged
+  prefix and appends `TurnActionSpent` V1 last; `TurnActionSpent.causedBy`
+  is the corresponding Attack-resolution Event's `eventId`, never a Damage
+  Event's — for all three current paths and all of their miss/zero-damage/
+  positive-damage branches.
+- Exactly one `StateStore.save()` occurs per successfully resolved
+  in-Combat Attack, combining HP and Action together when both apply.
+- State schema V8 read/write matches §3.33/§12.13 exactly; V1–V4 are
+  unaffected; V5–V7 active Combat decodes to `action_spent=False`; the
+  production writer emits exact V8.
+- A real filesystem round trip proves Action expenditure is reload-visible.
+- No new architecture decision was required; §3.33/DEC-0049 is implemented,
+  not amended.
 
 ### Verification
 
-- Documentation-reference tests (`tests/architecture/`, if applicable to
-  the changed sections) pass against the updated Architecture text.
-- Manual consistency review of the new contract against current code and
-  the existing canonical contracts in §§3.25, 3.28, 3.31, 3.32, and 12.13,
-  confirming no contradiction and no silent change to any of them.
-- Confirm this task's own execution does not create canonical behavior
-  inside `docs/TASK.md` itself — canonical text lives only in
-  `docs/ARCHITECTURE.md`/`docs/DECISIONS.md`.
-- Confirm a following implementation task for this narrow slice can be
-  written and refined to `Ready` without an unresolved decision remaining
-  in this scope.
+- Domain/Event tests for `TurnActionSpent` V1 (build/apply, integrity
+  checks, causality).
+- `CombatState`/`CombatStarted`/`TurnAdvanced` initialization and reset
+  tests.
+- `AttackHandler` spent-Action rejection test explicitly asserting
+  `DefinitionSource`/`DiceEngine`/`EventMetadataProvider`/
+  `StateStore.save()` are never reached.
+- Miss-inside-Combat consumes-and-persists-Action test.
+- Monster hit/zero-damage/positive-damage Action tests.
+- Character unarmed current-path Action test.
+- Character Dagger miss/zero-damage/positive-damage Action tests.
+- Deterministic `AttackHandler` assertions on the exact returned Event
+  order (existing chain unchanged, `TurnActionSpent` last) and its direct
+  `causedBy` pointing at the Attack-resolution Event for each currently
+  supported path (Character unarmed, Character Dagger miss/zero-damage/
+  positive-damage, Monster Scimitar miss/zero-damage/positive-damage) —
+  extending the existing path/miss/hit tests already covering these
+  branches rather than duplicating a separate test per combination where
+  they already prove the contract.
+- Exactly-one-save assertion for the combined HP+Action transition.
+- `StateSerializer` exact V8 round-trip tests.
+- V5/V6/V7 backward-compatible decode tests (`action_spent=False`).
+- Real filesystem integration round trip showing Action expenditure is
+  reload-visible.
+- Regression test confirming existing outside-Combat behavior is unchanged
+  for all three paths.
 
 ### Expected touchpoints
 
 Optional planning aid; not a contract.
 
-- `docs/ARCHITECTURE.md` (new section under Phase 3 combat contracts)
-- `docs/DECISIONS.md` (new entry)
-- `docs/ROADMAP.md` (scope-accurate annotation, once the decision lands)
-- `CLAUDE.md` (only if a reproduced canonical fact changes)
+- `src/dnd_engine/domain/state/combat.py`
+- `src/dnd_engine/domain/events/` (new `TurnActionSpent` module;
+  `start_combat.py`/`advance_turn.py` applier updates)
+- `src/dnd_engine/application/handlers/attack.py`
+- `src/dnd_engine/infrastructure/persistence/json/state_serializer.py`
+- `tests/domain/...`, `tests/application/...`, `tests/infrastructure/...`,
+  `tests/integration/...`
+- `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/DEVELOPMENT_LOG.md`,
+  `CLAUDE.md` (status sync only)
+
+### Execution checkpoints
+
+Optional.
+
+1. Domain State/Event/applier (`action_spent`, `TurnActionSpent` V1,
+   `apply_turn_action_spent_v1`, Action-aware `CombatStarted`/
+   `TurnAdvanced` appliers)
+2. Application orchestration (`AttackHandler` gate and consumption for all
+   three paths, combined-save atomicity)
+3. Persistence (State schema V8 read/write, V5–V7 compatibility)
+4. Real-adapter/filesystem integration evidence and documentation status
+   sync
 
 ### Evidence / trigger
 
-Three concrete `AttackCommand` consumers (Character unarmed, Monster
-Goblin Scimitar, Character Dagger) are now production-implemented with no
-action-resource gating; this is the concrete evidence justifying resolving
-the narrow ordinary-Action contract now, ahead of any broader turn/action
-economy design.
+§3.33/DEC-0049 (TSK-0014) is the concrete, already-approved architectural
+decision that makes this implementation task refinable without a further
+architecture decision.
 
 ---
 
@@ -1433,7 +1470,6 @@ economy design.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0008` | Define minimal melee targeting and reach for the first Character Dagger attack | PR #70 / merge commit `24da875` |
 | `TSK-0009` | Deduplicate README/CLAUDE and remove redundant current data-flow projection | PR #71 / merge commit `e99d0dc` |
 | `TSK-0003` | Define zero-HP Attack eligibility by creature category | PR #72 / merge commit `7ac97f6` |
 | `TSK-0006` | Implement active-turn Attack gating | PR #75 / merge commit `d590056` |
@@ -1443,6 +1479,7 @@ economy design.
 | `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
 | `TSK-0012` | Implement Character Dagger weapon Attack resolution | PR #85 |
 | `TSK-0013` | Implement Character Dagger Attack → Damage → Monster HP consequence | PR #86 |
+| `TSK-0014` | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers | PR #88 |
 
 ---
 
