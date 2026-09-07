@@ -1232,7 +1232,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0011
+- **Current:** TSK-0012
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0014
@@ -1244,15 +1244,14 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0011` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Weapon attacks and Attack consequences | Define exact Character Dagger Attack and Damage contracts |
-| `TSK-0012` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Weapon attacks | Implement Character Dagger weapon Attack resolution |
+| `TSK-0012` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Weapon attacks | Implement Character Dagger weapon Attack resolution |
 | `TSK-0013` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Attack consequences | Implement Character Dagger Attack → Damage → Monster HP consequence |
 
 ---
 
 # Open task details
 
-## TSK-0011 — Define exact Character Dagger Attack and Damage contracts
+## TSK-0012 — Implement Character Dagger weapon Attack resolution
 
 **Status:** `Current`
 
@@ -1260,114 +1259,252 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 **Size:** `M`
 
-**Group:** `architecture`
+**Group:** `mechanics`
 
-**Roadmap target:** Phase 3 / Weapon attacks and Attack consequences
+**Roadmap target:** Phase 3 / Weapon attacks
 
 **References:**
 
 - `ROADMAP.md` — Phase 3 / Weapon attacks
-- `ROADMAP.md` — Phase 3 / Attack consequences
-- `ARCHITECTURE.md` §3.27
+- `ARCHITECTURE.md` §3.17
+- `ARCHITECTURE.md` §3.28
 - `ARCHITECTURE.md` §3.29
 - `ARCHITECTURE.md` §3.30
-- `DEC-0042`
+- `ARCHITECTURE.md` §3.31
+- `ARCHITECTURE.md` §3.32
+- `DEC-0031`
 - `DEC-0044`
 - `DEC-0045`
+- `DEC-0046`
+- `DEC-0048`
 - `DEF-0011`
-- `DEF-0013`
 
-**Depends on:** `—`
+**Depends on:** `TSK-0011`
 
-**Contract impact:** `decision required before implementation`
+**Contract impact:** `none`
 
 ### Goal
 
-Resolve only the exact remaining canonical contracts required before
-TSK-0012/TSK-0013 can become executable Character Dagger implementation
-tasks.
-
-The architecture task must decide, with current repository evidence:
-
-Attack-resolution boundary:
-
-- whether the Character weapon path reuses or extends the existing
-  `AttackResult`;
-- whether `AttackResolved` evolves or a separate concrete Character/Weapon
-  Attack Event is justified;
-- which weapon-source identity facts, if any, belong in the resolved
-  result/event;
-- exact invariants and compatibility with existing unarmed `AttackResolved`
-  V1;
-- `AttackHandler` outcome typing.
-
-Weapon-Damage boundary:
-
-- exact Character Dagger normal-damage formula;
-- exact critical-damage formula;
-- how the already-selected Finesse Ability is reused by Damage rather than
-  selected again;
-- source `damage_type`;
-- concrete Damage result type;
-- concrete source-Damage Event type/payload;
-- zero-source-damage behavior;
-- exact Event causality/order;
-- reuse of unchanged source-agnostic `DamageApplied` V1.
-
-The task must compare alternatives rather than presuppose names such as
-`CharacterWeaponAttackResult` or `CharacterWeaponAttackResolved`.
+Implement the approved Character Dagger path through Attack Resolution and
+its `CharacterWeaponAttackResolved` V1 Event only.
 
 ### Why now
 
-Inventory/Equipment/V6 and the Dagger spatial contract are already
-established. Production Character weapon implementation would otherwise
-require unapproved Result/Event and Weapon Damage contracts, and `TASK.md`
-explicitly forbids marking such implementation `Ready`.
+TSK-0011 defines the exact Character Dagger Attack Result/Event boundary, so
+this first production slice can implement the canonical Attack stage without
+inventing Damage behavior or a new contract.
 
 ### Scope
 
-- inspect current `AttackResult`, `AttackResolved` V1, Monster Attack
-  contracts, G9 Damage contracts, and the existing `DamageApplied` contract;
-- compare minimal concrete alternatives;
-- choose and document the smallest sufficient Character Dagger
-  Attack/Damage contract;
-- update `ARCHITECTURE.md`;
-- append a new accepted Decision;
-- reconcile Roadmap/Deferred wording only where the new canonical contract
-  requires it;
-- refine future implementation tasks only after the decision exists.
+- add the approved optional `AttackPayload.weapon_item_id` and
+  `AttackPayload.weapon_ability` fields;
+- preserve existing Character-unarmed routing when `weapon_item_id is None`
+  and route a Character to the weapon path when it is not `None`;
+- reject `weapon_ability` without weapon selection and reject either
+  Character-specific weapon field on the Monster path;
+- resolve the selected runtime Item through the exact authoritative chain:
+
+  ```text
+  AttackPayload.weapon_item_id
+  → actor InventoryState
+  → InventoryItemState
+  → actor EquipmentState.equipped_weapon_id
+  → InventoryItemState.definition_id
+  → DefinitionSource
+  → WeaponDefinition
+  ```
+
+- treat the selected runtime weapon Item as equipped only when
+  `EquipmentState.equipped_weapon_id == AttackPayload.weapon_item_id`;
+- require the loaded Definition to be a `WeaponDefinition` and preserve the
+  exact `DEFINITION_NOT_FOUND`, `INVALID_STATE`, and
+  `ACTION_NOT_AVAILABLE` mappings from §3.29;
+- derive the weapon proficiency contribution from
+  `CharacterState.weapon_proficiencies`; non-proficiency contributes zero and
+  does not prohibit the Attack;
+- validate the Dagger's explicit Strength-or-Dexterity Finesse choice without
+  auto-selecting the larger modifier;
+- preserve the existing active-turn and actor zero-HP eligibility rules, and
+  require the current Combat/spatial prerequisites for a melee Dagger Attack;
+- invoke the existing narrow deterministic 5-ft reach policy before deriving
+  RollMode, rolling dice, allocating Event metadata, or producing Events;
+- derive Condition/RollMode through the existing policy and resolve the
+  Attack with the approved Character weapon resolver while reusing unchanged
+  `AttackResult`;
+- emit exactly one `CharacterWeaponAttackResolved` V1 for a successfully
+  resolved hit or miss and preserve the canonical
+  `ResolutionResult[AttackResult | MonsterAttackResult]` handler outcome
+  typing;
+- add deterministic Domain, Application, and real-adapter integration tests
+  for the implemented path and unchanged routes.
 
 ### Out of scope
 
-- production Python implementation;
-- State schema V7 implementation;
-- ranged/thrown/ammunition;
-- additional weapons;
-- resistance/immunity/vulnerability;
-- temporary HP or death lifecycle;
-- generic `AttackSource` hierarchy;
-- generic `Action` hierarchy;
-- generic modifier/damage/effect pipelines;
-- unrelated abstraction extraction.
+- Damage rolls or Damage orchestration;
+- `CharacterWeaponAttackDamageResult`;
+- `CharacterWeaponAttackDamageResolved`;
+- `DamageResult` or `DamageApplied` production work;
+- Monster HP mutation;
+- any `StateStore.save()` caused by a successful Character weapon Attack;
+- thrown/ranged/ammunition behavior or other weapons;
+- target zero-HP lifecycle or targetability policy;
+- generic Attack source, targeting, modifier, or weapon abstractions.
 
 ### Acceptance criteria
 
-- one explicit chosen Attack Result/Event boundary;
-- one explicit Character Dagger Damage Result/Event boundary;
-- normal/critical/Finesse semantics unambiguous;
-- exact causality/order through existing `DamageApplied` V1 unambiguous;
-- backward compatibility with already-published existing Events explicitly
-  addressed;
-- no speculative generic abstraction without current evidence;
-- Architecture and Decision Log agree;
-- TSK-0012/TSK-0013 can subsequently be refined without inventing a
-  canonical contract during implementation.
+- the existing Character-unarmed and Monster paths remain behaviorally and
+  contractually unchanged;
+- a valid equipped runtime Dagger resolves through authoritative
+  Inventory/Item/Equipment/Definition lookup, with correct proficient and
+  non-proficient contributions;
+- both explicit Strength and Dexterity Finesse cases resolve correctly, while
+  missing or unsupported Dagger Ability intent is rejected;
+- valid 5-ft reach succeeds and invalid Combat/spatial/reach prerequisites
+  fail before RollMode derivation, dice use, Event metadata allocation,
+  Event production, or save side effects;
+- miss, hit, natural-1, and natural-20 semantics remain those of unchanged
+  `AttackResult`;
+- every successfully resolved Character Dagger Attack emits exactly one
+  `CharacterWeaponAttackResolved` V1 with the canonical payload and no other
+  Event;
+- all pre-resolution failures use the prescribed error mapping and produce
+  no roll/Event metadata, Events, State mutation, or save side effects;
+- no successful Character Dagger Attack mutates State or performs Damage;
+- relevant deterministic Domain, Application, and integration tests pass,
+  and the full suite passes.
 
 ### Verification
 
-- documentation-reference tests;
-- consistency checks against current code contracts;
-- `git diff --check`.
+- deterministic Character weapon resolver tests covering Strength and
+  Dexterity, proficiency and non-proficiency, and
+  miss/hit/natural-1/natural-20 outcomes;
+- handler tests for routing, authoritative lookup/error mapping, eligibility,
+  reach-before-roll ordering, Event payload/count, and absence of
+  mutation/save side effects;
+- real-adapter integration coverage for the valid Dagger Attack path and
+  representative pre-resolution failures;
+- regression coverage for unchanged Character-unarmed and Monster paths.
+
+---
+
+## TSK-0013 — Implement Character Dagger Attack → Damage → Monster HP consequence
+
+**Status:** `Backlog`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `mechanics`
+
+**Roadmap target:** Phase 3 / Attack consequences
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Attack consequences
+- `ARCHITECTURE.md` §3.18
+- `ARCHITECTURE.md` §3.19
+- `ARCHITECTURE.md` §3.27
+- `ARCHITECTURE.md` §3.32
+- `DEC-0042`
+- `DEC-0048`
+- `DEF-0013`
+
+**Depends on:** `TSK-0012`
+
+**Contract impact:** `none`
+
+### Goal
+
+Continue the implemented Character Dagger Attack result through the approved
+source-Damage stage and, for positive source damage, the existing Monster HP
+application stage.
+
+### Why now
+
+TSK-0012 will provide the authoritative Dagger Attack outcome and weapon
+facts required by §3.32; this dependent slice can then implement the approved
+consequence chain without broadening the Attack task or changing the existing
+HP contract.
+
+### Scope
+
+- implement immutable `CharacterWeaponAttackDamageResult` and the pure
+  Character weapon source-Damage resolver;
+- consume authoritative `WeaponDefinition.damage_dice` and
+  `WeaponDefinition.damage_type` rather than hard-coding Dagger values;
+- reuse exactly the Attack-selected `ability` and `ability_modifier`, without
+  reselecting or maximizing an Ability and without adding proficiency to
+  Damage;
+- resolve normal source damage and critical source damage by doubling only
+  the damage-dice count and applying the Ability modifier once;
+- preserve a valid zero-source-damage result branch;
+- emit `CharacterWeaponAttackDamageResolved` V1 with the exact Event
+  causality and ordering from §3.32;
+- convert positive source damage only through existing
+  `resolve_damage_amount`, reuse unchanged `DamageResult` and
+  `DamageApplied` V1, and apply that existing Damage Event to the target
+  Monster `CreatureState.current_hp`;
+- replace the snapshot copy-on-write and perform exactly one
+  `StateStore.save()` for positive source damage, with no save for a miss or
+  zero source damage;
+- add deterministic Domain, Application, and integration coverage, including
+  a full real-adapter/filesystem round-trip analogous to the existing Monster
+  consequence evidence where applicable.
+
+### Out of scope
+
+- a new `DamageApplied` version or Event type;
+- resistance, immunity, vulnerability, or temporary HP;
+- death, unconsciousness, death saves, or zero-HP targetability policy;
+- other weapons or thrown/ranged/ammunition behavior;
+- EventStore, JSONL Event append, or durable Event persistence; these remain
+  deferred and are not introduced by TSK-0013;
+- generic Attack, Damage, source, modifier, or effect abstractions.
+
+### Acceptance criteria
+
+- a miss emits only `CharacterWeaponAttackResolved` and performs no Damage
+  roll, Damage Event, HP mutation, or save;
+- a normal hit with positive source damage uses the authoritative weapon dice
+  and type, applies the Attack-selected Ability modifier once, and updates
+  Monster HP through unchanged `DamageApplied` V1;
+- a critical hit doubles only the damage-dice count and applies the same
+  Attack-selected Ability modifier once;
+- a hit with zero source damage emits
+  `CharacterWeaponAttackDamageResolved(amount=0)` but no `DamageApplied`, HP
+  mutation, or save;
+- positive damage floors Monster HP at zero through the existing Damage
+  application contract;
+- Events are emitted exactly in canonical order with one shared Attack
+  Command correlation and the immediate chain
+  `CharacterWeaponAttackResolved → CharacterWeaponAttackDamageResolved →
+  DamageApplied`;
+- the positive branch performs one copy-on-write snapshot replacement and
+  exactly one save; miss and zero-source branches perform no save;
+- `DamageResult` and `DamageApplied` V1 remain unchanged;
+- deterministic Domain and Application tests cover miss, normal positive
+  damage, critical hit, zero source damage, HP floor, Event
+  ordering/causality, and save counts;
+- integration `FilesystemStateStore` round-trip coverage proves that the
+  positive branch persists Monster `current_hp` and reloads the expected
+  value, and the full suite passes.
+
+### Verification
+
+- deterministic source-Damage resolver tests for normal, critical, negative
+  modifier clamping, authoritative dice/type, and Finesse continuity;
+- handler tests prove HP floor and copy-on-write replacement, and explicitly
+  prove that miss and zero-source branches perform no `StateStore.save()`;
+- on the positive source-damage branch, a real `FilesystemStateStore`
+  round-trip proves that Monster `current_hp` was persisted and reloads with
+  the expected value;
+- separately, returned `ResolutionResult.events` proves the exact in-memory
+  Event order
+  `CharacterWeaponAttackResolved → CharacterWeaponAttackDamageResolved →
+  DamageApplied` and the canonical immediate `causedBy` chain;
+- regression coverage proving unchanged `DamageResult` and `DamageApplied`
+  V1 behavior.
 
 ---
 
@@ -1384,6 +1521,7 @@ explicitly forbids marking such implementation `Ready`.
 | `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 | `TSK-0004` | Implement the approved minimal Character weapon source and persistence | PR #80 / merge commit `d1b23de` |
 | `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
+| `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
 
 ---
 

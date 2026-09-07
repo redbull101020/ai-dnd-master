@@ -5620,3 +5620,102 @@ already-merged delivery branch.
 - No commit, push, or merge was performed for this closure step, and PR
   #83 was not moved out of draft; a `review.patch` was produced from the
   uncommitted working-tree diff for review.
+
+## 2026-09-06 — TSK-0011 Character Dagger Attack/Damage contract
+
+- Added canonical Architecture §3.32 for the smallest sufficient Character
+  Dagger Attack Resolution, source-Damage Resolution, and positive Damage
+  Application boundaries, composing the existing §3.29 authoritative weapon
+  source/Finesse contract with §3.30's melee-only 5-ft reach contract.
+- Accepted DEC-0048: reuse unchanged `AttackResult`, preserve
+  `AttackResolved` V1 as the Character-unarmed Event, add a separate future
+  `CharacterWeaponAttackResolved` V1, and define the concrete future
+  `CharacterWeaponAttackDamageResult` /
+  `CharacterWeaponAttackDamageResolved` V1 source-Damage stage while keeping
+  `DamageResult` / `DamageApplied` V1 source-agnostic and unchanged.
+- Fixed normal/critical Definition-driven Dagger damage, exact Finesse
+  Ability/modifier continuity, miss/zero/positive branches, Event order and
+  immediate `causedBy` chain, and reuse of the existing positive Damage→HP
+  State application/save boundary. No generic Attack/Damage/source or
+  modifier/effect pipeline abstraction was introduced.
+- This was documentation-only: no production Python behavior changed, neither
+  new Event is actually emitted in production by this task, no State schema
+  changed (the current schema remains V7), and TSK-0012/TSK-0013 remain future
+  production implementation work. `AttackPayload` weapon fields were not
+  implemented.
+- Intentionally unchanged: production code, tests, packaged Definitions,
+  persistence, State schemas, `docs/TASK.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `README.md`, and `CLAUDE.md`.
+- Verification on Python 3.12.14 from the repository `.venv`:
+  `python -m pytest tests/architecture/test_documentation_references.py` —
+  2 passed; `git diff --check` — no whitespace errors. The bare `python`
+  executable was unavailable in PATH, so the same required module invocation
+  was run through `.venv\Scripts\python.exe`; pytest reported only its
+  non-failing cache-write warning for `.pytest_cache`.
+
+## 2026-09-06 — TSK-0011 Roadmap/Deferred reconciliation
+
+- Reconciled the unchecked Phase 3 Weapon attacks, Attack consequences, and
+  Targeting rows with canonical §3.32/DEC-0048. The wording now separates
+  implemented weapon-source/spatial State and V6/V7 persistence from the
+  newly canonical but unimplemented Character Dagger Attack/Damage contracts,
+  and names TSK-0012/TSK-0013 as the pending production continuations.
+- Updated `P2-ATTACK-ROLLS`, directly linked `P2-DAMAGE`, DEF-0011, and
+  DEF-0013 to reference §3.32/DEC-0048. DEF-0011 and DEF-0013 remain
+  `Deferred`; their append-only History records that TSK-0011 defined the
+  exact concrete contracts without implementing them. The preserved
+  consequence chain is `Attack Resolution → source Damage Resolution →
+  optional source-agnostic Damage Application`, with unchanged
+  `DamageApplied` V1.
+- Reread `README.md` and `CLAUDE.md` after the canonical change. Neither
+  required editing: README remains a correct high-level overview, while
+  CLAUDE's deliberately reproduced index lists implemented contracts and its
+  pending Character weapon paragraph remains factually accurate.
+- No checkbox, Task status/queue entry, production code, test, State schema,
+  Event implementation, packaged Definition, or persistence behavior changed.
+  TSK-0011 remains `Current`; this iteration does not claim it is `Done`.
+- Verification on Python 3.12.14 from the repository `.venv`:
+  `python -m pytest tests/architecture/test_documentation_references.py` —
+  2 passed; `git diff --check` — no whitespace errors. Pytest reported only
+  the non-failing cache-write warning for `.pytest_cache`.
+
+## 2026-09-06 — TSK-0011 future implementation-task refinement
+
+- Expanded backlog TSK-0012 into the executable, contract-preserving
+  Character Dagger Attack-only slice: approved payload evolution and routing,
+  authoritative weapon lookup, proficiency/Finesse/reach resolution,
+  unchanged `AttackResult`, one `CharacterWeaponAttackResolved` V1, exact
+  pre-resolution side-effect boundaries, and deterministic test expectations.
+- Expanded dependent backlog TSK-0013 into the separate Character Dagger
+  consequence slice: concrete source-Damage Result/Event, authoritative
+  Definition dice/type, exact Finesse continuity, normal/critical/zero-source
+  behavior, ordered causality, unchanged positive-only `DamageApplied` V1,
+  copy-on-write Monster HP application, save counts, and real-adapter evidence.
+- This iteration only refines future executable task definitions. It adds no
+  canonical gameplay contract beyond the Group-1 §3.32/DEC-0048 decision and
+  no production implementation. TSK-0012/TSK-0013 remain `Backlog`, while
+  TSK-0011 remains `Current` and `Next` remains empty; no Task Closure was
+  performed.
+- Verification on Python 3.12.14: documentation-reference tests — 2 passed;
+  full suite — 1774 passed; configured `mypy` — no issues in 107 source
+  files; `git diff --check` — no whitespace errors. Formatter and linter are
+  not configured. The full-suite rerun used an isolated writable pytest/pip
+  temporary area because the host's default pytest temp/cache directories
+  returned Windows access-denied errors; the successful rerun reported only
+  the existing non-failing `.pytest_cache` write warning.
+
+## 2026-09-06 — TSK-0011 prospective Task Closure
+
+- Prepared the normal `TASK.md` §18.1 closure for TSK-0011 in draft PR #84.
+  The delivery defines the canonical Character Dagger Attack and Damage
+  contracts in §3.32/DEC-0048; production implementation remains explicitly
+  split between TSK-0012 and TSK-0013.
+- Removed TSK-0011 from the open index/details, recorded it in Recently
+  completed with PR #84 evidence, and recalculated the Phase 3 queue:
+  TSK-0012 is `Current`, TSK-0013 remains dependency-blocked `Backlog`, and
+  `Next` / hard blockers remain empty. `Next free ID` remains TSK-0014, and
+  the ten-most-recent retention limit required no eviction.
+- This prepared `Done` / current-queue state is prospective and becomes
+  authoritative only when PR #84 merges. No merge SHA is claimed; no
+  production behavior, broad Roadmap capability status, or Deferred status
+  changed in this closure iteration.

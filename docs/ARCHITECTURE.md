@@ -67,6 +67,7 @@
 | Minimal authoritative Character weapon source (TSK-0001) | §3.29 |
 | Character Dagger melee targeting/reach, `CombatPosition` (TSK-0008) | §3.30 |
 | Zero-HP Attack eligibility by creature category (TSK-0003) | §3.31 |
+| Character Dagger Attack/Damage contracts (TSK-0011) | §3.32 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -132,6 +133,7 @@
   * [3.29. Minimal authoritative Character weapon source (TSK-0001)](#329-minimal-authoritative-character-weapon-source-tsk-0001)
   * [3.30. Minimal Phase 3 Character Dagger melee targeting and reach (TSK-0008)](#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008)
   * [3.31. Minimal Phase 3 zero-HP Attack eligibility (TSK-0003)](#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003)
+  * [3.32. Minimal Phase 3 Character Dagger Attack and Damage contracts (TSK-0011)](#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -6141,9 +6143,10 @@ Attack Resolution
 → Damage Application
 ```
 
-Concrete result/Event types and Application orchestration belong to later
-implementation tasks. This foundation supplies authoritative inputs; it does
-not collapse or pre-implement those stages.
+The exact concrete result/Event contracts are defined by §3.32. Production
+resolver and Application orchestration remain later TSK-0012/TSK-0013 work.
+This foundation supplies authoritative inputs; it does not collapse or
+pre-implement those stages.
 
 ---
 
@@ -6403,8 +6406,8 @@ StateStore.load
 → Condition/RollMode derivation
 → Attack Resolution / DiceEngine
 → Event metadata / Events
-→ later Weapon Damage Resolution (§3.29)
-→ later Damage Application / persistence (§3.29)
+→ later Weapon Damage Resolution (§3.32)
+→ later Damage Application / persistence (§3.32)
 ```
 
 Spatial validation is not moved inside the Attack roll resolver and is not
@@ -6818,6 +6821,398 @@ death policy, stabilization, and targetability/lifecycle questions beyond
 this narrow Attack-eligibility rule) remain deferred; this section resolves
 only the narrow zero-HP Attack-eligibility question named in TSK-0003, with
 production implementation delivered by TSK-0007.
+
+---
+
+### 3.32. Minimal Phase 3 Character Dagger Attack and Damage contracts (TSK-0011)
+
+Implementation status: **Canonical contract defined; production
+implementation pending in TSK-0012 / TSK-0013.** This documentation-only
+section composes the authoritative runtime weapon source and explicit Finesse
+choice from §3.29 with the Dagger-only melee targeting/reach contract from
+§3.30. It preserves DEC-0042's separate stages:
+
+```text
+Attack Resolution
+→ Damage Resolution
+→ Damage Application
+```
+
+No production Python behavior, Event producer, State schema, packaged
+Definition, or persistence contract is changed by TSK-0011.
+
+#### Character weapon Attack Resolution
+
+The Character Dagger resolver reuses the existing `AttackResult` from §3.17
+unchanged:
+
+```python
+@dataclass(frozen=True)
+class AttackResult:
+    target_id: str
+    roll: D20Roll
+    ability: Ability
+    ability_modifier: int
+    proficiency_bonus: int
+    total: int
+    target_armor_class: int
+    hit: bool
+    critical_hit: bool
+```
+
+The same concrete result is sufficient for both current/future Character
+consumers:
+
+```text
+Character unarmed → AttackResult
+Character Dagger  → AttackResult
+```
+
+Its arithmetic and natural-roll invariants remain unchanged:
+
+```text
+total = selected d20
+      + selected Ability modifier
+      + conditional weapon proficiency contribution
+
+natural 1  → miss, not critical
+natural 20 → hit, critical
+otherwise  → hit exactly when total >= target Armor Class
+```
+
+For the Dagger, the selected Ability and modifier are the explicit,
+authoritatively validated Strength-or-Dexterity Finesse choice from §3.29.
+The proficiency contribution is
+`character_proficiency_bonus(character.total_level)` when the resolved
+`weapon_definition_id` is in `CharacterState.weapon_proficiencies`, otherwise
+zero. Lack of proficiency does not prohibit the Attack.
+
+Runtime weapon identity is not part of `AttackResult`. It is a source-audit
+fact needed by the weapon-specific Event, while the result owns only the
+resolved Character attack-roll mechanics shared by unarmed and Dagger paths.
+Do not add `weapon_item_id`, `weapon_definition_id`, nullable source fields,
+a subclass, `CharacterWeaponAttackResult`, or a generic Attack-result
+hierarchy.
+
+`MonsterAttackResult` remains separate and unchanged because the Monster
+stat-block `attack_bonus` is a materially different authoritative model. The
+canonical Application outcome type also remains exactly:
+
+```text
+ResolutionResult[AttackResult | MonsterAttackResult]
+```
+
+No new union member or aggregate Attack/Damage outcome is introduced. A
+successful Character Dagger path returns its `AttackResult` as the
+`ResolutionResult.outcome`; later Damage details are carried by ordered
+Events, as on the existing Monster path.
+
+#### `CharacterWeaponAttackResolved` V1
+
+The published `AttackResolved` V1 Event remains exactly the existing
+Character-unarmed Event. Event version is not used as an implicit attack-source
+discriminator. A successful Character weapon Attack instead emits the new
+concrete `CharacterWeaponAttackResolved` V1 Event with exactly this payload:
+
+```text
+targetId           str
+weaponItemId       str
+weaponDefinitionId str
+roll               {mode, rolls, selected}
+ability            Ability string value
+abilityModifier    int
+proficiencyBonus   int >= 0
+total              int
+targetArmorClass   int
+hit                bool
+criticalHit        bool
+```
+
+`roll` uses the existing `D20Roll` wire representation:
+
+```text
+mode
+rolls
+selected
+```
+
+Application obtains and validates the two weapon identities through the
+already-approved authoritative chain:
+
+```text
+AttackCommand.payload.weapon_item_id
+→ actor InventoryState
+→ InventoryItemState
+→ InventoryItemState.definition_id
+→ DefinitionSource
+→ WeaponDefinition
+```
+
+`weaponItemId` records the selected runtime Item; `weaponDefinitionId` records
+the immutable Weapon Definition actually resolved from that Item.
+`weaponDefinitionId` is never caller-supplied intent. The builder receives
+these already-resolved local facts explicitly; no `AttackContext`,
+`AttackSource`, source hierarchy, or generic transport object is introduced
+merely to carry them between Application steps.
+
+The Attack Event is correlated to the original `AttackCommand` and starts the
+causal chain:
+
+```text
+CharacterWeaponAttackResolved.causedBy = null
+```
+
+#### Character weapon Damage Resolution
+
+A successful hit enters the separate pure source-Damage stage, whose concrete
+immutable result is:
+
+```python
+@dataclass(frozen=True)
+class CharacterWeaponAttackDamageResult:
+    target_id: str
+    weapon_item_id: str
+    weapon_definition_id: str
+    roll: DiceRoll
+    ability: Ability
+    ability_modifier: int
+    damage_type: DamageType
+    critical_hit: bool
+    amount: int
+```
+
+The future Character weapon Damage resolver receives:
+
+```text
+successful AttackResult
+already-authoritatively resolved runtime weapon identity
+already-resolved WeaponDefinition
+DiceEngine
+```
+
+The Damage stage must reuse both values from the Attack outcome:
+
+```text
+ability          = attack_outcome.ability
+ability_modifier = attack_outcome.ability_modifier
+critical_hit     = attack_outcome.critical_hit
+```
+
+It must not inspect the Character's Strength/Dexterity again, maximize a
+modifier, derive a different Ability, or ask intent for a second Finesse
+choice. The exact continuity is:
+
+```text
+explicit Attack intent Ability
+→ AttackResult ability/modifier
+→ same Ability/modifier in CharacterWeaponAttackDamageResult
+```
+
+Proficiency is never added to weapon Damage.
+
+The result's `weapon_item_id` and `weapon_definition_id` are the same
+already-authoritatively resolved identities used for the Attack Event; neither
+is reselected or supplied by the caller during Damage Resolution.
+
+Damage dice and type come from the already-resolved authoritative
+`WeaponDefinition`:
+
+```text
+WeaponDefinition.damage_dice
+WeaponDefinition.damage_type
+```
+
+The currently packaged Dagger therefore resolves as `1d4 piercing`, but the
+resolver must consume those Definition fields and must not hard-code `"1d4"`
+or `"piercing"`.
+
+For `damage_dice = "NdM"`, normal source damage is:
+
+```text
+dice.roll("NdM")
+amount = max(0, roll.total + attack_outcome.ability_modifier)
+```
+
+Critical Damage reuses DEC-0042's semantics: double only the number of source
+dice and apply the Ability modifier exactly once:
+
+```text
+normal   → NdM + ability modifier
+critical → (2 * N)dM + ability modifier
+```
+
+For the Dagger:
+
+```text
+normal   → 1d4 + modifier
+critical → 2d4 + modifier
+```
+
+No generic critical multiplier is introduced.
+
+`CharacterWeaponAttackDamageResult` is deliberately not the existing
+`DamageResult`. It owns resolved weapon-source facts, including a valid
+`amount == 0`; `DamageResult` remains the later source-agnostic, positive-only
+HP-transition result. Do not introduce `AttackDamageResult`,
+`WeaponDamageResult`, `DamageSource`, a modifier pipeline, or a damage
+pipeline.
+
+#### `CharacterWeaponAttackDamageResolved` V1
+
+The source-Damage Event has exactly this payload:
+
+```text
+targetId           str
+weaponItemId       str
+weaponDefinitionId str
+roll               {expression, rolls, total}
+ability            Ability string value
+abilityModifier    int
+damageType         DamageType string value
+criticalHit        bool
+amount             int >= 0
+```
+
+`roll` uses the existing `DiceRoll` representation:
+
+```text
+expression
+rolls
+total
+```
+
+The Event owns the source-resolution audit facts. It contains no `previousHp`,
+`newHp`, attack-roll total, target Armor Class, proficiency bonus, reach,
+distance, or targeting data. It is correlated to the same original
+`AttackCommand` and fixes this causation edge:
+
+```text
+CharacterWeaponAttackDamageResolved.causedBy =
+    CharacterWeaponAttackResolved.eventId
+```
+
+#### Miss, zero-source, and positive-source branches
+
+The future Application orchestration has exactly three successful branches.
+
+##### Miss
+
+```text
+CharacterWeaponAttackResolved
+```
+
+No source-Damage roll, `CharacterWeaponAttackDamageResult`, source-Damage
+Event, `DamageResult`, HP mutation, or `StateStore.save()` occurs.
+
+##### Hit with source amount == 0
+
+```text
+CharacterWeaponAttackResolved
+→ CharacterWeaponAttackDamageResolved(amount=0)
+```
+
+Zero is a valid resolved source-Damage fact. It does not enter the existing
+positive-only HP Damage contract: no `DamageResult`, `DamageApplied`, HP
+mutation, or `StateStore.save()` occurs.
+
+##### Hit with positive source damage
+
+```text
+CharacterWeaponAttackResolved
+→ CharacterWeaponAttackDamageResolved
+→ DamageApplied V1
+```
+
+For positive Damage only, Application continues through the unchanged
+source-agnostic boundary:
+
+```text
+CharacterWeaponAttackDamageResult
+→ resolve_damage_amount(...)
+→ DamageResult
+→ DamageApplied V1
+→ existing CreatureState Event application
+→ replacement StateSnapshot
+→ one StateStore.save()
+```
+
+`DamageApplied` remains the source-agnostic V1 Event from §3.19 with exactly
+`targetId`, `amount`, `previousHp`, and `newHp`; it gains no weapon fields and
+no V2 is introduced. Its immediate cause is the source-Damage Event:
+
+```text
+DamageApplied.causedBy = CharacterWeaponAttackDamageResolved.eventId
+```
+
+All emitted Events retain the same original `AttackCommand.command_id`.
+Their exact order and causality are:
+
+```text
+CharacterWeaponAttackResolved              causedBy = null
+CharacterWeaponAttackDamageResolved        causedBy = Attack Event ID
+DamageApplied                              causedBy = source-Damage Event ID
+```
+
+`DamageApplied.causedBy` must never skip the immediate source-Damage Event and
+point directly to `CharacterWeaponAttackResolved`.
+
+The positive branch reuses the existing Creature State Owner/application and
+§3.18 replacement-State/save-before-success rules. It introduces no State
+Owner or State field and leaves the current State schema at V7.
+
+#### Backward compatibility
+
+This contract explicitly preserves all currently published and implemented
+boundaries:
+
+```text
+AttackResult                         unchanged
+AttackResolved V1                    unchanged; Character-unarmed Event
+existing Character-unarmed behavior unchanged
+MonsterAttackResult                  unchanged
+MonsterAttackResolved V1             unchanged
+MonsterAttackDamageResult            unchanged
+MonsterAttackDamageResolved V1       unchanged
+DamageResult                         unchanged
+DamageApplied V1                     unchanged
+Event Envelope                       unchanged
+State schema                         remains V7
+AttackHandler outcome type           ResolutionResult[AttackResult | MonsterAttackResult]
+```
+
+TSK-0011 defines documentation contracts only. It does not implement the
+already-approved future `AttackPayload.weapon_item_id` or
+`AttackPayload.weapon_ability` fields from §3.29 and does not cause either new
+Event to be emitted in production. TSK-0012/TSK-0013 remain the production
+implementation work.
+
+#### Explicit exclusions and abstraction verdict
+
+This contract does not decide or implement:
+
+```text
+zero-HP targetability
+Character death, unconsciousness, or death saves
+thrown Dagger behavior despite the packaged "thrown" property
+attack mode
+ranged range bands
+ammunition
+other weapons
+resistance / immunity / vulnerability
+temporary HP
+movement
+cover or visibility
+generic Attack source abstractions
+generic Action abstractions
+generic targeting or geometry services
+modifier, damage, or effect pipelines
+```
+
+The current Dagger consumer remains melee-only under §3.30. The abstraction
+verdict is **KEEP CONCRETE**: one existing shared Character `AttackResult`, one
+new concrete weapon Attack Event, and one concrete Character weapon source-
+Damage result/Event stage. Current evidence does not justify a generic Attack
+source/result hierarchy or a generic Damage framework.
 
 ---
 
