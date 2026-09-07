@@ -587,21 +587,23 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     assert list(state_path.parent.glob(".state-*.tmp")) == []
 
 
-# --- Character Dagger weapon Attack (TSK-0012 Group 4) ----------------
+# --- Character Dagger weapon Attack (TSK-0012/TSK-0013 Group 4) -------
 
 
-def test_character_dagger_attack_via_real_adapters_is_read_only(
+def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     tmp_path: Path,
 ) -> None:
-    """TSK-0012 Group 4 production-real integration evidence: a Character
-    Dagger weapon Attack resolved end to end through the real
+    """TSK-0013 Group 4 production-real integration evidence: a Character
+    Dagger weapon Attack that hits rolls its own authoritative source Damage
+    and applies it to the Goblin target's current_hp, durably visible after
+    a fresh FilesystemStateStore reload -- alongside untouched Character/
+    Inventory/Equipment/Combat projections -- using the real
     FilesystemStateStore (State schema V7), StateSerializer, real
     PackagedDefinitionSource (packaged dnd_5e/5.1 Dagger and Goblin
-    Definitions), and PythonDiceEngine adapters -- proving the authoritative
-    Inventory/Equipment/Definition weapon-source chain, the explicit Finesse
-    Dexterity choice, the proficiency contribution, and Combat/reach
-    validation, while remaining fully read-only (no Damage, no HP mutation,
-    no State save)."""
+    Definitions), and PythonDiceEngine adapters end to end. Evolves the
+    former TSK-0012 read-only variant of this same deterministic setup now
+    that TSK-0013 continues the Attack into source Damage and Damage
+    Application."""
     campaigns_root = tmp_path / "campaigns"
 
     actor = CreatureState(
@@ -675,14 +677,20 @@ def test_character_dagger_attack_via_real_adapters_is_read_only(
     state_before = state_path.read_bytes()
 
     store = CountingStateStore(real_store)
-    metadata = FixedEventMetadataProvider()
+    metadata = SequentialEventMetadataProvider()
 
-    # seed 20260901: 1d20 == 15.
+    # seed 20260901: 1d20 == 15 (Attack), then 1d4 == 1 (Dagger Damage).
     seed = 20260901
     rng = random.Random(seed)
     expected_rng = random.Random(seed)
-    expected_roll = expected_rng.randint(1, 20)
-    assert expected_roll == 15
+    expected_attack_roll = expected_rng.randint(1, 20)
+    expected_damage_roll = expected_rng.randint(1, 4)
+    assert (expected_attack_roll, expected_damage_roll) == (15, 1)
+
+    expected_ability_modifier = 2  # dexterity 14 -> modifier +2.
+    expected_damage_amount = expected_damage_roll + expected_ability_modifier
+    expected_previous_hp = target.current_hp
+    expected_new_hp = expected_previous_hp - expected_damage_amount
 
     command = AttackCommand(
         command_id="command_000501",
@@ -702,9 +710,10 @@ def test_character_dagger_attack_via_real_adapters_is_read_only(
         event_metadata_provider=metadata,
     ).handle(command)
 
-    # exactly one 1d20 roll was consumed for the Attack -- no Damage roll.
+    # exactly the expected 1d20 + 1d4 sequence was consumed -- no hidden
+    # additional RNG calls.
     assert rng.getstate() == expected_rng.getstate()
-    assert metadata.calls == ["campaign_001"]
+    assert metadata.calls == ["campaign_001"] * 3
 
     assert result.success is True
     assert result.errors == ()
@@ -712,52 +721,93 @@ def test_character_dagger_attack_via_real_adapters_is_read_only(
     assert outcome is not None
     assert outcome.target_id == "monster_001"
     assert outcome.roll.mode is RollMode.NORMAL
-    assert outcome.roll.rolls == (expected_roll,)
-    assert outcome.roll.selected == expected_roll
+    assert outcome.roll.rolls == (expected_attack_roll,)
+    assert outcome.roll.selected == expected_attack_roll
     assert outcome.ability is Ability.DEXTERITY
     # dexterity 14 -> modifier +2; strength 16 -> modifier +3 would leak
     # through here if Finesse silently fell back to the unarmed Strength
     # path, so this pins the explicit choice is honoured.
-    assert outcome.ability_modifier == 2
+    assert outcome.ability_modifier == expected_ability_modifier
     assert outcome.proficiency_bonus == 3
     assert outcome.total == 20
     assert outcome.target_armor_class == 15
     assert outcome.hit is True
     assert outcome.critical_hit is False
 
-    assert len(result.events) == 1
-    event = result.events[0]
-    assert event.event_id == "event_000456"
-    assert event.command_id == command.command_id
-    assert event.type == "CharacterWeaponAttackResolved"
-    assert event.version == 1
-    assert event.campaign_id == "campaign_001"
-    assert event.timestamp == FIXED_TIMESTAMP
-    assert event.actor_id == "character_001"
-    assert event.caused_by is None
-    assert event.payload == {
+    # exact Event order: CharacterWeaponAttackResolved ->
+    # CharacterWeaponAttackDamageResolved -> DamageApplied.
+    assert [event.type for event in result.events] == [
+        "CharacterWeaponAttackResolved",
+        "CharacterWeaponAttackDamageResolved",
+        "DamageApplied",
+    ]
+    attack_event, damage_event, applied_event = result.events
+
+    # exact immediate causedBy chain; DamageApplied never skips the
+    # source-Damage Event.
+    assert attack_event.caused_by is None
+    assert damage_event.caused_by == attack_event.event_id
+    assert applied_event.caused_by == damage_event.event_id
+    assert (
+        len({attack_event.event_id, damage_event.event_id, applied_event.event_id})
+        == 3
+    )
+    assert all(event.command_id == command.command_id for event in result.events)
+    assert all(event.campaign_id == "campaign_001" for event in result.events)
+    assert all(event.actor_id == "character_001" for event in result.events)
+    assert all(event.timestamp == FIXED_TIMESTAMP for event in result.events)
+
+    assert attack_event.version == 1
+    assert attack_event.payload == {
         "targetId": "monster_001",
         "weaponItemId": "item_001",
         "weaponDefinitionId": "dagger",
         "roll": {
             "mode": "normal",
-            "rolls": (expected_roll,),
-            "selected": expected_roll,
+            "rolls": (expected_attack_roll,),
+            "selected": expected_attack_roll,
         },
         "ability": "dexterity",
-        "abilityModifier": 2,
+        "abilityModifier": expected_ability_modifier,
         "proficiencyBonus": 3,
         "total": 20,
         "targetArmorClass": 15,
         "hit": True,
         "criticalHit": False,
     }
+    assert damage_event.version == 1
+    assert damage_event.payload == {
+        "targetId": "monster_001",
+        "weaponItemId": "item_001",
+        "weaponDefinitionId": "dagger",
+        "roll": {
+            "expression": "1d4",
+            "rolls": (expected_damage_roll,),
+            "total": expected_damage_roll,
+        },
+        "ability": "dexterity",
+        "abilityModifier": expected_ability_modifier,
+        "damageType": "piercing",
+        "criticalHit": False,
+        "amount": expected_damage_amount,
+    }
+    assert applied_event.version == 1
+    assert applied_event.payload == {
+        "targetId": "monster_001",
+        "amount": expected_damage_amount,
+        "previousHp": expected_previous_hp,
+        "newHp": expected_new_hp,
+    }
 
-    # no Damage roll, no Damage Event, no State mutation or persistence.
-    assert store.save_calls == []
+    # exactly one State snapshot save; the state file is no longer
+    # byte-identical after the positive hit.
+    assert len(store.save_calls) == 1
+    assert store.save_calls[0] is not snapshot
     state_after = state_path.read_bytes()
-    assert state_after == state_before
+    assert state_after != state_before
 
+    # fresh reload through a brand new FilesystemStateStore instance --
+    # proves a real filesystem round trip, not just the in-memory save arg.
     reloaded = FilesystemStateStore(campaigns_root).load("campaign_001")
     reloaded_actor = next(
         creature for creature in reloaded.creatures if creature.id == "character_001"
@@ -766,7 +816,9 @@ def test_character_dagger_attack_via_real_adapters_is_read_only(
         creature for creature in reloaded.creatures if creature.id == "monster_001"
     )
     assert (reloaded_actor.current_hp, reloaded_actor.max_hp) == (20, 20)
-    assert (reloaded_target.current_hp, reloaded_target.max_hp) == (7, 7)
+    assert reloaded_target.current_hp == expected_new_hp
+    assert reloaded_target.current_hp == expected_previous_hp - expected_damage_amount
+    assert reloaded_target.max_hp == target.max_hp
     reloaded_character = next(
         candidate
         for candidate in reloaded.characters

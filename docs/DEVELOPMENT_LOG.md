@@ -6016,3 +6016,81 @@ already-merged delivery branch.
 - TSK-0013 is not marked complete. No commit or push was performed for this
   group; a `review.patch` containing only the fresh Group 3 changes was
   produced for review.
+
+## 2026-09-07 — TSK-0013 Group 4: real-adapter evidence for Character Dagger Attack -> Damage -> Monster HP
+
+- Proved the complete Character Dagger `Attack -> source Damage ->
+  DamageApplied -> Monster HP persistence` path introduced by TSK-0013
+  through real adapters and a real filesystem round trip, by evolving the
+  existing TSK-0012 read-only Character Dagger real-adapter test in
+  `tests/integration/test_attack_real_adapters.py` rather than adding a
+  parallel test/framework. The deterministic setup (Character Strength 16/
+  Dexterity 14 with Dagger proficiency, explicit Dexterity Finesse choice,
+  equipped runtime `item_001`, packaged Dagger/Goblin Definitions, Goblin
+  starting HP 7, Character `(0, 0)`/Monster `(3, 4)` positions, seed
+  `20260901`) was preserved unchanged. Verified against the actual
+  `PythonDiceEngine`/`resolve_d20_roll` implementation rather than assumed:
+  with `random.Random(20260901)`, the first `1d20` is `15` and the
+  following `1d4` is `1`; with Dexterity 14 (modifier +2), source Damage is
+  `1 + 2 = 3` and Goblin HP goes `7 -> 4`. The test now uses the existing
+  `SequentialEventMetadataProvider` (distinct Event IDs) instead of the
+  single-ID `FixedEventMetadataProvider`, which remains in use by the
+  file's other unrelated tests.
+- The renamed
+  `test_character_dagger_hit_applies_damage_and_persists_through_real_adapters`
+  asserts, all through real `FilesystemStateStore` (State schema V7),
+  `PackagedDefinitionSource`, and `PythonDiceEngine` (no mocked Domain
+  resolver): the Attack keeps the explicit Dexterity selection, the
+  proficiency contribution, and a hit, publishing `CharacterWeaponAttackResolved`
+  V1; exactly one authoritative `1d4` Dagger Damage roll follows the `1d20`,
+  publishing `CharacterWeaponAttackDamageResolved` V1 with preserved runtime
+  Item (`item_001`) and Dagger Definition identity, Dexterity/+2 reused
+  unchanged, `damageType="piercing"`, `criticalHit=false`, and
+  `amount=3`; and the unchanged `DamageApplied` V1 records
+  `previousHp=7`/`newHp=4`/`amount=3`. `result.events` is exactly
+  `[CharacterWeaponAttackResolved, CharacterWeaponAttackDamageResolved,
+  DamageApplied]` with `caused_by` chained `null -> attack event id ->
+  damage event id` and three distinct Event IDs, all sharing the original
+  `command_id`/`campaign_id`/`actor_id`. Exactly one `StateStore.save()`
+  occurs and the on-disk `state.json` is no longer byte-identical; a
+  **new** `FilesystemStateStore` instance then reloads the campaign from
+  disk and the test asserts against that fresh reload (not the in-memory
+  save argument): Goblin `current_hp == 4` with `max_hp` unchanged,
+  Character Creature/Character-projection/Inventory/Equipment/Combat
+  order/positions all unchanged, and no JSONL Event-history file or other
+  EventStore artifact (and no leftover atomic-write temp file) exists
+  alongside `state.json`.
+- The existing Character Dagger out-of-range real-adapter regression
+  (`test_character_dagger_attack_out_of_range_via_real_adapters_rejects_before_roll`)
+  was preserved unchanged: it still asserts `OUT_OF_RANGE`, an untouched
+  RNG state (covering both no `1d20` and no Damage roll), no Event metadata
+  allocation, no save, and a byte-identical state file, proving TSK-0013
+  did not move Damage resolution ahead of existing Attack prerequisites.
+  The Monster Scimitar consequence real-adapter test was left unchanged and
+  re-run as regression evidence. No new integration framework, EventStore
+  implementation, or duplicated per-branch (miss/critical/zero-source/HP-
+  floor/save-failure) integration coverage was added; those remain covered
+  by the existing deterministic Application/Domain tests from Groups 1-3.
+- No production code changed in this group: no defect was found in the
+  approved Groups 1-3 implementation, and all stated deterministic roll/
+  modifier/HP assumptions matched actual behavior on first run.
+- Verification on Python 3.12.14 (with `--basetemp` pointed at a writable
+  scratch directory to work around this machine's pre-existing local
+  Windows `pytest-of-redbu` temp-directory `PermissionError`, unrelated to
+  this change): full `tests/integration/test_attack_real_adapters.py` — 5
+  passed, including the updated Character Dagger consequence test, the
+  preserved Character Dagger out-of-range regression, and the preserved
+  Monster Scimitar consequence regression; combined with the Group 1-3
+  targeted Domain/Application tests
+  (`test_character_weapon_attack_damage.py`,
+  `test_character_weapon_attack_damage_event.py`,
+  `test_attack_handler.py`) — 135 passed together; `mypy src/dnd_engine` —
+  no issues in 111 source files; `git diff --check` — no whitespace
+  errors. Manual diff inspection confirms
+  `tests/integration/test_attack_real_adapters.py` is the only
+  production/test file changed in this group, with `docs/DEVELOPMENT_LOG.md`
+  as the only additional (append-only documentation) change, and that no
+  other test in that file was altered.
+- TSK-0013 is not marked complete. No commit or push was performed for
+  this group; a `review.patch` containing only the fresh Group 4 changes
+  was produced for review.
