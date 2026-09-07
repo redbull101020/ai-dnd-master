@@ -1232,7 +1232,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0013
+- **Current:** —
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0014
@@ -1244,130 +1244,12 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0013` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Attack consequences | Implement Character Dagger Attack → Damage → Monster HP consequence |
 
 ---
 
 # Open task details
 
-## TSK-0013 — Implement Character Dagger Attack → Damage → Monster HP consequence
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / Attack consequences
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Attack consequences
-- `ARCHITECTURE.md` §3.18
-- `ARCHITECTURE.md` §3.19
-- `ARCHITECTURE.md` §3.27
-- `ARCHITECTURE.md` §3.32
-- `DEC-0042`
-- `DEC-0048`
-- `DEF-0013`
-
-**Depends on:** `TSK-0012`
-
-**Contract impact:** `none`
-
-### Goal
-
-Continue the implemented Character Dagger Attack result through the approved
-source-Damage stage and, for positive source damage, the existing Monster HP
-application stage.
-
-### Why now
-
-TSK-0012 implemented the authoritative Dagger Attack outcome and weapon
-facts required by §3.32; this dependent slice can then implement the approved
-consequence chain without broadening the Attack task or changing the existing
-HP contract.
-
-### Scope
-
-- implement immutable `CharacterWeaponAttackDamageResult` and the pure
-  Character weapon source-Damage resolver;
-- consume authoritative `WeaponDefinition.damage_dice` and
-  `WeaponDefinition.damage_type` rather than hard-coding Dagger values;
-- reuse exactly the Attack-selected `ability` and `ability_modifier`, without
-  reselecting or maximizing an Ability and without adding proficiency to
-  Damage;
-- resolve normal source damage and critical source damage by doubling only
-  the damage-dice count and applying the Ability modifier once;
-- preserve a valid zero-source-damage result branch;
-- emit `CharacterWeaponAttackDamageResolved` V1 with the exact Event
-  causality and ordering from §3.32;
-- convert positive source damage only through existing
-  `resolve_damage_amount`, reuse unchanged `DamageResult` and
-  `DamageApplied` V1, and apply that existing Damage Event to the target
-  Monster `CreatureState.current_hp`;
-- replace the snapshot copy-on-write and perform exactly one
-  `StateStore.save()` for positive source damage, with no save for a miss or
-  zero source damage;
-- add deterministic Domain, Application, and integration coverage, including
-  a full real-adapter/filesystem round-trip analogous to the existing Monster
-  consequence evidence where applicable.
-
-### Out of scope
-
-- a new `DamageApplied` version or Event type;
-- resistance, immunity, vulnerability, or temporary HP;
-- death, unconsciousness, death saves, or zero-HP targetability policy;
-- other weapons or thrown/ranged/ammunition behavior;
-- EventStore, JSONL Event append, or durable Event persistence; these remain
-  deferred and are not introduced by TSK-0013;
-- generic Attack, Damage, source, modifier, or effect abstractions.
-
-### Acceptance criteria
-
-- a miss emits only `CharacterWeaponAttackResolved` and performs no Damage
-  roll, Damage Event, HP mutation, or save;
-- a normal hit with positive source damage uses the authoritative weapon dice
-  and type, applies the Attack-selected Ability modifier once, and updates
-  Monster HP through unchanged `DamageApplied` V1;
-- a critical hit doubles only the damage-dice count and applies the same
-  Attack-selected Ability modifier once;
-- a hit with zero source damage emits
-  `CharacterWeaponAttackDamageResolved(amount=0)` but no `DamageApplied`, HP
-  mutation, or save;
-- positive damage floors Monster HP at zero through the existing Damage
-  application contract;
-- Events are emitted exactly in canonical order with one shared Attack
-  Command correlation and the immediate chain
-  `CharacterWeaponAttackResolved → CharacterWeaponAttackDamageResolved →
-  DamageApplied`;
-- the positive branch performs one copy-on-write snapshot replacement and
-  exactly one save; miss and zero-source branches perform no save;
-- `DamageResult` and `DamageApplied` V1 remain unchanged;
-- deterministic Domain and Application tests cover miss, normal positive
-  damage, critical hit, zero source damage, HP floor, Event
-  ordering/causality, and save counts;
-- integration `FilesystemStateStore` round-trip coverage proves that the
-  positive branch persists Monster `current_hp` and reloads the expected
-  value, and the full suite passes.
-
-### Verification
-
-- deterministic source-Damage resolver tests for normal, critical, negative
-  modifier clamping, authoritative dice/type, and Finesse continuity;
-- handler tests prove HP floor and copy-on-write replacement, and explicitly
-  prove that miss and zero-source branches perform no `StateStore.save()`;
-- on the positive source-damage branch, a real `FilesystemStateStore`
-  round-trip proves that Monster `current_hp` was persisted and reloads with
-  the expected value;
-- separately, returned `ResolutionResult.events` proves the exact in-memory
-  Event order
-  `CharacterWeaponAttackResolved → CharacterWeaponAttackDamageResolved →
-  DamageApplied` and the canonical immediate `causedBy` chain;
-- regression coverage proving unchanged `DamageResult` and `DamageApplied`
-  V1 behavior.
+_No `Current`, `Ready`, or `Blocked` task at this time._
 
 ---
 
@@ -1375,7 +1257,6 @@ HP contract.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0002` | Define active-turn gating for `AttackCommand` | PR #68 / merge commit `d8f86ed` |
 | `TSK-0008` | Define minimal melee targeting and reach for the first Character Dagger attack | PR #70 / merge commit `24da875` |
 | `TSK-0009` | Deduplicate README/CLAUDE and remove redundant current data-flow projection | PR #71 / merge commit `e99d0dc` |
 | `TSK-0003` | Define zero-HP Attack eligibility by creature category | PR #72 / merge commit `7ac97f6` |
@@ -1385,6 +1266,7 @@ HP contract.
 | `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
 | `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
 | `TSK-0012` | Implement Character Dagger weapon Attack resolution | PR #85 |
+| `TSK-0013` | Implement Character Dagger Attack → Damage → Monster HP consequence | PR #86 |
 
 ---
 

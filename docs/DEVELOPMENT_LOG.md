@@ -6153,3 +6153,59 @@ already-merged delivery branch.
 - TSK-0013 is not marked complete. No commit or push was performed for this
   group; a `review.patch` containing only the fresh Group 5 documentation
   changes was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 6: final verification and Task Closure
+
+- Ran final verification on Python 3.12.14 (with `--basetemp` pointed at a
+  writable scratch directory to work around this machine's pre-existing
+  local Windows `pytest-of-redbu` temp-directory `PermissionError`,
+  unrelated to this branch): targeted Domain suites (source-Damage,
+  source-Damage Event, Attack, Character weapon Attack Event, Monster
+  Attack Damage/Event, Damage, Damage Event) — 245 passed; full
+  `tests/application/test_attack_handler.py` — 77 passed; full
+  `tests/integration/test_attack_real_adapters.py` — 5 passed; full
+  `tests/architecture/` — 7 passed; complete repository suite
+  (`python -m pytest --basetemp="<writable scratch directory>"`, the same
+  writable-`--basetemp` workaround noted above) — **1953 passed, 0
+  errors**; `python -m mypy src/dnd_engine` — no issues in 111 source
+  files; `git diff --check` — no whitespace errors. Cumulative branch scope
+  against `origin/main`
+  (`14dc354..HEAD`) is exactly the expected 12 TSK-0013 production/test/
+  documentation files, with no unrelated refactor, dependency, schema,
+  infrastructure, or formatting churn.
+- Manually audited every TSK-0013 acceptance criterion against code and
+  tests — miss, normal positive hit, critical, zero source, HP floor,
+  exact Event sequence/causality, copy-on-write State handling and save
+  counts, and unchanged compatibility of `AttackResult`,
+  `ResolutionResult[AttackResult | MonsterAttackResult]`, `DamageResult`,
+  `DamageApplied` V1, State schema V7, `EventSerializer`, and existing
+  Monster consequence behavior — all **PASS**. No scope-exclusion item
+  (death/unconscious/death saves, zero-HP targetability expansion,
+  resistance/immunity/vulnerability, temporary HP, other weapons,
+  ranged/thrown/ammunition, EventStore/JSONL durable history, or a generic
+  Attack/Damage/source/modifier/effect abstraction) was implemented.
+- Opened draft PR [#86](https://github.com/redbull101020/ai-dnd-master/pull/86)
+  (`claude/tsk-0013-character-dagger-damage` → `main`) so its number could
+  serve as durable `Recently completed` evidence per §19, without inventing
+  a placeholder PR number or merge SHA.
+- Performed the normal pre-merge Task Closure (`docs/TASK.md` §18.1) for
+  TSK-0013: removed it from the `Open task index`/`Open task details`
+  (both now empty — no other refined `Ready`/`Backlog` task exists
+  anywhere in the file to promote), and added it to `Recently completed`
+  with `PR #86` evidence (no merge SHA invented). Keeping the ten-row
+  retention limit removed the oldest entry, `TSK-0002` (`PR #68`). `Current`
+  and `Next` are set to `—` because no already-refined eligible task exists
+  in `TASK.md` to select — no `TSK-0014` content was invented. `Next free
+  ID` remains `TSK-0014` (no new ID allocated), and `Last reviewed` is set
+  to 2026-09-07. This closure is **prospective** until PR #86 actually
+  merges (§4.5/§18.1): TSK-0013 is not yet authoritatively `Done` on
+  `main`, and no new delivery branch may be based on this prospective
+  empty `Current`.
+- No canonical contract changed in this group. `docs/ARCHITECTURE.md`,
+  `docs/ROADMAP.md`, `docs/DEFERRED.md`, and `CLAUDE.md` were already
+  synchronized in Group 5 and were not touched again here.
+- Verification for this closure step: `pytest tests/architecture/` — 7
+  passed; `git diff --check` — no whitespace errors.
+- No commit, push, or merge was performed for this group; a `review.patch`
+  containing only the fresh `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
+  entry was produced for review.
