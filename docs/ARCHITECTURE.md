@@ -68,6 +68,7 @@
 | Character Dagger melee targeting/reach, `CombatPosition` (TSK-0008) | §3.30 |
 | Zero-HP Attack eligibility by creature category (TSK-0003) | §3.31 |
 | Character Dagger Attack/Damage contracts (TSK-0011) | §3.32 |
+| Current-turn ordinary Action expenditure, `TurnActionSpent` (TSK-0014, decision only) | §3.33 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -134,6 +135,7 @@
   * [3.30. Minimal Phase 3 Character Dagger melee targeting and reach (TSK-0008)](#330-minimal-phase-3-character-dagger-melee-targeting-and-reach-tsk-0008)
   * [3.31. Minimal Phase 3 zero-HP Attack eligibility (TSK-0003)](#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003)
   * [3.32. Minimal Phase 3 Character Dagger Attack and Damage contracts (TSK-0011)](#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011)
+  * [3.33. Minimal Phase 3 current-turn ordinary Action expenditure (TSK-0014)](#333-minimal-phase-3-current-turn-ordinary-action-expenditure-tsk-0014)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -4728,7 +4730,13 @@ concrete consumer. In particular, G7 did not change `AttackHandler` (§3.17):
 the first concrete Combat actor/action-eligibility consumer in that slice was
 `AdvanceTurnHandler`'s own turn-ownership gate, not Attack. The active-turn
 contract for the supported `AttackCommand` paths is defined and implemented
-separately in §3.28 (TSK-0006), not as part of this G7 slice.
+separately in §3.28 (TSK-0006), not as part of this G7 slice. The narrow
+current-turn ordinary-Action expenditure contract that later builds on this
+`CombatState` — a planned `action_spent` field, `TurnActionSpent` V1, and
+Action-aware `CombatStarted`/`TurnAdvanced` projections — is separately
+defined in §3.33 (TSK-0014, DEC-0049) as a decision only; it does not change
+this section's implemented `CombatState`, `CombatStarted` V1, or
+`TurnAdvanced` V1 as delivered by G7.
 
 Initiative *is* explicitly in scope as a Dexterity check (SRD 5.1), so the
 already-implemented Poisoned Ability Check Condition policy (§3.22) already
@@ -5705,6 +5713,13 @@ The rule is deliberately limited to **the currently supported
 mechanics require the attacker to be the active combatant. Reactions,
 opportunity attacks, and other future out-of-turn consumers may receive a
 separate eligibility contract when they are implemented.
+
+The narrow ordinary-Action resource-expenditure gate that runs immediately
+after this active-turn gate, for the same currently supported
+`AttackCommand` paths, is separately defined in §3.33 (TSK-0014, DEC-0049)
+as a decision only; it does not redefine or reorder this section's own
+active-turn precedence, and its own State/Event/persistence consequence
+remains unimplemented pending a later task.
 
 ---
 
@@ -7235,6 +7250,422 @@ verdict is **KEEP CONCRETE**: one existing shared Character `AttackResult`, one
 new concrete weapon Attack Event, and one concrete Character weapon source-
 Damage result/Event stage. Current evidence does not justify a generic Attack
 source/result hierarchy or a generic Damage framework.
+
+---
+
+### 3.33. Minimal Phase 3 current-turn ordinary Action expenditure (TSK-0014)
+
+Implementation status: **Decision only (TSK-0014, DEC-0049). No current
+production Python behavior, Event producer, `StateSerializer`
+implementation, or currently persisted wire format is changed by this
+section, and the current production writer remains exact V7.** This section
+does canonically define the planned State schema V8 contract below for a
+later implementation task; "decision only" means that planned contract is
+not yet implemented, not that this section leaves the persistence
+consequence undefined. It canonically fixes the minimal current-turn
+ordinary-Action resource contract needed by the three currently implemented
+in-Combat `AttackCommand` consumers — Character unarmed (§3.17), Monster
+Goblin Scimitar (§§3.26–3.28), and Character Dagger (§3.32) — so that a
+later implementation task can be refined without a further architectural
+decision for this narrow scope. Production implementation, including the
+State schema V8 writer, remains a later task.
+
+#### Scope and authoritative inputs
+
+This section covers exactly the currently supported `AttackCommand` paths,
+after the already-accepted §3.28 active-turn gate, when `snapshot.combat is
+not None`. It is not a universal Action/eligibility framework and does not
+extend to Reactions, Opportunity Attacks, Bonus Actions, or Movement.
+
+#### State ownership
+
+The authoritative fact is one additional field on the existing `CombatState`
+(§3.25, §10.7), owned by the same `CombatEngine` State Owner:
+
+```python
+@dataclass
+class CombatState:
+    id: str
+    round: int
+    order: tuple[str, ...]
+    active_index: int
+    positions: tuple[CombatPosition, ...] = ()
+    action_spent: bool = False
+```
+
+`action_spent` records only whether the current `active_creature_id` has
+already spent its baseline ordinary Action during the current turn. It is
+not moved to `CreatureState` or `CharacterState`, and no separate
+`TurnState`, `ActionState`, `TurnResources`, resource pool, or generic
+resource-owner type is introduced. A single `bool` is deliberately not a
+complete model of every D&D Action; it represents only this one baseline
+ordinary Action per turn. Two distinct future concerns are explicitly not
+conflated with it. Action Surge — a future mechanic that grants an
+*additional* Action within the same turn — is an Action-**capacity**
+question: it may eventually require expanding this representation beyond a
+single boolean, but this section does not decide whether or how. Extra
+Attack and Monster Multiattack are a different, Attack-**resolution**
+question: they let one single Action produce more than one attack roll, so
+they do not themselves grant an additional Action, and they may instead
+require evolving the Attack-command/Attack-action/resolution boundary — how
+many attack resolutions one Action-consuming transaction produces — rather
+than this field. This section does not claim that Extra Attack or
+Multiattack grant an extra Action, and it does not decide whether
+`action_spent` itself will need to change for either mechanic.
+
+#### First concrete consumer
+
+The first concrete consumer is every currently supported in-Combat
+`AttackCommand` path — the existing Character unarmed and Character Dagger
+branches of `_handle_character_attack`/`_handle_character_weapon_attack`,
+and the existing Monster Goblin Scimitar branch of `_handle_monster_attack`
+(§3.17, §3.26, §3.32). This section does not declare `AttackCommand` to be
+the universal D&D Attack Action; it defines, narrowly, that for these
+already-implemented single-attack consumers a successfully resolved
+in-Combat `AttackCommand` spends the baseline ordinary Action of the
+current turn. No new `AttackActionCommand`, generic `ActionCommand`, attack
+sequence, or Action-Command hierarchy is introduced. This narrow contract
+neither implies nor forecloses how Extra Attack, Action Surge, or
+Multiattack will eventually be represented; see "State ownership" above for
+why those three raise different, separately-evolving questions rather than
+one shared "future evolution of this field."
+
+#### Outside Combat
+
+When `snapshot.combat is None`, this gate does not apply and no
+`action_spent` fact is consumed, exactly like the existing §3.28 active-turn
+gate. This section does not define Combat auto-start, a hostile-action
+lifecycle outside Combat, Initiative orchestration, or Attack retry
+semantics after a later `StartCombatCommand`.
+
+#### Validation precedence
+
+The canonical order for the current paths, extending §3.28/§3.31 without
+displacing them, becomes:
+
+```text
+StateStore.load
+→ actor CreatureState lookup
+→ active-turn eligibility when Combat exists (§3.28)
+→ ordinary Action availability gate (this section)
+→ existing Character/Monster routing
+→ existing zero-HP Attack eligibility (§3.31)
+→ existing source/target/equipment/Definition/reach validation
+→ Condition/RollMode derivation
+→ resolver / DiceEngine
+→ Event metadata
+→ Events
+→ optional consequences / State application / persistence
+```
+
+The gate runs immediately after the §3.28 active-turn check and before any
+Character/Monster routing, because it is a `CombatState`-only fact that does
+not depend on actor category — exactly like §3.28 itself does not depend on
+actor category. If Combat exists and `combat.action_spent is True`:
+
+```text
+ErrorCode.ACTION_NOT_AVAILABLE
+entity_id = command.actor_id
+field = None
+events = ()
+```
+
+This rejection occurs before any source-specific `DefinitionSource` lookup,
+`DiceEngine` call, `EventMetadataProvider` call, Event construction, State
+mutation, or `StateStore.save()` — the same side-effect boundary §3.28 and
+§3.31 already established. No generic validation pipeline or shared
+eligibility helper is introduced; `AttackHandler` gains one more concrete
+sequential check, exactly like its two existing gates.
+
+#### Consumption semantics
+
+This subsection defines consumption strictly inside Combat, continuing
+"Outside Combat" above: when `snapshot.combat is None`, this ordinary-Action
+contract does not apply at all — there is no `CombatState` to hold
+`action_spent` in the first place. The existing outside-Combat
+`AttackCommand` behavior (§3.17, §3.26, §3.32) is completely unchanged, and
+neither a successful nor a failed outside-Combat Attack ever produces
+`TurnActionSpent` or touches any `action_spent` fact. Absence of Combat is
+therefore not itself a "missing Combat prerequisite" rejection — it is
+simply outside this contract's scope.
+
+Inside Combat, the baseline ordinary Action is spent only after a
+successfully resolved Attack — that is, only on a successful
+`ResolutionResult` for the current in-Combat `AttackCommand`.
+`ResolutionResult.success` means the Command was successfully processed and
+resolved, not that the attack hit.
+
+Does **not** spend the Action inside Combat (no `CombatState` mutation, no
+`TurnActionSpent` Event):
+
+```text
+missing actor
+non-active actor (§3.28)
+an actor whose Action is already spent (this section)
+zero-HP actor (§3.31)
+invalid or missing target
+unsupported/missing weapon, equipment, or Definition
+invalid Ability selection
+actor or target missing a required CombatPosition
+target not part of Combat, or out of melee reach
+any other pre-resolution gameplay rejection
+```
+
+Does spend the Action inside Combat:
+
+```text
+resolved miss
+resolved hit
+resolved critical hit
+resolved hit with zero source damage
+resolved hit with positive source damage
+```
+
+None of the above changes the §3.28/§3.31/this-section validation
+precedence already fixed above; it only states which of those already-
+ordered outcomes consume the Action.
+
+#### `TurnActionSpent` V1
+
+A new concrete Event, following the existing PascalCase past-tense naming
+convention (§8.13):
+
+```text
+TurnActionSpent
+```
+
+Exact V1 payload:
+
+```text
+combatId   str
+```
+
+No other field is duplicated into the payload. `actorId`, `commandId`,
+`campaignId`, `eventId`, `timestamp`, and `causedBy` already exist on the
+Event Envelope (§8.2); a `spent = true` flag or a generic action-type field
+would be redundant, since this Event's own existence already means the
+baseline ordinary Action was spent.
+
+#### Event causality
+
+`TurnActionSpent` is correlated to the same original `AttackCommand`
+(`command_id` unchanged, per the existing Envelope convention). Its
+Envelope `actorId` is the Attack actor. Its `causedBy` points directly to
+the Attack-resolution Event of the same branch, never to a Damage Event:
+
+```text
+Character unarmed  → causedBy = AttackResolved.eventId
+Monster Scimitar    → causedBy = MonsterAttackResolved.eventId
+Character Dagger    → causedBy = CharacterWeaponAttackResolved.eventId
+```
+
+`TurnActionSpent.causedBy` must never point at `DamageApplied` or at a
+source-Damage Event (`MonsterAttackDamageResolved`,
+`CharacterWeaponAttackDamageResolved`); the Action was spent by resolving
+the Attack, not by its optional Damage consequence.
+
+#### Event ordering
+
+Existing Attack/Damage Event chains (§3.8, §3.27, §3.32, §12.11) remain an
+unchanged prefix. `TurnActionSpent` is the last Event of a successful
+in-Combat `AttackCommand` transaction. For example:
+
+```text
+miss (any current path):
+    <Attack-resolution Event> -> TurnActionSpent
+
+Character Dagger, zero source damage:
+    CharacterWeaponAttackResolved
+    -> CharacterWeaponAttackDamageResolved
+    -> TurnActionSpent
+
+Character Dagger, positive source damage:
+    CharacterWeaponAttackResolved
+    -> CharacterWeaponAttackDamageResolved
+    -> DamageApplied
+    -> TurnActionSpent
+```
+
+The Monster Goblin Scimitar path follows the identical shape, substituting
+`MonsterAttackResolved`/`MonsterAttackDamageResolved`. The resulting
+causality graph branches — `TurnActionSpent.causedBy` still points at the
+Attack-resolution Event even when a `DamageApplied` Event, caused by an
+intermediate source-Damage Event, also exists later in the same ordered
+sequence. No existing Damage Event schema or `causedBy` edge changes.
+Outside Combat, no `TurnActionSpent` Event is produced at all, matching
+"Outside Combat" above.
+
+#### Event → State projection
+
+A future concrete pure applier, following the existing per-Event applier
+pattern (§3.18, §3.25):
+
+```text
+apply_turn_action_spent_v1(combat: CombatState, event: GameEvent) -> CombatState
+```
+
+Required integrity checks, in the same "stale-input integrity check" style
+as `apply_turn_advanced_v1`:
+
+```text
+event.type == "TurnActionSpent"
+event.version == 1
+event.payload keys == {"combatId"}
+payload.combatId == combat.id
+event.actor_id == combat.active_creature_id
+combat.action_spent == False
+```
+
+On success, it returns a replacement `CombatState` with `action_spent=True`
+(`dataclasses.replace(combat, action_spent=True)`); no other field changes.
+A failed integrity check is a propagating `TypeError`/`ValueError` — a
+programming/integrity-boundary failure, not a gameplay `EngineError`,
+exactly like the existing appliers in §§3.19–3.21 and §3.25. No
+`EventApplierRegistry` or generic reducer is introduced; this is one more
+narrow concrete applier alongside the existing ones.
+
+#### Combat start
+
+`CombatStarted` V1's Event schema and payload (§3.25) are unchanged; no
+`actionSpent` field is added to it, and no `CombatStarted` V2 is
+introduced. `action_spent` is a single field on `CombatState`, not a
+per-combatant map — it describes only the current `active_creature_id`'s
+turn, exactly like `round`/`active_index` already do. The future
+Action-aware `apply_combat_started_v1` projection therefore constructs the
+new `CombatState` with `action_spent=False`, using the field's own
+dataclass default: the first active combatant's current turn begins with
+its baseline Action unspent. This contract does not store a separate
+Action-spent fact for any other participant ahead of that participant's own
+turn; each later combatant's turn independently starts with
+`action_spent=False` only once the "Turn advancement" projection below
+makes it the active turn, not because Combat start pre-computed or reserved
+a fact for it. This is a **planned** projection for a later implementation
+task; the current production `apply_combat_started_v1` (§3.25) constructs
+`CombatState` without an `action_spent` field at all, because the field
+does not exist in production until the later State schema V8 implementation
+lands.
+
+#### Turn advancement
+
+`TurnAdvanced` V1's Event schema and payload (§3.25) are unchanged; no
+`TurnAdvanced` V2 is introduced, because no new fact needs to cross the
+Event boundary — turn advancement already identifies the new active
+combatant, and "the new active combatant's Action is unspent" is a
+State-projection rule, not a new audited fact. The future Action-aware
+`apply_turn_advanced_v1` projection updates `round`/`active_index` exactly
+as today **and** additionally resets `action_spent=False` for the new
+active turn. To avoid a stale claim: the **current** production
+`apply_turn_advanced_v1` (§3.25) changes only `round` and `active_index`,
+exactly as documented there — it does not yet reset any Action resource,
+because `action_spent` does not exist in production yet. Once this
+section's later implementation task lands (State schema V8), the same
+`TurnAdvanced` V1 Event and the same applier function additionally reset
+`action_spent=False` as part of that projection. `AdvanceTurnCommand`
+remains unconditionally allowed regardless of whether the current
+combatant's Action was spent — no `action_spent must be True` gate is
+added to it, matching the SRD's turn order continuing to advance
+regardless of what a combatant did or did not do on their turn.
+
+#### Atomicity
+
+The §3.8/§3.18 boundary is unchanged: one `AttackCommand` remains one
+logical transaction. Once implemented, every successfully resolved
+in-Combat `AttackCommand` becomes State-mutating at least because of
+`action_spent` — including the miss and zero-source-damage branches, which
+today mutate no State and call no `StateStore.save()` inside Combat. When a
+positive-damage branch also mutates target `current_hp`, the single
+replacement `StateSnapshot` passed to `StateStore.save()` must carry both
+the HP consequence and `CombatState.action_spent=True` together, saved with
+exactly one `StateStore.save()` call. Saving HP and Action separately (in
+either order), or introducing `UnitOfWork`, `TransactionManager`,
+`WorkingState`, or another generic transaction coordinator, is rejected. A
+`StateStore.save()` failure yields no successful `ResolutionResult`; neither
+the HP change nor `action_spent=True` is an authoritative persisted fact
+after a failed save.
+
+#### State schema V8 contract (planned)
+
+A future State schema V8 is additive over the current V7 (§3.30, §12.13).
+The new exact non-null Combat wire field is:
+
+```text
+actionSpent: bool
+```
+
+V8 keeps every existing V7 Combat field unchanged: `id`, `round`, `order`,
+`activeIndex`, `positions`, plus the new required `actionSpent`. **The
+current production writer remains exact V7 after this section.** This
+section defines the planned V8 contract only; it does not change
+`StateSerializer`, does not bump `SCHEMA_VERSION`, and does not retroactively
+extend the historical V5/V6/V7 wire shapes.
+
+#### Legacy compatibility (planned)
+
+Planned decode semantics for a later V8-reading implementation:
+
+```text
+V1-V4 (no CombatState)          -> no action_spent fact (no Combat exists)
+V5 active Combat                -> action_spent = False
+V6 active Combat                -> action_spent = False
+V7 active Combat                -> action_spent = False
+V8 active Combat                -> action_spent = the serialized actionSpent
+```
+
+Snapshots saved before this contract existed never recorded an authoritative
+Action-expenditure fact, and no durable Event replay exists (§12.10,
+§12.11) to reconstruct it retroactively. `False` is therefore a canonical
+compatibility default for every pre-V8 active Combat, not a recovered
+historical fact — exactly the same discipline already used for
+`weapon_proficiencies`/`inventories`/`equipment` (V1–V5) and `positions`
+(V5–V6) in §12.13. No generic migration framework is introduced.
+
+This has one explicit consequence worth stating plainly: if a legacy V5–V7
+snapshot was saved mid-turn — for example, after that turn's Attack was
+already resolved under the pre-V8 rules, which tracked no Action-expenditure
+fact at all — that historical mid-turn fact does not exist anywhere in the
+snapshot or in Event replay, and a later V8-reading implementation has no
+way to recover it. It deterministically decodes `action_spent = False`
+regardless of what actually happened mid-turn in that legacy game. This is
+a conscious compatibility trade-off, not an oversight: a deterministic
+default is preferred over either guessing at unrecorded history or refusing
+to load a legacy active Combat at all.
+
+#### Explicit exclusions
+
+This section does not design, decide, or implement:
+
+```text
+Bonus Action resources
+Reaction resources
+Opportunity Attacks
+Movement allowance or resources
+Dash, Dodge, Disengage, Ready
+Extra Attack implementation
+Action Surge implementation
+Multiattack implementation
+spell action economy
+multiple-Action grants per turn
+participant-specific Reaction lifecycle
+generic ActionResource, TurnResource, ResourcePool, or ActionCost types
+a generic action/eligibility framework
+```
+
+A Reaction cannot simply reuse this section's active-turn-scoped boolean:
+a Reaction may be taken by a combatant who is **not** the current active
+combatant, so `CombatState.action_spent` — a fact about the current
+`active_creature_id` only — cannot represent it. A Reaction resource
+contract must wait for its own concrete Reaction consumer and is not
+predetermined by this section.
+
+#### Abstraction verdict
+
+**KEEP CONCRETE.** One additional `bool` field on the existing `CombatState`
+State Owner, one new concrete `TurnActionSpent` V1 Event, and one new
+concrete applier follow the same narrow pattern §3.18/§3.25 already
+established. No generic `Action`, `ActionResource`, `TurnResource`,
+`ResourcePool`, `ActionCost`, or action/eligibility-pipeline abstraction is
+introduced; current evidence — three single-attack, single-Action
+consumers — does not justify one.
 
 ---
 
@@ -10454,6 +10885,18 @@ generic migration registry или framework не вводится. State schema 
 (`weaponProficiencies`/`inventories`/`equipment`) без изменений и добавляет
 только обязательный `combat.positions` внутри non-null `combat`; V6
 остаётся exact historical Combat shape без `positions`.
+
+State schema V8 (§3.33, TSK-0014, DEC-0049) — **planned**, decision-only
+additive Combat contract over V7: keeps every V7 Combat field
+(`id`/`round`/`order`/`activeIndex`/`positions`) unchanged and adds one new
+required `combat.actionSpent: bool`. The current production writer remains
+exact V7; §3.33 does not change `StateSerializer` or bump `SCHEMA_VERSION`.
+A legacy active Combat (V5–V7) is planned to decode to `action_spent =
+False`, following the same compatibility-default discipline as the
+`weapon_proficiencies`/`inventories`/`equipment` (V1–V5) and `positions`
+(V5–V6) defaults above, because no pre-V8 snapshot recorded an authoritative
+Action-expenditure fact and no durable Event replay exists to reconstruct
+one.
 
 ---
 
