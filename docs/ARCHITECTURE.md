@@ -5708,20 +5708,21 @@ separate eligibility contract when they are implemented.
 ### 3.29. Minimal authoritative Character weapon source (TSK-0001)
 
 Implementation status: **State/persistence foundation implemented by
-TSK-0004; Character weapon consumer remains pending.** This section defines
-the smallest authoritative weapon source required by the first future
-Character Dagger consumer.
+TSK-0004; the production Character Dagger weapon Attack consumer is
+implemented by TSK-0012.** This section defines the authoritative weapon
+source that Dagger Attack consumer uses; broader Weapon attacks beyond the
+Dagger remain open (`docs/ROADMAP.md`).
 
 Implemented: `InventoryItemState`, `InventoryState`, `EquipmentState`,
 `CharacterState.weapon_proficiencies`, `StateSnapshot.inventories`,
 `StateSnapshot.equipment`, the exact State schema V6 persistence contract
-below (§12.13), and strict V1–V5 compatibility.
+below (§12.13), strict V1–V5 compatibility, and (TSK-0012) the
+`AttackPayload` weapon fields, the Character Dagger `AttackHandler` branch,
+the `WeaponDefinition` consumer path, weapon proficiency contribution in
+Attack, and explicit Dagger Finesse execution.
 
-Still pending: the `AttackPayload` weapon fields, the Character weapon
-`AttackHandler` branch, the `WeaponDefinition` consumer path, weapon
-proficiency contribution in Attack, explicit Dagger Finesse execution, the
-§3.30 targeting/reach implementation, Weapon Attack resolution, Weapon
-Damage, and the Monster HP consequence continuation.
+Still pending: Character weapon Damage Resolution and the Monster HP
+consequence continuation (TSK-0013, §3.32).
 
 This foundation preserves the existing separation between immutable
 Definitions, runtime State, intent-level Commands, deterministic resolution,
@@ -6127,11 +6128,12 @@ code is introduced.
 #### Boundary with later implementation
 
 TSK-0004 implemented the production State classes and the State schema V6
-serializer described above. This architecture slice still does not
-implement the `AttackHandler` weapon branch, a Character weapon resolver, a
-Weapon Attack Event, a Weapon Damage Result/Event, critical-damage code,
-`DamageApplied` orchestration, Monster HP mutation, targeting/distance/reach
-(now scoped for the Dagger melee case by §3.30), Movement,
+serializer described above. TSK-0012 has since implemented the
+`AttackHandler` Dagger weapon branch, the Character Dagger weapon Attack
+resolver, the `CharacterWeaponAttackResolved` V1 Event, and production 5-ft
+reach validation (§3.30) using that State. This architecture slice still does not
+implement a Weapon Damage Result/Event, critical-damage code for Damage,
+`DamageApplied` orchestration for this path, Monster HP mutation, Movement,
 ranged/thrown/ammunition rules, a generic `AttackSource`, or generic
 modifier/equipment frameworks.
 
@@ -6143,29 +6145,33 @@ Attack Resolution
 → Damage Application
 ```
 
-The exact concrete result/Event contracts are defined by §3.32. Production
-resolver and Application orchestration remain later TSK-0012/TSK-0013 work.
-This foundation supplies authoritative inputs; it does not collapse or
-pre-implement those stages.
+The exact concrete result/Event contracts are defined by §3.32. TSK-0012
+implements the production Attack resolver and Application orchestration;
+Damage Resolution and the Monster HP consequence continuation remain later
+TSK-0013 work. This foundation supplies authoritative inputs; it does not
+collapse or pre-implement that later stage.
 
 ---
 
 ### 3.30. Minimal Phase 3 Character Dagger melee targeting and reach (TSK-0008)
 
-Implementation status: **Partially implemented.** This section defines the
-smallest authoritative targeting/reach contract required by the first
-future Character Dagger melee consumer described in §3.29.
+Implementation status: **Implemented for the first Character Dagger melee
+consumer (TSK-0012); broader targeting remains pending/deferred.** This
+section defines the authoritative targeting/reach contract that consumer
+uses.
 
 Implemented (TSK-0010): `CombatPosition`, `CombatState.positions`, and
 State schema V7 persistence (additive over V6, §12.13) — the Combat-owned
 tactical-position foundation this section requires.
 
-Still pending: the Character Dagger Weapon Attack consumer (`AttackHandler`
-branch), production 5-ft reach validation using this spatial State, the
-Weapon Attack resolver, Movement/placement lifecycle, and broader targeting
-(ranged/thrown/ammunition, cover, visibility). No production resolver or
-`AttackHandler` branch exists yet. The current production writer is State
-schema V7 (TSK-0010), additive over V6 (implemented by TSK-0004,
+Implemented (TSK-0012): the Character Dagger Weapon Attack consumer
+(`AttackHandler` branch) and production deterministic 5-ft reach validation
+using this spatial State, gating exactly the first Dagger melee consumer
+described in §3.29.
+
+Still pending/deferred: Movement/placement lifecycle and broader targeting
+(ranged/thrown/ammunition, cover, visibility). The current production writer
+is State schema V7 (TSK-0010), additive over V6 (implemented by TSK-0004,
 §3.29/§12.13); V6 remains the exact historical V5-shaped Combat wire
 contract without `positions`, preserved read-only.
 
@@ -6550,8 +6556,8 @@ V7: a non-null CombatState includes a required serialized positions array
 
 This contract is implemented by the production serializer
 (`SCHEMA_VERSION = 7`) and State classes (TSK-0010). The Character Dagger
-Attack consumer that will exercise this spatial State for targeting/reach
-validation does not exist yet (see *Implementation status* above).
+Attack consumer that exercises this spatial State for targeting/reach
+validation is implemented by TSK-0012 (see *Implementation status* above).
 
 #### Explicit exclusions / abstraction verdict
 
@@ -6826,9 +6832,11 @@ production implementation delivered by TSK-0007.
 
 ### 3.32. Minimal Phase 3 Character Dagger Attack and Damage contracts (TSK-0011)
 
-Implementation status: **Canonical contract defined; production
-implementation pending in TSK-0012 / TSK-0013.** This documentation-only
-section composes the authoritative runtime weapon source and explicit Finesse
+Implementation status: **Character weapon Attack Resolution and
+`CharacterWeaponAttackResolved` V1 implemented by TSK-0012; Character weapon
+Damage Resolution, `CharacterWeaponAttackDamageResolved` V1, and the Monster
+HP consequence continuation remain pending in TSK-0013.** This section
+composes the authoritative runtime weapon source and explicit Finesse
 choice from §3.29 with the Dagger-only melee targeting/reach contract from
 §3.30. It preserves DEC-0042's separate stages:
 
@@ -7180,11 +7188,12 @@ State schema                         remains V7
 AttackHandler outcome type           ResolutionResult[AttackResult | MonsterAttackResult]
 ```
 
-TSK-0011 defines documentation contracts only. It does not implement the
-already-approved future `AttackPayload.weapon_item_id` or
-`AttackPayload.weapon_ability` fields from §3.29 and does not cause either new
-Event to be emitted in production. TSK-0012/TSK-0013 remain the production
-implementation work.
+TSK-0011 defined documentation contracts only. TSK-0012 has since
+implemented the `AttackPayload.weapon_item_id`/`weapon_ability` fields from
+§3.29 and causes `CharacterWeaponAttackResolved` V1 to be emitted in
+production. TSK-0013 remains the production implementation work for Character
+weapon Damage Resolution, `CharacterWeaponAttackDamageResolved` V1, and the
+Monster HP consequence continuation.
 
 #### Explicit exclusions and abstraction verdict
 

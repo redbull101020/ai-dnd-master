@@ -5719,3 +5719,67 @@ already-merged delivery branch.
   authoritative only when PR #84 merges. No merge SHA is claimed; no
   production behavior, broad Roadmap capability status, or Deferred status
   changed in this closure iteration.
+
+## 2026-09-07 — TSK-0012 Character Dagger Attack production implementation
+
+- Implemented the approved §3.29/§3.30/§3.32 Character Dagger Attack-only
+  slice in production. `AttackPayload` gains optional `weapon_item_id` and
+  `weapon_ability` fields; a Character actor with `weapon_item_id is None`
+  keeps the existing unarmed path unchanged, and a non-`None` value routes to
+  a new `AttackHandler` weapon branch. The Monster path explicitly rejects
+  either Character-only weapon field with `INVALID_COMMAND`.
+- The weapon branch resolves the authoritative runtime Dagger source through
+  the exact chain `weapon_item_id → actor InventoryState →
+  InventoryItemState → actor EquipmentState (must be the equipped item) →
+  InventoryItemState.definition_id → DefinitionSource → ItemDefinition →
+  WeaponDefinition`, preserving the `DEFINITION_NOT_FOUND`/`INVALID_STATE`/
+  `ACTION_NOT_AVAILABLE` split from §3.29. Production is scoped to the
+  packaged Dagger only (`weapon_definition.id == "dagger"`); any other valid
+  `WeaponDefinition` is rejected with `ACTION_NOT_AVAILABLE` rather than
+  silently generalized.
+- Derives the conditional weapon-proficiency contribution from
+  `CharacterState.weapon_proficiencies` (proficient →
+  `character_proficiency_bonus(total_level)`, otherwise `0`, never a
+  rejection), and validates the explicit Strength-or-Dexterity Finesse choice
+  from `AttackPayload.weapon_ability` without auto-selecting the larger
+  modifier (`INVALID_COMMAND` for a missing or unsupported Ability).
+- Enforces the §3.30 Combat/spatial prerequisites and the deterministic 5-ft
+  reach policy (`is_within_melee_reach`) before RollMode derivation, any
+  `DiceEngine` call, or Event metadata allocation: required `CombatState`,
+  actor `CombatPosition`, target membership in `combat.order`, target
+  `CombatPosition`, then squared-distance reach, each mapped to the exact
+  `ErrorCode`/`entity_id`/`field` triples from §3.30.
+- Reuses unchanged `AttackResult` and `resolve_character_weapon_attack`
+  (added in the prior TSK-0012 slice) and emits exactly one
+  `CharacterWeaponAttackResolved` V1 Event on a resolved hit or miss, with
+  `weaponItemId`/`weaponDefinitionId` set from the already-resolved runtime
+  identities. No Damage roll, no `CharacterWeaponAttackDamageResolved`
+  Event, no Monster HP mutation, and no `StateStore.save()` occur on this
+  path — Damage Resolution and the Monster HP consequence continuation
+  remain TSK-0013 scope. No new generic Attack/weapon/targeting/modifier
+  abstraction was introduced.
+- Added deterministic Application unit coverage (`AttackHandler` routing,
+  authoritative lookup/error mapping, proficiency/Finesse, reach-before-roll
+  ordering, Event payload/count, absence of mutation/save) and pure Domain
+  coverage for the resolver/reach rules and the new Event builder, then real
+  production-adapter integration evidence: a valid Dagger Attack resolved
+  end to end through `FilesystemStateStore` (State schema V7),
+  `StateSerializer`, `PackagedDefinitionSource` (packaged `dnd_5e/5.1`
+  Dagger and Goblin Definitions), and `PythonDiceEngine` with a seeded
+  `random.Random` — proving exact d20 RNG consumption, the explicit
+  Dexterity Finesse choice (Str 16 / Dex 14, distinguishing it from the
+  unarmed Strength path), proficiency contribution, the single
+  `CharacterWeaponAttackResolved` V1 payload, zero `StateStore.save()`
+  calls, and a byte-identical `state.json` across the read-only Attack —
+  plus a representative out-of-range real-adapter failure
+  (`OUT_OF_RANGE`, no RNG consumption, no Event metadata allocation, no
+  save). Existing real-adapter coverage for the Character-unarmed, Monster
+  Scimitar, and Monster-consequence paths was left unchanged and still
+  passes.
+- Verification on Python 3.12.9: `pytest
+  tests/integration/test_attack_real_adapters.py` — 5 passed;
+  `pytest tests/application/test_attack_handler.py` — 74 passed;
+  `pytest tests/domain/test_attack.py` — 67 passed;
+  `pytest tests/domain/test_character_weapon_attack_event.py` — 40 passed;
+  `mypy src/dnd_engine` — no issues in 109 source files; `git diff --check`
+  — no whitespace errors.
