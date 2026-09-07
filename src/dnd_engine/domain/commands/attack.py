@@ -1,14 +1,24 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+from dnd_engine.domain.value_objects.ability import Ability
+
 
 @dataclass(frozen=True)
 class AttackPayload:
     target_id: str
+    weapon_item_id: str | None = None
+    weapon_ability: Ability | None = None
 
     def __post_init__(self) -> None:
         if type(self.target_id) is not str:
             raise TypeError("target_id must be a str")
+        if self.weapon_item_id is not None and type(self.weapon_item_id) is not str:
+            raise TypeError("weapon_item_id must be a str or None")
+        if self.weapon_ability is not None and not isinstance(
+            self.weapon_ability, Ability
+        ):
+            raise TypeError("weapon_ability must be an Ability or None")
 
 
 @dataclass(frozen=True)

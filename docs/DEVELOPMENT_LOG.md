@@ -5719,3 +5719,108 @@ already-merged delivery branch.
   authoritative only when PR #84 merges. No merge SHA is claimed; no
   production behavior, broad Roadmap capability status, or Deferred status
   changed in this closure iteration.
+
+## 2026-09-07 — TSK-0012 Character Dagger Attack production implementation
+
+- Implemented the approved §3.29/§3.30/§3.32 Character Dagger Attack-only
+  slice in production. `AttackPayload` gains optional `weapon_item_id` and
+  `weapon_ability` fields; a Character actor with `weapon_item_id is None`
+  keeps the existing unarmed path unchanged, and a non-`None` value routes to
+  a new `AttackHandler` weapon branch. The Monster path explicitly rejects
+  either Character-only weapon field with `INVALID_COMMAND`.
+- The weapon branch resolves the authoritative runtime Dagger source through
+  the exact chain `weapon_item_id → actor InventoryState →
+  InventoryItemState → actor EquipmentState (must be the equipped item) →
+  InventoryItemState.definition_id → DefinitionSource → ItemDefinition →
+  WeaponDefinition`, preserving the `DEFINITION_NOT_FOUND`/`INVALID_STATE`/
+  `ACTION_NOT_AVAILABLE` split from §3.29. Production is scoped to the
+  packaged Dagger only (`weapon_definition.id == "dagger"`); any other valid
+  `WeaponDefinition` is rejected with `ACTION_NOT_AVAILABLE` rather than
+  silently generalized.
+- Derives the conditional weapon-proficiency contribution from
+  `CharacterState.weapon_proficiencies` (proficient →
+  `character_proficiency_bonus(total_level)`, otherwise `0`, never a
+  rejection), and validates the explicit Strength-or-Dexterity Finesse choice
+  from `AttackPayload.weapon_ability` without auto-selecting the larger
+  modifier (`INVALID_COMMAND` for a missing or unsupported Ability).
+- Enforces the §3.30 Combat/spatial prerequisites and the deterministic 5-ft
+  reach policy (`is_within_melee_reach`) before RollMode derivation, any
+  `DiceEngine` call, or Event metadata allocation: required `CombatState`,
+  actor `CombatPosition`, target membership in `combat.order`, target
+  `CombatPosition`, then squared-distance reach, each mapped to the exact
+  `ErrorCode`/`entity_id`/`field` triples from §3.30.
+- Reuses unchanged `AttackResult` and `resolve_character_weapon_attack`
+  (added in the prior TSK-0012 slice) and emits exactly one
+  `CharacterWeaponAttackResolved` V1 Event on a resolved hit or miss, with
+  `weaponItemId`/`weaponDefinitionId` set from the already-resolved runtime
+  identities. No Damage roll, no `CharacterWeaponAttackDamageResolved`
+  Event, no Monster HP mutation, and no `StateStore.save()` occur on this
+  path — Damage Resolution and the Monster HP consequence continuation
+  remain TSK-0013 scope. No new generic Attack/weapon/targeting/modifier
+  abstraction was introduced.
+- Added deterministic Application unit coverage (`AttackHandler` routing,
+  authoritative lookup/error mapping, proficiency/Finesse, reach-before-roll
+  ordering, Event payload/count, absence of mutation/save) and pure Domain
+  coverage for the resolver/reach rules and the new Event builder, then real
+  production-adapter integration evidence: a valid Dagger Attack resolved
+  end to end through `FilesystemStateStore` (State schema V7),
+  `StateSerializer`, `PackagedDefinitionSource` (packaged `dnd_5e/5.1`
+  Dagger and Goblin Definitions), and `PythonDiceEngine` with a seeded
+  `random.Random` — proving exact d20 RNG consumption, the explicit
+  Dexterity Finesse choice (Str 16 / Dex 14, distinguishing it from the
+  unarmed Strength path), proficiency contribution, the single
+  `CharacterWeaponAttackResolved` V1 payload, zero `StateStore.save()`
+  calls, and a byte-identical `state.json` across the read-only Attack —
+  plus a representative out-of-range real-adapter failure
+  (`OUT_OF_RANGE`, no RNG consumption, no Event metadata allocation, no
+  save). Existing real-adapter coverage for the Character-unarmed, Monster
+  Scimitar, and Monster-consequence paths was left unchanged and still
+  passes.
+- Verification on Python 3.12.9: `pytest
+  tests/integration/test_attack_real_adapters.py` — 5 passed;
+  `pytest tests/application/test_attack_handler.py` — 74 passed;
+  `pytest tests/domain/test_attack.py` — 67 passed;
+  `pytest tests/domain/test_character_weapon_attack_event.py` — 40 passed;
+  `mypy src/dnd_engine` — no issues in 109 source files; `git diff --check`
+  — no whitespace errors.
+
+## 2026-09-07 — TSK-0012 prospective Task Closure
+
+- Prepared the normal `TASK.md` §18.1 closure for TSK-0012 in draft PR #85.
+  The implementation diff was reviewed and accepted, and the PR's required
+  CI is green.
+- Removed TSK-0012 from the open index/details, recorded it in Recently
+  completed with PR #85 evidence (no merge SHA invented, per §19), and
+  recalculated the Phase 3 queue: TSK-0013 is selected as the prospective
+  next `Current` because its sole dependency (TSK-0012) will be satisfied by
+  this exact merge, and its existing Goal/Scope/Out of scope/Acceptance
+  criteria/Verification already pass the §12 readiness gate without an
+  unresolved architectural decision. `Next` and `Hard blockers` remain
+  empty, `Next free ID` remains TSK-0014 (no new ID allocated), and
+  `Last reviewed` is set to 2026-09-07. Adding TSK-0012 to Recently
+  completed would have produced eleven rows, so the oldest entry
+  (`TSK-0001`) was removed to keep exactly ten, per the retention rule.
+- TSK-0013's `Status` field was updated to `Current` and its stale
+  future-tense "Why now" wording ("TSK-0012 will provide...") was corrected
+  to past tense; its Goal, Scope, Out of scope, Acceptance criteria,
+  Contract impact, and Verification were left exactly as previously
+  approved.
+- This prepared `Done`/`Current` state is prospective and becomes
+  authoritative only when PR #85 merges (§4.5/§18.1): TSK-0012 is not yet
+  authoritatively `Done` on `main`, and TSK-0013 implementation must not
+  begin before that merge. No new delivery branch may be based on this
+  prospective `Current`.
+- No change to `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `docs/DECISIONS.md`, `CLAUDE.md`, `README.md`,
+  production code, or tests in this closure step: the implementation-status
+  reconciliation for TSK-0012's delivered scope already landed as part of
+  PR #85's prior documentation-sync commits, so no additional
+  Roadmap/Deferred/Architecture change was required here. No gameplay
+  contract, Roadmap capability checkbox, or Deferred status changed.
+- Verification on Python 3.12.9: `pytest
+  tests/architecture/test_documentation_references.py` — 2 passed; full
+  suite — 1897 passed; `mypy src/dnd_engine` — no issues in 109 source
+  files; `git diff --check` — no whitespace errors. Confirmed the fresh
+  closure diff touches only `docs/TASK.md` and this entry.
+- No merge was performed and PR #85 was not moved out of draft; a
+  `review.patch` scoped to only the closure commit was produced for review.

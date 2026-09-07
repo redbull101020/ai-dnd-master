@@ -7,6 +7,7 @@ from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
 from dnd_engine.domain.rules.attack import (
     AttackResult,
     resolve_character_unarmed_attack,
+    resolve_character_weapon_attack,
 )
 from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.creature import CreatureState
@@ -341,6 +342,204 @@ def test_resolver_does_not_mutate_state_projections() -> None:
 
     assert creature == creature_before
     assert character == character_before
+
+
+def resolve_weapon_attack(
+    *raw_rolls: int,
+    ability: Ability = Ability.STRENGTH,
+    strength: int = 16,
+    dexterity: int = 8,
+    proficiency_bonus: int = 3,
+    target_armor_class: int = 15,
+    roll_mode: RollMode = RollMode.NORMAL,
+) -> AttackResult:
+    return resolve_character_weapon_attack(
+        make_command(),
+        make_creature(strength=strength, dexterity=dexterity),
+        make_character(),
+        ScriptedDiceEngine(*raw_rolls),
+        ability=ability,
+        proficiency_bonus=proficiency_bonus,
+        target_armor_class=target_armor_class,
+        roll_mode=roll_mode,
+    )
+
+
+def test_weapon_attack_uses_explicit_strength_ability() -> None:
+    result = resolve_weapon_attack(
+        10, ability=Ability.STRENGTH, strength=16, dexterity=20
+    )
+
+    assert result.ability is Ability.STRENGTH
+    assert result.ability_modifier == 3
+    assert result.total == 10 + 3 + 3
+
+
+def test_weapon_attack_uses_explicit_dexterity_ability() -> None:
+    result = resolve_weapon_attack(
+        10, ability=Ability.DEXTERITY, strength=16, dexterity=20
+    )
+
+    assert result.ability is Ability.DEXTERITY
+    assert result.ability_modifier == 5
+    assert result.total == 10 + 5 + 3
+
+
+def test_weapon_attack_uses_resolved_positive_proficiency_contribution() -> None:
+    result = resolve_weapon_attack(10, proficiency_bonus=3, target_armor_class=100)
+
+    assert result.proficiency_bonus == 3
+    assert result.total == 10 + 3 + 3
+
+
+def test_weapon_attack_uses_already_resolved_non_proficient_contribution() -> None:
+    result = resolve_weapon_attack(10, proficiency_bonus=0, target_armor_class=100)
+
+    assert result.proficiency_bonus == 0
+    assert result.total == 10 + 3 + 0
+
+
+def test_weapon_attack_ordinary_hit() -> None:
+    result = resolve_weapon_attack(10, target_armor_class=15)
+
+    assert result.total == 16
+    assert result.hit is True
+    assert result.critical_hit is False
+
+
+def test_weapon_attack_ordinary_miss() -> None:
+    result = resolve_weapon_attack(8, target_armor_class=15)
+
+    assert result.total == 14
+    assert result.hit is False
+    assert result.critical_hit is False
+
+
+def test_weapon_attack_natural_one_is_automatic_miss_despite_numeric_total() -> None:
+    result = resolve_weapon_attack(
+        1, strength=30, proficiency_bonus=6, target_armor_class=10
+    )
+
+    assert result.total >= result.target_armor_class
+    assert result.hit is False
+    assert result.critical_hit is False
+
+
+def test_weapon_attack_natural_twenty_is_automatic_critical_hit() -> None:
+    result = resolve_weapon_attack(
+        20, strength=1, proficiency_bonus=0, target_armor_class=100
+    )
+
+    assert result.total < result.target_armor_class
+    assert result.hit is True
+    assert result.critical_hit is True
+
+
+@pytest.mark.parametrize(
+    ("mode", "raw_rolls", "selected", "critical_hit"),
+    [
+        (RollMode.NORMAL, (12,), 12, False),
+        (RollMode.ADVANTAGE, (7, 16), 16, False),
+        (RollMode.DISADVANTAGE, (7, 16), 7, False),
+        (RollMode.ADVANTAGE, (1, 15), 15, False),
+        (RollMode.DISADVANTAGE, (20, 5), 5, False),
+        (RollMode.ADVANTAGE, (20, 5), 20, True),
+    ],
+)
+def test_weapon_attack_semantics_use_only_selected_d20(
+    mode: RollMode,
+    raw_rolls: tuple[int, ...],
+    selected: int,
+    critical_hit: bool,
+) -> None:
+    result = resolve_weapon_attack(
+        *raw_rolls, target_armor_class=10, roll_mode=mode
+    )
+
+    assert result.roll == D20Roll(mode=mode, rolls=raw_rolls, selected=selected)
+    assert result.total == selected + 3 + 3
+    assert result.hit is True
+    assert result.critical_hit is critical_hit
+
+
+def test_weapon_attack_resolver_does_not_mutate_state_projections() -> None:
+    creature = make_creature()
+    character = make_character()
+    creature_before = deepcopy(creature)
+    character_before = deepcopy(character)
+
+    resolve_character_weapon_attack(
+        make_command(),
+        creature,
+        character,
+        ScriptedDiceEngine(10),
+        ability=Ability.STRENGTH,
+        proficiency_bonus=3,
+        target_armor_class=15,
+    )
+
+    assert creature == creature_before
+    assert character == character_before
+
+
+def test_weapon_attack_resolver_rejects_wrong_ability_type() -> None:
+    dice = ScriptedDiceEngine(10)
+
+    with pytest.raises(TypeError, match="ability"):
+        resolve_character_weapon_attack(
+            make_command(),
+            make_creature(),
+            make_character(),
+            dice,
+            ability="strength",  # type: ignore[arg-type]
+            proficiency_bonus=3,
+            target_armor_class=15,
+        )
+
+    assert dice.calls == []
+
+
+@pytest.mark.parametrize("proficiency_bonus", [True, 3.0, "3", None])
+def test_weapon_attack_resolver_requires_exact_integer_proficiency_bonus(
+    proficiency_bonus: object,
+) -> None:
+    dice = ScriptedDiceEngine(10)
+
+    with pytest.raises(TypeError, match="proficiency_bonus"):
+        resolve_character_weapon_attack(
+            make_command(),
+            make_creature(),
+            make_character(),
+            dice,
+            ability=Ability.STRENGTH,
+            proficiency_bonus=proficiency_bonus,  # type: ignore[arg-type]
+            target_armor_class=15,
+        )
+
+    assert dice.calls == []
+
+
+def test_weapon_attack_resolver_rejects_negative_proficiency_bonus() -> None:
+    dice = ScriptedDiceEngine(10)
+
+    with pytest.raises(ValueError, match="proficiency_bonus must not be negative"):
+        resolve_character_weapon_attack(
+            make_command(),
+            make_creature(),
+            make_character(),
+            dice,
+            ability=Ability.STRENGTH,
+            proficiency_bonus=-1,
+            target_armor_class=15,
+        )
+
+    assert dice.calls == []
+
+
+def test_weapon_attack_resolver_output_is_exactly_attack_result() -> None:
+    result = resolve_weapon_attack(10, target_armor_class=15)
+
+    assert type(result) is AttackResult
 
 
 def canonical_result(**overrides: object) -> AttackResult:

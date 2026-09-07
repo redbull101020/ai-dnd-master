@@ -144,12 +144,15 @@ State/Value Objects **полные, минимальные и закрытые**
 | Zero-HP Attack eligibility by creature category | §3.31 |
 | Character weapon-source State + State schema V6 persistence (TSK-0004) | §3.29, §12.13 |
 | Combat-owned spatial State (`CombatPosition`, `CombatState.positions`) + State schema V7 persistence (TSK-0010) | §3.30, §12.13 |
+| Character Dagger weapon Attack consumer + `CharacterWeaponAttackResolved` V1 (TSK-0012) | §3.29, §3.30, §3.32 |
 
-Character weapon-source State/persistence и Combat-owned spatial State
-(`CombatPosition`/`CombatState.positions`, State schema V7) — реализованы;
-Character weapon Attack consumer (`AttackPayload`, `AttackHandler` branch,
-proficiency contribution, Finesse execution, §3.30 production 5-ft reach
-validation) — pending.
+Character weapon-source State/persistence, Combat-owned spatial State
+(`CombatPosition`/`CombatState.positions`, State schema V7) и production
+Character Dagger weapon Attack consumer (`AttackPayload.weapon_item_id`/
+`weapon_ability`, `AttackHandler` weapon branch, proficiency contribution,
+explicit Finesse execution, §3.30 production 5-ft reach validation,
+`CharacterWeaponAttackResolved` V1) — реализованы. Character weapon Damage
+Resolution и Monster HP consequence continuation остаются pending (TSK-0013).
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation
@@ -227,7 +230,7 @@ replay остаются отдельно deferred (§12.10, §3.18).
 
 Command — намерение, Event — свершившийся факт в прошедшем времени. Command не меняет State напрямую: она порождает Events, и уже они меняют состояние. Команда может быть отклонена или провалиться; событие описывает только то, что действительно произошло.
 
-Специфика команды живёт **только** внутри `payload`. Не выноси `targetId` или другие mechanic-specific поля на верхний уровень Envelope; current `AttackCommand` содержит только `targetId`, без `weaponId` (§3.17).
+Специфика команды живёт **только** внутри `payload`. Не выноси `targetId` или другие mechanic-specific поля на верхний уровень Envelope. Boundary/Command Envelope Attack payload несёт `targetId` и опциональные `weaponItemId`/`weaponAbility` для Character weapon Attack (§3.29, TSK-0012); typed Domain `AttackPayload` представляет их как `target_id`/`weapon_item_id`/`weapon_ability`. Ни на границе, ни в Domain caller не передаёт производные факты вроде `weaponDefinitionId` или `damageDice` — их вычисляет Engine.
 
 Command Envelope — это JSON/boundary-контракт, а не обязательный generic Python Domain-класс. После boundary validation gameplay-команда представляется отдельным immutable typed dataclass с concrete typed payload; произвольный `dict[str, Any]` не проходит внутрь rule-resolution boundary. Generic Command inheritance hierarchy на текущем этапе не вводится.
 
