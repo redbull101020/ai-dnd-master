@@ -1232,10 +1232,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0014
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0014
+- **Next free ID:** TSK-0015
 - **Last reviewed:** 2026-09-07
 
 ---
@@ -1244,12 +1244,186 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0014` | `Current` | `P1` | `M` | `architecture` | Phase 3 / Turn/action economy and turn resources | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers |
 
 ---
 
 # Open task details
 
-_No `Current`, `Ready`, or `Blocked` task at this time._
+## TSK-0014 — Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Turn/action economy and turn resources
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Turn/action economy and turn resources
+- `ARCHITECTURE.md` §3.8 (Atomicity)
+- `ARCHITECTURE.md` §3.25 (Combat Initiative/Turn Order vertical slice, G7)
+- `ARCHITECTURE.md` §3.28 (Attack active-turn eligibility)
+- `ARCHITECTURE.md` §3.31 (zero-HP Attack eligibility)
+- `ARCHITECTURE.md` §3.32 (Character Dagger Attack and Damage contracts)
+- `ARCHITECTURE.md` §10.7 (Combat State Owner — already names `turn resources` as `CombatEngine` responsibility)
+- `ARCHITECTURE.md` §12.11 (Event Ordering)
+- `ARCHITECTURE.md` §12.13 (Versioning Principle)
+- `DEC-0040` (G7 Initiative/Turn Order)
+- `DEC-0043` (Attack active-turn gate)
+- `DEC-0046` (zero-HP Attack eligibility)
+- `DEC-0048` (Character Dagger Attack/Damage contracts)
+- `TSK-0006` (evidence: production active-turn gate implementation)
+- `TSK-0012` (evidence: production Character Dagger Attack Resolution)
+- `TSK-0013` (evidence: production Character Dagger Damage Resolution / Monster HP consequence)
+
+**Depends on:** `—`
+
+**Contract impact:** `decision required before implementation`
+
+### Goal
+
+Determine and canonically fix, in `docs/ARCHITECTURE.md`, the minimal
+ordinary-Action resource contract needed by the currently implemented
+in-Combat `AttackCommand` consumers (Character unarmed §3.17, Monster
+Goblin Scimitar §§3.26–3.28, Character Dagger §3.32), so that a following
+implementation task can be refined without requiring any new architectural
+decision for this narrow scope.
+
+This task's own deliverable is the decision and the canonical Architecture
+text plus its Decision record. This task must not itself implement
+production behavior, and `docs/TASK.md` must not become a second
+`docs/ARCHITECTURE.md`: this task detail records the questions the decision
+must answer, not the answers themselves.
+
+### Why now
+
+The Roadmap `Turn/action economy and turn resources` capability is the
+next open item directly after the consumer-blocked grouped-initiative row,
+and three concrete `AttackCommand` consumers already exist
+(Character unarmed, Monster Goblin Scimitar, Character Dagger) with no
+action-resource gating at all. §10.7 already assigns `turn resources` to
+`CombatEngine` ownership, but no concrete State fact, Event, or consumer
+boundary has been defined. Per `TASK.md` §12 (Readiness gate) and §16
+(Queue selection), implementation work that would require an unresolved
+architectural decision cannot become `Ready`; resolving this decision now,
+narrowly scoped to the already-evidenced consumers, is the correct next
+`Current` slice. This task must resolve only the ordinary-Action contract
+for the already-existing Attack consumers, without pulling Extra Attack,
+Action Surge, Multiattack, Bonus Action, Reaction, or Movement into this
+slice and without predetermining their future contracts.
+
+### Scope
+
+The resulting Architecture decision/section must answer, for exactly the
+three currently implemented `AttackCommand` consumers named above:
+
+- the exact State owner and the minimal persisted State fact representing
+  an ordinary Action (per turn, per actor);
+- the first concrete consumer boundary (which existing `AttackCommand`
+  path(s) read/consume it, and where in `AttackHandler`);
+- exact validation precedence relative to the already-accepted §3.28
+  active-turn gate and §3.31 zero-HP eligibility;
+- consume vs. no-consume semantics (when an ordinary Action is spent vs.
+  not spent by an `AttackCommand`);
+- the Event contract for spending/resetting the resource and its
+  Event → State projection;
+- Event ordering/causality relative to the existing Attack/Damage Event
+  chains (§3.8, §3.27, §3.32, §12.11);
+- Combat-start initialization and turn-advance reset semantics (interaction
+  with `StartCombatCommand`/`AdvanceTurnCommand`, §3.25);
+- atomicity when Action consumption is combined with the existing
+  Damage/HP mutation in the same `AttackCommand` (§3.8);
+- the persistence/State-schema consequence (schema version impact, if any,
+  per §12.12/§12.13);
+- legacy State compatibility for snapshots saved before this contract
+  exists;
+- the exact boundary separating this narrow ordinary-Action contract from
+  Extra Attack, Action Surge, and Multiattack, so those remain undecided.
+
+Required documentation: an update to `docs/ARCHITECTURE.md` fixing the
+above as a canonical contract, and a new append-only entry in
+`docs/DECISIONS.md` recording the rationale. `docs/ROADMAP.md` may gain a
+scope-accurate row/annotation once the decision exists, per the normal
+`AGENTS.md` documentation-update discipline — but that update belongs to
+this task's own eventual execution, not to this allocation step.
+
+### Out of scope
+
+- production Python implementation of any part of this contract;
+- State schema implementation (only the schema *consequence* is decided
+  here, not written as code);
+- Bonus Actions;
+- Reactions;
+- Opportunity Attacks;
+- Movement resources;
+- Dash / Dodge / Disengage / Ready;
+- Extra Attack implementation;
+- Action Surge implementation;
+- Multiattack implementation;
+- spell action economy;
+- a generic `Action`, `ActionResource`, `TurnResource`, resource-pool, or
+  eligibility framework;
+- unrelated refactoring or infrastructure work.
+
+### Acceptance criteria
+
+- Exactly one explicit State/resource contract for an ordinary Action is
+  fixed in `docs/ARCHITECTURE.md`, with a corresponding `docs/DECISIONS.md`
+  entry.
+- The consumer boundary (which `AttackCommand` path(s), and where in
+  `AttackHandler`) and its validation precedence relative to §3.28/§3.31
+  are unambiguous.
+- Consume vs. no-consume cases for an `AttackCommand` are unambiguous.
+- The Event/State transition and its ordering/causality relative to
+  existing Attack/Damage Events are unambiguous.
+- Combat-start initialization and turn-advance reset semantics are
+  unambiguous.
+- Persistence/schema consequence and legacy-State compatibility are
+  unambiguous.
+- Extra Attack, Action Surge, and Multiattack are not accidentally
+  predetermined by this decision.
+- Bonus Action, Reaction, and Movement remain explicitly out of scope of
+  the resulting contract.
+- A following implementation task for this exact narrow slice can be
+  refined to `Ready` without requiring a further architectural decision.
+- No speculative shared abstraction (generic `Action`/resource-pool/
+  eligibility framework) is introduced by the decision.
+
+### Verification
+
+- Documentation-reference tests (`tests/architecture/`, if applicable to
+  the changed sections) pass against the updated Architecture text.
+- Manual consistency review of the new contract against current code and
+  the existing canonical contracts in §§3.25, 3.28, 3.31, 3.32, and 12.13,
+  confirming no contradiction and no silent change to any of them.
+- Confirm this task's own execution does not create canonical behavior
+  inside `docs/TASK.md` itself — canonical text lives only in
+  `docs/ARCHITECTURE.md`/`docs/DECISIONS.md`.
+- Confirm a following implementation task for this narrow slice can be
+  written and refined to `Ready` without an unresolved decision remaining
+  in this scope.
+
+### Expected touchpoints
+
+Optional planning aid; not a contract.
+
+- `docs/ARCHITECTURE.md` (new section under Phase 3 combat contracts)
+- `docs/DECISIONS.md` (new entry)
+- `docs/ROADMAP.md` (scope-accurate annotation, once the decision lands)
+- `CLAUDE.md` (only if a reproduced canonical fact changes)
+
+### Evidence / trigger
+
+Three concrete `AttackCommand` consumers (Character unarmed, Monster
+Goblin Scimitar, Character Dagger) are now production-implemented with no
+action-resource gating; this is the concrete evidence justifying resolving
+the narrow ordinary-Action contract now, ahead of any broader turn/action
+economy design.
 
 ---
 
