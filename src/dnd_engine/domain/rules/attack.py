@@ -116,3 +116,61 @@ def resolve_character_unarmed_attack(
         hit=hit,
         critical_hit=critical_hit,
     )
+
+
+def resolve_character_weapon_attack(
+    command: AttackCommand,
+    creature: CreatureState,
+    character: CharacterState,
+    dice: DiceEngine,
+    *,
+    ability: Ability,
+    proficiency_bonus: int,
+    target_armor_class: int,
+    roll_mode: RollMode = RollMode.NORMAL,
+) -> AttackResult:
+    if not isinstance(command, AttackCommand):
+        raise TypeError("command must be an AttackCommand")
+    if not isinstance(creature, CreatureState):
+        raise TypeError("creature must be a CreatureState")
+    if not isinstance(character, CharacterState):
+        raise TypeError("character must be a CharacterState")
+    if not isinstance(ability, Ability):
+        raise TypeError("ability must be an Ability")
+    if type(proficiency_bonus) is not int:
+        raise TypeError("proficiency_bonus must be an int")
+    if type(target_armor_class) is not int:
+        raise TypeError("target_armor_class must be an int")
+    if proficiency_bonus < 0:
+        raise ValueError("proficiency_bonus must not be negative")
+    if command.actor_id != creature.id:
+        raise ValueError("command actor_id must match creature id")
+    if command.actor_id != character.id:
+        raise ValueError("command actor_id must match character id")
+
+    score = getattr(creature.ability_scores, ability.value)
+    ability_mod = ability_modifier(score)
+    roll = resolve_d20_roll(dice, roll_mode)
+    total = roll.selected + ability_mod + proficiency_bonus
+
+    if roll.selected == 1:
+        hit = False
+        critical_hit = False
+    elif roll.selected == 20:
+        hit = True
+        critical_hit = True
+    else:
+        hit = total >= target_armor_class
+        critical_hit = False
+
+    return AttackResult(
+        target_id=command.payload.target_id,
+        roll=roll,
+        ability=ability,
+        ability_modifier=ability_mod,
+        proficiency_bonus=proficiency_bonus,
+        total=total,
+        target_armor_class=target_armor_class,
+        hit=hit,
+        critical_hit=critical_hit,
+    )
