@@ -5824,3 +5824,50 @@ already-merged delivery branch.
   closure diff touches only `docs/TASK.md` and this entry.
 - No merge was performed and PR #85 was not moved out of draft; a
   `review.patch` scoped to only the closure commit was produced for review.
+
+## 2026-09-07 — TSK-0013 Group 1: pure Character weapon source-Damage Domain slice
+
+- Implemented the pure Domain half of TSK-0013 per §3.32/DEC-0048: added
+  `CharacterWeaponAttackDamageResult` (`target_id`, `weapon_item_id`,
+  `weapon_definition_id`, `roll`, `ability`, `ability_modifier`,
+  `damage_type`, `critical_hit`, `amount`) and the concrete resolver
+  `resolve_character_weapon_attack_damage(attack_outcome, weapon_item_id,
+  weapon, dice)` in new
+  `src/dnd_engine/domain/rules/character_weapon_attack_damage.py`.
+- The resolver requires a successful `AttackResult`, reuses exactly
+  `attack_outcome.ability`/`ability_modifier`/`critical_hit` without
+  reselecting Strength/Dexterity or adding proficiency, and reads
+  `WeaponDefinition.damage_dice`/`damage_type` as the sole authoritative
+  damage source. Normal damage rolls the Definition's `NdM` unchanged;
+  critical damage doubles only the dice count to `(2*N)dM` and applies the
+  Ability modifier exactly once. `amount = max(0, roll.total +
+  ability_modifier)`, with `amount == 0` a valid result. Mirrors the
+  existing `resolve_monster_attack_damage` defensive-validation pattern
+  (runtime type checks, dice-response expression consistency, miss
+  rejection before any roll). No `AttackHandler` integration, source-Damage
+  Event, HP mutation, or State/StateStore access was added — those remain
+  the rest of TSK-0013.
+- No canonical contract changed: `AttackResult`, `AttackCommand`,
+  `DamageResult`, `DamageApplied`, State classes/schema, and
+  `WeaponDefinition` are unchanged. No abstraction from §3.6/DEC-0048's
+  exclusion list (`AttackSource`, `DamageSource`, `AttackContext`, a
+  generic critical-damage helper, etc.) was introduced.
+- Added `tests/domain/test_character_weapon_attack_damage.py` (27 tests)
+  covering normal/critical damage, explicit Strength and Dexterity/Finesse
+  continuity, authoritative dice/type, runtime Item and Definition identity
+  propagation, negative-modifier zero-clamping, miss rejection without a
+  roll, dice-response consistency, exact result field set/immutability/type
+  validation, inconsistent-`amount` rejection, and non-mutation of the
+  input `AttackResult`/`WeaponDefinition`.
+- Verification on Python 3.12.14: new test file — 27 passed;
+  `tests/domain/test_attack.py`, `test_monster_attack_damage.py`,
+  `test_character_weapon_attack_event.py`, `test_attack_event.py`,
+  `test_attack_command.py` — 175 passed; `mypy src/dnd_engine` — no issues
+  in 110 source files; `git diff --check` — no whitespace errors. A
+  pre-existing local Windows temp-directory permission error
+  (`pytest-of-redbu`) blocks unrelated infrastructure/integration/packaging
+  tests on this machine independent of this change (reproduced identically
+  on the unmodified base commit); it does not affect any file touched here.
+- TSK-0013 is not marked complete. No commit or push was performed; a
+  `review.patch` containing only this Group 1 slice was produced for
+  review.
