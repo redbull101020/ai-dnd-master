@@ -5783,3 +5783,44 @@ already-merged delivery branch.
   `pytest tests/domain/test_character_weapon_attack_event.py` — 40 passed;
   `mypy src/dnd_engine` — no issues in 109 source files; `git diff --check`
   — no whitespace errors.
+
+## 2026-09-07 — TSK-0012 prospective Task Closure
+
+- Prepared the normal `TASK.md` §18.1 closure for TSK-0012 in draft PR #85.
+  The implementation diff was reviewed and accepted, and the PR's required
+  CI is green.
+- Removed TSK-0012 from the open index/details, recorded it in Recently
+  completed with PR #85 evidence (no merge SHA invented, per §19), and
+  recalculated the Phase 3 queue: TSK-0013 is selected as the prospective
+  next `Current` because its sole dependency (TSK-0012) will be satisfied by
+  this exact merge, and its existing Goal/Scope/Out of scope/Acceptance
+  criteria/Verification already pass the §12 readiness gate without an
+  unresolved architectural decision. `Next` and `Hard blockers` remain
+  empty, `Next free ID` remains TSK-0014 (no new ID allocated), and
+  `Last reviewed` is set to 2026-09-07. Adding TSK-0012 to Recently
+  completed would have produced eleven rows, so the oldest entry
+  (`TSK-0001`) was removed to keep exactly ten, per the retention rule.
+- TSK-0013's `Status` field was updated to `Current` and its stale
+  future-tense "Why now" wording ("TSK-0012 will provide...") was corrected
+  to past tense; its Goal, Scope, Out of scope, Acceptance criteria,
+  Contract impact, and Verification were left exactly as previously
+  approved.
+- This prepared `Done`/`Current` state is prospective and becomes
+  authoritative only when PR #85 merges (§4.5/§18.1): TSK-0012 is not yet
+  authoritatively `Done` on `main`, and TSK-0013 implementation must not
+  begin before that merge. No new delivery branch may be based on this
+  prospective `Current`.
+- No change to `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `docs/DECISIONS.md`, `CLAUDE.md`, `README.md`,
+  production code, or tests in this closure step: the implementation-status
+  reconciliation for TSK-0012's delivered scope already landed as part of
+  PR #85's prior documentation-sync commits, so no additional
+  Roadmap/Deferred/Architecture change was required here. No gameplay
+  contract, Roadmap capability checkbox, or Deferred status changed.
+- Verification on Python 3.12.9: `pytest
+  tests/architecture/test_documentation_references.py` — 2 passed; full
+  suite — 1897 passed; `mypy src/dnd_engine` — no issues in 109 source
+  files; `git diff --check` — no whitespace errors. Confirmed the fresh
+  closure diff touches only `docs/TASK.md` and this entry.
+- No merge was performed and PR #85 was not moved out of draft; a
+  `review.patch` scoped to only the closure commit was produced for review.
