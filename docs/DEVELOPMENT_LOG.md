@@ -6209,3 +6209,43 @@ already-merged delivery branch.
 - No commit, push, or merge was performed for this group; a `review.patch`
   containing only the fresh `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
   entry was produced for review.
+
+## 2026-09-07 — TSK-0014 allocation: ordinary-Action resource contract (architecture)
+
+- On branch `claude/tsk-0014-current-turn-action-contract`
+  (base `origin/main` `c9362d5`), verified `docs/TASK.md`'s `Current
+  position` was still exactly `Current: —`, `Next: —`, `Hard blockers: —`,
+  `Next free ID: TSK-0014`, and the `Open task index`/`Open task details`
+  empty — the state `TSK-0013`'s prospective closure (previous entry) left
+  behind — and that `docs/ROADMAP.md` Phase 3 still lists the open
+  `Turn/action economy and turn resources` capability directly after the
+  consumer-blocked grouped-initiative row. The `Current`/`Ready`/`Blocked`
+  queue was confirmed empty, so no other task needed to execute first.
+- Allocated `TSK-0014` as the next `Current` task: a `Size: M`, `Priority:
+  P1`, `Group: architecture` slice whose deliverable is a canonical
+  Architecture decision — not implementation — defining the minimal
+  ordinary-Action resource contract (State owner/fact, consumer boundary,
+  validation precedence relative to §3.28/§3.31, consume/no-consume
+  semantics, Event contract and ordering, Combat-start/turn-advance reset,
+  atomicity, persistence/schema consequence, legacy compatibility) needed
+  by the three currently implemented `AttackCommand` consumers (Character
+  unarmed, Monster Goblin Scimitar, Character Dagger). Extra Attack, Action
+  Surge, Multiattack, Bonus Actions, Reactions, and Movement are explicitly
+  named out of scope so this decision does not predetermine them. `TSK-0006`
+  /`TSK-0012`/`TSK-0013` are recorded as evidence/reference, not as `Depends
+  on`. Added `TSK-0014` to `docs/TASK.md`'s `Open task index` and wrote its
+  full `Open task details` entry; set `Current: TSK-0014`, left `Next: —`
+  and `Hard blockers: —` (no other `Ready` task exists to queue), advanced
+  `Next free ID` to `TSK-0015`, and set `Last reviewed` to 2026-09-07.
+- This group changed only `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
+  entry. No production behavior or canonical Action contract was changed
+  or decided by this group: `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/ROADMAP.md`, `docs/DEFERRED.md`, `CLAUDE.md`, `README.md`,
+  production Python, and runtime tests are all untouched. `TSK-0014` itself
+  remains unimplemented; none of its acceptance criteria are claimed met by
+  this entry.
+- Verification: `pytest tests/architecture/` — 7 passed; `git diff --check`
+  — no whitespace errors.
+- No commit, push, or merge was performed for this group; a `review.patch`
+  containing only the fresh `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
+  entry was produced for review.
