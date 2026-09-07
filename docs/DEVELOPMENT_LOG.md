@@ -5871,3 +5871,58 @@ already-merged delivery branch.
 - TSK-0013 is not marked complete. No commit or push was performed; a
   `review.patch` containing only this Group 1 slice was produced for
   review.
+
+## 2026-09-07 — TSK-0013 Group 2: `CharacterWeaponAttackDamageResolved` V1 Event
+
+- Implemented the concrete Character weapon source-Damage Event contract
+  fixed by §3.32/DEC-0048: added
+  `CharacterWeaponAttackDamageResolvedPayloadV1` (`target_id`,
+  `weapon_item_id`, `weapon_definition_id`, `roll`, `ability`,
+  `ability_modifier`, `damage_type`, `critical_hit`, `amount`) and
+  `build_character_weapon_attack_damage_resolved_v1(...)` in new
+  `src/dnd_engine/domain/events/character_weapon_attack_damage.py`.
+- The builder consumes Event metadata, the original `AttackCommand`, the
+  Group 1 `CharacterWeaponAttackDamageResult`, and an explicit `caused_by`;
+  it emits `type="CharacterWeaponAttackDamageResolved"`, `version=1`, the
+  original `command_id`/`campaign_id`/`actor_id`, and requires `caused_by`
+  to be a non-null `str`, which it records unchanged on the Event (a
+  required `str`, never `None`, mirroring
+  `build_monster_attack_damage_resolved_v1`). The builder itself does not
+  verify that `caused_by` is the immediately preceding
+  `CharacterWeaponAttackResolved.event_id`; supplying that exact value is
+  the responsibility of the future Application orchestration required by
+  §3.32, not of this Group 2 builder. It validates that the outcome
+  `target_id` matches the Command payload target and that the outcome
+  `weapon_item_id` matches the Command's selected `weapon_item_id`; it does
+  not accept or re-validate `weaponDefinitionId` against the Command,
+  because that fact is Engine-resolved by Group 1, never caller intent.
+  `roll` serializes using the existing `DiceRoll` wire shape
+  (`expression`/`rolls`/`total`); `ability`/`damageType` serialize by
+  `.value`. The payload carries no `proficiencyBonus`, Attack `total`,
+  target Armor Class, `previousHp`, or `newHp`; a zero `amount` remains a
+  valid Event. `CharacterWeaponAttackResolved` V1, `DamageApplied` V1,
+  `AttackResult`, and `DamageResult` are unchanged; no Event registry,
+  generic payload inheritance, or generic source-Damage Event was
+  introduced, and `EventSerializer` required no change.
+- Added `tests/domain/test_character_weapon_attack_damage_event.py`
+  (26 tests) covering exact `type`/`version`/`commandId`/campaign/actor
+  correlation, exact immediate `causedBy`, exact canonical payload field
+  set, exact `DiceRoll` representation, `Ability`/`DamageType`
+  by-value serialization, runtime weapon Item and Definition identity,
+  zero-amount validity, absence of `previousHp`/`newHp`/`proficiencyBonus`,
+  target and weapon-Item mismatch rejection, invalid `caused_by` rejection,
+  payload exact fields/immutability/runtime-type validation, inconsistent-
+  `amount` rejection, generic `GameEvent` immutability, and
+  `EventSerializer.serialize()` producing the exact JSON-compatible
+  payload.
+- No `AttackHandler` integration and no Monster HP mutation were added in
+  this group; those remain the rest of TSK-0013.
+- Verification on Python 3.12.14: new Event test file — 26 passed;
+  `test_character_weapon_attack_damage.py`,
+  `test_character_weapon_attack_event.py`, `test_monster_attack_damage_event.py`,
+  `test_attack_event.py`, `test_monster_attack_damage.py`, `test_attack.py`,
+  `test_damage_event.py` — 241 passed together; `mypy src/dnd_engine` — no
+  issues in 111 source files; `git diff --check` — no whitespace errors.
+- TSK-0013 is not marked complete. No commit or push was performed for
+  this group; a `review.patch` containing only the fresh Group 2 changes
+  was produced for review.
