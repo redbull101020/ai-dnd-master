@@ -1235,7 +1235,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 - **Current:** TSK-0016
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0017
+- **Next free ID:** TSK-0018
 - **Last reviewed:** 2026-09-09
 
 ---
@@ -1245,6 +1245,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
 | `TSK-0016` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define minimal Character zero-HP turn and Death Save contract |
+| `TSK-0017` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement minimal Character Death Save vertical slice |
 
 ---
 
@@ -1396,6 +1397,45 @@ TSK-0016 считается выполненным только когда:
 - `git diff --check`;
 - проверка, что production Python не менялся;
 - проверка итогового diff на отсутствие несвязанных изменений.
+
+## TSK-0017 — Implement minimal Character Death Save vertical slice
+
+**Status:** `Backlog`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `mechanics`
+
+**Roadmap target:** Phase 3 / Zero-HP and combatant eligibility
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
+- `ARCHITECTURE.md` §3.25
+- `ARCHITECTURE.md` §3.31
+- `DEFERRED.md` — `DEF-0005`
+- `DEFERRED.md` — `DEF-0015`
+
+**Depends on:** `TSK-0016`
+
+**Contract impact:** `none`
+
+### Goal
+
+Implement the canonical minimal Character zero-HP turn / Death Save
+contract accepted by TSK-0016 through deterministic Domain/Application/
+Event/State/persistence behavior and automated tests. Не фиксируй сейчас
+точные Command/Event/class/schema поля: они должны следовать из принятого
+результата TSK-0016.
+
+### Evidence / trigger
+
+TSK-0017 должен оставаться `Backlog` до тех пор, пока TSK-0016 не станет
+`Done`. Перед переводом в `Ready` требуется отдельный refinement pass,
+который сформирует точные `Scope`, `Out of scope`, `Acceptance criteria` и
+`Verification` из уже принятого канонического контракта TSK-0016.
 
 ---
 
