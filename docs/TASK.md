@@ -1297,8 +1297,16 @@ Character имеет `current_hp == 0` и является текущим
   получить активный ход.
 - `DEF-0005` прямо оставляет открытым минимальный timing/ownership contract
   для Death Saving Throws.
-- Это уже реальный current-phase consumer, поэтому его надо определить
-  раньше более позднего Movement/Reaction scope.
+- Более ранний открытый `Combat lifecycle / CombatEnded` сейчас не является
+  более готовым concrete slice, потому что authoritative
+  combat-end/removal criteria пересекаются с ещё не определённой
+  zero-HP/combatant lifecycle semantics.
+- TSK-0016 сам `CombatEnded` не определяет.
+- TSK-0016 закрывает более конкретный уже существующий zero-HP turn
+  boundary.
+- После TSK-0016/его реализации frontier должен быть пересмотрен.
+- Это уже реальный current-phase production boundary, поэтому его надо
+  определить раньше более позднего Movement/Reaction scope.
 - Не создавай generic lifecycle abstraction.
 
 ### Scope
