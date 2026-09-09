@@ -23,6 +23,7 @@ class CombatState:
     order: tuple[str, ...]
     active_index: int
     positions: tuple[CombatPosition, ...] = ()
+    action_spent: bool = False
 
     def __post_init__(self) -> None:
         if type(self.id) is not str:
@@ -56,6 +57,8 @@ class CombatState:
             raise ValueError(
                 "every positioned creature must be present in order"
             )
+        if type(self.action_spent) is not bool:
+            raise TypeError("action_spent must be a bool")
 
     @property
     def active_creature_id(self) -> str:

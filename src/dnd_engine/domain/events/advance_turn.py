@@ -129,4 +129,9 @@ def apply_turn_advanced_v1(
         raise ValueError("event previousRound must match combat round")
 
     new_active_index = combat.order.index(decoded.active_creature_id)
-    return replace(combat, round=decoded.round, active_index=new_active_index)
+    return replace(
+        combat,
+        round=decoded.round,
+        active_index=new_active_index,
+        action_spent=False,
+    )

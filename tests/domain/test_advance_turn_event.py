@@ -153,6 +153,24 @@ def test_applier_preserves_positions_and_order_while_advancing() -> None:
     assert updated.positions == positions
 
 
+def test_applier_resets_action_spent_to_false_on_turn_advance() -> None:
+    combat = make_combat(active_index=0, round=1, action_spent=True)
+    event = build_event()
+
+    updated = apply_turn_advanced_v1(combat, event)
+
+    assert updated.action_spent is False
+
+
+def test_applier_keeps_action_spent_false_when_already_false() -> None:
+    combat = make_combat(active_index=0, round=1, action_spent=False)
+    event = build_event()
+
+    updated = apply_turn_advanced_v1(combat, event)
+
+    assert updated.action_spent is False
+
+
 def test_applier_advances_round_on_wraparound() -> None:
     combat = make_combat(order=("character_001", "monster_001"), active_index=1, round=1)
     event = build_turn_advanced_v1(

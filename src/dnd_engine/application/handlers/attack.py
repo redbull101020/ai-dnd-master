@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from dnd_engine.application.services.event_metadata import EventMetadataProvider
 from dnd_engine.application.services.state_snapshot import (
     replace_creature_in_snapshot,
@@ -18,11 +20,16 @@ from dnd_engine.domain.events.damage import (
     apply_damage_applied_v1,
     build_damage_applied_from_attack_v1,
 )
+from dnd_engine.domain.events.game_event import GameEvent
 from dnd_engine.domain.events.monster_attack import (
     build_monster_attack_resolved_v1,
 )
 from dnd_engine.domain.events.monster_attack_damage import (
     build_monster_attack_damage_resolved_v1,
+)
+from dnd_engine.domain.events.turn_action_spent import (
+    apply_turn_action_spent_v1,
+    build_turn_action_spent_v1,
 )
 from dnd_engine.domain.resolution import ResolutionResult
 from dnd_engine.domain.rules.armor_class import unarmored_character_armor_class
@@ -58,6 +65,7 @@ from dnd_engine.domain.services.definitions import (
 from dnd_engine.domain.services.dice import DiceEngine
 from dnd_engine.domain.services.state_store import StateStore
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability import Ability
@@ -123,6 +131,24 @@ class AttackHandler:
                 ),
             )
 
+        if snapshot.combat is not None and snapshot.combat.action_spent:
+            return ResolutionResult(
+                success=False,
+                command_id=command.command_id,
+                outcome=None,
+                events=(),
+                errors=(
+                    EngineError(
+                        code=ErrorCode.ACTION_NOT_AVAILABLE,
+                        message=(
+                            "Attack actor has already spent this turn's "
+                            "ordinary Action."
+                        ),
+                        entity_id=command.actor_id,
+                    ),
+                ),
+            )
+
         actor_character = next(
             (
                 candidate
@@ -138,6 +164,39 @@ class AttackHandler:
             )
 
         return self._handle_monster_attack(command, snapshot, actor_creature)
+
+    def _consume_ordinary_action(
+        self,
+        *,
+        command: AttackCommand,
+        snapshot: StateSnapshot,
+        combat: CombatState,
+        events: tuple[GameEvent, ...],
+        caused_by: str,
+        replacement_target: CreatureState | None,
+    ) -> tuple[GameEvent, ...]:
+        metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
+        turn_action_spent_event = build_turn_action_spent_v1(
+            event_id=metadata.event_id,
+            timestamp=metadata.timestamp,
+            command=command,
+            combat_id=combat.id,
+            caused_by=caused_by,
+        )
+        replacement_combat = apply_turn_action_spent_v1(
+            combat, turn_action_spent_event
+        )
+
+        replacement_snapshot = (
+            snapshot
+            if replacement_target is None
+            else replace_creature_in_snapshot(snapshot, replacement_target)
+        )
+        replacement_snapshot = replace(replacement_snapshot, combat=replacement_combat)
+
+        self._state_store.save(replacement_snapshot)
+
+        return events + (turn_action_spent_event,)
 
     def _handle_character_attack(
         self,
@@ -265,11 +324,22 @@ class AttackHandler:
                 outcome=outcome,
             )
 
+            events: tuple[GameEvent, ...] = (event,)
+            if snapshot.combat is not None:
+                events = self._consume_ordinary_action(
+                    command=command,
+                    snapshot=snapshot,
+                    combat=snapshot.combat,
+                    events=events,
+                    caused_by=event.event_id,
+                    replacement_target=None,
+                )
+
             return ResolutionResult(
                 success=True,
                 command_id=command.command_id,
                 outcome=outcome,
-                events=(event,),
+                events=events,
                 errors=(),
             )
 
@@ -627,7 +697,14 @@ class AttackHandler:
                 success=True,
                 command_id=command.command_id,
                 outcome=outcome,
-                events=(attack_event,),
+                events=self._consume_ordinary_action(
+                    command=command,
+                    snapshot=snapshot,
+                    combat=combat,
+                    events=(attack_event,),
+                    caused_by=attack_event.event_id,
+                    replacement_target=None,
+                ),
                 errors=(),
             )
 
@@ -647,7 +724,14 @@ class AttackHandler:
                 success=True,
                 command_id=command.command_id,
                 outcome=outcome,
-                events=(attack_event, damage_event),
+                events=self._consume_ordinary_action(
+                    command=command,
+                    snapshot=snapshot,
+                    combat=combat,
+                    events=(attack_event, damage_event),
+                    caused_by=attack_event.event_id,
+                    replacement_target=None,
+                ),
                 errors=(),
             )
 
@@ -663,17 +747,19 @@ class AttackHandler:
         )
 
         replacement_target = apply_damage_applied_v1(target, application_event)
-        replacement_snapshot = replace_creature_in_snapshot(
-            snapshot,
-            replacement_target,
-        )
-        self._state_store.save(replacement_snapshot)
 
         return ResolutionResult(
             success=True,
             command_id=command.command_id,
             outcome=outcome,
-            events=(attack_event, damage_event, application_event),
+            events=self._consume_ordinary_action(
+                command=command,
+                snapshot=snapshot,
+                combat=combat,
+                events=(attack_event, damage_event, application_event),
+                caused_by=attack_event.event_id,
+                replacement_target=replacement_target,
+            ),
             errors=(),
         )
 
@@ -870,11 +956,21 @@ class AttackHandler:
         )
 
         if damage_outcome is None:
+            events: tuple[GameEvent, ...] = (attack_event,)
+            if snapshot.combat is not None:
+                events = self._consume_ordinary_action(
+                    command=command,
+                    snapshot=snapshot,
+                    combat=snapshot.combat,
+                    events=events,
+                    caused_by=attack_event.event_id,
+                    replacement_target=None,
+                )
             return ResolutionResult(
                 success=True,
                 command_id=command.command_id,
                 outcome=outcome,
-                events=(attack_event,),
+                events=events,
                 errors=(),
             )
 
@@ -890,11 +986,21 @@ class AttackHandler:
         )
 
         if damage_result is None:
+            events = (attack_event, damage_event)
+            if snapshot.combat is not None:
+                events = self._consume_ordinary_action(
+                    command=command,
+                    snapshot=snapshot,
+                    combat=snapshot.combat,
+                    events=events,
+                    caused_by=attack_event.event_id,
+                    replacement_target=None,
+                )
             return ResolutionResult(
                 success=True,
                 command_id=command.command_id,
                 outcome=outcome,
-                events=(attack_event, damage_event),
+                events=events,
                 errors=(),
             )
 
@@ -910,16 +1016,27 @@ class AttackHandler:
         )
 
         replacement_target = apply_damage_applied_v1(target, application_event)
-        replacement_snapshot = replace_creature_in_snapshot(
-            snapshot,
-            replacement_target,
-        )
-        self._state_store.save(replacement_snapshot)
+        events = (attack_event, damage_event, application_event)
+        if snapshot.combat is not None:
+            events = self._consume_ordinary_action(
+                command=command,
+                snapshot=snapshot,
+                combat=snapshot.combat,
+                events=events,
+                caused_by=attack_event.event_id,
+                replacement_target=replacement_target,
+            )
+        else:
+            replacement_snapshot = replace_creature_in_snapshot(
+                snapshot,
+                replacement_target,
+            )
+            self._state_store.save(replacement_snapshot)
 
         return ResolutionResult(
             success=True,
             command_id=command.command_id,
             outcome=outcome,
-            events=(attack_event, damage_event, application_event),
+            events=events,
             errors=(),
         )

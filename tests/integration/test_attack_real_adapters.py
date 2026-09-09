@@ -339,7 +339,11 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     FilesystemStateStore reload -- alongside an untouched CombatState and
     untouched unrelated Creature/Character projections -- using the real
     FilesystemStateStore, PackagedDefinitionSource, and PythonDiceEngine
-    adapters end to end."""
+    adapters end to end. Also carries the TSK-0015 §3.33 real-adapter
+    evidence: the same reload proves `combat.action_spent is True`
+    alongside the HP change from one combined save, and a second Attack
+    by the same still-active actor is then rejected purely from that
+    reloaded persisted fact."""
     campaigns_root = tmp_path / "campaigns"
 
     goblin_actor = CreatureState(
@@ -473,7 +477,7 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
         event_metadata_provider=metadata,
     ).handle(command)
 
-    assert metadata.calls == ["campaign_001"] * 3
+    assert metadata.calls == ["campaign_001"] * 4
     assert result.success is True
     assert result.errors == ()
     outcome = result.outcome
@@ -486,19 +490,33 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     assert outcome.critical_hit is False
 
     # (6) Events are ordered MonsterAttackResolved -> MonsterAttackDamageResolved
-    # -> DamageApplied.
+    # -> DamageApplied -> TurnActionSpent (§3.33/TSK-0015).
     assert [event.type for event in result.events] == [
         "MonsterAttackResolved",
         "MonsterAttackDamageResolved",
         "DamageApplied",
+        "TurnActionSpent",
     ]
-    attack_event, damage_event, applied_event = result.events
+    attack_event, damage_event, applied_event, action_spent_event = result.events
 
-    # (7) causedBy chain is exact.
+    # (7) causedBy chain is exact; TurnActionSpent is caused by the Attack
+    # resolution Event, never by the Damage chain.
     assert attack_event.caused_by is None
     assert damage_event.caused_by == attack_event.event_id
     assert applied_event.caused_by == damage_event.event_id
-    assert len({attack_event.event_id, damage_event.event_id, applied_event.event_id}) == 3
+    assert action_spent_event.caused_by == attack_event.event_id
+    assert action_spent_event.payload == {"combatId": "combat_001"}
+    assert (
+        len(
+            {
+                attack_event.event_id,
+                damage_event.event_id,
+                applied_event.event_id,
+                action_spent_event.event_id,
+            }
+        )
+        == 4
+    )
 
     assert attack_event.payload == {
         "targetId": "character_001",
@@ -552,12 +570,16 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     assert reloaded_target.current_hp == expected_previous_hp - expected_damage_amount
     assert reloaded_target.max_hp == character_target.max_hp
 
-    # (3)/(4) CombatState still exists and is byte-for-byte unchanged.
+    # (3)/(4) CombatState still exists and is otherwise unchanged, except for
+    # the Action this successful in-Combat Attack spent.
     assert reloaded.combat is not None
     assert reloaded.combat.id == combat.id
     assert reloaded.combat.round == combat.round
     assert reloaded.combat.order == combat.order
     assert reloaded.combat.active_index == combat.active_index
+    # State schema V8 (`actionSpent`, §3.33/DEC-0049) persists Action
+    # expenditure through a real filesystem reload.
+    assert reloaded.combat.action_spent is True
 
     # (5) no unrelated Creature/Character projection changed.
     reloaded_actor = next(
@@ -585,6 +607,29 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
         if path.is_file()
     ) == ["state.json"]
     assert list(state_path.parent.glob(".state-*.tmp")) == []
+
+    # (9) TSK-0015 end-to-end persisted-eligibility proof: the
+    # `action_spent=True` fact just reloaded from real V8 JSON (not the
+    # in-memory result above) is what gates a second Attack by the same
+    # still-active actor, rejected before any Definition/dice/Event/save
+    # side effect. The exact side-effect boundary itself is already proven
+    # by the Application unit tests (Group 2); this proves the real
+    # writer/reader round trip actually feeds that gate.
+    second_result = AttackHandler(
+        state_store=FilesystemStateStore(campaigns_root),
+        definition_source=PackagedDefinitionSource(),
+        dice=PythonDiceEngine(rng),
+        event_metadata_provider=metadata,
+    ).handle(command)
+
+    assert second_result.success is False
+    assert second_result.outcome is None
+    assert second_result.events == ()
+    assert len(second_result.errors) == 1
+    assert second_result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert second_result.errors[0].entity_id == "monster_001"
+    assert metadata.calls == ["campaign_001"] * 4
+    assert state_path.read_bytes() == state_after
 
 
 # --- Character Dagger weapon Attack (TSK-0012/TSK-0013 Group 4) -------
@@ -713,7 +758,7 @@ def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     # exactly the expected 1d20 + 1d4 sequence was consumed -- no hidden
     # additional RNG calls.
     assert rng.getstate() == expected_rng.getstate()
-    assert metadata.calls == ["campaign_001"] * 3
+    assert metadata.calls == ["campaign_001"] * 4
 
     assert result.success is True
     assert result.errors == ()
@@ -735,22 +780,34 @@ def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     assert outcome.critical_hit is False
 
     # exact Event order: CharacterWeaponAttackResolved ->
-    # CharacterWeaponAttackDamageResolved -> DamageApplied.
+    # CharacterWeaponAttackDamageResolved -> DamageApplied ->
+    # TurnActionSpent (§3.33/TSK-0015).
     assert [event.type for event in result.events] == [
         "CharacterWeaponAttackResolved",
         "CharacterWeaponAttackDamageResolved",
         "DamageApplied",
+        "TurnActionSpent",
     ]
-    attack_event, damage_event, applied_event = result.events
+    attack_event, damage_event, applied_event, action_spent_event = result.events
 
     # exact immediate causedBy chain; DamageApplied never skips the
-    # source-Damage Event.
+    # source-Damage Event; TurnActionSpent is caused by the Attack
+    # resolution Event, never by the Damage chain.
     assert attack_event.caused_by is None
     assert damage_event.caused_by == attack_event.event_id
     assert applied_event.caused_by == damage_event.event_id
+    assert action_spent_event.caused_by == attack_event.event_id
+    assert action_spent_event.payload == {"combatId": "combat_001"}
     assert (
-        len({attack_event.event_id, damage_event.event_id, applied_event.event_id})
-        == 3
+        len(
+            {
+                attack_event.event_id,
+                damage_event.event_id,
+                applied_event.event_id,
+                action_spent_event.event_id,
+            }
+        )
+        == 4
     )
     assert all(event.command_id == command.command_id for event in result.events)
     assert all(event.campaign_id == "campaign_001" for event in result.events)
@@ -845,6 +902,9 @@ def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     assert reloaded.combat.order == combat.order
     assert reloaded.combat.active_index == combat.active_index
     assert reloaded.combat.positions == combat.positions
+    # State schema V8 (`actionSpent`, §3.33/DEC-0049) persists Action
+    # expenditure through a real filesystem reload.
+    assert reloaded.combat.action_spent is True
 
     # no Event history artifacts, no other files, no leftover temp files.
     assert sorted(

@@ -6441,3 +6441,126 @@ already-merged delivery branch.
 - No commit, push, or merge was performed for this group; a `review.patch`
   containing only the fresh `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md`
   entry was produced for review.
+
+## 2026-09-09 — TSK-0015 production implementation: current-turn ordinary Action expenditure
+
+- Implemented the already-approved §3.33/DEC-0049 contract (TSK-0014) in
+  production for the three currently implemented in-Combat `AttackCommand`
+  consumers (Character unarmed, Monster Goblin Scimitar, Character Dagger),
+  across four groups on branch `claude/tsk-0015-current-turn-action-expenditure`
+  (base `origin/main` at `05f9dec`).
+- **Group 1 (Domain):** added `CombatState.action_spent: bool = False` with
+  strict `type(...) is bool` validation, preserving existing invariants;
+  implemented `TurnActionSpent` V1 (`combatId` payload only) with its
+  builder `build_turn_action_spent_v1` and pure applier
+  `apply_turn_action_spent_v1` (integrity checks: type/version/payload-keys/
+  `combatId`-match/actor-is-active-combatant/not-already-spent; a failure is
+  `TypeError`/`ValueError`, never `EngineError`); made
+  `apply_turn_advanced_v1` additionally reset `action_spent=False` for the
+  new active turn. `apply_combat_started_v1` required no code change, since
+  the new field's own dataclass default already yields `action_spent=False`.
+  New/extended tests in `tests/domain/test_combat_state.py`,
+  `tests/domain/test_turn_action_spent_event.py` (new),
+  `tests/domain/test_start_combat_event.py`,
+  `tests/domain/test_advance_turn_event.py`.
+- **Group 2 (Application):** added the ordinary-Action availability gate to
+  `AttackHandler.handle()` immediately after the existing §3.28 active-turn
+  gate (`ACTION_NOT_AVAILABLE`, no Definition/dice/Event/save side effects
+  on rejection); added a narrow private `_consume_ordinary_action` helper
+  (local to `AttackHandler`, not a Domain/generic abstraction) that builds
+  `TurnActionSpent`, applies it to the loaded `CombatState`, combines it
+  with any HP replacement into one `StateSnapshot`, and calls
+  `StateStore.save()` exactly once — reused across all three consumers'
+  miss/hit/critical/zero-damage/positive-damage branches, so every
+  successfully resolved in-Combat Attack (including the previously
+  non-mutating miss/zero-damage branches) now persists `action_spent=True`
+  with `TurnActionSpent` appended last to the existing Event chain,
+  `causedBy` the Attack-resolution Event, never a Damage Event. Ten
+  existing `tests/application/test_attack_handler.py` tests were updated to
+  the new event/save counts this introduces; four new tests were added
+  (gate rejection, Monster miss-in-combat consumption, Monster
+  zero-damage-in-combat consumption, miss-in-combat save-failure). Outside-
+  Combat behavior for all three consumers is unchanged, proven by the many
+  pre-existing outside-Combat tests passing unmodified.
+- **Group 3 (Persistence):** implemented exact additive State schema V8
+  (`SCHEMA_V8_VERSION = 8`, now `SCHEMA_VERSION`): non-null Combat gains
+  exactly one new required field, `actionSpent: bool`; added `_require_bool`
+  and used it both to decode `actionSpent` and to re-validate
+  `combat.action_spent` in `_validate_combat` (mutation defense, matching
+  the existing `order`/`positions` guards). Audited and updated every
+  version-membership branch that needed to reuse the unchanged V6/V7 shapes
+  for V8 (top-level state fields, Character `weaponProficiencies`,
+  `inventories`/`equipment`, Combat presence/`positions`/new `actionSpent`
+  gate, Creature `conditions`). V5/V6/V7 active Combat decodes
+  `action_spent=False` as the canonical compatibility default (not a
+  reconstruction of historical fact); V1–V4 are unaffected. Historical
+  `CANONICAL_V7_DATA`/`V7_COMBAT_DATA`/`v7_data()` fixtures were preserved
+  byte-identical (only comments updated) and new
+  `CANONICAL_V8_DATA`/`V8_COMBAT_DATA`/`v8_data()` fixtures were added
+  alongside; the four existing future-schema-bump sentinel tests were moved
+  from a hypothetical `SCHEMA_VERSION = 8` to `9` now that 8 is real, and a
+  fifth sentinel test for V8 was added following the same established
+  pattern. `tests/infrastructure/test_state_serializer.py` and
+  `tests/infrastructure/test_state_store.py` were updated/extended
+  accordingly; two Group 2 real-adapter integration assertions (which had
+  documented the then-true "V7 writer does not persist `action_spent`" gap)
+  were corrected to `action_spent is True` after reload, since V8 closes
+  that gap.
+- **Group 4 (real-adapter evidence and documentation sync):** extended the
+  existing real-adapter
+  `test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters`
+  (real `FilesystemStateStore`, `PackagedDefinitionSource`,
+  `PythonDiceEngine`, production `AttackHandler`) with one additional proof
+  on top of Group 3's changes to that same test: after the real filesystem
+  reload shows `combat.action_spent is True` alongside the persisted HP
+  change from one combined save, a second `AttackCommand` from the same
+  still-active actor is issued through a **fresh** `FilesystemStateStore`
+  and is rejected with `ACTION_NOT_AVAILABLE` before any further
+  Definition/dice/Event/save side effect (`result.events == ()`,
+  `metadata.calls` unchanged, `state.json` bytes unchanged) — proving the
+  persisted V8 eligibility fact, not just the in-memory one, actually
+  drives the gate. No new integration fixture or spy layer was introduced;
+  the exact side-effect boundary itself remains the Application unit
+  tests' responsibility (Group 2). Audited existing coverage across every
+  Domain/Application/Persistence/Integration acceptance category from
+  TSK-0015's `docs/TASK.md` entry and found no other gap, so no other test
+  was added.
+- Updated documentation to reflect actually-implemented (not planned)
+  behavior, without reopening §3.33/DEC-0049: `docs/ARCHITECTURE.md` §3.33's
+  Implementation status changed from "Decision only" to "implemented in
+  production by TSK-0015" (the Combat start/Turn advancement/Atomicity/
+  State schema V8 contract/Legacy compatibility subsections were rewritten
+  from future/planned tense to implemented-fact tense, with no semantic
+  change to the contract itself), plus cross-references in
+  §3.25/§3.28/§3.29/§3.30/§12.13 that previously said "V7 remains the
+  current production writer" or "decision only" were updated to name V8 as
+  current and V7 as historical; the §12.13 exact-shape enumeration was
+  extended from seven to eight versions with V8's exact field-by-field
+  facts, and the `SCHEMA_VERSION` fixed-identity-constant discussion now
+  lists `SCHEMA_V8_VERSION`. `docs/ROADMAP.md`'s `Turn/action economy and
+  turn resources` row text was updated to record the production
+  implementation while the row itself stays unchecked (`[ ]`), since Bonus
+  Actions/Reactions/Movement/Extra Attack/Action Surge/Multiattack/the
+  broader action economy remain open; no other row was changed. `CLAUDE.md`'s
+  implemented-contracts index gained one row (`§3.33, §12.13`) plus one
+  short paragraph on the current V8 writer and the narrow consumer scope,
+  without duplicating §3.33's full contract. `README.md` was reviewed and
+  left unchanged: it names no schema version and no Action-expenditure
+  status, so nothing in it was stale. `docs/DECISIONS.md`, `docs/TASK.md`,
+  and `docs/DEFERRED.md` were left unchanged, as required: DEC-0049 is
+  being implemented, not amended or superseded; TSK-0015 is not marked
+  `Done` or closed in this group; no Deferred concern is exactly resolved
+  by this narrow slice.
+- Verification (Python 3.12.9, `--basetemp` pointed outside the repo to
+  work around this machine's pre-existing local Windows `pytest-of-redbu`
+  temp-directory `PermissionError`, unrelated to this change): full
+  `pytest` — 1997 passed; `pytest tests/architecture/` — 7 passed
+  (documentation §-reference/link-anchor consistency); `mypy
+  src/dnd_engine` — no issues in 112 source files; `git diff --check` — no
+  whitespace errors. Cumulative branch diff against `origin/main`
+  (`05f9dec`) was reviewed and contains only TSK-0015-relevant files; no
+  generic Action/resource framework, `UnitOfWork`/`TransactionManager`, new
+  dependency, or unrelated refactor was introduced at any group.
+- TSK-0015 is not marked complete and Task Closure is not asserted by this
+  entry. No commit or push was performed for this group; a `review.patch`
+  containing only the fresh Group 4 changes was produced for review.

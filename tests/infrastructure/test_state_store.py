@@ -172,7 +172,7 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 7
+    assert data["schemaVersion"] == 8
     assert data["state"]["characters"] == []
     assert data["state"]["inventories"] == []
     assert data["state"]["equipment"] == []
@@ -228,15 +228,16 @@ def test_save_load_v3_preserves_character_state(tmp_path: Path) -> None:
     assert store.load("campaign_001") == original
 
 
-def test_save_load_v7_preserves_weapon_source_state_and_combat_positions(
+def test_save_load_v8_preserves_weapon_source_state_combat_positions_and_action_spent(
     tmp_path: Path,
 ) -> None:
-    """Real filesystem V7 proof (TSK-0004 weapon-source State plus TSK-0010
-    Combat.positions, §3.30/DEC-0045): proves non-empty
-    weapon_proficiencies, InventoryState, EquipmentState with an equipped
-    weapon, and non-empty CombatState.positions all survive one exact
-    Domain round-trip through actual on-disk State schema V7 JSON, not
-    just an in-memory fake."""
+    """Real filesystem V8 proof (TSK-0004 weapon-source State, TSK-0010
+    Combat.positions, §3.30/DEC-0045, and TSK-0015 Combat.action_spent,
+    §3.33/DEC-0049): proves non-empty weapon_proficiencies, InventoryState,
+    EquipmentState with an equipped weapon, non-empty
+    CombatState.positions, and a spent Combat.action_spent all survive one
+    exact Domain round-trip through actual on-disk State schema V8 JSON,
+    not just an in-memory fake."""
     from dnd_engine.domain.state.combat import CombatPosition, CombatState
     from dnd_engine.domain.state.equipment import EquipmentState
     from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
@@ -271,6 +272,7 @@ def test_save_load_v7_preserves_weapon_source_state_and_combat_positions(
         order=("character_001",),
         active_index=0,
         positions=(CombatPosition(creature_id="character_001", x=3, y=4),),
+        action_spent=True,
     )
     original = StateSnapshot(
         campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
@@ -292,10 +294,11 @@ def test_save_load_v7_preserves_weapon_source_state_and_combat_positions(
     assert loaded.combat.positions == (
         CombatPosition(creature_id="character_001", x=3, y=4),
     )
+    assert loaded.combat.action_spent is True
 
     state_path = tmp_path / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 7
+    assert data["schemaVersion"] == 8
     assert data["state"]["characters"][0]["weaponProficiencies"] == ["dagger"]
     assert data["state"]["inventories"] == [
         {
@@ -312,6 +315,7 @@ def test_save_load_v7_preserves_weapon_source_state_and_combat_positions(
         "order": ["character_001"],
         "activeIndex": 0,
         "positions": [{"creatureId": "character_001", "x": 3, "y": 4}],
+        "actionSpent": True,
     }
 
 

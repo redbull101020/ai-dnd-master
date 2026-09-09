@@ -68,7 +68,7 @@
 | Character Dagger melee targeting/reach, `CombatPosition` (TSK-0008) | §3.30 |
 | Zero-HP Attack eligibility by creature category (TSK-0003) | §3.31 |
 | Character Dagger Attack/Damage contracts (TSK-0011) | §3.32 |
-| Current-turn ordinary Action expenditure, `TurnActionSpent` (TSK-0014, decision only) | §3.33 |
+| Current-turn ordinary Action expenditure, `TurnActionSpent` (TSK-0014/TSK-0015) | §3.33 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -4731,12 +4731,13 @@ the first concrete Combat actor/action-eligibility consumer in that slice was
 `AdvanceTurnHandler`'s own turn-ownership gate, not Attack. The active-turn
 contract for the supported `AttackCommand` paths is defined and implemented
 separately in §3.28 (TSK-0006), not as part of this G7 slice. The narrow
-current-turn ordinary-Action expenditure contract that later builds on this
-`CombatState` — a planned `action_spent` field, `TurnActionSpent` V1, and
-Action-aware `CombatStarted`/`TurnAdvanced` projections — is separately
-defined in §3.33 (TSK-0014, DEC-0049) as a decision only; it does not change
-this section's implemented `CombatState`, `CombatStarted` V1, or
-`TurnAdvanced` V1 as delivered by G7.
+current-turn ordinary-Action expenditure contract that builds on this
+`CombatState` — `action_spent`, `TurnActionSpent` V1, and Action-aware
+`CombatStarted`/`TurnAdvanced` projections — is separately defined and now
+implemented in §3.33 (TSK-0014/TSK-0015, DEC-0049); it extends this
+section's `CombatState`, `CombatStarted` V1, and `TurnAdvanced` V1
+additively and does not change the `round`/`order`/`active_index` fields or
+Event schemas as delivered by G7.
 
 Initiative *is* explicitly in scope as a Dexterity check (SRD 5.1), so the
 already-implemented Poisoned Ability Check Condition policy (§3.22) already
@@ -5716,10 +5717,10 @@ separate eligibility contract when they are implemented.
 
 The narrow ordinary-Action resource-expenditure gate that runs immediately
 after this active-turn gate, for the same currently supported
-`AttackCommand` paths, is separately defined in §3.33 (TSK-0014, DEC-0049)
-as a decision only; it does not redefine or reorder this section's own
-active-turn precedence, and its own State/Event/persistence consequence
-remains unimplemented pending a later task.
+`AttackCommand` paths, is separately defined and now implemented in §3.33
+(TSK-0014/TSK-0015, DEC-0049); it does not redefine or reorder this
+section's own active-turn precedence, and simply adds one further
+sequential check after it.
 
 ---
 
@@ -6090,9 +6091,11 @@ additive State schema V7 contract in §3.30, which reuses every V6 field
 defined above unchanged.
 
 State schema V6 was implemented by TSK-0004 (§12.13) as this exact
-persistence contract. The current production writer is State schema V7
-(TSK-0010, §3.30), additive over this V6 shape. No Attack Command, Event,
-or gameplay behavior changed.
+persistence contract, since superseded as the production writer first by
+State schema V7 (TSK-0010, §3.30), additive over this V6 shape, then by
+State schema V8 (TSK-0015, §3.33), additive over V7. The current production
+writer is V8. The V6 persistence slice itself changed no Attack Command,
+Event, or gameplay behavior.
 
 #### Character weapon validation order
 
@@ -6193,10 +6196,12 @@ using this spatial State, gating exactly the first Dagger melee consumer
 described in §3.29.
 
 Still pending/deferred: Movement/placement lifecycle and broader targeting
-(ranged/thrown/ammunition, cover, visibility). The current production writer
-is State schema V7 (TSK-0010), additive over V6 (implemented by TSK-0004,
-§3.29/§12.13); V6 remains the exact historical V5-shaped Combat wire
-contract without `positions`, preserved read-only.
+(ranged/thrown/ammunition, cover, visibility). This section's own
+`positions` contract was State schema V7 (TSK-0010), additive over V6
+(implemented by TSK-0004, §3.29/§12.13); the current production writer is
+now State schema V8 (TSK-0015, §3.33), additive over V7. Both V6 (exact
+historical V5-shaped Combat wire contract without `positions`) and V7
+(without `actionSpent`) remain preserved read-only.
 
 #### Consumer boundary
 
@@ -6478,8 +6483,10 @@ existing validation order.
 
 #### State schema consequence
 
-The current production writer is State schema V7, implemented by TSK-0010.
-State schema V6, implemented by TSK-0004 (§3.29/§12.13), added the
+State schema V7, implemented by TSK-0010, was the production writer that
+introduced this section's spatial contract; the current production writer
+is now State schema V8 (TSK-0015, §3.33), additive over V7. State schema
+V6, implemented by TSK-0004 (§3.29/§12.13), added the
 weapon-source additions (`StateSnapshot.inventories`,
 `StateSnapshot.equipment`, `CharacterState.weapon_proficiencies`); V6 did
 not add spatial State and remains the exact historical Combat wire contract
@@ -7255,20 +7262,18 @@ source/result hierarchy or a generic Damage framework.
 
 ### 3.33. Minimal Phase 3 current-turn ordinary Action expenditure (TSK-0014)
 
-Implementation status: **Decision only (TSK-0014, DEC-0049). No current
-production Python behavior, Event producer, `StateSerializer`
-implementation, or currently persisted wire format is changed by this
-section, and the current production writer remains exact V7.** This section
-does canonically define the planned State schema V8 contract below for a
-later implementation task; "decision only" means that planned contract is
-not yet implemented, not that this section leaves the persistence
-consequence undefined. It canonically fixes the minimal current-turn
-ordinary-Action resource contract needed by the three currently implemented
-in-Combat `AttackCommand` consumers — Character unarmed (§3.17), Monster
-Goblin Scimitar (§§3.26–3.28), and Character Dagger (§3.32) — so that a
-later implementation task can be refined without a further architectural
-decision for this narrow scope. Production implementation, including the
-State schema V8 writer, remains a later task.
+Implementation status: **Contract defined by TSK-0014 (DEC-0049); implemented
+in production by TSK-0015.** `CombatState.action_spent`, `TurnActionSpent`
+V1 and its applier, the `AttackHandler` ordinary-Action gate and
+consumption, Action-aware `CombatStarted`/`TurnAdvanced` projections,
+combined HP+Action atomic persistence, and State schema V8 read/write with
+V5–V7 compatibility are all implemented exactly as this section defines,
+for the three currently implemented in-Combat `AttackCommand` consumers —
+Character unarmed (§3.17), Monster Goblin Scimitar (§§3.26–3.28), and
+Character Dagger (§3.32). This section remains the narrow contract for
+exactly those three consumers; it is not a universal Action/eligibility
+framework and does not extend to Reactions, Opportunity Attacks, Bonus
+Actions, or Movement (see "Explicit exclusions" below).
 
 #### Scope and authoritative inputs
 
@@ -7497,8 +7502,8 @@ Outside Combat, no `TurnActionSpent` Event is produced at all, matching
 
 #### Event → State projection
 
-A future concrete pure applier, following the existing per-Event applier
-pattern (§3.18, §3.25):
+A concrete pure applier, implemented (TSK-0015) following the existing
+per-Event applier pattern (§3.18, §3.25):
 
 ```text
 apply_turn_action_spent_v1(combat: CombatState, event: GameEvent) -> CombatState
@@ -7530,20 +7535,19 @@ narrow concrete applier alongside the existing ones.
 `actionSpent` field is added to it, and no `CombatStarted` V2 is
 introduced. `action_spent` is a single field on `CombatState`, not a
 per-combatant map — it describes only the current `active_creature_id`'s
-turn, exactly like `round`/`active_index` already do. The future
-Action-aware `apply_combat_started_v1` projection therefore constructs the
-new `CombatState` with `action_spent=False`, using the field's own
-dataclass default: the first active combatant's current turn begins with
-its baseline Action unspent. This contract does not store a separate
-Action-spent fact for any other participant ahead of that participant's own
-turn; each later combatant's turn independently starts with
-`action_spent=False` only once the "Turn advancement" projection below
-makes it the active turn, not because Combat start pre-computed or reserved
-a fact for it. This is a **planned** projection for a later implementation
-task; the current production `apply_combat_started_v1` (§3.25) constructs
-`CombatState` without an `action_spent` field at all, because the field
-does not exist in production until the later State schema V8 implementation
-lands.
+turn, exactly like `round`/`active_index` already do. The Action-aware
+`apply_combat_started_v1` projection constructs the new `CombatState`
+relying on the field's own dataclass default (`action_spent=False`): the
+first active combatant's current turn begins with its baseline Action
+unspent. This contract does not store a separate Action-spent fact for any
+other participant ahead of that participant's own turn; each later
+combatant's turn independently starts with `action_spent=False` only once
+the "Turn advancement" projection below makes it the active turn, not
+because Combat start pre-computed or reserved a fact for it. This
+projection is implemented (TSK-0015): `apply_combat_started_v1` (§3.25)
+required no code change to produce it, because the new field's own
+dataclass default already yields `action_spent=False` on every
+`CombatState` it constructs.
 
 #### Turn advancement
 
@@ -7551,30 +7555,25 @@ lands.
 `TurnAdvanced` V2 is introduced, because no new fact needs to cross the
 Event boundary — turn advancement already identifies the new active
 combatant, and "the new active combatant's Action is unspent" is a
-State-projection rule, not a new audited fact. The future Action-aware
-`apply_turn_advanced_v1` projection updates `round`/`active_index` exactly
-as today **and** additionally resets `action_spent=False` for the new
-active turn. To avoid a stale claim: the **current** production
-`apply_turn_advanced_v1` (§3.25) changes only `round` and `active_index`,
-exactly as documented there — it does not yet reset any Action resource,
-because `action_spent` does not exist in production yet. Once this
-section's later implementation task lands (State schema V8), the same
-`TurnAdvanced` V1 Event and the same applier function additionally reset
-`action_spent=False` as part of that projection. `AdvanceTurnCommand`
-remains unconditionally allowed regardless of whether the current
-combatant's Action was spent — no `action_spent must be True` gate is
-added to it, matching the SRD's turn order continuing to advance
+State-projection rule, not a new audited fact. The Action-aware
+`apply_turn_advanced_v1` projection is implemented (TSK-0015): it updates
+`round`/`active_index` exactly as before (§3.25) **and** additionally
+resets `action_spent=False` for the new active turn, via the same
+`TurnAdvanced` V1 Event and the same applier function.
+`AdvanceTurnCommand` remains unconditionally allowed regardless of whether
+the current combatant's Action was spent — no `action_spent must be True`
+gate is added to it, matching the SRD's turn order continuing to advance
 regardless of what a combatant did or did not do on their turn.
 
 #### Atomicity
 
 The §3.8/§3.18 boundary is unchanged: one `AttackCommand` remains one
-logical transaction. Once implemented, every successfully resolved
-in-Combat `AttackCommand` becomes State-mutating at least because of
-`action_spent` — including the miss and zero-source-damage branches, which
-today mutate no State and call no `StateStore.save()` inside Combat. When a
-positive-damage branch also mutates target `current_hp`, the single
-replacement `StateSnapshot` passed to `StateStore.save()` must carry both
+logical transaction. This is implemented (TSK-0015): every successfully
+resolved in-Combat `AttackCommand` becomes State-mutating at least because
+of `action_spent` — including the miss and zero-source-damage branches,
+which previously mutated no State and called no `StateStore.save()` inside
+Combat. When a positive-damage branch also mutates target `current_hp`, the
+single replacement `StateSnapshot` passed to `StateStore.save()` must carry both
 the HP consequence and `CombatState.action_spent=True` together, saved with
 exactly one `StateStore.save()` call. Saving HP and Action separately (in
 either order), or introducing `UnitOfWork`, `TransactionManager`,
@@ -7583,25 +7582,26 @@ either order), or introducing `UnitOfWork`, `TransactionManager`,
 the HP change nor `action_spent=True` is an authoritative persisted fact
 after a failed save.
 
-#### State schema V8 contract (planned)
+#### State schema V8 contract
 
-A future State schema V8 is additive over the current V7 (§3.30, §12.13).
-The new exact non-null Combat wire field is:
+State schema V8 is additive over V7 (§3.30, §12.13) and is the current
+production writer version (TSK-0015). The new exact non-null Combat wire
+field is:
 
 ```text
 actionSpent: bool
 ```
 
 V8 keeps every existing V7 Combat field unchanged: `id`, `round`, `order`,
-`activeIndex`, `positions`, plus the new required `actionSpent`. **The
-current production writer remains exact V7 after this section.** This
-section defines the planned V8 contract only; it does not change
-`StateSerializer`, does not bump `SCHEMA_VERSION`, and does not retroactively
-extend the historical V5/V6/V7 wire shapes.
+`activeIndex`, `positions`, plus the new required `actionSpent`. The
+current production writer emits exact V8 (`SCHEMA_VERSION =
+SCHEMA_V8_VERSION` in `state_serializer.py`); the historical V1–V7 wire
+shapes are not retroactively extended, and their strict field-set rejection
+of `actionSpent`/`positions`/etc. as appropriate remains unchanged (§12.13).
 
-#### Legacy compatibility (planned)
+#### Legacy compatibility
 
-Planned decode semantics for a later V8-reading implementation:
+Decode semantics, implemented exactly as specified here (TSK-0015):
 
 ```text
 V1-V4 (no CombatState)          -> no action_spent fact (no Combat exists)
@@ -10471,13 +10471,13 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Текущий production writer — exact State schema V7
-(`SCHEMA_V7_VERSION`), additive over V6; его точный field-by-field контракт
+filesystem I/O. Текущий production writer — exact State schema V8
+(`SCHEMA_V8_VERSION`), additive over V7; его точный field-by-field контракт
 (top-level `inventories`, `equipment`, Character `weaponProficiencies` —
-§3.29; non-null `combat.positions` — §3.30) канонически определён в
-§3.29/§3.30 и не дублируется здесь. Ниже — historical V5 example
-(предшествует V6/V7 additions), иллюстрирующий общую envelope-форму; это не
-current writer shape:
+§3.29; non-null `combat.positions` — §3.30; non-null `combat.actionSpent` —
+§3.33) канонически определён в §3.29/§3.30/§3.33 и не дублируется здесь.
+Ниже — historical V5 example (предшествует V6/V7/V8 additions),
+иллюстрирующий общую envelope-форму; это не current writer shape:
 
 ```json
 {
@@ -10525,15 +10525,17 @@ current writer shape:
 }
 ```
 
-JSON использует camelCase. The current V7 writer always emits
-`schemaVersion: 7` and the exact V6 state fields defined in §3.29
+JSON использует camelCase. The current V8 writer always emits
+`schemaVersion: 8` and the exact V7 state fields defined in §3.30
 (`campaign`, `creatures`, `characters`, `inventories`, `equipment`,
-`combat`), additionally requiring `positions` inside a non-null `combat`
-(§3.30). V6 preserves the V5 campaign, creature, and combat shapes and
+`combat`), additionally requiring `actionSpent` inside a non-null `combat`
+(§3.33). V6 preserves the V5 campaign, creature, and combat shapes and
 preserves the pre-existing Character fields/semantics, while adding the V6
 Character `weaponProficiencies` field and the top-level
 `inventories`/`equipment` projections defined in §3.29; V7 preserves this
-exact V6 shape unchanged and adds only `combat.positions`. Preserved fields
+exact V6 shape unchanged and adds only `combat.positions`; V8 preserves
+this exact V7 shape unchanged and adds only `combat.actionSpent`. Preserved
+fields
 include `"characters": []` для пустой collection, `"conditions": []` для
 пустого Creature Condition membership (§3.21) и `"combat": null`, когда
 `StateSnapshot.combat is None` (§3.25). Creatures и Characters сортируются по runtime ID,
@@ -10543,17 +10545,19 @@ include `"characters": []` для пустой collection, `"conditions": []` д
 object с exact fields `id`, `round`, `order` (JSON array Creature ID strings в
 initiative-порядке) и `activeIndex`.
 
-Reader принимает семь точных схем: legacy V1 с state fields `campaign` и
+Reader принимает восемь точных схем: legacy V1 с state fields `campaign` и
 `creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
 обязательным дополнительным `skillProficiencies`, legacy V4 с обязательным
 `conditions` (без `combat`), legacy V5 с обязательным дополнительным
 `combat` (без `inventories`/`equipment`/Character `weaponProficiencies`,
 без `combat.positions`), legacy V6 с обязательными дополнительными
 top-level `inventories`, `equipment` и Character `weaponProficiencies`
-(exact field-by-field контракт — §3.29, без `combat.positions`), и current
-V7 с теми же V6 полями плюс обязательным `positions` внутри non-null
-`combat` (exact field-by-field контракт — §3.30). V1–V6 сохраняют свои
-exact historical shapes без retroactive расширения V7-полями. Поле
+(exact field-by-field контракт — §3.29, без `combat.positions`), legacy V7
+с теми же V6 полями плюс обязательным `positions` внутри non-null `combat`
+(exact field-by-field контракт — §3.30, без `combat.actionSpent`), и
+current V8 с теми же V7 полями плюс обязательным `actionSpent` внутри
+non-null `combat` (exact field-by-field контракт — §3.33). V1–V7 сохраняют
+свои exact historical shapes без retroactive расширения V8-полями. Поле
 `characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
 `StateSnapshot.characters=()` и не придумывает level или proficiency
 defaults. V2 Character entry сохраняет exact legacy fields `id`,
@@ -10568,43 +10572,48 @@ V1–V5 не содержат `weaponProficiencies`, `inventories` или `equip
 unknown для этих пяти версий; успешное чтение любой из них создаёт
 `CharacterState.weapon_proficiencies = frozenset()`,
 `StateSnapshot.inventories = ()` и `StateSnapshot.equipment = ()` без синтеза
-weapon State (§3.29/§12.13). V6 обязан сохранять реальные
+weapon State (§3.29/§12.13). V6, V7 и V8 обязаны сохранять реальные
 `weaponProficiencies`/`inventories`/`equipment` — они не empty defaults для
-этой версии. V5 и V6 `combat` записи не содержат `positions`
+этих версий. V5 и V6 `combat` записи не содержат `positions`
 — оно unknown и запрещено для этих версий; при непустом `combat` успешное
 чтение любой из них создаёт `CombatState.positions = ()` без синтеза
-tactical placement (§3.30).
+tactical placement (§3.30). V7 обязан сохранять реальные `positions` — они
+не empty default для этой версии. V5, V6 и V7 `combat` записи не содержат
+`actionSpent` — оно unknown и запрещено для этих версий; при непустом
+`combat` успешное чтение любой из них создаёт `CombatState.action_spent =
+False` без реконструкции исторического Action-expenditure факта (§3.33).
 
-Для всех семи версий required fields и JSON primitive/container types
+Для всех восьми версий required fields и JSON primitive/container types
 точны; unknown fields, defaults, type coercion, несовпадение outer
 `campaignId` с `state.campaign.id`, невалидные Domain values и duplicate IDs
-запрещены. V2–V7 дополнительно требуют, чтобы каждый Character ID ссылался
-на существующий Creature ID; V5–V7 дополнительно требуют, чтобы каждый
+запрещены. V2–V8 дополнительно требуют, чтобы каждый Character ID ссылался
+на существующий Creature ID; V5–V8 дополнительно требуют, чтобы каждый
 `combat.order` ID ссылался на существующий Creature ID. V3–V5 Character
 entry содержит identical exact fields `id`, `totalLevel`,
 `savingThrowProficiencies` и `skillProficiencies` — Character schema не
-менялась с V3 по V5; V6 и V7 Character entry дополнительно требуют
-`weaponProficiencies` (§3.29) — эти два поля идентичны, §3.30 не меняет
-Character schema. V4–V7 Creature entry дополнительно требуют `conditions`:
-JSON list точных строк, каждая — известное значение `Condition`, без
-дубликатов; malformed non-list, unknown-value и duplicate-value payloads
-отклоняются (§3.21).
+менялась с V3 по V5; V6, V7 и V8 Character entry дополнительно требуют
+`weaponProficiencies` (§3.29) — эти три версии идентичны друг другу в
+Character schema, ни §3.30, ни §3.33 не меняют Character schema. V4–V8
+Creature entry дополнительно требуют `conditions`: JSON list точных строк,
+каждая — известное значение `Condition`, без дубликатов; malformed
+non-list, unknown-value и duplicate-value payloads отклоняются (§3.21).
 
 Character decoding (включая ветку, читающую `skillProficiencies`) определяется
 явным сравнением с `LEGACY_SCHEMA_V2_VERSION`, а не сравнением только с
 текущим `SCHEMA_VERSION` — это защищает V3-чтение при будущих schema bump'ах.
-Симметрично, V4/V5/V6/V7 Creature field set и `conditions` decoding
+Симметрично, V4/V5/V6/V7/V8 Creature field set и `conditions` decoding
 определяются сравнением с fixed-identity множеством `{SCHEMA_V4_VERSION,
-SCHEMA_V5_VERSION, SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}`, а не с мутируемым
-`SCHEMA_VERSION`: `SCHEMA_VERSION = SCHEMA_V7_VERSION` сегодня, но эти имена
-не взаимозаменяемы — `SCHEMA_VERSION` обозначает current writer и
-используется только при записи, тогда как historical V4/V5/V6/V7 read
-semantics зафиксированы на своих собственных fixed constants независимо от
-того, останется ли V7 current writer в будущем (§3.21 фиксирует эту
-regression-защиту как часть G6C1; §3.25 применяет тот же constant-based
-discipline к своему V5 `combat` addition, G7; §3.29 применяет её же к своим
-V6 weapon-source additions, TSK-0004; §3.30 применяет её же к своему V7
-Combat `positions` addition, TSK-0010).
+SCHEMA_V5_VERSION, SCHEMA_V6_VERSION, SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}`,
+а не с мутируемым `SCHEMA_VERSION`: `SCHEMA_VERSION = SCHEMA_V8_VERSION`
+сегодня, но эти имена не взаимозаменяемы — `SCHEMA_VERSION` обозначает
+current writer и используется только при записи, тогда как historical
+V4/V5/V6/V7/V8 read semantics зафиксированы на своих собственных fixed
+constants независимо от того, останется ли V8 current writer в будущем
+(§3.21 фиксирует эту regression-защиту как часть G6C1; §3.25 применяет тот
+же constant-based discipline к своему V5 `combat` addition, G7; §3.29
+применяет её же к своим V6 weapon-source additions, TSK-0004; §3.30
+применяет её же к своему V7 Combat `positions` addition, TSK-0010; §3.33
+применяет её же к своему V8 Combat `actionSpent` addition, TSK-0015).
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -10853,12 +10862,13 @@ Migration
 State v3
 ```
 
-Текущие production migration paths читают exact legacy V1–V6 и current V7
+Текущие production migration paths читают exact legacy V1–V7 и current V8
 согласно их фиксированным wire-контрактам; production writer выпускает exact
-V7 (§3.30), реализованный TSK-0010, additive поверх exact V6 (§3.29),
-реализованного TSK-0004. Reader сохраняет те же exact V1–V6 shapes и
-добавляет только те Domain projections, которых не было в исходной версии,
-как пустые migration results:
+V8 (§3.33), реализованный TSK-0015, additive поверх exact V7 (§3.30),
+реализованного TSK-0010, которая, в свою очередь, additive поверх exact V6
+(§3.29), реализованного TSK-0004. Reader сохраняет те же exact V1–V7 shapes
+и добавляет только те Domain projections, которых не было в исходной
+версии, как пустые migration results:
 
 ```text
 V1–V5:
@@ -10868,35 +10878,45 @@ V1–V5:
 
 V5–V6 non-null combat:
     CombatState.positions = ()
+
+V5–V7 non-null combat:
+    CombatState.action_spent = False
 ```
 
 V6 обязан сохранять свои реальные `weaponProficiencies`/`inventories`/
-`equipment` — это не empty defaults для V6. Legacy migration не выводит
-Dagger, Inventory, Equipment, weapon proficiency или tactical placement из
+`equipment`, а V7 — дополнительно свои реальные `positions`; это не empty
+defaults для этих версий. Legacy migration не выводит Dagger, Inventory,
+Equipment, weapon proficiency, tactical placement или Action-expenditure из
 class, Creature Definition, level либо других старых данных. Успешно
 загруженный V1–V5 snapshot при следующем сохранении записывается в exact
-V7: projections, отсутствовавшие в исходной версии, получают canonical
-empty defaults, как указано выше. Успешно загруженный V6 snapshot при
-следующем сохранении сохраняет свои реальные `weaponProficiencies`/
-`inventories`/`equipment` без изменений и получает `combat.positions = ()`
-при непустом `combat`. Legacy wire schemas задним числом не расширяются;
-generic migration registry или framework не вводится. State schema V7
-(§3.30, TSK-0010) — additive spatial contract над V6: сохраняет все V6 поля
-(`weaponProficiencies`/`inventories`/`equipment`) без изменений и добавляет
-только обязательный `combat.positions` внутри non-null `combat`; V6
-остаётся exact historical Combat shape без `positions`.
+V8: projections, отсутствовавшие в исходной версии, получают canonical
+empty/false defaults, как указано выше (`positions = ()`, `action_spent =
+False` включительно). Успешно загруженный V6 snapshot при следующем
+сохранении сохраняет свои реальные `weaponProficiencies`/`inventories`/
+`equipment` без изменений и получает `combat.positions = ()` и
+`combat.action_spent = False` при непустом `combat`. Успешно загруженный V7
+snapshot при следующем сохранении сохраняет свои реальные
+`weaponProficiencies`/`inventories`/`equipment`/`positions` без изменений и
+получает `combat.action_spent = False` при непустом `combat`. Legacy wire
+schemas задним числом не расширяются; generic migration registry или
+framework не вводится. State schema V7 (§3.30, TSK-0010) — additive spatial
+contract над V6: сохраняет все V6 поля (`weaponProficiencies`/
+`inventories`/`equipment`) без изменений и добавляет только обязательный
+`combat.positions` внутри non-null `combat`; V6 остаётся exact historical
+Combat shape без `positions`. State schema V8 (§3.33, TSK-0015, DEC-0049) —
+additive Action-expenditure contract над V7 и current production writer:
+сохраняет все V7 поля (`id`/`round`/`order`/`activeIndex`/`positions`) без
+изменений и добавляет только обязательный `combat.actionSpent: bool`
+внутри non-null `combat`; V7 остаётся exact historical Combat shape без
+`actionSpent`.
 
-State schema V8 (§3.33, TSK-0014, DEC-0049) — **planned**, decision-only
-additive Combat contract over V7: keeps every V7 Combat field
-(`id`/`round`/`order`/`activeIndex`/`positions`) unchanged and adds one new
-required `combat.actionSpent: bool`. The current production writer remains
-exact V7; §3.33 does not change `StateSerializer` or bump `SCHEMA_VERSION`.
-A legacy active Combat (V5–V7) is planned to decode to `action_spent =
-False`, following the same compatibility-default discipline as the
+A legacy active Combat (V5–V7) decodes to `action_spent = False`, following
+the same compatibility-default discipline as the
 `weapon_proficiencies`/`inventories`/`equipment` (V1–V5) and `positions`
 (V5–V6) defaults above, because no pre-V8 snapshot recorded an authoritative
 Action-expenditure fact and no durable Event replay exists to reconstruct
-one.
+one. This default is a deterministic compatibility value, not a
+reconstruction of what Action usage actually happened in that legacy game.
 
 ---
 

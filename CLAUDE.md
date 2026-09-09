@@ -146,6 +146,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | Combat-owned spatial State (`CombatPosition`, `CombatState.positions`) + State schema V7 persistence (TSK-0010) | §3.30, §12.13 |
 | Character Dagger weapon Attack consumer + `CharacterWeaponAttackResolved` V1 (TSK-0012) | §3.29, §3.30, §3.32 |
 | Character Dagger source-Damage Resolution + `CharacterWeaponAttackDamageResolved` V1 + Monster HP consequence continuation (TSK-0013) | §3.29, §3.32 |
+| Current-turn ordinary Action expenditure (`CombatState.action_spent`, `TurnActionSpent` V1) + State schema V8 persistence (TSK-0014/TSK-0015) | §3.33, §12.13 |
 
 Character weapon-source State/persistence, Combat-owned spatial State
 (`CombatPosition`/`CombatState.positions`, State schema V7) и production
@@ -161,6 +162,16 @@ Damage Resolution также реализована (TSK-0013): pure resolver
 `StateStore.save()`; zero source создаёт source-Damage Event, но не
 `DamageApplied`, HP-мутацию и save. Broader Character weapon behavior
 (другое оружие, ranged/thrown/ammunition) остаётся pending.
+
+Current-turn ordinary Action expenditure (TSK-0014/TSK-0015) реализована:
+`CombatState.action_spent`, `TurnActionSpent` V1 и `AttackHandler`
+ordinary-Action gate/consumption применяются к тем же трём существующим
+in-Combat `AttackCommand` consumers (Character unarmed, Monster Goblin
+Scimitar, Character Dagger); текущий production writer — State schema V8
+(`combat.actionSpent`), V5–V7 читаются с compatibility default
+`action_spent=False`. Bonus Actions, Reactions, Movement, Extra Attack,
+Action Surge, Multiattack и более широкая action economy остаются pending
+(§3.33).
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation
