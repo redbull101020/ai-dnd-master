@@ -6564,3 +6564,215 @@ already-merged delivery branch.
 - TSK-0015 is not marked complete and Task Closure is not asserted by this
   entry. No commit or push was performed for this group; a `review.patch`
   containing only the fresh Group 4 changes was produced for review.
+
+## 2026-09-09 — TSK-0016 architecture decision: Character zero-HP turn / Death Save contract (DEC-0050)
+
+- On branch `claude/tsk-0016-death-save-contract`, created from `origin/main`
+  `e442a89` (confirming `origin/main:docs/TASK.md` showed `Current:
+  TSK-0016`, `Status: Current`; a separate repository Decision-ID check
+  against `docs/DECISIONS.md` confirmed the last existing record was
+  `DEC-0049` and `DEC-0050` was free). Re-read `AGENTS.md`, `README.md`,
+  `docs/ARCHITECTURE.md`,
+  `docs/ROADMAP.md`, `docs/TASK.md`, `docs/DEFERRED.md` (`DEF-0005`,
+  `DEF-0015`), and `docs/DECISIONS.md` (`DEC-0040`, `DEC-0046`, `DEC-0049`)
+  before editing, per TSK-0016's own decision-only architecture scope.
+- Added `docs/ARCHITECTURE.md` §3.34 "Minimal Character zero-HP turn and
+  Death Save contract (TSK-0016)" — a decision-only canonical contract, with
+  cross-reference updates in §3.2.4, §3.13, §3.25, §3.31, §3.33, §10.4,
+  §10.7, and §12.13 (no rewrite of any of those sections' own accepted
+  scope). Went through two internal review/revision passes before
+  acceptance — closing an initially missing Result contract, missing
+  Event→State application boundaries, a Damage-at-zero wording
+  contradiction, and stale DEF-0005 status wording in the first pass; then
+  defining the Damage-at-zero `CharacterDeathSaveFailureResult` Result
+  contract explicitly and adding intrinsic `CharacterState` plus
+  cross-projection `StateSnapshot` Character↔Creature invariants in the
+  second. The accepted §3.34 fixes, at a high level:
+  - Death Saving Throw is a separate Character-specific mechanic — not
+    `SavingThrowCommand(ability, dc)`, and no external player-/API-facing
+    `DeathSaveCommand` is introduced. It is a mandatory, deterministic
+    Engine consequence automatically resolved in memory once a new
+    `active_creature_id` is established by the existing
+    `CombatStarted`/`TurnAdvanced` Events (§3.25), for a Character at
+    `current_hp == 0` that is neither stable nor dead; it is not an
+    ordinary Action (§3.33) and never touches `action_spent`/
+    `TurnActionSpent`.
+  - The four authoritative lifecycle facts (`death_save_successes`,
+    `death_save_failures`, `death_save_stable`, `dead`) are persisted on
+    the existing Character-specific `CharacterState` projection under the
+    existing `Creature / CreatureDomain` owner (§10.4) — not on
+    `CombatState`/`CombatEngine` (§10.7) and not behind a new universal
+    `LifeState`. Pure typed `CharacterDeathSaveResult`/
+    `CharacterDeathSaveFailureResult` Results, two concrete Events
+    (`CharacterDeathSaveResolved` V1, `CharacterDeathSaveFailureRecorded`
+    V1) and their Event→State application boundaries, and cross-projection
+    `StateSnapshot` Character↔Creature validation complete the D20/Result/
+    Event/State-application chain, fixing natural 1/20 and
+    three-success/three-failure semantics along the way.
+  - A natural 20 never mutates `CreatureState.current_hp` directly through
+    the Death Save Event; it reuses the unchanged `HealingApplied` V1 wire
+    contract (§3.20) for the `0 → 1` HP transition instead.
+  - A Damage-at-zero failure consequence (`DamageResult.previous_hp == 0`
+    against a living Character) is explicitly distinct from an ordinary
+    damage-to-zero transition (`positive HP → 0`, which alone creates no
+    failure); critical provenance for it stays source-specific
+    (`MonsterAttackDamageResult`/`CharacterWeaponAttackDamageResult`'s
+    existing `critical_hit` fact) and is not added to the generic
+    `ApplyDamageCommand`.
+  - Ordinary Healing crossing `current_hp == 0 → current_hp > 0` resets
+    both Death Save counters (`death_save_successes`, `death_save_failures`)
+    and the `death_save_stable` flag; ordinary Healing against a Character
+    with `dead == True` is rejected before resolution using the existing
+    `ErrorCode.INVALID_TARGET`, and resurrection stays undefined/out of
+    scope.
+  - State schema V9 is accepted as the additive implementation target over
+    the current production V8 writer (§12.13); the current writer remains
+    exact V8 until TSK-0017 implements V9, and a V9 reader must reject an
+    invalid persisted Character/Creature combination rather than accept it
+    as authoritative.
+  - Monster Death Saves, Monster death/stabilization/lifecycle policy,
+    Combat removal, `CombatEnded`, resurrection/revivification, temporary
+    HP, and massive-damage/instant-death rules all remain explicitly out of
+    scope; the abstraction verdict is **KEEP CONCRETE**.
+- Added `docs/DECISIONS.md` `DEC-0050`, recording the rationale for the
+  above — mechanic identity, automatic trigger, Character-owned ownership,
+  the D20/Result/Event/State-application chain, natural-20/`HealingApplied`
+  HP ownership, the Damage-at-zero/damage-to-zero distinction, the V9 target
+  contract, and the deferred scope — without duplicating §3.34's exact
+  payload schemas.
+- Reconciled `docs/DEFERRED.md`: `DEF-0005` moved `Deferred` → `In
+  progress` (the architectural question is resolved by §3.34/DEC-0050 and a
+  concrete continuation task, `TSK-0017`, now exists; production
+  implementation is still outstanding, so the record is not `Done`).
+  `DEF-0015` stays `Deferred`: only the narrow Character Death Save slice
+  it coordinated with DEF-0005 is resolved; Monster death/lifecycle policy,
+  zero-HP targetability, Combat removal/`CombatEnded`, and other
+  action-eligibility consumers remain open. Both records gained a dated
+  `2026-09-09` `History` entry; no earlier `History` entry was rewritten.
+- Reconciled `docs/ROADMAP.md`'s `Zero-HP and combatant eligibility` row
+  and added an explanatory paragraph distinguishing **defined** (§3.34/
+  DEC-0050: trigger, ownership, Result/Event/State-application boundaries,
+  V9 target), **pending** (TSK-0017: production resolvers/Events/
+  appliers/orchestration and the V9 reader/writer), and **still open**
+  (broader Character zero-HP lifecycle beyond this mechanic, Monster Death
+  Saves and lifecycle policy, zero-HP targetability, other
+  action-eligibility consumers, Combat removal/`CombatEnded`). The
+  capability row stays unchecked (`[ ]`): a canonical contract is not a
+  delivered capability.
+- Reconciled `docs/TASK.md` minimally: `TSK-0016`'s `References` gained
+  `ARCHITECTURE.md` §3.34 and `DEC-0050`, and a short "Current branch
+  status" note distinguishes the current pre-PR state (canonical contract
+  defined on this delivery branch; prospective Task Closure not yet
+  prepared because Group-3 review and PR creation are still pending) from
+  the §18.1 normal path (once a PR exists, closure may be prepared and
+  reviewed in that same branch/PR before merge) and from authoritative
+  `Done` (exists only once the accepted result and closure land on `main`);
+  `TSK-0016` stays `Status: Current`, keeps its full task detail, and is
+  not moved to `Recently completed`. `TSK-0017`'s `References` gained
+  §3.34 and `DEC-0050`, and its `Goal` was rewritten to state that TSK-0017
+  must implement the already-fixed §3.34/DEC-0050 semantic/Event/State/
+  schema contracts (no external `DeathSaveCommand`, the automatic trigger,
+  `CharacterDeathSaveResult`/`CharacterDeathSaveFailureResult`, both
+  concrete Events, the Character lifecycle State facts, and the V9 target)
+  rather than redefine them, leaving only Python module/helper placement
+  for its own refinement pass; `TSK-0017` stays `Status: Backlog`,
+  `Depends on: TSK-0016`, and is not moved to `Ready`/`Current` — it still
+  must wait for TSK-0016's authoritative `Done` on `main` and its own
+  separate refinement/readiness pass. `Current position`, the `Open task
+  index`, and `Next free ID` were not touched; Task Closure (§18) was not
+  performed.
+- Re-read `CLAUDE.md` per `AGENTS.md`'s reproduced-fact discipline
+  (implemented-contract index, current phase, `current_hp`/`max_hp`
+  naming, closed `DamageType` set, Command lifecycle states, and the
+  §3.6/§3.18 deferred-abstraction list): none of its reproduced facts
+  changed. `CLAUDE.md` contained no Death Save/zero-HP wording at all
+  before this iteration; its implemented-contracts index still correctly
+  stops at §3.33/State schema V8 (TSK-0014/TSK-0015) and its explanatory
+  paragraph still correctly names V8 as the current production writer —
+  §3.34 is deliberately not added to that index because its production
+  implementation does not exist yet, matching the same precedent already
+  set for §3.28/§3.29 originally. `CLAUDE.md` was left untouched.
+  `README.md` was re-read for Death Save/zero-HP/schema-version status
+  claims; it contains none — only the unaffected general "Phase 3 — Combat"
+  status — so it remains factually correct and was left untouched.
+- No production Python file was changed, no runtime behavior changed, and
+  no production/runtime behavioral test was added or modified; State schema
+  V9 was not implemented and the production writer remains exact V8.
+- Verification (Python 3.12.14, `--basetemp` pointed outside the repo to
+  work around this machine's pre-existing local Windows `pytest-of-redbu`
+  temp-directory `PermissionError`, unrelated to this change): full
+  `pytest` — 1997 passed; `pytest tests/architecture/` — 7 passed
+  (documentation §-reference/link-anchor consistency and Domain dependency
+  boundary checks); `mypy src/dnd_engine` — no issues in 112 source files;
+  `git diff --check` — no whitespace errors. No formatter/linter is
+  configured in `pyproject.toml`, so none was run, per `AGENTS.md`.
+  Cumulative branch diff against `origin/main` (`e442a89`) was reviewed and
+  contains exactly six files: `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`,
+  `docs/DEFERRED.md`, `docs/DEVELOPMENT_LOG.md` (this entry),
+  `docs/ROADMAP.md`, and `docs/TASK.md`; `README.md` and `CLAUDE.md` were
+  not touched, no `src/**` file was touched, and no generic
+  lifecycle/consequence/LifeState framework or unrelated refactor was
+  introduced at any group.
+- `TSK-0016` is not marked `Done`, is not moved to `Recently completed`,
+  and Task Closure is not asserted by this entry; production implementation
+  remains separately tracked by `TSK-0017`. No commit, push, or merge was
+  performed for this group; a `review.patch` containing only the fresh
+  Group 3 changes was produced for review.
+
+## 2026-09-09 — Prepared Task Closure for TSK-0016 in PR #91
+
+- The cumulative TSK-0016 result already pushed to draft PR #91
+  (`docs/ARCHITECTURE.md` §3.34, `docs/DECISIONS.md` `DEC-0050`, and the
+  `docs/DEFERRED.md`/`docs/ROADMAP.md`/`docs/TASK.md` reconciliation) was
+  reviewed and accepted. PR #91 exists, is open, is still a draft, and
+  targets `main`. Before preparing this closure, `origin/main` was
+  revalidated at `e442a89a4abd8acea13be863aa1012b5d7705ea8` — unchanged
+  since the branch was created — and PR #91's head was confirmed to match
+  this branch's local `HEAD`, so no conflicting upstream Decision ID,
+  Current task, or Architecture change exists.
+- Corrected one remaining factual wording error in `docs/DECISIONS.md`
+  `DEC-0050`: "resets the same three counters/stable flag" understated the
+  fact that the persisted lifecycle State has exactly two counters
+  (`death_save_successes`, `death_save_failures`) and one separate boolean
+  flag (`death_save_stable`); reworded to "resets both Death Save counters
+  and the `stable` flag". No Decision semantics changed.
+- Prepared the normal-path §18.1 prospective Task Closure for `TSK-0016` in
+  this same delivery branch/PR, following `docs/TASK.md`'s own closure
+  procedure: `Current position` changed `Current: TSK-0016` → `Current: —`
+  (`TSK-0017` is not promoted — it stays `Backlog`/`Depends on: TSK-0016`
+  and still requires its own separate refinement/readiness pass once
+  TSK-0016 is authoritatively `Done` on `main`); the `TSK-0016` row was
+  removed from `Open task index`; the full `TSK-0016` detail block —
+  including its temporary "Current branch status" note, which has now
+  served its purpose — was removed from `Open task details`; and
+  `TSK-0016` was added to `Recently completed` with `PR #91` as evidence
+  (no merge commit SHA, because PR #91 has not merged). This entire
+  `docs/TASK.md` closure state is prospective, per §18.1: it describes what
+  becomes authoritative only if and when this exact PR merges to `main`.
+  Before that merge, `TSK-0016` is not actually `Done`, and `TSK-0017` must
+  not begin implementation.
+- Re-read `docs/ROADMAP.md` and `docs/DEFERRED.md`: both already state the
+  accepted status correctly and required no fresh change. `DEF-0005`
+  remains `In progress` (architecture defined by §3.34/DEC-0050; production
+  still pending `TSK-0017`). `DEF-0015` remains `Deferred` (broader
+  Monster/lifecycle scope still open). Roadmap's `Zero-HP and combatant
+  eligibility` capability row remains unchecked. This is an architecture-
+  task closure, not completion of the broader zero-HP capability or of the
+  DEF-0005 production concern; Death Saves and State schema V9 remain
+  defined but not implemented.
+- No production Python file or runtime behavior was changed by this
+  closure preparation.
+- Verification (same `--basetemp` workaround as the prior entry, where
+  needed): `pytest tests/architecture/test_documentation_references.py` —
+  2 passed; full `pytest` — 1997 passed; `mypy src/dnd_engine` — no issues
+  in 112 source files; `git diff --check` — no whitespace errors. Fresh
+  diff for this pass touches only `docs/TASK.md`, `docs/DEVELOPMENT_LOG.md`
+  (this entry), and the one `docs/DECISIONS.md` wording correction; zero
+  fresh diff in `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `README.md`, `CLAUDE.md`, `src/**`, or tests.
+- This closure is prospective only: PR #91 has not merged, no merge commit
+  SHA is claimed, `TSK-0017` is not `Ready`/`Current`, and no Death
+  Save/State-schema-V9 production behavior is claimed to exist. No commit,
+  push, or merge was performed for this pass; the PR was not marked ready
+  for review. A `review.patch` containing only these fresh prospective
+  closure changes was produced for review.
