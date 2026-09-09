@@ -473,7 +473,7 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
         event_metadata_provider=metadata,
     ).handle(command)
 
-    assert metadata.calls == ["campaign_001"] * 3
+    assert metadata.calls == ["campaign_001"] * 4
     assert result.success is True
     assert result.errors == ()
     outcome = result.outcome
@@ -486,19 +486,33 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     assert outcome.critical_hit is False
 
     # (6) Events are ordered MonsterAttackResolved -> MonsterAttackDamageResolved
-    # -> DamageApplied.
+    # -> DamageApplied -> TurnActionSpent (§3.33/TSK-0015).
     assert [event.type for event in result.events] == [
         "MonsterAttackResolved",
         "MonsterAttackDamageResolved",
         "DamageApplied",
+        "TurnActionSpent",
     ]
-    attack_event, damage_event, applied_event = result.events
+    attack_event, damage_event, applied_event, action_spent_event = result.events
 
-    # (7) causedBy chain is exact.
+    # (7) causedBy chain is exact; TurnActionSpent is caused by the Attack
+    # resolution Event, never by the Damage chain.
     assert attack_event.caused_by is None
     assert damage_event.caused_by == attack_event.event_id
     assert applied_event.caused_by == damage_event.event_id
-    assert len({attack_event.event_id, damage_event.event_id, applied_event.event_id}) == 3
+    assert action_spent_event.caused_by == attack_event.event_id
+    assert action_spent_event.payload == {"combatId": "combat_001"}
+    assert (
+        len(
+            {
+                attack_event.event_id,
+                damage_event.event_id,
+                applied_event.event_id,
+                action_spent_event.event_id,
+            }
+        )
+        == 4
+    )
 
     assert attack_event.payload == {
         "targetId": "character_001",
@@ -558,6 +572,11 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     assert reloaded.combat.round == combat.round
     assert reloaded.combat.order == combat.order
     assert reloaded.combat.active_index == combat.active_index
+    # State schema V8 (`actionSpent`) is a later group's persistence scope;
+    # the current V7 writer does not persist `action_spent`, so it
+    # deterministically decodes to its dataclass default on every reload
+    # regardless of the in-memory Action expenditure this Attack produced.
+    assert reloaded.combat.action_spent is False
 
     # (5) no unrelated Creature/Character projection changed.
     reloaded_actor = next(
@@ -713,7 +732,7 @@ def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     # exactly the expected 1d20 + 1d4 sequence was consumed -- no hidden
     # additional RNG calls.
     assert rng.getstate() == expected_rng.getstate()
-    assert metadata.calls == ["campaign_001"] * 3
+    assert metadata.calls == ["campaign_001"] * 4
 
     assert result.success is True
     assert result.errors == ()
@@ -735,22 +754,34 @@ def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     assert outcome.critical_hit is False
 
     # exact Event order: CharacterWeaponAttackResolved ->
-    # CharacterWeaponAttackDamageResolved -> DamageApplied.
+    # CharacterWeaponAttackDamageResolved -> DamageApplied ->
+    # TurnActionSpent (§3.33/TSK-0015).
     assert [event.type for event in result.events] == [
         "CharacterWeaponAttackResolved",
         "CharacterWeaponAttackDamageResolved",
         "DamageApplied",
+        "TurnActionSpent",
     ]
-    attack_event, damage_event, applied_event = result.events
+    attack_event, damage_event, applied_event, action_spent_event = result.events
 
     # exact immediate causedBy chain; DamageApplied never skips the
-    # source-Damage Event.
+    # source-Damage Event; TurnActionSpent is caused by the Attack
+    # resolution Event, never by the Damage chain.
     assert attack_event.caused_by is None
     assert damage_event.caused_by == attack_event.event_id
     assert applied_event.caused_by == damage_event.event_id
+    assert action_spent_event.caused_by == attack_event.event_id
+    assert action_spent_event.payload == {"combatId": "combat_001"}
     assert (
-        len({attack_event.event_id, damage_event.event_id, applied_event.event_id})
-        == 3
+        len(
+            {
+                attack_event.event_id,
+                damage_event.event_id,
+                applied_event.event_id,
+                action_spent_event.event_id,
+            }
+        )
+        == 4
     )
     assert all(event.command_id == command.command_id for event in result.events)
     assert all(event.campaign_id == "campaign_001" for event in result.events)
@@ -845,6 +876,11 @@ def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     assert reloaded.combat.order == combat.order
     assert reloaded.combat.active_index == combat.active_index
     assert reloaded.combat.positions == combat.positions
+    # State schema V8 (`actionSpent`) is a later group's persistence scope;
+    # the current V7 writer does not persist `action_spent`, so it
+    # deterministically decodes to its dataclass default on every reload
+    # regardless of the in-memory Action expenditure this Attack produced.
+    assert reloaded.combat.action_spent is False
 
     # no Event history artifacts, no other files, no leftover temp files.
     assert sorted(

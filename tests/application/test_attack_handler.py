@@ -1182,8 +1182,15 @@ def test_monster_attack_damage_preserves_existing_combat_state() -> None:
 
     assert result.success is True
     assert len(store.save_calls) == 1
-    assert store.save_calls[0].combat is combat
+    saved_combat = store.save_calls[0].combat
+    assert saved_combat is not None
+    assert saved_combat is not combat
+    assert saved_combat.action_spent is True
+    assert saved_combat.round == combat.round
+    assert saved_combat.order == combat.order
+    assert saved_combat.active_index == combat.active_index
     assert snapshot.combat is combat
+    assert combat.action_spent is False
     saved_target = next(
         creature
         for creature in store.save_calls[0].creatures
@@ -1191,6 +1198,15 @@ def test_monster_attack_damage_preserves_existing_combat_state() -> None:
     )
     assert saved_target.current_hp == 5
     assert target.current_hp == 11
+    assert len(result.events) == 4
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "DamageApplied",
+        "TurnActionSpent",
+    ]
+    assert result.events[3].caused_by == result.events[0].event_id
+    assert result.events[3].payload == {"combatId": "combat_001"}
 
 
 def test_monster_attack_save_failure_propagates_and_keeps_loaded_state() -> None:
@@ -1429,6 +1445,173 @@ def test_monster_attack_target_without_character_state_is_invalid_target() -> No
     assert store.save_calls == []
 
 
+# --- Ordinary Action availability gating and consumption (§3.33, TSK-0015) --
+
+
+def test_ordinary_action_gate_rejects_active_actor_with_action_already_spent() -> None:
+    actor = make_actor()
+    target = make_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(actor.id, target.id),
+        active_index=0,
+        action_spent=True,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(),
+        calls,
+        error=DefinitionNotFoundError("must not be reached"),
+    )
+    dice = ScriptedDiceEngine(10, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert result.errors[0].entity_id == "character_001"
+    assert result.errors[0].field is None
+    assert calls == ["load"]
+    assert definitions.get_calls == []
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_monster_attack_miss_inside_combat_consumes_and_saves_action() -> None:
+    actor = make_monster_actor()
+    target = make_character_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(actor.id, target.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(1, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert result.outcome is not None
+    assert result.outcome.hit is False
+    assert calls == ["load", "definition", "dice", "metadata", "metadata", "save"]
+    assert len(result.events) == 2
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "TurnActionSpent",
+    ]
+    assert result.events[1].caused_by == result.events[0].event_id
+    assert result.events[1].payload == {"combatId": "combat_001"}
+    assert len(store.save_calls) == 1
+    saved_combat = store.save_calls[0].combat
+    assert saved_combat is not None
+    assert saved_combat.action_spent is True
+    assert combat.action_spent is False
+    assert target.current_hp == 11
+
+
+def test_monster_attack_zero_source_damage_inside_combat_consumes_and_saves_action() -> (
+    None
+):
+    actor = make_monster_actor()
+    target = make_character_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(actor.id, target.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(
+            attacks=(make_scimitar_attack(damage_modifier=-2),)
+        ),
+        calls,
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(1,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert result.outcome is not None and result.outcome.hit is True
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "TurnActionSpent",
+    ]
+    assert result.events[1].payload["amount"] == 0
+    assert result.events[2].caused_by == result.events[0].event_id
+    assert result.events[2].payload == {"combatId": "combat_001"}
+    assert len(store.save_calls) == 1
+    saved_combat = store.save_calls[0].combat
+    assert saved_combat is not None
+    assert saved_combat.action_spent is True
+    assert target.current_hp == 11
+
+
+def test_monster_attack_miss_inside_combat_save_failure_propagates_and_keeps_loaded_state() -> (
+    None
+):
+    actor = make_monster_actor()
+    target = make_character_target()
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=(actor.id, target.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(make_character(),),
+        combat=combat,
+    )
+    loaded_before = deepcopy(snapshot)
+    calls: list[str] = []
+    store = SaveFailingStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(1, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    with pytest.raises(StateStoreError, match="backend unavailable"):
+        handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert calls.count("save") == 1
+    assert len(store.save_calls) == 1
+    assert store.snapshot == loaded_before
+    assert combat.action_spent is False
+
+
 # --- Active-turn eligibility gating (§3.28, TSK-0006) -------------------
 
 
@@ -1480,13 +1663,27 @@ def test_active_character_inside_combat_reaches_existing_attack_path() -> None:
 
     result = handle_with(store, definitions, dice, metadata)
 
-    assert calls == ["load", "definition", "dice", "metadata"]
-    assert store.save_calls == []
+    assert calls == ["load", "definition", "dice", "metadata", "metadata", "save"]
     assert result.success is True
     assert result.outcome is not None
     assert result.outcome.target_id == "monster_001"
-    assert len(result.events) == 1
-    assert result.events[0].type == "AttackResolved"
+    assert len(result.events) == 2
+    attack_event, action_spent_event = result.events
+    assert attack_event.type == "AttackResolved"
+    assert action_spent_event.type == "TurnActionSpent"
+    assert action_spent_event.event_id == "event_000124"
+    assert action_spent_event.command_id == attack_event.command_id
+    assert action_spent_event.actor_id == "character_001"
+    assert action_spent_event.caused_by == attack_event.event_id
+    assert action_spent_event.payload == {"combatId": "combat_001"}
+    assert len(store.save_calls) == 1
+    saved_combat = store.save_calls[0].combat
+    assert saved_combat is not None
+    assert saved_combat.action_spent is True
+    assert saved_combat.round == combat.round
+    assert saved_combat.order == combat.order
+    assert saved_combat.active_index == combat.active_index
+    assert combat.action_spent is False
 
 
 def test_inactive_character_inside_combat_is_rejected_before_routing() -> None:
@@ -1977,6 +2174,7 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
         "metadata",
         "metadata",
         "metadata",
+        "metadata",
         "save",
     ]
     assert definitions.get_calls == [
@@ -1994,7 +2192,7 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
         },
     ]
     assert dice.roll_calls == ["1d20", "1d4"]
-    assert metadata.next_calls == ["campaign_001"] * 3
+    assert metadata.next_calls == ["campaign_001"] * 4
     assert snapshot == before
     assert target.current_hp == 7
     assert len(store.save_calls) == 1
@@ -2005,6 +2203,9 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
     assert saved_target.current_hp == 2
     assert saved_target is not target
     assert saved_snapshot.creatures[0] is actor
+    assert saved_snapshot.combat is not None
+    assert saved_snapshot.combat.action_spent is True
+    assert combat.action_spent is False
 
     assert result.success is True
     assert result.errors == ()
@@ -2018,21 +2219,25 @@ def test_character_weapon_valid_equipped_dagger_hits_with_proficiency() -> None:
     assert outcome.hit is True
     assert outcome.critical_hit is False
 
-    assert len(result.events) == 3
-    attack_event, damage_event, applied_event = result.events
+    assert len(result.events) == 4
+    attack_event, damage_event, applied_event, action_spent_event = result.events
     assert [event.type for event in result.events] == [
         "CharacterWeaponAttackResolved",
         "CharacterWeaponAttackDamageResolved",
         "DamageApplied",
+        "TurnActionSpent",
     ]
     assert [event.event_id for event in result.events] == [
         "event_000123",
         "event_000124",
         "event_000125",
+        "event_000126",
     ]
     assert attack_event.caused_by is None
     assert damage_event.caused_by == attack_event.event_id
     assert applied_event.caused_by == damage_event.event_id
+    assert action_spent_event.caused_by == attack_event.event_id
+    assert action_spent_event.payload == {"combatId": "combat_001"}
     assert all(event.command_id == "command_000001" for event in result.events)
     assert all(event.campaign_id == "campaign_001" for event in result.events)
     assert all(event.actor_id == "character_001" for event in result.events)
@@ -2671,6 +2876,8 @@ def test_character_weapon_poisoned_actor_uses_disadvantage() -> None:
         "dice",
         "dice",
         "metadata",
+        "metadata",
+        "save",
     ]
     assert dice.roll_calls == ["1d20", "1d20"]
     outcome = result.outcome
@@ -2683,7 +2890,13 @@ def test_character_weapon_poisoned_actor_uses_disadvantage() -> None:
         "rolls": (17, 6),
         "selected": 6,
     }
-    assert store.save_calls == []
+    assert len(result.events) == 2
+    assert result.events[1].type == "TurnActionSpent"
+    assert result.events[1].caused_by == result.events[0].event_id
+    assert len(store.save_calls) == 1
+    saved_combat = store.save_calls[0].combat
+    assert saved_combat is not None
+    assert saved_combat.action_spent is True
 
 
 # --- Resolution ----------------------------------------------------------
@@ -2725,12 +2938,19 @@ def test_character_weapon_gameplay_miss_outcomes_are_successful_processing(
     assert outcome.hit is expected_hit
     assert outcome.critical_hit is expected_critical
     assert dice.roll_calls == ["1d20"]
-    assert metadata.next_calls == ["campaign_001"]
-    assert len(result.events) == 1
+    assert metadata.next_calls == ["campaign_001"] * 2
+    assert len(result.events) == 2
     assert result.events[0].type == "CharacterWeaponAttackResolved"
     assert result.events[0].payload["hit"] is expected_hit
     assert result.events[0].payload["criticalHit"] is expected_critical
-    assert store.save_calls == []
+    assert result.events[1].type == "TurnActionSpent"
+    assert result.events[1].caused_by == result.events[0].event_id
+    assert result.events[1].payload == {"combatId": "combat_001"}
+    assert len(store.save_calls) == 1
+    saved_combat = store.save_calls[0].combat
+    assert saved_combat is not None
+    assert saved_combat.action_spent is True
+    assert combat.action_spent is False
 
 
 def test_character_weapon_critical_hit_doubles_dice_count_and_applies_modifier_once() -> (
@@ -2772,14 +2992,16 @@ def test_character_weapon_critical_hit_doubles_dice_count_and_applies_modifier_o
     outcome = result.outcome
     assert outcome is not None
     assert outcome.critical_hit is True
-    assert len(result.events) == 3
+    assert len(result.events) == 4
     assert [event.type for event in result.events] == [
         "CharacterWeaponAttackResolved",
         "CharacterWeaponAttackDamageResolved",
         "DamageApplied",
+        "TurnActionSpent",
     ]
     assert result.events[1].caused_by == result.events[0].event_id
     assert result.events[2].caused_by == result.events[1].event_id
+    assert result.events[3].caused_by == result.events[0].event_id
     assert result.events[1].payload["roll"] == {
         "expression": "2d4",
         "rolls": (3, 4),
@@ -2793,7 +3015,7 @@ def test_character_weapon_critical_hit_doubles_dice_count_and_applies_modifier_o
     assert len(store.save_calls) == 1
 
 
-def test_character_weapon_zero_source_damage_emits_two_events_without_save() -> None:
+def test_character_weapon_zero_source_damage_consumes_and_saves_action() -> None:
     actor = make_weapon_actor(strength=16, dexterity=8)
     target = make_target()
     character = make_character(weapon_proficiencies=frozenset({"dagger"}))
@@ -2823,15 +3045,22 @@ def test_character_weapon_zero_source_damage_emits_two_events_without_save() -> 
     assert result.success is True
     assert result.outcome is not None and result.outcome.hit is True
     assert dice.roll_calls == ["1d20", "1d4"]
-    assert metadata.next_calls == ["campaign_001"] * 2
+    assert metadata.next_calls == ["campaign_001"] * 3
     assert [event.type for event in result.events] == [
         "CharacterWeaponAttackResolved",
         "CharacterWeaponAttackDamageResolved",
+        "TurnActionSpent",
     ]
     assert result.events[1].caused_by == result.events[0].event_id
     assert result.events[1].payload["amount"] == 0
-    assert store.save_calls == []
+    assert result.events[2].caused_by == result.events[0].event_id
+    assert result.events[2].payload == {"combatId": "combat_001"}
     assert target.current_hp == 7
+    assert len(store.save_calls) == 1
+    saved_combat = store.save_calls[0].combat
+    assert saved_combat is not None
+    assert saved_combat.action_spent is True
+    assert combat.action_spent is False
 
 
 def test_character_weapon_lethal_damage_floors_hp_at_zero() -> None:
@@ -2867,13 +3096,15 @@ def test_character_weapon_lethal_damage_floors_hp_at_zero() -> None:
         make_weapon_command(weapon_ability=Ability.STRENGTH),
     )
 
-    assert len(result.events) == 3
+    assert len(result.events) == 4
     assert result.events[2].payload == {
         "targetId": "monster_001",
         "amount": 7,
         "previousHp": 3,
         "newHp": 0,
     }
+    assert result.events[3].type == "TurnActionSpent"
+    assert result.events[3].caused_by == result.events[0].event_id
     saved_target = next(
         creature
         for creature in store.save_calls[0].creatures
@@ -2980,12 +3211,14 @@ def test_character_weapon_attack_against_zero_hp_target_still_resolves() -> None
     )
 
     assert result.success is True
-    assert len(result.events) == 3
+    assert len(result.events) == 4
     assert [event.type for event in result.events] == [
         "CharacterWeaponAttackResolved",
         "CharacterWeaponAttackDamageResolved",
         "DamageApplied",
+        "TurnActionSpent",
     ]
     assert result.events[2].payload["previousHp"] == 0
     assert result.events[2].payload["newHp"] == 0
+    assert result.events[3].caused_by == result.events[0].event_id
     assert len(store.save_calls) == 1
