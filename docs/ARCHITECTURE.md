@@ -69,6 +69,7 @@
 | Zero-HP Attack eligibility by creature category (TSK-0003) | §3.31 |
 | Character Dagger Attack/Damage contracts (TSK-0011) | §3.32 |
 | Current-turn ordinary Action expenditure, `TurnActionSpent` (TSK-0014/TSK-0015) | §3.33 |
+| Character zero-HP turn / Death Save contract (TSK-0016, decision-only) | §3.34 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -136,6 +137,7 @@
   * [3.31. Minimal Phase 3 zero-HP Attack eligibility (TSK-0003)](#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003)
   * [3.32. Minimal Phase 3 Character Dagger Attack and Damage contracts (TSK-0011)](#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011)
   * [3.33. Minimal Phase 3 current-turn ordinary Action expenditure (TSK-0014)](#333-minimal-phase-3-current-turn-ordinary-action-expenditure-tsk-0014)
+  * [3.34. Minimal Character zero-HP turn and Death Save contract (TSK-0016)](#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -1284,6 +1286,14 @@ inheritance. `CharacterState` не дублирует `definition_id`, `ability_
 State Owner не вводится. Class levels, XP, proficiency provenance, monster
 proficiency и другие proficiency categories остаются deferred.
 
+Этот раздел фиксирует только Phase 2 foundation field set. Более поздние
+Phase 3 consumers additively расширили эту проекцию тем же способом:
+`weapon_proficiencies` (§3.29). §3.34 (TSK-0016) канонически определяет, но
+пока не реализует, дальнейшее additive Character-specific расширение —
+death-save/lifecycle facts (`death_save_successes`, `death_save_failures`,
+`death_save_stable`, `dead`); полный контракт живёт только в §3.34, не
+здесь.
+
 ---
 
 #### State lifecycle
@@ -2290,9 +2300,12 @@ State и runtime Event persistence не выполняется.
 Poisoned explicitly does not affect this Saving Throw slice (§3.22):
 `SavingThrowHandler` invokes no Condition roll-mode policy and retains the
 resolver's NORMAL default. Monster Saving Throws and their proficiency source,
-Death Saving Throws, other Condition/Effect sources, aggregation/cancellation
-of advantage sources, generic modifier/check abstractions, resolver registry,
-EventStore, replay, and State mutation remain deferred.
+other Condition/Effect sources, aggregation/cancellation of advantage
+sources, generic modifier/check abstractions, resolver registry, EventStore,
+replay, and State mutation remain deferred. Death Saving Throws are a
+separate Character-specific mechanic and do not reuse `SavingThrowCommand`/
+`SavingThrowResult` at all; their canonical contract is defined by §3.34
+(TSK-0016), not by this section.
 
 ---
 
@@ -4714,7 +4727,7 @@ This slice does not implement, and does not imply a decision on:
 ```text
 CombatEnded / combat lifecycle end
 zero-HP action eligibility (DEF-0015) — this slice's eligibility gate is turn-order identity only
-Death Saves (DEF-0005)
+Death Saves (DEF-0005) — canonically defined, not implemented, by §3.34 (TSK-0016)
 movement, positions, reactions, opportunity attacks
 turn resources, action economy
 Attack -> Combat integration (Attack, §3.17, is unchanged by this slice)
@@ -4898,10 +4911,16 @@ combat.active_creature_id`; a mismatch returns `ACTION_NOT_AVAILABLE`
 (`entity_id=actor_id`) without calling `DiceEngine`, `EventMetadataProvider`,
 or `StateStore.save()`. **This is the concrete actor/action-eligibility
 consumer this slice exists to deliver**: only the creature whose turn it
-already is may advance it. It does not check `current_hp` — that is the
-open zero-HP question DEF-0015 still tracks; a downed combatant's turn still
-formally passes in this slice, matching the SRD's Unconscious behavior of the
-turn order itself continuing even when the combatant cannot act.
+already is may advance it. `AdvanceTurnHandler` still does not check
+`current_hp`, and §3.34 (TSK-0016) deliberately preserves that: a downed
+combatant's turn still formally passes in this slice, matching the SRD's
+Unconscious behavior of the turn order itself continuing even when the
+combatant cannot act. Rather than adding a new `current_hp`/death-save
+precondition to `AdvanceTurnCommand` itself, §3.34 adds a separate
+in-memory, post-transition Character Death Save consequence layered after
+this Command's own resolution (see §3.34's "Trigger and timing"). The
+broader DEF-0015 zero-HP/lifecycle concern beyond that narrow Character
+Death Save slice remains open.
 
 `resolve_advance_turn(command, combat) -> AdvanceTurnResult` is pure: it
 computes `next_index = (active_index + 1) % len(order)`, increments `round`
@@ -6852,11 +6871,18 @@ ActionEligibilityService, a generic validation pipeline, or a shared
 a generic Creature life-state model shared by Character and Monster
 ```
 
-DEF-0005 (Character death saves) and the broader DEF-0015 concern (Monster
-death policy, stabilization, and targetability/lifecycle questions beyond
-this narrow Attack-eligibility rule) remain deferred; this section resolves
-only the narrow zero-HP Attack-eligibility question named in TSK-0003, with
-production implementation delivered by TSK-0007.
+This section resolves only the narrow zero-HP Attack-eligibility question
+named in TSK-0003, with production implementation delivered by TSK-0007; the
+death-save/stabilization exclusions listed above are this section's own
+boundary, not a claim about any other section's current status. §3.34
+(TSK-0016) now canonically defines, but does not yet deliver a production
+continuation of, the Character-specific Death Save mechanic those exclusions
+name — that production continuation remains pending TSK-0017. §3.34 does not
+change this section's `current_hp == 0` Attack-eligibility gate, which stays
+sufficient by itself with no separate stable/dead check. The broader
+DEF-0015 concern (Monster death policy, stabilization, and
+targetability/lifecycle questions beyond this narrow Attack-eligibility
+rule) remains open and is untouched by §3.34.
 
 ---
 
@@ -7650,6 +7676,14 @@ generic ActionResource, TurnResource, ResourcePool, or ActionCost types
 a generic action/eligibility framework
 ```
 
+The Character Death Save consequence defined by §3.34 (TSK-0016) is not an
+ordinary Action and is intentionally outside this section's `action_spent`
+contract: it never reads or sets `action_spent` and never produces
+`TurnActionSpent`. A natural-20 Death Save may still leave a Character able
+to Attack later in the same turn, but only because `current_hp` becomes
+positive and `action_spent` was already `False` at the start of that turn —
+this section's own existing semantics, unchanged by §3.34.
+
 A Reaction cannot simply reuse this section's active-turn-scoped boolean:
 a Reaction may be taken by a combatant who is **not** the current active
 combatant, so `CombatState.action_spent` — a fact about the current
@@ -7666,6 +7700,904 @@ established. No generic `Action`, `ActionResource`, `TurnResource`,
 `ResourcePool`, `ActionCost`, or action/eligibility-pipeline abstraction is
 introduced; current evidence — three single-attack, single-Action
 consumers — does not justify one.
+
+---
+
+### 3.34. Minimal Character zero-HP turn and Death Save contract (TSK-0016)
+
+Implementation status: **Contract defined by TSK-0016 (architecture-only).
+Production implementation is intentionally pending TSK-0017.** No production
+Python behavior — Command, Event, resolver, applier, Application handler, or
+State schema writer — is delivered by TSK-0016. The current production
+State schema writer remains exact V8 (§3.33, §12.13); this section's
+additive V9 target contract (see below) is not yet implemented.
+
+This section resolves the architectural questions required for the minimal
+Character Death Save slice tracked by DEF-0005 (Character Death Saving
+Throws) and the Character-specific slice of DEF-0015 (zero-HP semantics),
+both of which remained open after §3.31/DEC-0046 fixed the narrow
+`AttackCommand` zero-HP eligibility question. It defines, but does not
+implement, the deterministic Engine consequence a Character at
+`current_hp == 0` triggers when their Combat turn begins; the production
+continuation of DEF-0005 remains pending TSK-0017, and DEF-0015's broader
+Monster/lifecycle scope remains open.
+
+#### Mechanic identity
+
+Death Saving Throw is a separate Character-specific mechanic, not an
+`AttackCommand`-adjacent rule and not a reuse of the existing ability-based
+Saving Throw slice (§3.13). It is not represented as
+`SavingThrowCommand(ability, dc)` and does not construct or reuse
+`SavingThrowResult`/`SavingThrowResolved`. It has no `Ability`, no ability
+modifier, no proficiency bonus, and no externally supplied DC — none of
+those concepts apply to a Death Save.
+
+Reuse is limited to genuinely mechanic-agnostic primitives that already
+exist: `DiceEngine`, `D20Roll`/`resolve_d20_roll` (§3.12) under
+`RollMode.NORMAL`, `GameEvent` (§8), `ResolutionResult` (§3.5), Event
+metadata allocation, `StateStore`, and the existing §3.18 mutating-command
+principles. No `SavingThrowCommand`, `SavingThrowPayload`, `Ability`, or
+proficiency contribution is involved.
+
+#### Trigger and timing
+
+There is no player- or API-facing `DeathSaveCommand`. A Death Save is a
+mandatory, deterministic Engine consequence of the start of a Character's
+Combat turn, not a separate intent a caller submits. The only concrete
+trigger sources are the two existing Combat Events that establish a new
+`active_creature_id` (§3.25):
+
+```text
+CombatStarted
+TurnAdvanced
+```
+
+After the corresponding Combat Event has been applied in memory (that is,
+after `apply_combat_started_v1` or `apply_turn_advanced_v1` has produced the
+replacement `CombatState` within the same Command's resolution — before
+`StateStore.save()`), the new `active_creature_id` is considered to have
+started its turn. If that creature:
+
+```text
+has a matching CharacterState (§3.2.4)
+CreatureState.current_hp == 0
+CharacterState.death_save_stable == False
+CharacterState.dead == False
+```
+
+the Engine must automatically resolve exactly one Death Save before ordinary
+actions of that turn become available. If the Character is
+`death_save_stable` or `dead`, no Death Save is rolled. If the new active
+creature has no matching `CharacterState` (a Monster), this section defines
+nothing for it; Monster lifecycle stays governed by DEF-0015's still-open
+Monster scope.
+
+This is an in-memory Application-orchestration consequence of
+`StartCombatHandler`/`AdvanceTurnHandler`, not a new Command a caller
+submits and not a background/scheduled process.
+
+#### Turn and Action semantics
+
+A Death Save is not an ordinary Action (§3.33). It does not read
+`CombatState.action_spent` as a prerequisite, does not set it, and does not
+produce `TurnActionSpent`. The existing `CombatStarted`/`TurnAdvanced`
+Action-aware projection (§3.33) is otherwise unchanged: the new active
+turn's `action_spent` still starts `False`. Consequently, a natural 20 Death
+Save that returns the Character to 1 HP at the start of a turn still leaves
+that Character's ordinary Action available for the rest of that same turn.
+
+`CombatState.order` (§3.25) is unaffected: a stable or dead Character stays
+formally present in Combat order for this slice. `AdvanceTurnCommand` gains
+no new check on `current_hp`, `death_save_stable`, `dead`, or
+`action_spent`; it remains exactly as unconditional as §3.25/§3.33 already
+define. Combat removal, turn skipping, and `CombatEnded` remain undefined by
+this section.
+
+#### State ownership and authoritative facts
+
+Death-save lifecycle facts belong to the existing `Creature / CreatureDomain`
+owner (§10.4) and are stored in the Character-specific projection,
+conceptually `CharacterState` (§3.2.4) — not a new State Owner, and not
+`CombatState`. This extends §3.2.4 the same way §3.29 extended it with
+`weapon_proficiencies`, without restating or narrowing its existing base
+field set:
+
+```python
+@dataclass
+class CharacterState:
+    ...
+    death_save_successes: int
+    death_save_failures: int
+    death_save_stable: bool
+    dead: bool
+```
+
+Wire field names (JSON, §12.5/§12.6): `deathSaveSuccesses`,
+`deathSaveFailures`, `deathSaveStable`, `dead`.
+
+Successes and failures need not be consecutive. A third success stabilizes
+the Character in the same Death Save resolution that produced it:
+
+```text
+death_save_stable = True
+death_save_successes = 0
+death_save_failures = 0
+current_hp remains 0
+```
+
+A failure that brings the failure count to three kills the Character:
+
+```text
+death_save_failures = 3
+dead = True
+death_save_stable = False
+```
+
+Within this minimal slice, the third Death Save failure is the only defined
+transition to `dead = True` (this is fixed precisely as a one-way
+`CharacterState` intrinsic invariant below). This section does not
+establish the reverse universal equivalence
+`dead == True → death_save_failures == 3`: a future instant/massive-damage
+death rule may reach `dead = True` through a different, separately defined
+path, and is out of scope here.
+
+None of the invariants above can be fully protected by `CharacterState`'s
+own constructor in isolation, because some depend on the matching
+`CreatureState.current_hp`. Following this project's existing pattern —
+`StateSnapshot` (§3.2.3) is already the authoritative boundary for
+relational invariants across State projections, for example its existing
+"each `CharacterState.id` must match an existing `CreatureState.id`" check —
+this section splits the invariants into two authoritative validation
+boundaries. No new validator, service, or State Owner is introduced; both
+boundaries are the existing `CharacterState.__post_init__` and the existing
+authoritative `StateSnapshot` construction/validation, per the pattern
+already used for the referential checks above.
+
+**`CharacterState` intrinsic invariants** — checkable from the Character
+projection alone, without `CreatureState`, and enforced by
+`CharacterState.__post_init__` exactly like every other intrinsic Character
+field (§3.2.4, §3.29):
+
+```text
+death_save_successes: exact int (bool is not valid), 0 <= death_save_successes <= 2
+death_save_failures:  exact int (bool is not valid), 0 <= death_save_failures <= 3
+death_save_stable: exact bool
+dead: exact bool
+
+not (death_save_stable and dead)
+
+death_save_stable == True
+    → death_save_successes == 0
+    → death_save_failures == 0
+
+death_save_failures == 3
+    → dead == True
+```
+
+`death_save_failures == 3 → dead == True` is deliberately one-way, matching
+the "only defined transition to `dead = True`" statement above; the reverse
+(`dead == True → death_save_failures == 3`) is never asserted, for the same
+future-instant/massive-damage-death reason.
+
+**`StateSnapshot` Character↔Creature relational invariants** — checked when
+the authoritative `StateSnapshot` (§3.2.3) is constructed, the same
+boundary that already validates `CharacterState.id`↔`CreatureState.id` and
+`CombatState.order`↔`CreatureState.id` referential relations (§3.2.3,
+§3.25). This is canonical authoritative-State validation, not merely a
+promise that handlers happen to produce correct States:
+
+```text
+character.death_save_stable == True
+    → creature.current_hp == 0
+
+character.dead == True
+    → creature.current_hp == 0
+
+creature.current_hp > 0
+    → character.death_save_successes == 0
+    → character.death_save_failures == 0
+    → character.death_save_stable == False
+    → character.dead == False
+```
+
+These relations apply only to a `CreatureState`/`CharacterState` pair that
+share an `id` (§3.2.3); no universal Creature life-state rule is
+introduced, and a Creature with no matching `CharacterState` is unaffected.
+Every Application replacement flow that produces a final `StateSnapshot`
+(§"State application / replacement" below) must satisfy these same
+relations before `StateStore.save()`, exactly like it must already satisfy
+the existing `StateSnapshot` referential invariants.
+
+#### D20 resolution semantics
+
+A Death Save rolls one normal d20 through the existing primitives:
+
+```text
+resolve_d20_roll(dice, RollMode.NORMAL) -> D20Roll
+```
+
+No Ability, no ability modifier, no proficiency bonus, and no externally
+supplied DC apply. Poisoned does not affect this slice — no
+Condition/RollMode policy is consulted, matching the existing Saving Throw
+precedent (§3.13). Advantage, disadvantage, and modifier aggregation are not
+introduced for this mechanic.
+
+Outcome by `D20Roll.selected`:
+
+```text
+selected in 10..19 → one success
+selected in 2..9   → one failure
+natural 1  (selected == 1)  → two failures, capped at death_save_failures == 3
+natural 20 (selected == 20) → immediate regain of 1 HP (see below)
+```
+
+`D20Roll` itself does not interpret natural 1/20 (§3.12); that
+interpretation is this concrete Death Save rule's own responsibility, the
+same way Attack (§3.17) owns its own natural-1/20 interpretation.
+
+#### Result contract
+
+The Death Save resolution above (§"D20 resolution semantics") and the
+lifecycle transitions above (§"State ownership and authoritative facts")
+are packaged into one immutable, pure resolution outcome before any Event is
+built — the same "resolver produces a typed Result, Application builds the
+Event from it" split every other mechanic in this document already follows
+(§3.5, §3.13, §3.19, §3.27). No Python file/module/function name is fixed by
+this section; the conceptual shape is:
+
+```text
+CharacterDeathSaveResult(
+    character_id: str,
+    roll: D20Roll,
+    previous_successes: int,
+    previous_failures: int,
+    previous_stable: bool,
+    previous_dead: bool,
+    successes: int,
+    failures: int,
+    stable: bool,
+    dead: bool,
+    hp_regain_amount: Literal[0, 1],
+)
+```
+
+`hp_regain_amount` is `1` only for a natural 20 and `0` for every other
+outcome; it is the explicit, already-decided semantic signal that a
+subsequent `HealingApplied` V1 (§"Natural 20 and HP ownership") is required.
+Application must read this field rather than re-deriving `roll.selected ==
+20` a second time to decide whether to build `HealingApplied`; the natural-20
+interpretation happens exactly once, inside this Result. The Result itself
+never mutates `CreatureState.current_hp` — HP ownership stays exactly as
+defined below.
+
+Result invariants agree with the already-fixed natural-1/natural-20 and
+three-success/three-failure rules above:
+
+```text
+hp_regain_amount == 1  ⟺  roll.selected == 20
+hp_regain_amount == 1  →  successes == 0, failures == 0, stable == False, dead == False
+
+for roll.selected in 10..19 (ordinary success), when this is not the third success:
+    successes == previous_successes + 1, failures == previous_failures
+
+for roll.selected in 2..9 (ordinary failure):
+    failures == previous_failures + 1, successes == previous_successes
+
+for roll.selected == 1 (natural 1):
+    failures == min(previous_failures + 2, 3), successes == previous_successes
+
+stable == True  ⟺  this resolution is the third success
+    (in which case successes == 0 and failures == 0)
+dead == True  ⟺  this resolution is the third failure (failures reaches 3)
+    (in which case failures == 3 and stable == False)
+stable and dead are never both True
+```
+
+This Result is a Death Save-specific consequence outcome, not a new root
+Command outcome. It does not replace or wrap the outcome of the root
+Command that triggered it:
+
+```text
+StartCombatHandler keeps its existing ResolutionResult[StartCombatResult] (§3.25)
+AdvanceTurnHandler keeps its existing ResolutionResult[AdvanceTurnResult] (§3.25)
+the existing in-Combat Attack root outcome stays the existing Attack result (§3.17, §3.26, §3.32)
+the existing direct ApplyDamageCommand root outcome stays DamageResult (§3.19)
+```
+
+**`CharacterDeathSaveFailureResult`.** The Damage-at-zero lifecycle
+consequence (§"Damage at zero HP" below) follows the same
+"rule resolution → typed Result → Event → State application" boundary as
+every other mechanic in this document; it is not built directly out of
+scattered `CharacterState`/`DamageResult`/critical-provenance facts inside
+Application without a concrete rule outcome. As with
+`CharacterDeathSaveResult` above, no Python file/module/function name is
+fixed by this section; the conceptual shape is:
+
+```text
+CharacterDeathSaveFailureResult(
+    character_id: str,
+    previous_failures: int,
+    previous_stable: bool,
+    previous_dead: bool,
+    critical_hit: bool,
+    failures: int,
+    stable: bool,
+    dead: bool,
+)
+```
+
+`death_save_successes` is intentionally absent: this Damage consequence
+never changes it (§"Damage at zero HP" below already establishes this).
+
+This Result is a pure concrete lifecycle-consequence outcome. Preconditions:
+
+```text
+target is a Character
+DamageResult.previous_hp == 0
+previous_dead == False
+```
+
+Critical provenance is exactly the already-fixed §"Critical provenance"
+rule below: a direct `ApplyDamageCommand` always supplies `critical_hit =
+False`; Attack-origin Damage supplies the already-existing source-specific
+`critical_hit` fact. Resolution:
+
+```text
+failure_increment = 2 if critical_hit else 1
+failures = min(previous_failures + failure_increment, 3)
+stable = False
+dead = (failures == 3)
+```
+
+`previous_stable == True` is a valid input: Damage at zero HP against a
+stabilized Character clears stabilization and records the failure(s) in the
+same resolution, exactly as §"Damage at zero HP" below already states. This
+Result does not mutate State and does not construct an Event; the concrete
+`CharacterDeathSaveFailureRecorded` V1 Event (below) is built from it, the
+same way `build_damage_applied_v1`/`build_healing_applied_v1` already build
+their Events from an already-resolved `DamageResult`/`HealingResult` (§3.19,
+§3.20).
+
+Both `CharacterDeathSaveResult` and `CharacterDeathSaveFailureResult` are
+internal consequence outcomes consumed only to build the consequence
+Event(s) described below; those Events are appended to the unchanged
+`ResolutionResult.events` tuple of the root Command, exactly like
+`MonsterAttackDamageResult` already contributes `MonsterAttackDamageResolved`
+to `AttackCommand`'s `ResolutionResult.events` without itself becoming
+`ResolutionResult.outcome` (§3.27). Neither Result becomes a new root
+`ResolutionResult.outcome`; the existing root outcomes listed above are
+unchanged. This section introduces no generic lifecycle Result, no generic
+consequence Result, no composite root Result, and no
+`ResolutionResult.outcome` union widening.
+
+#### Natural 20 and HP ownership
+
+A natural 20 must not directly mutate `CreatureState.current_hp` through the
+Death Save Event. The canonical consequence chain reuses the existing
+source-agnostic HP-transition contract instead of inventing a second one:
+
+```text
+CharacterDeathSaveResolved
+        ↓
+HealingApplied V1 (§3.20)
+        ↓
+current_hp: 0 → 1
+```
+
+The existing `HealingApplied` V1 wire contract (`targetId`, `amount`,
+`previousHp`, `maxHp`, `newHp`) is reused unchanged as the HP-transition
+fact: `amount = 1`, `previousHp = 0`, `newHp = min(max_hp, 1) = 1` (every
+Character has `max_hp >= 1`, per the existing `CreatureState` invariant,
+§3.2.1). No `HealingApplied` V2 is introduced solely to carry Death-Save
+provenance. A later TSK-0017 may add a separate source-specific builder/
+orchestration path that produces this same unchanged `HealingApplied` V1
+payload from a natural-20 Death Save; its exact Python API is not fixed
+here.
+
+For a natural 20:
+
+```text
+this resolution is not an ordinary success-counter increment
+after HealingApplied is applied, current_hp == 1
+death_save_successes and death_save_failures are both reset to 0
+death_save_stable remains False
+dead remains False
+```
+
+`CharacterDeathSaveResolved` itself does not perform an ordinary success
+increment for a natural 20; the final reset is expressed by the Event's own
+`successes`/`failures` payload fields (both `0`) together with the
+subsequent `HealingApplied` HP transition, not by a second competing
+authoritative HP fact.
+
+#### Ordinary Healing interaction
+
+Any current authoritative Character transition `current_hp == 0 →
+current_hp > 0` produced by ordinary Healing (§3.20) must reset:
+
+```text
+death_save_successes → 0
+death_save_failures  → 0
+death_save_stable    → False
+```
+
+Ordinary Healing is not resurrection. If the matching `CharacterState` has
+`dead == True`, the existing source-agnostic `ApplyHealingCommand` (§3.20)
+must be rejected before resolution or State mutation, using the existing
+`ErrorCode.INVALID_TARGET` (§3.9) with `entity_id` = the target Character ID
+and `field="target_id"`. This is a Character-specific gate layered on the
+existing Healing validation order; it does not become a universal Creature
+death/healing rule, and Monster Healing/lifecycle is unchanged. Healing is
+never described as a transition `dead = True → dead = False`; this section
+defines no path back from `dead = True`.
+
+#### Damage at zero HP
+
+A Death Save failure consequence from Damage applies only when the target
+was a Character and the authoritative pre-damage fact was already zero:
+
+```text
+DamageResult.previous_hp == 0 (§3.19, §3.27)
+```
+
+Damage that transitions `positive HP → 0` does not by itself create a Death
+Save failure. Damage that transitions `0 → 0` against a living Character
+(`dead == False`) does create one Death Save failure consequence. If the
+Character was `death_save_stable`, that Damage first clears
+`death_save_stable = False`, and only then the failure(s) below are
+recorded. If the Character already has `dead == True`, no new Death Save
+failure is created by this minimal contract.
+
+```text
+ordinary Damage at zero HP        → +1 failure
+critical Attack Damage at zero HP → +2 failures
+failures are capped at 3
+```
+
+Massive-damage / instant-death rules are not implemented or defined by this
+section.
+
+#### Critical provenance
+
+`ApplyDamageCommand` (§3.19) gains no `critical_hit` field; a generic Damage
+abstraction is not created for this one consumer. Because the direct
+`ApplyDamageCommand` path has no authoritative critical provenance, within
+this minimal modeled Damage-at-zero scope its zero-HP consequence is treated
+as ordinary Damage (`+1 failure`). This is not a decision about future
+massive-damage or instant-death precedence — that rule is separately out of
+scope (see "Explicit exclusions" below) and is neither designed nor
+implemented here; it only fixes how the two currently modeled Damage-at-zero
+consequences (ordinary vs. Attack-critical) are told apart today.
+Attack-origin Damage may use the already-existing source-specific
+`critical_hit` fact already carried by `MonsterAttackDamageResult`/
+`MonsterAttackDamageResolved` (§3.27) and
+`CharacterWeaponAttackDamageResult`/`CharacterWeaponAttackDamageResolved`
+(§3.32):
+
+```text
+ordinary Attack Damage → +1 failure
+critical Attack Damage → +2 failures
+```
+
+No generic Damage abstraction is created solely for this one consumer.
+
+#### `CharacterDeathSaveResolved` V1
+
+A new concrete Event, following the existing past-tense naming convention
+(§8.13), records exactly the resolution of the Death Save mechanic itself:
+
+```text
+CharacterDeathSaveResolved   version 1
+```
+
+Canonical payload:
+
+```text
+characterId         str
+roll                { mode, rolls, selected }   (D20Roll, §3.12)
+previousSuccesses    int
+previousFailures     int
+previousStable       bool
+previousDead         bool
+successes            int
+failures             int
+stable               bool
+dead                 bool
+```
+
+`characterId` is an explicit subject field because this Event's automatic
+trigger (see "Event Envelope identity and subject" below) may not be the
+same entity as the Envelope's `actorId`. The payload carries no
+`previousHp`/`newHp`: the natural-20 HP transition belongs to the following
+`HealingApplied` Event (see "Natural 20 and HP ownership" above), not to
+this Event.
+
+#### `CharacterDeathSaveFailureRecorded` V1
+
+A separate concrete Event covers only the Damage-at-zero consequence; it is
+not a Saving Throw resolution Event and is never produced by the turn-start
+Death Save flow above:
+
+```text
+CharacterDeathSaveFailureRecorded   version 1
+```
+
+Canonical payload:
+
+```text
+characterId       str
+previousFailures  int
+failures          int
+previousStable    bool
+stable            bool
+previousDead      bool
+dead              bool
+criticalHit       bool
+```
+
+`successes` is not part of this payload: this consequence never changes
+`death_save_successes`, and duplicating an unchanged fact for symmetry is
+rejected, matching the existing precedent of omitting a redundant field from
+`HealingApplied` (§3.20, "there is no `appliedAmount`"). `causedBy` on this
+Event points at the originating `DamageApplied.eventId` (see "Event
+ordering and atomicity" below).
+
+The builder copies `CharacterDeathSaveFailureResult` (§"Result contract"
+above) verbatim into this payload; it does not recompute
+`min(previous_failures + failure_increment, 3)` or `dead = (failures == 3)`
+itself — those formulas are owned exclusively by the Result. For a valid
+Event of this concrete type, the following semantic integrity relations
+therefore always hold:
+
+```text
+previousDead == False
+stable == False
+
+criticalHit == False → failures == min(previousFailures + 1, 3)
+criticalHit == True  → failures == min(previousFailures + 2, 3)
+
+dead == (failures == 3)
+```
+
+`dead == (failures == 3)` holds only as a property of this one concrete
+Event type, not as a universal Character invariant (see "State ownership
+and authoritative facts" above): a future, separately defined
+instant/massive-damage death path is not required to satisfy it.
+
+#### State application / replacement
+
+This subsection fixes the concrete pure application/replacement boundaries
+for the two Events above and for the existing `HealingApplied` V1 reset
+consequence, following the same "Event → State contract" and stale-input
+integrity-check discipline every other implemented applier in this document
+already uses (§3.18, §3.19, §3.20, §3.25, §3.33). No Python function name is
+fixed by this section.
+
+**`CharacterDeathSaveResolved` V1.** Conceptually:
+
+```text
+CharacterState + CharacterDeathSaveResolved V1 → replacement CharacterState
+```
+
+Required integrity/stale-state prerequisites, minimum:
+
+```text
+event type == "CharacterDeathSaveResolved", version == 1
+payload.characterId == CharacterState.id
+payload.previousSuccesses == loaded death_save_successes
+payload.previousFailures == loaded death_save_failures
+payload.previousStable == loaded death_save_stable
+payload.previousDead == loaded dead
+```
+
+On success, the replacement changes only the four Death Save/lifecycle
+facts (`successes`, `failures`, `stable`, `dead`, taken from the payload);
+every other Character fact (`id`, `total_level`,
+`saving_throw_proficiencies`, `skill_proficiencies`,
+`weapon_proficiencies`) is preserved. This Event never changes
+`CreatureState.current_hp`; the natural-20 HP transition is still performed
+solely by the following `HealingApplied` V1 (see "Natural 20 and HP
+ownership" above), never by this applier.
+
+**`CharacterDeathSaveFailureRecorded` V1.** Conceptually:
+
+```text
+CharacterState + CharacterDeathSaveFailureRecorded V1 → replacement CharacterState
+```
+
+Required checks:
+
+```text
+event type == "CharacterDeathSaveFailureRecorded", version == 1
+payload.characterId == CharacterState.id
+payload.previousFailures == loaded death_save_failures
+payload.previousStable == loaded death_save_stable
+payload.previousDead == loaded dead
+```
+
+On success, the replacement takes `failures`/`stable`/`dead` verbatim from
+the payload; it does not recompute
+`min(previousFailures + failure_increment, 3)` or re-derive `dead` itself —
+exactly like `apply_damage_applied_v1`/`apply_healing_applied_v1` take
+`newHp` verbatim without recomputing their own formulas (§3.19, §3.20). That
+formula is owned exclusively by `CharacterDeathSaveFailureResult` (§"Result
+contract" above) and is already fixed as a property of any valid Event of
+this type by the "semantic integrity relations" listed under
+`CharacterDeathSaveFailureRecorded` V1 above. Within this Event:
+`death_save_successes` is preserved unchanged; every other Character fact
+is preserved.
+
+Neither applier is folded into a generic Event applier; each is one more
+concrete narrow applier alongside the existing ones (§3.18, §3.23).
+
+**`HealingApplied` V1 → Character reset.** This fixes the already-agreed
+cross-projection consequence explicitly: when an existing `HealingApplied`
+V1 (§3.20) for a matching live Character records `previousHp == 0` and
+`newHp > 0`, within that same logical transaction:
+
+```text
+the existing Creature projection applies the HP transition exactly as §3.20 already defines
+the matching Character projection additionally resets:
+    death_save_successes = 0
+    death_save_failures = 0
+    death_save_stable = False
+dead is already required to be False at this point, because ordinary
+    Healing against a dead Character is rejected before resolution
+    (see "Ordinary Healing interaction" above)
+```
+
+No separate `DeathSaveReset` Event is introduced: this reset is fully
+determined by the already-existing authoritative `HealingApplied` fact and
+needs no second authoritative source. For a natural 20,
+`CharacterDeathSaveResolved` already carries the resulting
+successes/failures/stable/dead (all reset, per "Result contract" above), and
+the following `HealingApplied` performs only the canonical HP transition;
+both projections stay consistent because both derive from the same
+`CharacterDeathSaveResult`.
+
+**Final snapshot / persistence.**
+
+```text
+the Start Combat / Advance Turn flow may replace CombatState + CharacterState,
+    and — for a natural 20 — CreatureState, together in one final StateSnapshot
+the Damage-at-zero flow replaces CreatureState through the existing Damage
+    projection (§3.19, §3.27) and CharacterState through the failure
+    consequence above, together in one final StateSnapshot
+ordinary Healing may replace CreatureState and the matching CharacterState
+    together in one final StateSnapshot
+the loaded snapshot is never mutated in place; every projection above is a
+    replacement, matching §3.18's copy-on-write discipline
+StateStore.save() is called exactly once per Command, after the final
+    replacement StateSnapshot has been constructed
+no intermediate saves occur
+no generic UnitOfWork, WorkingState, or transaction framework is introduced
+```
+
+This is the same single-snapshot MVP atomicity boundary §3.18/§3.33 already
+established; this subsection only makes explicit which projections a
+successful Death Save/Damage-at-zero/reset consequence may combine into that
+one final snapshot.
+
+#### Event Envelope identity and subject
+
+No existing Event Envelope semantics (§8.2) are silently redefined. For
+every automatic consequence Event this section defines, Envelope
+correlation follows the original root Command, exactly like every other
+multi-Event chain already in this document (§3.27, §3.33):
+
+```text
+commandId   = the original StartCombat / AdvanceTurn / Attack / ApplyDamage command ID
+campaignId  = the original Command's campaign
+actorId     = the original root Command's actor, per the existing consequence-chain convention (§8.8)
+causedBy    = the immediate causing Event
+```
+
+The subject of a Death Save or a Damage-at-zero failure consequence is
+carried separately, as payload `characterId` — never by redefining
+`actorId` as a generic "subject of event" field. For a turn-start Death
+Save:
+
+```text
+CombatStarted / TurnAdvanced → CharacterDeathSaveResolved
+```
+
+For a natural 20:
+
+```text
+CharacterDeathSaveResolved → HealingApplied
+```
+
+#### Event ordering and atomicity
+
+Start Combat, first-turn case:
+
+```text
+CombatStarted
+→ optional CharacterDeathSaveResolved
+→ optional HealingApplied (natural 20 only)
+```
+
+Advance Turn case:
+
+```text
+TurnAdvanced
+→ optional CharacterDeathSaveResolved
+→ optional HealingApplied (natural 20 only)
+```
+
+All projections are built in memory, exactly like every other multi-Event
+chain in this document (§3.8, §3.18, §3.27, §3.33). `StateStore.save()` is
+called exactly once, after the final replacement `StateSnapshot` — carrying
+both the `CombatState` transition and any Death-Save/HP consequence for the
+Character — has been constructed. `CombatState` is never saved separately
+before the Death Save consequence; this preserves the same one-save-per-
+Command discipline §3.33 already established for combined HP+Action
+mutation.
+
+For the existing successful in-Combat Attack path, when Damage is applied
+to a living Character target that was already at zero HP
+(`DamageResult.previous_hp == 0`, see "Damage at zero HP" above — never a
+`positive HP → 0` transition), the already-fixed §3.33 Event chain gains one
+optional Event without changing its shape:
+
+```text
+<existing Attack-resolution Event(s)>
+→ <source Damage-resolution Event>
+→ DamageApplied
+→ optional CharacterDeathSaveFailureRecorded
+→ TurnActionSpent
+```
+
+The existing §3.33 invariant is preserved unchanged: `TurnActionSpent`
+remains the last Event of a successful in-Combat Attack transaction, and its
+existing `causedBy` (the Attack-resolution Event, §3.33) is never
+re-pointed at the Death Save failure Event.
+
+For the direct `ApplyDamageCommand` path (§3.19):
+
+```text
+DamageApplied
+→ optional CharacterDeathSaveFailureRecorded
+```
+
+#### Validation precedence
+
+For `StartCombatCommand`/`AdvanceTurnCommand`:
+
+```text
+1. existing root Command validation (§3.25)
+2. existing Combat resolution (§3.25)
+3. Combat Event built and applied in memory
+4. new active creature identified
+5. matching CharacterState?
+6. current_hp == 0?
+7. dead?
+8. death_save_stable?
+9. only then: DiceEngine for the Death Save
+```
+
+An invalid root `StartCombatCommand`/`AdvanceTurnCommand` must not roll a
+Death Save, allocate Death-Save Event metadata, produce a Death-Save
+consequence Event, or call `StateStore.save()`. This is the same
+"rejection precedes every side effect" discipline §3.28/§3.31/§3.33 already
+established for `AttackHandler`, applied here to `StartCombatHandler`/
+`AdvanceTurnHandler`.
+
+For ordinary Healing (§3.20):
+
+```text
+1. existing actor lookup
+2. existing target lookup
+3. target has a CharacterState with dead == True → ErrorCode.INVALID_TARGET
+4. only then: Healing resolution / metadata / State application
+```
+
+#### State schema V9 target contract
+
+The current production State schema writer remains exact V8 (§3.33,
+§12.13). This section defines, but does not implement, the target State
+schema V9: additive over V8, adding only the four Character death-save/
+lifecycle fields above. V9 does not change any root `state` key, does not
+change the `CreatureState` wire shape, does not change the `CombatState`
+wire shape, and does not change any Inventory/Equipment wire shape.
+
+Legacy V1–V8 snapshots must decode, once a V9 reader is implemented, with
+the same canonical-compatibility-default discipline already established for
+`weapon_proficiencies`/`inventories`/`equipment` (V1–V5), `positions`
+(V5–V6), and `action_spent` (V5–V7) in §12.13:
+
+```text
+deathSaveSuccesses = 0
+deathSaveFailures  = 0
+deathSaveStable    = False
+dead               = False
+```
+
+A V9 writer must write the real Character `deathSaveSuccesses`/
+`deathSaveFailures`/`deathSaveStable`/`dead` facts explicitly; legacy V1–V8
+wire schemas are not retroactively extended to accept these V9-only fields.
+
+A V9 reader must finish decoding by constructing the authoritative
+`StateSnapshot` (§3.2.3), exactly like every other schema version already
+does: it first decodes the exact wire fields (or, for legacy V1–V8, applies
+the canonical defaults above), then the resulting Character/Creature
+projections must satisfy both `CharacterState`'s own intrinsic constructor
+invariants and the `StateSnapshot` Character↔Creature relational invariants
+fixed above (§"State ownership and authoritative facts"). A persisted V9
+combination that violates those relations — for example `dead=true`
+together with `currentHp>0` — is an invalid State and must be rejected, not
+silently accepted as authoritative. Legacy V1–V8 snapshots decode to the
+canonical `0`/`0`/`False`/`False` defaults above and then pass through this
+same `StateSnapshot` relational validation, exactly like every other
+projection they already carry. This section fixes only the target
+decode-then-validate contract; it does not fix a specific exception message
+or serializer helper name — Architecture has no existing general
+requirement on exact persistence-error text — and it changes no
+`StateSerializer` code, since it is not implemented by TSK-0016.
+
+This section only fixes the target V9 contract; it does not claim V9 is
+already implemented.
+
+#### Compatibility with existing sections
+
+```text
+§3.13 — the ordinary Character Saving Throw slice is unaffected; Death Save
+    remains a distinct mechanic that does not construct SavingThrowCommand
+    or SavingThrowResult (see "Mechanic identity" above)
+§3.25 — AdvanceTurnCommand's existing unconditional turn-order-continues
+    semantics and its unchanged current_hp-blind actor-eligibility gate are
+    unaffected; this section only adds an in-memory consequence built on
+    top of the already-applied CombatStarted/TurnAdvanced projection
+§3.31 — the existing Character/Monster current_hp == 0 -> AttackCommand
+    unavailable gate remains sufficient by itself and gains no separate
+    stable/dead check
+§3.33 — Death Save never reads or sets action_spent and never produces
+    TurnActionSpent; a natural-20 Death Save may leave a Character able to
+    Attack later in the same turn only because current_hp is already
+    positive and action_spent is still False, exactly as §3.33 already
+    defines
+§10.4 — "life state" (already listed as a Creature State Owner
+    responsibility) is concretized, for this narrow slice, as the four
+    Character death-save/lifecycle facts above
+§10.7 — CombatState gains no death-save field; the turn-start trigger is a
+    Creature-owned consequence of an already-applied Combat Event, not a
+    Combat-owned fact
+```
+
+#### Explicit exclusions
+
+This section does not design, decide, or implement:
+
+```text
+Monster death/lifecycle policy or Monster Death Saves
+a universal LifeState or generic unconscious/dead hierarchy
+broader zero-HP targetability
+removing dead/stable combatants from Combat order, or automatic turn skipping
+CombatEnded
+Monster stabilization
+Medicine / external stabilization
+the stable 1d4-hour natural-recovery rule
+resurrection / revivification
+temporary HP
+massive-damage / instant-death rules
+Movement, Reactions, Opportunity Attacks
+a generic lifecycle/effect/action framework
+a generic consequence pipeline or generic modifier aggregation
+```
+
+#### Abstraction verdict
+
+**KEEP CONCRETE.** This section reuses only the existing narrow primitives
+already named above (`DiceEngine`, `D20Roll`/`resolve_d20_roll`, `GameEvent`,
+`ResolutionResult`, `HealingApplied` V1, Event metadata, `StateStore`, the
+existing §3.18/§3.23 replacement-State discipline). It introduces no
+`LifeState`, no `ZeroHpLifecycleEngine`, no generic Saving Throw base type,
+no generic turn-trigger framework, no generic consequence pipeline, no
+generic state-transition framework, and no Event registry/dispatcher built
+solely for this mechanic. Two Death Save consumers exist in this slice
+(turn-start resolution and Damage-at-zero failure), and both remain concrete
+per the same evidence-driven abstraction discipline (§3.6) already applied
+throughout §§3.19–3.33.
 
 ---
 
@@ -9416,6 +10348,14 @@ Any future non-combat/world placement contract remains undesigned. If such a
 contract is introduced later, its relationship with combat-local tactical
 position must be defined without creating competing authoritative copies.
 
+The generic `life state` responsibility listed above is concretized, for the
+narrow Character zero-HP/Death Save slice, by §3.34 (TSK-0016): the
+death-save/lifecycle facts live in the Character-specific projection,
+conceptually `CharacterState` (§3.2.4), under this same `Creature /
+CreatureDomain` owner — not under `CombatEngine` (§10.7) and not as a new
+State Owner. §3.34 defines this contract but does not implement it; broader
+Monster life-state policy remains open (DEF-0015).
+
 Но важно разделить **ownership** и **resolution**.
 
 Например `DamageResolver` рассчитывает:
@@ -9539,6 +10479,13 @@ field and is not a second authoritative copy of this combat-local tactical
 position. Any future non-combat/world placement contract remains
 undesigned; if one is introduced later, it must be defined without creating
 a competing authoritative copy.
+
+Per §3.34 (TSK-0016), `CombatState` gains no death-save/lifecycle field:
+the Character Death Save triggered at the start of a Combat turn is a
+Creature-owned (§10.4) consequence of an already-applied `CombatStarted`/
+`TurnAdvanced` Event, not a `CombatEngine`-owned fact. `turn resources`
+above already covers `CombatState.action_spent` (§3.33); it does not extend
+to Death Save, which is not an ordinary Action.
 
 Например:
 
@@ -10917,6 +11864,18 @@ the same compatibility-default discipline as the
 Action-expenditure fact and no durable Event replay exists to reconstruct
 one. This default is a deterministic compatibility value, not a
 reconstruction of what Action usage actually happened in that legacy game.
+
+State schema V9 (§3.34, TSK-0016) is the target, currently unimplemented,
+additive Character death-save/lifecycle contract over V8: it would add only
+`deathSaveSuccesses`, `deathSaveFailures`, `deathSaveStable`, and `dead` to
+each Character, without changing any root `state` key or the `CreatureState`
+/`CombatState`/Inventory/Equipment wire shapes. The current production
+writer remains exact V8; this is a defined target contract, not an
+implemented schema version. Once a V9 reader exists, a legacy V1–V8
+Character decodes with the same canonical-compatibility-default discipline
+as above: `deathSaveSuccesses = 0`, `deathSaveFailures = 0`,
+`deathSaveStable = False`, `dead = False` — because no pre-V9 snapshot
+recorded these facts and no durable Event replay exists to reconstruct them.
 
 ---
 
