@@ -1232,10 +1232,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0016
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0016
+- **Next free ID:** TSK-0017
 - **Last reviewed:** 2026-09-09
 
 ---
@@ -1244,12 +1244,150 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0016` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Zero-HP and combatant eligibility | Define minimal Character zero-HP turn and Death Save contract |
 
 ---
 
 # Open task details
 
-_(none — no `Current`, `Ready`, or `Blocked` task is currently tracked.)_
+## TSK-0016 — Define minimal Character zero-HP turn and Death Save contract
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `S`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Zero-HP and combatant eligibility
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
+- `ARCHITECTURE.md` §3.13
+- `ARCHITECTURE.md` §3.25
+- `ARCHITECTURE.md` §3.31
+- `ARCHITECTURE.md` §3.33
+- `ARCHITECTURE.md` §10.4
+- `ARCHITECTURE.md` §10.7
+- `DEFERRED.md` — `DEF-0005`
+- `DEFERRED.md` — `DEF-0015`
+- `DEC-0046`
+
+**Depends on:** `—`
+
+**Contract impact:** `decision required before implementation`
+
+### Goal
+
+Определить канонический минимальный Character-specific zero-HP turn /
+Death Save contract для уже существующего production-состояния, когда
+Character имеет `current_hp == 0` и является текущим
+`CombatState.active_creature_id`. После выполнения TSK-0016 Architecture
+должна однозначно определять authoritative Engine flow для этого случая, не
+переиспользуя обычный ability-based `SavingThrowCommand`.
+
+### Why now
+
+- Combat turn sequencing уже реализован.
+- Character при `current_hp == 0` уже не может использовать текущий
+  `AttackCommand`.
+- Такой Character всё ещё может быть участником `CombatState.order` и
+  получить активный ход.
+- `DEF-0005` прямо оставляет открытым минимальный timing/ownership contract
+  для Death Saving Throws.
+- Это уже реальный current-phase consumer, поэтому его надо определить
+  раньше более позднего Movement/Reaction scope.
+- Не создавай generic lifecycle abstraction.
+
+### Scope
+
+TSK-0016 должен определить канонически, но не реализовывать production
+behavior:
+
+- точный trigger/timing Death Save относительно существующего active turn /
+  `AdvanceTurn`;
+- является ли Death Save отдельным Command либо использует другой явно
+  определённый Engine trigger;
+- authoritative State Owner;
+- минимально необходимые authoritative State facts, включая
+  counters/lifecycle facts только если они реально требуются;
+- Result contract;
+- Event contract и causality/order;
+- natural 1 / natural 20 semantics;
+- three-success / three-failure semantics;
+- минимально необходимые reset rules;
+- только необходимые для согласованности этого slice взаимодействия с
+  Damage/Healing;
+- State replacement / persistence boundary;
+- schema/versioning consequence, если новый persisted State действительно
+  потребуется;
+- validation/failure precedence;
+- совместимость с существующими §3.25, §3.31 и §3.33;
+- явный abstraction verdict;
+- новый Decision record при выполнении самой architecture task;
+- необходимые factual reconciliation updates в Roadmap/Deferred/CLAUDE
+  только если принятый контракт реально затронет их канонические/статусные
+  утверждения.
+
+Не предопределяй точные Python class/function/file names без необходимости.
+
+### Out of scope
+
+- Monster death/lifecycle policy;
+- universal `LifeState`;
+- generic unconscious/dead state hierarchy;
+- broader zero-HP targetability;
+- Combat removal;
+- `CombatEnded`;
+- Monster stabilization;
+- resurrection/revivification;
+- external stabilization features/items;
+- temporary HP;
+- massive-damage rules;
+- Movement;
+- Reactions;
+- Opportunity Attacks;
+- generic lifecycle/effect/action framework;
+- production implementation самого Death Save slice.
+
+Если часть Damage/Healing interaction строго необходима для
+непротиворечивого минимального Death Save contract, разрешено определить
+только эту узкую часть и явно оставить broader lifecycle deferred.
+
+### Acceptance criteria
+
+TSK-0016 считается выполненным только когда:
+
+1. Architecture однозначно отвечает, что происходит, когда Character с
+   `current_hp == 0` получает активный Combat turn.
+2. Death Saving Throw не подменяется существующим ordinary
+   `SavingThrowCommand(ability, dc)`.
+3. Trigger/timing и связь с `AdvanceTurn` определены.
+4. State ownership и минимальные authoritative facts определены.
+5. Result/Event/State-transition/persistence boundaries определены.
+6. natural 1/20, three-success/three-failure и необходимые reset semantics
+   определены.
+7. Совместимость/границы с §3.31 zero-HP Attack eligibility и §3.33
+   ordinary Action expenditure явны.
+8. Monster lifecycle и generic `LifeState` не вводятся.
+9. Любое изменение persisted State имеет явный schema compatibility
+   contract.
+10. Принятое архитектурное решение сопровождается новым `DEC-*`, а связанные
+    Deferred/Roadmap assertions reconciled без ложного закрытия broader
+    zero-HP capability.
+11. Нет production-кода в самой decision-only TSK-0016.
+
+### Verification
+
+- consistency review против текущих §3.13, §3.25, §3.31, §3.33, §10.4,
+  §10.7;
+- проверка `DEF-0005` / `DEF-0015`;
+- architecture/documentation reference tests;
+- `git diff --check`;
+- проверка, что production Python не менялся;
+- проверка итогового diff на отсутствие несвязанных изменений.
 
 ---
 
