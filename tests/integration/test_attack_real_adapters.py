@@ -566,17 +566,16 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     assert reloaded_target.current_hp == expected_previous_hp - expected_damage_amount
     assert reloaded_target.max_hp == character_target.max_hp
 
-    # (3)/(4) CombatState still exists and is byte-for-byte unchanged.
+    # (3)/(4) CombatState still exists and is otherwise unchanged, except for
+    # the Action this successful in-Combat Attack spent.
     assert reloaded.combat is not None
     assert reloaded.combat.id == combat.id
     assert reloaded.combat.round == combat.round
     assert reloaded.combat.order == combat.order
     assert reloaded.combat.active_index == combat.active_index
-    # State schema V8 (`actionSpent`) is a later group's persistence scope;
-    # the current V7 writer does not persist `action_spent`, so it
-    # deterministically decodes to its dataclass default on every reload
-    # regardless of the in-memory Action expenditure this Attack produced.
-    assert reloaded.combat.action_spent is False
+    # State schema V8 (`actionSpent`, §3.33/DEC-0049) persists Action
+    # expenditure through a real filesystem reload.
+    assert reloaded.combat.action_spent is True
 
     # (5) no unrelated Creature/Character projection changed.
     reloaded_actor = next(
@@ -876,11 +875,9 @@ def test_character_dagger_hit_applies_damage_and_persists_through_real_adapters(
     assert reloaded.combat.order == combat.order
     assert reloaded.combat.active_index == combat.active_index
     assert reloaded.combat.positions == combat.positions
-    # State schema V8 (`actionSpent`) is a later group's persistence scope;
-    # the current V7 writer does not persist `action_spent`, so it
-    # deterministically decodes to its dataclass default on every reload
-    # regardless of the in-memory Action expenditure this Attack produced.
-    assert reloaded.combat.action_spent is False
+    # State schema V8 (`actionSpent`, §3.33/DEC-0049) persists Action
+    # expenditure through a real filesystem reload.
+    assert reloaded.combat.action_spent is True
 
     # no Event history artifacts, no other files, no leftover temp files.
     assert sorted(

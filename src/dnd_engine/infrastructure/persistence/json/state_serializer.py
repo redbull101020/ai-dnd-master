@@ -40,25 +40,34 @@ SCHEMA_V6_VERSION = 6
 # strictly additive over V6 (§12.13): every other V6 shape/field-set is
 # unchanged and reused as-is by V7.
 SCHEMA_V7_VERSION = 7
-SCHEMA_VERSION = SCHEMA_V7_VERSION
+# Fixed identity of the V8 state shape (adds Combat `actionSpent`,
+# §3.33/DEC-0049). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
+# SCHEMA_V6_VERSION/SCHEMA_V7_VERSION above: historical V8 semantics compare
+# against this fixed sentinel, never against the mutable SCHEMA_VERSION
+# below. V8 is strictly additive over V7 (§12.13): every other V7
+# shape/field-set is unchanged and reused as-is by V8.
+SCHEMA_V8_VERSION = 8
+SCHEMA_VERSION = SCHEMA_V8_VERSION
 # The V4 Creature shape (with `conditions`) is unchanged by the V5 state-level
-# `combat` addition, the V6 weapon-source additions, and the V7 Combat
-# `positions` addition; all four versions decode Creature payloads the same
-# way.
+# `combat` addition, the V6 weapon-source additions, the V7 Combat
+# `positions` addition, and the V8 Combat `actionSpent` addition; all five
+# versions decode Creature payloads the same way.
 _CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {
     SCHEMA_V4_VERSION,
     SCHEMA_V5_VERSION,
     SCHEMA_V6_VERSION,
     SCHEMA_V7_VERSION,
+    SCHEMA_V8_VERSION,
 }
 
 _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
 _V2_STATE_FIELDS = {"campaign", "creatures", "characters"}
 _V5_STATE_FIELDS = _V2_STATE_FIELDS | {"combat"}
-# V7 adds no new top-level state key: `positions` lives inside the existing
-# `combat` key (see _V7_COMBAT_FIELDS below), so V6 and V7 share this exact
-# top-level state field set.
+# Neither V7 nor V8 adds a new top-level state key: `positions` and
+# `actionSpent` both live inside the existing `combat` key (see
+# _V7_COMBAT_FIELDS/_V8_COMBAT_FIELDS below), so V6, V7, and V8 share this
+# exact top-level state field set.
 _V6_STATE_FIELDS = _V5_STATE_FIELDS | {"inventories", "equipment"}
 _CAMPAIGN_FIELDS = {"id", "rulesetId", "rulesetVersion"}
 _CREATURE_FIELDS = {
@@ -88,6 +97,9 @@ _COMBAT_FIELDS = {"id", "round", "order", "activeIndex"}
 # V7 adds `positions` to the existing exact V5/V6 Combat wire shape; V5/V6
 # combat payloads must keep rejecting it (§3.30/DEC-0045, §12.13).
 _V7_COMBAT_FIELDS = _COMBAT_FIELDS | {"positions"}
+# V8 adds `actionSpent` to the existing exact V5/V6/V7 Combat wire shape;
+# V5/V6/V7 combat payloads must keep rejecting it (§3.33/DEC-0049, §12.13).
+_V8_COMBAT_FIELDS = _V7_COMBAT_FIELDS | {"actionSpent"}
 _COMBAT_POSITION_FIELDS = {"creatureId", "x", "y"}
 _INVENTORY_FIELDS = {"ownerId", "items"}
 _INVENTORY_ITEM_FIELDS = {"id", "definitionId"}
@@ -124,6 +136,12 @@ def _require_str(value: object, location: str) -> str:
 def _require_int(value: object, location: str) -> int:
     if type(value) is not int:
         raise TypeError(f"{location} must be an int")
+    return value
+
+
+def _require_bool(value: object, location: str) -> bool:
+    if type(value) is not bool:
+        raise TypeError(f"{location} must be a bool")
     return value
 
 
@@ -393,6 +411,7 @@ def _validate_combat(combat: CombatState | None, creature_ids: set[str]) -> None
         raise ValueError(
             "every positioned creature must be present in combat.order"
         )
+    _require_bool(combat.action_spent, "combat.action_spent")
 
 
 def _serialize_combat_position(position: CombatPosition) -> dict[str, object]:
@@ -415,6 +434,7 @@ def _serialize_combat(combat: CombatState | None) -> dict[str, object] | None:
         "positions": [
             _serialize_combat_position(position) for position in positions
         ],
+        "actionSpent": combat.action_spent,
     }
 
 
@@ -496,6 +516,7 @@ class StateSerializer:
             SCHEMA_V5_VERSION,
             SCHEMA_V6_VERSION,
             SCHEMA_V7_VERSION,
+            SCHEMA_V8_VERSION,
         }:
             raise ValueError(f"unsupported schemaVersion: {schema_version}")
 
@@ -503,7 +524,7 @@ class StateSerializer:
         state = _require_mapping(root["state"], "state")
         if schema_version == LEGACY_SCHEMA_VERSION:
             state_fields = _V1_STATE_FIELDS
-        elif schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}:
+        elif schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}:
             state_fields = _V6_STATE_FIELDS
         elif schema_version == SCHEMA_V5_VERSION:
             state_fields = _V5_STATE_FIELDS
@@ -550,12 +571,17 @@ class StateSerializer:
                 )
                 for index, character_data in enumerate(characters_data)
             )
-        if schema_version in {SCHEMA_V5_VERSION, SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}:
+        if schema_version in {
+            SCHEMA_V5_VERSION,
+            SCHEMA_V6_VERSION,
+            SCHEMA_V7_VERSION,
+            SCHEMA_V8_VERSION,
+        }:
             combat = StateSerializer._deserialize_combat(state["combat"], schema_version)
         else:
             combat = None
 
-        if schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}:
+        if schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}:
             inventories_data = state["inventories"]
             if type(inventories_data) is not list:
                 raise TypeError("state.inventories must be a list")
@@ -662,7 +688,11 @@ class StateSerializer:
         character = _require_mapping(data, f"state.characters[{index}]")
         if schema_version == LEGACY_SCHEMA_V2_VERSION:
             character_fields = _V2_CHARACTER_FIELDS
-        elif schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}:
+        elif schema_version in {
+            SCHEMA_V6_VERSION,
+            SCHEMA_V7_VERSION,
+            SCHEMA_V8_VERSION,
+        }:
             character_fields = _V6_CHARACTER_FIELDS
         else:
             character_fields = _V3_CHARACTER_FIELDS
@@ -735,7 +765,11 @@ class StateSerializer:
         # V1-V5 predate `weaponProficiencies`; legacy migration always yields
         # empty weapon-source membership (§12.13), never a synthesized value.
         weapon_proficiencies: list[str] = []
-        if schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION}:
+        if schema_version in {
+            SCHEMA_V6_VERSION,
+            SCHEMA_V7_VERSION,
+            SCHEMA_V8_VERSION,
+        }:
             weapon_proficiencies_data = character["weaponProficiencies"]
             if type(weapon_proficiencies_data) is not list:
                 raise TypeError(
@@ -829,9 +863,12 @@ class StateSerializer:
         if data is None:
             return None
         combat = _require_mapping(data, "state.combat")
-        combat_fields = (
-            _V7_COMBAT_FIELDS if schema_version == SCHEMA_V7_VERSION else _COMBAT_FIELDS
-        )
+        if schema_version == SCHEMA_V8_VERSION:
+            combat_fields = _V8_COMBAT_FIELDS
+        elif schema_version == SCHEMA_V7_VERSION:
+            combat_fields = _V7_COMBAT_FIELDS
+        else:
+            combat_fields = _COMBAT_FIELDS
         _require_exact_fields(combat, combat_fields, "combat")
 
         order_data = combat["order"]
@@ -843,7 +880,7 @@ class StateSerializer:
         )
 
         positions: tuple[CombatPosition, ...] = ()
-        if schema_version == SCHEMA_V7_VERSION:
+        if schema_version in {SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}:
             positions_data = combat["positions"]
             if type(positions_data) is not list:
                 raise TypeError("state.combat.positions must be a list")
@@ -852,12 +889,20 @@ class StateSerializer:
                 for index, position_data in enumerate(positions_data)
             )
 
+        # V5-V7 predate `actionSpent`; a legacy active Combat always decodes
+        # to an unspent Action -- a compatibility default, not a recovered
+        # historical fact (§3.33/DEC-0049, §12.13).
+        action_spent = False
+        if schema_version == SCHEMA_V8_VERSION:
+            action_spent = _require_bool(combat["actionSpent"], "combat.actionSpent")
+
         return CombatState(
             id=_require_str(combat["id"], "combat.id"),
             round=_require_int(combat["round"], "combat.round"),
             order=order,
             active_index=_require_int(combat["activeIndex"], "combat.activeIndex"),
             positions=positions,
+            action_spent=action_spent,
         )
 
     @staticmethod
