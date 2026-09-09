@@ -339,7 +339,11 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
     FilesystemStateStore reload -- alongside an untouched CombatState and
     untouched unrelated Creature/Character projections -- using the real
     FilesystemStateStore, PackagedDefinitionSource, and PythonDiceEngine
-    adapters end to end."""
+    adapters end to end. Also carries the TSK-0015 §3.33 real-adapter
+    evidence: the same reload proves `combat.action_spent is True`
+    alongside the HP change from one combined save, and a second Attack
+    by the same still-active actor is then rejected purely from that
+    reloaded persisted fact."""
     campaigns_root = tmp_path / "campaigns"
 
     goblin_actor = CreatureState(
@@ -603,6 +607,29 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
         if path.is_file()
     ) == ["state.json"]
     assert list(state_path.parent.glob(".state-*.tmp")) == []
+
+    # (9) TSK-0015 end-to-end persisted-eligibility proof: the
+    # `action_spent=True` fact just reloaded from real V8 JSON (not the
+    # in-memory result above) is what gates a second Attack by the same
+    # still-active actor, rejected before any Definition/dice/Event/save
+    # side effect. The exact side-effect boundary itself is already proven
+    # by the Application unit tests (Group 2); this proves the real
+    # writer/reader round trip actually feeds that gate.
+    second_result = AttackHandler(
+        state_store=FilesystemStateStore(campaigns_root),
+        definition_source=PackagedDefinitionSource(),
+        dice=PythonDiceEngine(rng),
+        event_metadata_provider=metadata,
+    ).handle(command)
+
+    assert second_result.success is False
+    assert second_result.outcome is None
+    assert second_result.events == ()
+    assert len(second_result.errors) == 1
+    assert second_result.errors[0].code is ErrorCode.ACTION_NOT_AVAILABLE
+    assert second_result.errors[0].entity_id == "monster_001"
+    assert metadata.calls == ["campaign_001"] * 4
+    assert state_path.read_bytes() == state_after
 
 
 # --- Character Dagger weapon Attack (TSK-0012/TSK-0013 Group 4) -------
