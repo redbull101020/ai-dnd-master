@@ -23,6 +23,7 @@ def test_combat_state_has_exact_fields() -> None:
         "order",
         "active_index",
         "positions",
+        "action_spent",
     )
 
 
@@ -192,3 +193,21 @@ def test_combat_state_accepts_full_positions() -> None:
     )
 
     assert len(combat.positions) == 2
+
+
+def test_combat_state_defaults_action_spent_to_false() -> None:
+    combat = make_combat()
+
+    assert combat.action_spent is False
+
+
+def test_combat_state_accepts_explicit_action_spent_true() -> None:
+    combat = make_combat(action_spent=True)
+
+    assert combat.action_spent is True
+
+
+@pytest.mark.parametrize("invalid_value", [1, 0, "True", "", None])
+def test_combat_state_rejects_non_bool_action_spent(invalid_value: object) -> None:
+    with pytest.raises(TypeError, match="action_spent"):
+        make_combat(action_spent=invalid_value)

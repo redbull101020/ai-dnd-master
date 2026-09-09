@@ -160,6 +160,16 @@ def test_applier_produces_combat_with_no_positions() -> None:
     assert combat.positions == ()
 
 
+def test_applier_produces_combat_with_action_unspent() -> None:
+    """The first active combatant's current turn begins with its baseline
+    ordinary Action unspent (§3.33/DEC-0049)."""
+    event = build_event()
+
+    combat = apply_combat_started_v1(event)
+
+    assert combat.action_spent is False
+
+
 def test_applier_rejects_wrong_event_type_or_version() -> None:
     from dataclasses import replace
 
