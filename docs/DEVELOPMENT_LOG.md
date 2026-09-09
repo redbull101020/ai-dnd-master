@@ -6718,3 +6718,61 @@ already-merged delivery branch.
   remains separately tracked by `TSK-0017`. No commit, push, or merge was
   performed for this group; a `review.patch` containing only the fresh
   Group 3 changes was produced for review.
+
+## 2026-09-09 — Prepared Task Closure for TSK-0016 in PR #91
+
+- The cumulative TSK-0016 result already pushed to draft PR #91
+  (`docs/ARCHITECTURE.md` §3.34, `docs/DECISIONS.md` `DEC-0050`, and the
+  `docs/DEFERRED.md`/`docs/ROADMAP.md`/`docs/TASK.md` reconciliation) was
+  reviewed and accepted. PR #91 exists, is open, is still a draft, and
+  targets `main`. Before preparing this closure, `origin/main` was
+  revalidated at `e442a89a4abd8acea13be863aa1012b5d7705ea8` — unchanged
+  since the branch was created — and PR #91's head was confirmed to match
+  this branch's local `HEAD`, so no conflicting upstream Decision ID,
+  Current task, or Architecture change exists.
+- Corrected one remaining factual wording error in `docs/DECISIONS.md`
+  `DEC-0050`: "resets the same three counters/stable flag" understated the
+  fact that the persisted lifecycle State has exactly two counters
+  (`death_save_successes`, `death_save_failures`) and one separate boolean
+  flag (`death_save_stable`); reworded to "resets both Death Save counters
+  and the `stable` flag". No Decision semantics changed.
+- Prepared the normal-path §18.1 prospective Task Closure for `TSK-0016` in
+  this same delivery branch/PR, following `docs/TASK.md`'s own closure
+  procedure: `Current position` changed `Current: TSK-0016` → `Current: —`
+  (`TSK-0017` is not promoted — it stays `Backlog`/`Depends on: TSK-0016`
+  and still requires its own separate refinement/readiness pass once
+  TSK-0016 is authoritatively `Done` on `main`); the `TSK-0016` row was
+  removed from `Open task index`; the full `TSK-0016` detail block —
+  including its temporary "Current branch status" note, which has now
+  served its purpose — was removed from `Open task details`; and
+  `TSK-0016` was added to `Recently completed` with `PR #91` as evidence
+  (no merge commit SHA, because PR #91 has not merged). This entire
+  `docs/TASK.md` closure state is prospective, per §18.1: it describes what
+  becomes authoritative only if and when this exact PR merges to `main`.
+  Before that merge, `TSK-0016` is not actually `Done`, and `TSK-0017` must
+  not begin implementation.
+- Re-read `docs/ROADMAP.md` and `docs/DEFERRED.md`: both already state the
+  accepted status correctly and required no fresh change. `DEF-0005`
+  remains `In progress` (architecture defined by §3.34/DEC-0050; production
+  still pending `TSK-0017`). `DEF-0015` remains `Deferred` (broader
+  Monster/lifecycle scope still open). Roadmap's `Zero-HP and combatant
+  eligibility` capability row remains unchecked. This is an architecture-
+  task closure, not completion of the broader zero-HP capability or of the
+  DEF-0005 production concern; Death Saves and State schema V9 remain
+  defined but not implemented.
+- No production Python file or runtime behavior was changed by this
+  closure preparation.
+- Verification (same `--basetemp` workaround as the prior entry, where
+  needed): `pytest tests/architecture/test_documentation_references.py` —
+  2 passed; full `pytest` — 1997 passed; `mypy src/dnd_engine` — no issues
+  in 112 source files; `git diff --check` — no whitespace errors. Fresh
+  diff for this pass touches only `docs/TASK.md`, `docs/DEVELOPMENT_LOG.md`
+  (this entry), and the one `docs/DECISIONS.md` wording correction; zero
+  fresh diff in `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
+  `docs/DEFERRED.md`, `README.md`, `CLAUDE.md`, `src/**`, or tests.
+- This closure is prospective only: PR #91 has not merged, no merge commit
+  SHA is claimed, `TSK-0017` is not `Ready`/`Current`, and no Death
+  Save/State-schema-V9 production behavior is claimed to exist. No commit,
+  push, or merge was performed for this pass; the PR was not marked ready
+  for review. A `review.patch` containing only these fresh prospective
+  closure changes was produced for review.
