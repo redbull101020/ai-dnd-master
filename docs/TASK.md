@@ -1270,11 +1270,13 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 - `ARCHITECTURE.md` §3.25
 - `ARCHITECTURE.md` §3.31
 - `ARCHITECTURE.md` §3.33
+- `ARCHITECTURE.md` §3.34
 - `ARCHITECTURE.md` §10.4
 - `ARCHITECTURE.md` §10.7
 - `DEFERRED.md` — `DEF-0005`
 - `DEFERRED.md` — `DEF-0015`
 - `DEC-0046`
+- `DEC-0050`
 
 **Depends on:** `—`
 
@@ -1398,6 +1400,18 @@ TSK-0016 считается выполненным только когда:
 - проверка, что production Python не менялся;
 - проверка итогового diff на отсутствие несвязанных изменений.
 
+### Current branch status
+
+Canonical contract is defined on this delivery branch (`ARCHITECTURE.md`
+§3.34, `DECISIONS.md` DEC-0050); `DEFERRED.md` (`DEF-0005`, `DEF-0015`) and
+`ROADMAP.md` are reconciled accordingly. Prospective Task Closure has not
+yet been prepared, because final Group-3 review and PR creation are still
+pending. After the accepted cumulative diff has a PR, §18.1 permits the
+closure to be prepared and reviewed in this same branch/PR before merge.
+Until that closure is prepared, `TSK-0016` remains `Status: Current` and
+this detail stays in `Open task details`; authoritative `Done` exists only
+once the accepted result and closure land on `main`.
+
 ## TSK-0017 — Implement minimal Character Death Save vertical slice
 
 **Status:** `Backlog`
@@ -1415,8 +1429,10 @@ TSK-0016 считается выполненным только когда:
 - `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
 - `ARCHITECTURE.md` §3.25
 - `ARCHITECTURE.md` §3.31
+- `ARCHITECTURE.md` §3.34
 - `DEFERRED.md` — `DEF-0005`
 - `DEFERRED.md` — `DEF-0015`
+- `DEC-0050`
 
 **Depends on:** `TSK-0016`
 
@@ -1425,17 +1441,27 @@ TSK-0016 считается выполненным только когда:
 ### Goal
 
 Implement the canonical minimal Character zero-HP turn / Death Save
-contract accepted by TSK-0016 through deterministic Domain/Application/
-Event/State/persistence behavior and automated tests. Не фиксируй сейчас
-точные Command/Event/class/schema поля: они должны следовать из принятого
-результата TSK-0016.
+contract defined by `ARCHITECTURE.md` §3.34 (DEC-0050) through
+deterministic Domain/Application/Event/State/persistence behavior and
+automated tests.
+
+TSK-0017 must implement the already-fixed semantic/Event/State/schema
+contracts §3.34 defines — no external `DeathSaveCommand`, the automatic
+`CombatStarted`/`TurnAdvanced` trigger, `CharacterDeathSaveResult`,
+`CharacterDeathSaveFailureResult`, `CharacterDeathSaveResolved` V1,
+`CharacterDeathSaveFailureRecorded` V1, the Character lifecycle State
+facts, and the target State schema V9 Character wire fields/compatibility
+semantics — rather than redefine them. Exact Python module placement,
+concrete helper/function names, and other implementation details §3.34
+deliberately does not fix remain for the TSK-0017 refinement/
+implementation pass.
 
 ### Evidence / trigger
 
 TSK-0017 должен оставаться `Backlog` до тех пор, пока TSK-0016 не станет
 `Done`. Перед переводом в `Ready` требуется отдельный refinement pass,
 который сформирует точные `Scope`, `Out of scope`, `Acceptance criteria` и
-`Verification` из уже принятого канонического контракта TSK-0016.
+`Verification` из уже принятого канонического контракта §3.34/DEC-0050.
 
 ---
 
