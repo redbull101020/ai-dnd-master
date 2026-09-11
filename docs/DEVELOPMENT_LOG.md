@@ -6887,3 +6887,48 @@ already-merged delivery branch.
 - Verification: targeted AttackHandler suite — 87 passed; all Application
   tests — 193 passed; `mypy src/dnd_engine` — no issues in 115 source files;
   `git diff --check` — no whitespace errors.
+
+## 2026-09-11 — Completed TSK-0017 integration, regression, and documentation sync
+
+- This is TSK-0017 checkpoint 5, closing the vertical slice: State schema V9
+  (`CharacterState.death_save_successes`/`death_save_failures`/
+  `death_save_stable`/`dead`, canonical V1–V8 compatibility defaults), the
+  automatic turn-start Character Death Save orchestrated by
+  `StartCombatHandler`/`AdvanceTurnHandler`, Damage-at-zero failure
+  consequences for both direct `ApplyDamageCommand` and Attack-origin Damage
+  (including critical provenance), and ordinary-Healing lifecycle reset plus
+  the dead-Character rejection are all implemented in production, exactly as
+  §3.34/DEC-0050 defines and with no additional gameplay scope.
+- Added `tests/integration/test_death_save_real_adapters.py`: a real
+  `FilesystemStateStore`/`PythonDiceEngine` V9 persistence round-trip with
+  non-default Character lifecycle facts (schema-version and exact-value
+  proof), one representative automatic turn-start Death Save through
+  `AdvanceTurnHandler`, and one direct `ApplyDamageCommand` Damage-at-zero
+  failure consequence — each confirming exactly one `StateStore.save()` and
+  a correct persisted reload. Combinatorial mechanic behavior remains owned
+  by the existing focused Domain/Application tests.
+- Ran the full repository regression suite and confirmed no existing Attack,
+  Saving Throw, Skill Check, Damage, Healing, Combat, or persistence behavior
+  regressed outside the approved §3.34 changes.
+- Synchronized factual documentation to stop claiming TSK-0017/State schema
+  V9 are unimplemented: `ARCHITECTURE.md` §3.34 implementation status,
+  §12.13 migration/writer narrative, and the cross-references in §3.25/§3.31/
+  §10.4 now describe the delivered production behavior without altering any
+  accepted §3.34 semantics; `ROADMAP.md`'s Zero-HP and combatant eligibility
+  row and TSK-0016/TSK-0017 status block now reflect the implemented narrow
+  Character slice while the capability itself stays unchecked; `DEFERRED.md`
+  DEF-0005 closed `Done` with a dated History entry, and DEF-0015 stays
+  `Deferred` with its own dated History entry noting the narrow coordinated
+  slice is now implemented while its broader Monster/lifecycle scope remains
+  open; `CLAUDE.md`'s implemented-contracts index and summary paragraph gained
+  the Death Save slice. `docs/TASK.md` intentionally still shows TSK-0017 as
+  `Current` — no Task Closure, `Recently completed` entry, or next-`Current`
+  selection was performed, since Task Closure requires an accepted PR number
+  and none was created in this pass.
+- Verification: full `python -m pytest` — 2162 passed; `python -m mypy
+  src/dnd_engine` — no issues in 115 source files; `git diff --check` — no
+  whitespace errors, including against the cumulative branch diff versus
+  `origin/main`; focused re-runs of the documentation reference tests, the
+  State serializer/store tests, the Death Save Domain tests, the
+  `StartCombatHandler`/`AdvanceTurnHandler` Application tests, the
+  Damage/Healing handler tests, and the `AttackHandler` tests all passed.

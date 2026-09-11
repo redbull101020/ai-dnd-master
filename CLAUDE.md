@@ -147,6 +147,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | Character Dagger weapon Attack consumer + `CharacterWeaponAttackResolved` V1 (TSK-0012) | §3.29, §3.30, §3.32 |
 | Character Dagger source-Damage Resolution + `CharacterWeaponAttackDamageResolved` V1 + Monster HP consequence continuation (TSK-0013) | §3.29, §3.32 |
 | Current-turn ordinary Action expenditure (`CombatState.action_spent`, `TurnActionSpent` V1) + State schema V8 persistence (TSK-0014/TSK-0015) | §3.33, §12.13 |
+| Character Death Save vertical slice (`CharacterState` lifecycle fields, `CharacterDeathSaveResolved` V1, `CharacterDeathSaveFailureRecorded` V1) + State schema V9 persistence (TSK-0016/TSK-0017) | §3.34, §12.13 |
 
 Character weapon-source State/persistence, Combat-owned spatial State
 (`CombatPosition`/`CombatState.positions`, State schema V7) и production
@@ -167,11 +168,35 @@ Current-turn ordinary Action expenditure (TSK-0014/TSK-0015) реализова�
 `CombatState.action_spent`, `TurnActionSpent` V1 и `AttackHandler`
 ordinary-Action gate/consumption применяются к тем же трём существующим
 in-Combat `AttackCommand` consumers (Character unarmed, Monster Goblin
-Scimitar, Character Dagger); текущий production writer — State schema V8
-(`combat.actionSpent`), V5–V7 читаются с compatibility default
-`action_spent=False`. Bonus Actions, Reactions, Movement, Extra Attack,
-Action Surge, Multiattack и более широкая action economy остаются pending
-(§3.33).
+Scimitar, Character Dagger); State schema V8 добавил `combat.actionSpent`
+(V5–V7 читаются с compatibility default `action_spent=False`). Bonus
+Actions, Reactions, Movement, Extra Attack, Action Surge, Multiattack и
+более широкая action economy остаются pending (§3.33).
+
+Character Death Save vertical slice (§3.34, TSK-0016/TSK-0017) реализована:
+`CharacterState.death_save_successes`/`death_save_failures`/
+`death_save_stable`/`dead`, pure resolvers
+`resolve_character_death_save`/`resolve_character_death_save_failure`,
+`CharacterDeathSaveResolved` V1 и `CharacterDeathSaveFailureRecorded` V1 с
+конкретными builders/appliers. `StartCombatHandler`/`AdvanceTurnHandler`
+автоматически резолвят ровно один Death Save для eligible Character в начале
+хода; natural 20 проходит через неизменённый `HealingApplied` V1
+(`current_hp: 0 → 1`) без отдельного HP-факта на самом Death Save Event.
+`DamageHandler` и `AttackHandler` (Monster → Character ветка) записывают
+`CharacterDeathSaveFailureRecorded` при positive Damage против Character,
+уже стоящего на `current_hp == 0` (ordinary +1 failure, critical Attack
+Damage +2); ordinary successful `HealingHandler` Healing при переходе
+`0 → positive HP` сбрасывает ровно три Death Save счётчика/флаг
+(`death_save_successes = 0`, `death_save_failures = 0`,
+`death_save_stable = False`) — `dead` этим путём не воскрешается и не
+трогается; Healing против уже `dead` Character отклоняется
+`ErrorCode.INVALID_TARGET` до resolution. Текущий production writer — State schema V9
+(`deathSaveSuccesses`/`deathSaveFailures`/`deathSaveStable`/`dead` на каждом
+Character), V1–V8 читаются с canonical compatibility defaults `0`/`0`/
+`False`/`False`. Monster Death Saves, Monster death/lifecycle policy,
+broader zero-HP targetability, Combat removal/`CombatEnded`, resurrection,
+temporary HP и massive-damage/instant-death rules остаются pending
+(DEF-0015).
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation
