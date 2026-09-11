@@ -44,6 +44,54 @@ def build_healing_applied_v1(
     if outcome.amount != command.payload.amount:
         raise ValueError("outcome amount must match command payload amount")
 
+    return _build_healing_applied_v1(
+        event_id=event_id,
+        timestamp=timestamp,
+        command_id=command.command_id,
+        campaign_id=command.campaign_id,
+        actor_id=command.actor_id,
+        caused_by=None,
+        outcome=outcome,
+    )
+
+
+def build_healing_applied_from_death_save_v1(
+    *,
+    event_id: str,
+    timestamp: datetime,
+    command_id: str,
+    campaign_id: str,
+    actor_id: str,
+    caused_by: str,
+    outcome: HealingResult,
+) -> GameEvent:
+    if type(actor_id) is not str:
+        raise TypeError("actor_id must be a str")
+    if type(caused_by) is not str:
+        raise TypeError("caused_by must be a str")
+    if not isinstance(outcome, HealingResult):
+        raise TypeError("outcome must be a HealingResult")
+    return _build_healing_applied_v1(
+        event_id=event_id,
+        timestamp=timestamp,
+        command_id=command_id,
+        campaign_id=campaign_id,
+        actor_id=actor_id,
+        caused_by=caused_by,
+        outcome=outcome,
+    )
+
+
+def _build_healing_applied_v1(
+    *,
+    event_id: str,
+    timestamp: datetime,
+    command_id: str,
+    campaign_id: str,
+    actor_id: str,
+    caused_by: str | None,
+    outcome: HealingResult,
+) -> GameEvent:
     payload = HealingAppliedPayloadV1(
         target_id=outcome.target_id,
         amount=outcome.amount,
@@ -54,13 +102,13 @@ def build_healing_applied_v1(
 
     return GameEvent(
         event_id=event_id,
-        command_id=command.command_id,
+        command_id=command_id,
         type="HealingApplied",
         version=1,
-        campaign_id=command.campaign_id,
+        campaign_id=campaign_id,
         timestamp=timestamp,
-        actor_id=command.actor_id,
-        caused_by=None,
+        actor_id=actor_id,
+        caused_by=caused_by,
         payload={
             "targetId": payload.target_id,
             "amount": payload.amount,

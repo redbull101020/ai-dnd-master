@@ -139,6 +139,7 @@ def test_start_combat_then_advance_turn_round_trips_through_fresh_reloads(
 
     advance_result = AdvanceTurnHandler(
         state_store=FilesystemStateStore(campaigns_root),
+        dice=PythonDiceEngine(random.Random(1)),
         event_metadata_provider=FixedEventMetadataProvider(),
     ).handle(
         AdvanceTurnCommand(
@@ -162,6 +163,7 @@ def test_start_combat_then_advance_turn_round_trips_through_fresh_reloads(
 
     wrong_actor_result = AdvanceTurnHandler(
         state_store=FilesystemStateStore(campaigns_root),
+        dice=PythonDiceEngine(random.Random(1)),
         event_metadata_provider=FixedEventMetadataProvider(),
     ).handle(
         AdvanceTurnCommand(
@@ -177,6 +179,7 @@ def test_start_combat_then_advance_turn_round_trips_through_fresh_reloads(
 
     final_advance_result = AdvanceTurnHandler(
         state_store=FilesystemStateStore(campaigns_root),
+        dice=PythonDiceEngine(random.Random(1)),
         event_metadata_provider=FixedEventMetadataProvider(),
     ).handle(
         AdvanceTurnCommand(

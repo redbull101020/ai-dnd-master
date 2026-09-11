@@ -12,10 +12,12 @@ from dnd_engine.domain.commands.advance_turn import (
 from dnd_engine.domain.errors import ErrorCode
 from dnd_engine.domain.services.state_store import StateStoreError
 from dnd_engine.domain.state.campaign import CampaignState
+from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
+from dnd_engine.domain.value_objects.dice_roll import DiceRoll
 
 
 FIXED_TIMESTAMP = datetime(2026, 8, 30, 15, 0, tzinfo=timezone.utc)
@@ -56,15 +58,31 @@ class FixedEventMetadataProvider:
         self.next_calls.append(campaign_id)
         if self._fail:
             raise RuntimeError("metadata unavailable")
-        return EventMetadata(event_id="event_000789", timestamp=FIXED_TIMESTAMP)
+        return EventMetadata(
+            event_id=f"event_{789 + len(self.next_calls) - 1:06d}",
+            timestamp=FIXED_TIMESTAMP,
+        )
 
 
-def make_creature(*, creature_id: str) -> CreatureState:
+class ScriptedDiceEngine:
+    def __init__(self, *raw_rolls: int, calls: list[str]) -> None:
+        self._rolls = iter(raw_rolls)
+        self._calls = calls
+        self.roll_calls: list[str] = []
+
+    def roll(self, expression: str) -> DiceRoll:
+        self._calls.append("dice")
+        self.roll_calls.append(expression)
+        raw = next(self._rolls)
+        return DiceRoll(expression=expression, rolls=(raw,), total=raw)
+
+
+def make_creature(*, creature_id: str, current_hp: int = 10) -> CreatureState:
     return CreatureState(
         id=creature_id,
         definition_id="fighter",
         ability_scores=AbilityScores(10, 10, 10, 10, 10, 10),
-        current_hp=10,
+        current_hp=current_hp,
         max_hp=10,
     )
 
@@ -84,14 +102,26 @@ def make_snapshot(
     *,
     creatures: tuple[CreatureState, ...],
     combat: CombatState | None,
+    characters: tuple[CharacterState, ...] = (),
 ) -> StateSnapshot:
     return StateSnapshot(
         campaign=CampaignState(
             id="campaign_001", ruleset_id="dnd_5e", ruleset_version="5.1"
         ),
         creatures=creatures,
+        characters=characters,
         combat=combat,
     )
+
+
+def make_character(**overrides: object) -> CharacterState:
+    values: dict[str, object] = {
+        "id": "monster_001", "total_level": 1,
+        "saving_throw_proficiencies": frozenset(), "skill_proficiencies": frozenset(),
+        "weapon_proficiencies": frozenset(),
+    }
+    values.update(overrides)
+    return CharacterState(**values)  # type: ignore[arg-type]
 
 
 def make_command(
@@ -122,9 +152,11 @@ def handle_with(
     store: SpyStateStore,
     metadata: FixedEventMetadataProvider,
     command: AdvanceTurnCommand | None = None,
+    raw_rolls: tuple[int, ...] = (),
 ):
+    dice = ScriptedDiceEngine(*raw_rolls, calls=store._calls)
     return AdvanceTurnHandler(
-        state_store=store, event_metadata_provider=metadata
+        state_store=store, dice=dice, event_metadata_provider=metadata
     ).handle(command or make_command())
 
 
@@ -263,4 +295,33 @@ def test_save_failure_propagates_and_is_attempted_exactly_once() -> None:
         handle_with(store, metadata)
 
     assert calls == ["load", "metadata", "save"]
+    assert len(store.save_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("roll", "character", "expected"),
+    [
+        (10, make_character(death_save_successes=1), (2, 0, False, False)),
+        (2, make_character(death_save_failures=1), (0, 2, False, False)),
+        (1, make_character(death_save_failures=1), (0, 3, False, True)),
+        (10, make_character(death_save_successes=2), (0, 0, True, False)),
+        (2, make_character(death_save_failures=2), (0, 3, False, True)),
+    ],
+)
+def test_eligible_character_gets_one_death_save_after_turn_advanced(
+    roll: int,
+    character: CharacterState,
+    expected: tuple[int, int, bool, bool],
+) -> None:
+    creatures = (
+        make_creature(creature_id="character_001"),
+        make_creature(creature_id="monster_001", current_hp=0),
+    )
+    snapshot = make_snapshot(creatures=creatures, combat=make_combat(), characters=(character,))
+    store, metadata, calls = make_dependencies(snapshot)
+    result = handle_with(store, metadata, raw_rolls=(roll,))
+    assert [event.type for event in result.events] == ["TurnAdvanced", "CharacterDeathSaveResolved"]
+    assert calls == ["load", "metadata", "dice", "metadata", "save"]
+    saved_character = store.save_calls[0].characters[0]
+    assert (saved_character.death_save_successes, saved_character.death_save_failures, saved_character.death_save_stable, saved_character.dead) == expected
     assert len(store.save_calls) == 1

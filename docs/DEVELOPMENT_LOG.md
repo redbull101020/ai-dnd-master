@@ -6827,3 +6827,15 @@ already-merged delivery branch.
   before copy-only Event builders can consume them, including normal-roll and
   valid stabilized-pre-state requirements; automatic consequence builders
   also require complete string root/immediate-cause correlation.
+
+## 2026-09-11 — Integrated turn-start Character Death Saves
+
+- Integrated the automatic eligible Character Death Save consequence after
+  in-memory `CombatStarted` and `TurnAdvanced` application while retaining
+  the existing root outcomes and a single final State save.
+- Added the natural-20 chain through unchanged `HealingApplied` V1, preserving
+  root correlation, immediate Event causation, lifecycle reset, and the new
+  turn's unspent Action.
+- Added focused Application coverage for eligibility, roll transitions,
+  Event ordering/causation, HP recovery, save atomicity, Character snapshot
+  replacement, and unchanged Healing V1 consequence boundaries.

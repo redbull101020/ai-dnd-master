@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from dnd_engine.application.services.state_snapshot import (
+    replace_character_in_snapshot,
     replace_creature_in_snapshot,
 )
 from dnd_engine.domain.state.campaign import CampaignState
@@ -128,3 +129,84 @@ def test_rejects_invalid_inputs() -> None:
         replace_creature_in_snapshot(object(), creature)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="replacement must be"):
         replace_creature_in_snapshot(snapshot, object())  # type: ignore[arg-type]
+
+
+def make_character(character_id: str, *, total_level: int = 1) -> CharacterState:
+    return CharacterState(
+        id=character_id,
+        total_level=total_level,
+        saving_throw_proficiencies=frozenset(),
+        skill_proficiencies=frozenset(),
+        weapon_proficiencies=frozenset(),
+    )
+
+
+def test_replaces_exactly_one_character_and_preserves_other_projections() -> None:
+    campaign = CampaignState("campaign_001", "dnd_5e", "5.1")
+    target_creature = make_creature("character_001", current_hp=0)
+    other_creature = make_creature("character_002")
+    target = make_character("character_001")
+    other = make_character("character_002", total_level=2)
+    inventory = InventoryState(owner_id="character_001", items=())
+    equipment = EquipmentState(
+        owner_id="character_001",
+        equipped_weapon_id=None,
+    )
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=("character_001", "character_002"),
+        active_index=0,
+    )
+    snapshot = StateSnapshot(
+        campaign=campaign,
+        creatures=(target_creature, other_creature),
+        characters=(target, other),
+        inventories=(inventory,),
+        equipment=(equipment,),
+        combat=combat,
+    )
+    replacement = replace(target, death_save_successes=1)
+
+    result = replace_character_in_snapshot(snapshot, replacement)
+
+    assert result is not snapshot
+    assert result.characters == (replacement, other)
+    assert result.characters[0] is replacement
+    assert result.characters[1] is other
+    assert result.campaign is campaign
+    assert result.creatures is snapshot.creatures
+    assert result.inventories is snapshot.inventories
+    assert result.equipment is snapshot.equipment
+    assert result.combat is combat
+    assert snapshot.characters == (target, other)
+    assert target.death_save_successes == 0
+
+
+def test_character_replacement_rejects_zero_or_multiple_matches() -> None:
+    creature = make_creature("character_001")
+    target = make_character("character_001")
+    snapshot = StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
+        creatures=(creature,),
+        characters=(target,),
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        replace_character_in_snapshot(snapshot, make_character("character_999"))
+
+    object.__setattr__(snapshot, "characters", (target, target))
+    with pytest.raises(ValueError, match="exactly one"):
+        replace_character_in_snapshot(snapshot, target)
+
+
+def test_character_replacement_rejects_invalid_inputs() -> None:
+    target = make_character("character_001")
+    snapshot = StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
+        creatures=(make_creature("character_001"),),
+        characters=(target,),
+    )
+    with pytest.raises(TypeError, match="snapshot must be"):
+        replace_character_in_snapshot(object(), target)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="replacement must be"):
+        replace_character_in_snapshot(snapshot, object())  # type: ignore[arg-type]

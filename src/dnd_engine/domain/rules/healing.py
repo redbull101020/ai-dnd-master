@@ -41,14 +41,25 @@ def resolve_healing(
     if command.payload.target_id != target.id:
         raise ValueError("command payload target_id must match target id")
 
-    previous_hp = target.current_hp
-    max_hp = target.max_hp
-    new_hp = min(max_hp, previous_hp + command.payload.amount)
+    return resolve_healing_amount(target, amount=command.payload.amount)
+
+
+def resolve_healing_amount(
+    target: CreatureState,
+    *,
+    amount: int,
+) -> HealingResult:
+    if not isinstance(target, CreatureState):
+        raise TypeError("target must be a CreatureState")
+    if type(amount) is not int:
+        raise TypeError("amount must be an int")
+    if amount < 1:
+        raise ValueError("amount must be at least 1")
 
     return HealingResult(
-        target_id=command.payload.target_id,
-        amount=command.payload.amount,
-        previous_hp=previous_hp,
-        max_hp=max_hp,
-        new_hp=new_hp,
+        target_id=target.id,
+        amount=amount,
+        previous_hp=target.current_hp,
+        max_hp=target.max_hp,
+        new_hp=min(target.max_hp, target.current_hp + amount),
     )
