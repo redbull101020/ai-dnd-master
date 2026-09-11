@@ -7,7 +7,11 @@ from dnd_engine.domain.commands.healing import (
     ApplyHealingCommand,
     ApplyHealingPayload,
 )
-from dnd_engine.domain.rules.healing import HealingResult, resolve_healing
+from dnd_engine.domain.rules.healing import (
+    HealingResult,
+    resolve_healing,
+    resolve_healing_amount,
+)
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.value_objects.ability_scores import AbilityScores
 
@@ -94,6 +98,18 @@ def test_healing_from_zero_increases_hp() -> None:
 
     assert result.previous_hp == 0
     assert result.new_hp == 5
+
+
+def test_healing_amount_helper_uses_the_same_bounded_result_contract() -> None:
+    result = resolve_healing_amount(make_creature(current_hp=0), amount=1)
+
+    assert result == HealingResult(
+        target_id="monster_001",
+        amount=1,
+        previous_hp=0,
+        max_hp=20,
+        new_hp=1,
+    )
 
 
 def test_healing_at_full_hp_is_successful_no_op() -> None:

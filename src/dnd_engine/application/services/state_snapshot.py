@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
 
@@ -28,3 +29,30 @@ def replace_creature_in_snapshot(
     )
 
     return replace(snapshot, creatures=replacement_creatures)
+
+
+def replace_character_in_snapshot(
+    snapshot: StateSnapshot,
+    replacement: CharacterState,
+) -> StateSnapshot:
+    if not isinstance(snapshot, StateSnapshot):
+        raise TypeError("snapshot must be a StateSnapshot")
+    if not isinstance(replacement, CharacterState):
+        raise TypeError("replacement must be a CharacterState")
+
+    matching_characters = sum(
+        character.id == replacement.id for character in snapshot.characters
+    )
+    if matching_characters != 1:
+        raise ValueError(
+            "replacement CharacterState id must match exactly one CharacterState "
+            "in snapshot"
+        )
+
+    return replace(
+        snapshot,
+        characters=tuple(
+            replacement if character.id == replacement.id else character
+            for character in snapshot.characters
+        ),
+    )

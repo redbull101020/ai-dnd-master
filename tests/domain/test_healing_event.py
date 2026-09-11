@@ -10,6 +10,7 @@ from dnd_engine.domain.commands.healing import (
 from dnd_engine.domain.events.game_event import GameEvent
 from dnd_engine.domain.events.healing import (
     HealingAppliedPayloadV1,
+    build_healing_applied_from_death_save_v1,
     build_healing_applied_v1,
 )
 from dnd_engine.domain.rules.healing import HealingResult
@@ -132,6 +133,54 @@ def test_builder_uses_supplied_metadata_and_command_correlation() -> None:
     assert event.actor_id == command.actor_id
     assert event.caused_by is None
     assert event.timestamp is FIXED_TIMESTAMP
+
+
+def test_death_save_builder_reuses_exact_healing_applied_v1_contract() -> None:
+    event = build_healing_applied_from_death_save_v1(
+        event_id="event_healing_001",
+        timestamp=FIXED_TIMESTAMP,
+        command_id="command_advance_001",
+        campaign_id="campaign_001",
+        actor_id="character_002",
+        caused_by="event_death_save_001",
+        outcome=make_outcome(
+            amount=1,
+            previous_hp=0,
+            max_hp=20,
+            new_hp=1,
+        ),
+    )
+
+    assert event.type == "HealingApplied"
+    assert event.version == 1
+    assert event.command_id == "command_advance_001"
+    assert event.campaign_id == "campaign_001"
+    assert event.actor_id == "character_002"
+    assert event.caused_by == "event_death_save_001"
+    assert set(event.payload) == PAYLOAD_KEYS
+    assert event.payload == {
+        "targetId": "character_001",
+        "amount": 1,
+        "previousHp": 0,
+        "maxHp": 20,
+        "newHp": 1,
+    }
+    assert not {"deathSave", "roll", "successes", "failures"} & set(event.payload)
+
+
+@pytest.mark.parametrize("field_name", ["actor_id", "caused_by"])
+def test_death_save_builder_rejects_missing_string_correlation(
+    field_name: str,
+) -> None:
+    arguments: dict[str, object] = {
+        "event_id": "event_healing_001", "timestamp": FIXED_TIMESTAMP,
+        "command_id": "command_advance_001", "campaign_id": "campaign_001",
+        "actor_id": "character_002", "caused_by": "event_death_save_001",
+        "outcome": make_outcome(amount=1, previous_hp=0, new_hp=1),
+    }
+    arguments[field_name] = None
+    with pytest.raises(TypeError, match=field_name):
+        build_healing_applied_from_death_save_v1(**arguments)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,9 @@
 import dataclasses
 
 from dnd_engine.application.services.event_metadata import EventMetadataProvider
+from dnd_engine.application.services.character_death_save import (
+    apply_active_character_death_save,
+)
 from dnd_engine.domain.commands.start_combat import StartCombatCommand
 from dnd_engine.domain.errors import EngineError, ErrorCode
 from dnd_engine.domain.events.start_combat import (
@@ -111,6 +114,16 @@ class StartCombatHandler:
 
         combat = apply_combat_started_v1(event)
         replacement_snapshot = dataclasses.replace(snapshot, combat=combat)
+        replacement_snapshot, consequence_events = apply_active_character_death_save(
+            replacement_snapshot,
+            active_creature_id=combat.active_creature_id,
+            dice=self._dice,
+            event_metadata_provider=self._event_metadata_provider,
+            command_id=command.command_id,
+            campaign_id=command.campaign_id,
+            actor_id=command.actor_id,
+            caused_by=event.event_id,
+        )
 
         self._state_store.save(replacement_snapshot)
 
@@ -118,6 +131,6 @@ class StartCombatHandler:
             success=True,
             command_id=command.command_id,
             outcome=outcome,
-            events=(event,),
+            events=(event, *consequence_events),
             errors=(),
         )

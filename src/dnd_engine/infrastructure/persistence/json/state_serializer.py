@@ -47,10 +47,15 @@ SCHEMA_V7_VERSION = 7
 # below. V8 is strictly additive over V7 (§12.13): every other V7
 # shape/field-set is unchanged and reused as-is by V8.
 SCHEMA_V8_VERSION = 8
-SCHEMA_VERSION = SCHEMA_V8_VERSION
+# Fixed identity of the V9 state shape (adds four Character death-save/
+# lifecycle fields, §3.34/DEC-0050). V9 is strictly additive over V8 and
+# leaves every non-Character wire shape unchanged.
+SCHEMA_V9_VERSION = 9
+SCHEMA_VERSION = SCHEMA_V9_VERSION
 # The V4 Creature shape (with `conditions`) is unchanged by the V5 state-level
 # `combat` addition, the V6 weapon-source additions, the V7 Combat
-# `positions` addition, and the V8 Combat `actionSpent` addition; all five
+# `positions` addition, the V8 Combat `actionSpent` addition, and the V9
+# Character lifecycle addition; all six
 # versions decode Creature payloads the same way.
 _CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {
     SCHEMA_V4_VERSION,
@@ -58,16 +63,16 @@ _CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {
     SCHEMA_V6_VERSION,
     SCHEMA_V7_VERSION,
     SCHEMA_V8_VERSION,
+    SCHEMA_V9_VERSION,
 }
 
 _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
 _V2_STATE_FIELDS = {"campaign", "creatures", "characters"}
 _V5_STATE_FIELDS = _V2_STATE_FIELDS | {"combat"}
-# Neither V7 nor V8 adds a new top-level state key: `positions` and
-# `actionSpent` both live inside the existing `combat` key (see
-# _V7_COMBAT_FIELDS/_V8_COMBAT_FIELDS below), so V6, V7, and V8 share this
-# exact top-level state field set.
+# V7, V8, and V9 add no new top-level state key: `positions`/`actionSpent`
+# live inside `combat`, while the V9 fields live inside each Character. V6–V9
+# therefore share this exact top-level state field set.
 _V6_STATE_FIELDS = _V5_STATE_FIELDS | {"inventories", "equipment"}
 _CAMPAIGN_FIELDS = {"id", "rulesetId", "rulesetVersion"}
 _CREATURE_FIELDS = {
@@ -85,6 +90,12 @@ _V2_CHARACTER_FIELDS = {
 }
 _V3_CHARACTER_FIELDS = _V2_CHARACTER_FIELDS | {"skillProficiencies"}
 _V6_CHARACTER_FIELDS = _V3_CHARACTER_FIELDS | {"weaponProficiencies"}
+_V9_CHARACTER_FIELDS = _V6_CHARACTER_FIELDS | {
+    "deathSaveSuccesses",
+    "deathSaveFailures",
+    "deathSaveStable",
+    "dead",
+}
 _ABILITY_SCORE_FIELDS = {
     "strength",
     "dexterity",
@@ -218,6 +229,33 @@ def _validate_character(character: CharacterState) -> None:
         raise TypeError(
             "character weapon_proficiencies must contain only str values"
         )
+    death_save_successes = _require_int(
+        character.death_save_successes,
+        "character.death_save_successes",
+    )
+    if not 0 <= death_save_successes <= 2:
+        raise ValueError("character.death_save_successes must be between 0 and 2")
+    death_save_failures = _require_int(
+        character.death_save_failures,
+        "character.death_save_failures",
+    )
+    if not 0 <= death_save_failures <= 3:
+        raise ValueError("character.death_save_failures must be between 0 and 3")
+    death_save_stable = _require_bool(
+        character.death_save_stable,
+        "character.death_save_stable",
+    )
+    dead = _require_bool(character.dead, "character.dead")
+    if death_save_stable and dead:
+        raise ValueError("character death_save_stable and dead cannot both be true")
+    if death_save_stable and (
+        death_save_successes != 0 or death_save_failures != 0
+    ):
+        raise ValueError(
+            "a stable CharacterState must have reset death save counters"
+        )
+    if death_save_failures == 3 and not dead:
+        raise ValueError("three death save failures require character.dead")
 
 
 def _validate_inventory_item(item: InventoryItemState, location: str) -> None:
@@ -345,6 +383,10 @@ def _serialize_character(character: CharacterState) -> dict[str, object]:
             )
         ],
         "weaponProficiencies": sorted(character.weapon_proficiencies),
+        "deathSaveSuccesses": character.death_save_successes,
+        "deathSaveFailures": character.death_save_failures,
+        "deathSaveStable": character.death_save_stable,
+        "dead": character.dead,
     }
 
 
@@ -446,11 +488,13 @@ class StateSerializer:
 
         _validate_campaign(snapshot.campaign)
         creature_ids: set[str] = set()
+        creatures_by_id: dict[str, CreatureState] = {}
         for creature in snapshot.creatures:
             _validate_creature(creature)
             if creature.id in creature_ids:
                 raise ValueError("creature IDs must be unique within a StateSnapshot")
             creature_ids.add(creature.id)
+            creatures_by_id[creature.id] = creature
 
         character_ids: set[str] = set()
         for character in snapshot.characters:
@@ -460,6 +504,20 @@ class StateSerializer:
             if character.id not in creature_ids:
                 raise ValueError(
                     "every CharacterState must have a corresponding CreatureState"
+                )
+            creature = creatures_by_id[character.id]
+            if character.death_save_stable and creature.current_hp != 0:
+                raise ValueError("a stable CharacterState must have zero current_hp")
+            if character.dead and creature.current_hp != 0:
+                raise ValueError("a dead CharacterState must have zero current_hp")
+            if creature.current_hp > 0 and (
+                character.death_save_successes != 0
+                or character.death_save_failures != 0
+                or character.death_save_stable
+                or character.dead
+            ):
+                raise ValueError(
+                    "a positive-HP Character must have reset death save lifecycle"
                 )
             character_ids.add(character.id)
 
@@ -517,6 +575,7 @@ class StateSerializer:
             SCHEMA_V6_VERSION,
             SCHEMA_V7_VERSION,
             SCHEMA_V8_VERSION,
+            SCHEMA_V9_VERSION,
         }:
             raise ValueError(f"unsupported schemaVersion: {schema_version}")
 
@@ -524,7 +583,12 @@ class StateSerializer:
         state = _require_mapping(root["state"], "state")
         if schema_version == LEGACY_SCHEMA_VERSION:
             state_fields = _V1_STATE_FIELDS
-        elif schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}:
+        elif schema_version in {
+            SCHEMA_V6_VERSION,
+            SCHEMA_V7_VERSION,
+            SCHEMA_V8_VERSION,
+            SCHEMA_V9_VERSION,
+        }:
             state_fields = _V6_STATE_FIELDS
         elif schema_version == SCHEMA_V5_VERSION:
             state_fields = _V5_STATE_FIELDS
@@ -576,12 +640,18 @@ class StateSerializer:
             SCHEMA_V6_VERSION,
             SCHEMA_V7_VERSION,
             SCHEMA_V8_VERSION,
+            SCHEMA_V9_VERSION,
         }:
             combat = StateSerializer._deserialize_combat(state["combat"], schema_version)
         else:
             combat = None
 
-        if schema_version in {SCHEMA_V6_VERSION, SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}:
+        if schema_version in {
+            SCHEMA_V6_VERSION,
+            SCHEMA_V7_VERSION,
+            SCHEMA_V8_VERSION,
+            SCHEMA_V9_VERSION,
+        }:
             inventories_data = state["inventories"]
             if type(inventories_data) is not list:
                 raise TypeError("state.inventories must be a list")
@@ -688,6 +758,8 @@ class StateSerializer:
         character = _require_mapping(data, f"state.characters[{index}]")
         if schema_version == LEGACY_SCHEMA_V2_VERSION:
             character_fields = _V2_CHARACTER_FIELDS
+        elif schema_version == SCHEMA_V9_VERSION:
+            character_fields = _V9_CHARACTER_FIELDS
         elif schema_version in {
             SCHEMA_V6_VERSION,
             SCHEMA_V7_VERSION,
@@ -769,6 +841,7 @@ class StateSerializer:
             SCHEMA_V6_VERSION,
             SCHEMA_V7_VERSION,
             SCHEMA_V8_VERSION,
+            SCHEMA_V9_VERSION,
         }:
             weapon_proficiencies_data = character["weaponProficiencies"]
             if type(weapon_proficiencies_data) is not list:
@@ -787,12 +860,38 @@ class StateSerializer:
                     )
                 weapon_proficiencies.append(weapon_value)
 
+        death_save_successes = 0
+        death_save_failures = 0
+        death_save_stable = False
+        dead = False
+        if schema_version == SCHEMA_V9_VERSION:
+            death_save_successes = _require_int(
+                character["deathSaveSuccesses"],
+                f"state.characters[{index}].deathSaveSuccesses",
+            )
+            death_save_failures = _require_int(
+                character["deathSaveFailures"],
+                f"state.characters[{index}].deathSaveFailures",
+            )
+            death_save_stable = _require_bool(
+                character["deathSaveStable"],
+                f"state.characters[{index}].deathSaveStable",
+            )
+            dead = _require_bool(
+                character["dead"],
+                f"state.characters[{index}].dead",
+            )
+
         return CharacterState(
             id=_require_str(character["id"], f"state.characters[{index}].id"),
             total_level=total_level,
             saving_throw_proficiencies=frozenset(proficiencies),
             skill_proficiencies=frozenset(skill_proficiencies),
             weapon_proficiencies=frozenset(weapon_proficiencies),
+            death_save_successes=death_save_successes,
+            death_save_failures=death_save_failures,
+            death_save_stable=death_save_stable,
+            dead=dead,
         )
 
     @staticmethod
@@ -863,7 +962,7 @@ class StateSerializer:
         if data is None:
             return None
         combat = _require_mapping(data, "state.combat")
-        if schema_version == SCHEMA_V8_VERSION:
+        if schema_version in {SCHEMA_V8_VERSION, SCHEMA_V9_VERSION}:
             combat_fields = _V8_COMBAT_FIELDS
         elif schema_version == SCHEMA_V7_VERSION:
             combat_fields = _V7_COMBAT_FIELDS
@@ -880,7 +979,11 @@ class StateSerializer:
         )
 
         positions: tuple[CombatPosition, ...] = ()
-        if schema_version in {SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}:
+        if schema_version in {
+            SCHEMA_V7_VERSION,
+            SCHEMA_V8_VERSION,
+            SCHEMA_V9_VERSION,
+        }:
             positions_data = combat["positions"]
             if type(positions_data) is not list:
                 raise TypeError("state.combat.positions must be a list")
@@ -893,7 +996,7 @@ class StateSerializer:
         # to an unspent Action -- a compatibility default, not a recovered
         # historical fact (§3.33/DEC-0049, §12.13).
         action_spent = False
-        if schema_version == SCHEMA_V8_VERSION:
+        if schema_version in {SCHEMA_V8_VERSION, SCHEMA_V9_VERSION}:
             action_spent = _require_bool(combat["actionSpent"], "combat.actionSpent")
 
         return CombatState(

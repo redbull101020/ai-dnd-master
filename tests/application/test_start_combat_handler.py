@@ -12,6 +12,7 @@ from dnd_engine.domain.commands.start_combat import (
 from dnd_engine.domain.errors import ErrorCode
 from dnd_engine.domain.services.state_store import StateStoreError
 from dnd_engine.domain.state.campaign import CampaignState
+from dnd_engine.domain.state.character import CharacterState
 from dnd_engine.domain.state.combat import CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.snapshot import StateSnapshot
@@ -72,7 +73,10 @@ class FixedEventMetadataProvider:
         self.next_calls.append(campaign_id)
         if self._fail:
             raise RuntimeError("metadata unavailable")
-        return EventMetadata(event_id="event_000789", timestamp=FIXED_TIMESTAMP)
+        return EventMetadata(
+            event_id=f"event_{789 + len(self.next_calls) - 1:06d}",
+            timestamp=FIXED_TIMESTAMP,
+        )
 
 
 def make_creature(
@@ -80,6 +84,7 @@ def make_creature(
     creature_id: str,
     dexterity: int = 10,
     conditions: frozenset[Condition] = frozenset(),
+    current_hp: int = 10,
 ) -> CreatureState:
     return CreatureState(
         id=creature_id,
@@ -92,7 +97,7 @@ def make_creature(
             wisdom=10,
             charisma=10,
         ),
-        current_hp=10,
+        current_hp=current_hp,
         max_hp=10,
         conditions=conditions,
     )
@@ -102,14 +107,26 @@ def make_snapshot(
     *,
     creatures: tuple[CreatureState, ...] = (),
     combat: CombatState | None = None,
+    characters: tuple[CharacterState, ...] = (),
 ) -> StateSnapshot:
     return StateSnapshot(
         campaign=CampaignState(
             id="campaign_001", ruleset_id="dnd_5e", ruleset_version="5.1"
         ),
         creatures=creatures,
+        characters=characters,
         combat=combat,
     )
+
+
+def make_character(**overrides: object) -> CharacterState:
+    values: dict[str, object] = {
+        "id": "character_001", "total_level": 1,
+        "saving_throw_proficiencies": frozenset(), "skill_proficiencies": frozenset(),
+        "weapon_proficiencies": frozenset(),
+    }
+    values.update(overrides)
+    return CharacterState(**values)  # type: ignore[arg-type]
 
 
 def make_command(
@@ -385,4 +402,46 @@ def test_save_failure_propagates_and_is_attempted_exactly_once() -> None:
         handle_with(store, dice, metadata)
 
     assert calls == ["load", "dice", "dice", "metadata", "save"]
+    assert len(store.save_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("character", "hp"),
+    [(None, 0), (make_character(), 10), (make_character(death_save_stable=True), 0), (make_character(dead=True), 0)],
+)
+def test_ineligible_active_creature_has_no_death_save(
+    character: CharacterState | None,
+    hp: int,
+) -> None:
+    active = make_creature(creature_id="character_001", current_hp=hp)
+    monster = make_creature(creature_id="monster_001")
+    snapshot = make_snapshot(
+        creatures=(active, monster),
+        characters=() if character is None else (character,),
+    )
+    store, dice, metadata, _ = make_dependencies(snapshot, raw_rolls=(20, 1))
+    result = handle_with(store, dice, metadata)
+    assert [event.type for event in result.events] == ["CombatStarted"]
+    assert dice.roll_calls == ["1d20", "1d20"]
+    assert metadata.next_calls == ["campaign_001"]
+    assert len(store.save_calls) == 1
+
+
+def test_natural_twenty_death_save_heals_after_combat_event_once() -> None:
+    active = make_creature(creature_id="character_001", current_hp=0)
+    monster = make_creature(creature_id="monster_001")
+    snapshot = make_snapshot(
+        creatures=(active, monster),
+        characters=(make_character(death_save_successes=1, death_save_failures=1),),
+    )
+    store, dice, metadata, _ = make_dependencies(snapshot, raw_rolls=(20, 1, 20))
+    result = handle_with(store, dice, metadata)
+    assert [event.type for event in result.events] == ["CombatStarted", "CharacterDeathSaveResolved", "HealingApplied"]
+    assert result.events[1].caused_by == result.events[0].event_id
+    assert result.events[2].caused_by == result.events[1].event_id
+    saved = store.save_calls[0]
+    assert saved.creatures[0].current_hp == 1
+    assert saved.characters[0].death_save_successes == 0
+    assert saved.characters[0].death_save_failures == 0
+    assert saved.combat is not None and saved.combat.action_spent is False
     assert len(store.save_calls) == 1

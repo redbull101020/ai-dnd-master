@@ -160,7 +160,7 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Initiative: SRD 5.1 grouped initiative for identical GM-controlled creatures — G7 is individual-participant only; a later concrete Monster/control consumer must evidence this before it is added.
 * [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn) — §3.28/DEC-0043 define and implement the canonical active-turn eligibility boundary for the currently supported `AttackCommand` paths (row above, TSK-0006); §3.33/DEC-0049 (TSK-0014) canonically defined the first narrow ordinary-Action resource contract for those same three currently implemented `AttackCommand` consumers, and TSK-0015 has now implemented it in production: `CombatState.action_spent`, `TurnActionSpent` V1 and its applier, the `AttackHandler` ordinary-Action gate and consumption (a successful in-Combat Attack spends the Action even on a miss), Action-aware `CombatStarted`/`TurnAdvanced` projections, combined HP+Action atomic persistence, and State schema V8 read/write with V5–V7 `action_spent=False` compatibility, confirmed through a real-adapter/filesystem round trip. This remains a narrow baseline-Action slice for exactly these three consumers, not a general action-economy framework. Bonus Action and Reaction resources, Movement, Extra Attack, Action Surge, Multiattack, per-turn resets beyond this narrow slice, and the broader action economy remain open, so this capability stays unchecked.
 * [ ] Combat lifecycle / `CombatEnded` — G7 has no combat-ending Command or Event.
-* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — `AttackHandler` now implements the canonical Character/Monster zero-HP `AttackCommand` eligibility contract ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046, TSK-0007), after §3.28 active-turn eligibility and Character/Monster category establishment. **Defined, not yet implemented:** TSK-0016 ([§3.34](ARCHITECTURE.md#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016), DEC-0050) canonically defines the minimal Character zero-HP turn / Death Save contract — automatic turn-start trigger, Character-owned lifecycle facts, D20/Result/Event/State-application boundaries, and the additive State schema V9 target over the current production V8 writer; production implementation is **pending TSK-0017**. Still open under DEF-0005/DEF-0015 beyond that narrow defined slice: the broader Character zero-HP lifecycle outside §3.34 (e.g. Combat removal/end interaction), Monster Death Saves and Monster death/stabilization/lifecycle policy, zero-HP targetability, other action-eligibility consumers beyond the current `AttackCommand`, and Combat removal/end (`CombatEnded`) itself. This capability stays unchecked: a canonical contract is not a delivered capability.
+* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — `AttackHandler` now implements the canonical Character/Monster zero-HP `AttackCommand` eligibility contract ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046, TSK-0007), after §3.28 active-turn eligibility and Character/Monster category establishment. **Now implemented:** TSK-0016 ([§3.34](ARCHITECTURE.md#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016), DEC-0050) canonically defined the minimal Character zero-HP turn / Death Save contract, and TSK-0017 has since delivered its production continuation — the automatic turn-start trigger (`CombatStarted`/`TurnAdvanced`), Character-owned lifecycle facts, the concrete resolvers/Results/Event builders/appliers, Application orchestration across `StartCombatHandler`/`AdvanceTurnHandler`/`AttackHandler`/`DamageHandler`/`HealingHandler`, and the additive State schema V9 reader/writer over the prior production V8 writer, confirmed through deterministic Domain/Application tests and real-adapter/filesystem integration tests. This closes [DEF-0005](DEFERRED.md#def-0005) `Done`. Still open under DEF-0015 beyond that narrow implemented slice: the broader Character zero-HP lifecycle outside §3.34 (e.g. Combat removal/end interaction), Monster Death Saves and Monster death/stabilization/lifecycle policy, zero-HP targetability, other action-eligibility consumers beyond the current `AttackCommand`, and Combat removal/end (`CombatEnded`) itself. This capability stays unchecked: one narrow implemented Character-specific slice is not the full delivered capability.
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
@@ -261,30 +261,31 @@ already-accepted §3.28 active-turn boundary. It introduces no new State,
 Event, `ErrorCode`, or life-state model and changed no production code by
 itself; TSK-0007 has now implemented that gate in production `AttackHandler`,
 after §3.28 active-turn eligibility and after Character/Monster category
-establishment (Zero-HP and combatant eligibility row above). Broader
-lifecycle questions — Character death saves ([DEF-0005](DEFERRED.md#def-0005))
-and Monster death policy, stabilization, and targetability at zero HP
-([DEF-0015](DEFERRED.md#def-0015)) — remain open.
+establishment (Zero-HP and combatant eligibility row above). Of the broader
+lifecycle questions this left open, the narrow Character death-save concern
+tracked by [DEF-0005](DEFERRED.md#def-0005) is now implemented by TSK-0017
+(see below) and closed `Done`; Monster death policy, stabilization, and
+targetability at zero HP, and the remaining broader scope tracked by
+[DEF-0015](DEFERRED.md#def-0015), remain open.
 
-TSK-0016 (§3.34, DEC-0050) canonically **defines** the next narrow slice of
+TSK-0016 (§3.34, DEC-0050) canonically **defined** the next narrow slice of
 that broader Character death-save question — a decision-only architecture
-task that changes no production code:
+task that changed no production code — and TSK-0017 has since **implemented**
+it in production:
 
 ```text
-DEFINED (§3.34, DEC-0050):
+DEFINED (§3.34, DEC-0050) AND IMPLEMENTED (TSK-0017):
     automatic turn-start Death Save trigger (CombatStarted/TurnAdvanced)
     Character-owned death-save/lifecycle facts on CharacterState
     D20/Result/Event/State-application boundaries and validation precedence
     natural 1/20 and three-success/three-failure semantics
     Damage-at-zero vs. damage-to-zero distinction and critical provenance
-    additive State schema V9 target over the current production V8 writer
-
-PENDING (TSK-0017):
     production resolvers/Results, Event builders/appliers, Application
         orchestration (StartCombat/AdvanceTurn/Attack/ApplyDamage/Healing)
-    the State schema V9 reader/writer
+    additive State schema V9 reader/writer, now the current production
+        writer, over the prior production V8 writer
 
-STILL OPEN (DEF-0005/DEF-0015, beyond §3.34's narrow Character slice):
+STILL OPEN (DEF-0015, beyond §3.34's narrow Character slice):
     broader Character zero-HP lifecycle beyond this Death Save mechanic
     Monster Death Saves and Monster death/stabilization/lifecycle policy
     zero-HP targetability
@@ -292,9 +293,12 @@ STILL OPEN (DEF-0005/DEF-0015, beyond §3.34's narrow Character slice):
     Combat removal / CombatEnded
 ```
 
-This does not mark Death Saves implemented, does not close the broader
-Zero-HP and combatant eligibility capability, and does not mark Combat
-lifecycle complete; the capability row above stays unchecked.
+This marks the narrow Character Death Save mechanic implemented and closes
+[DEF-0005](DEFERRED.md#def-0005) `Done`, but does not close the broader
+Zero-HP and combatant eligibility capability and does not mark Combat
+lifecycle complete; the capability row above stays unchecked because
+Monster lifecycle, broader zero-HP targetability, and Combat removal remain
+open under DEF-0015.
 
 ## Phase 4 — Magic
 

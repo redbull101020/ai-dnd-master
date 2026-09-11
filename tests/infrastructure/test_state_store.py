@@ -172,7 +172,7 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 8
+    assert data["schemaVersion"] == 9
     assert data["state"]["characters"] == []
     assert data["state"]["inventories"] == []
     assert data["state"]["equipment"] == []
@@ -228,16 +228,12 @@ def test_save_load_v3_preserves_character_state(tmp_path: Path) -> None:
     assert store.load("campaign_001") == original
 
 
-def test_save_load_v8_preserves_weapon_source_state_combat_positions_and_action_spent(
+def test_save_load_v9_preserves_prior_state_and_death_save_lifecycle(
     tmp_path: Path,
 ) -> None:
-    """Real filesystem V8 proof (TSK-0004 weapon-source State, TSK-0010
-    Combat.positions, §3.30/DEC-0045, and TSK-0015 Combat.action_spent,
-    §3.33/DEC-0049): proves non-empty weapon_proficiencies, InventoryState,
-    EquipmentState with an equipped weapon, non-empty
-    CombatState.positions, and a spent Combat.action_spent all survive one
-    exact Domain round-trip through actual on-disk State schema V8 JSON,
-    not just an in-memory fake."""
+    """Real filesystem V9 proof: prior weapon, spatial, and Action State plus
+    non-default Character death-save lifecycle facts survive one exact Domain
+    round-trip through on-disk JSON, not just an in-memory fake."""
     from dnd_engine.domain.state.combat import CombatPosition, CombatState
     from dnd_engine.domain.state.equipment import EquipmentState
     from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
@@ -247,7 +243,7 @@ def test_save_load_v8_preserves_weapon_source_state_combat_positions_and_action_
         id="character_001",
         definition_id="fighter",
         ability_scores=AbilityScores(16, 12, 14, 10, 10, 8),
-        current_hp=28,
+        current_hp=0,
         max_hp=28,
     )
     character = CharacterState(
@@ -258,6 +254,8 @@ def test_save_load_v8_preserves_weapon_source_state_combat_positions_and_action_
         ),
         skill_proficiencies=frozenset({Skill.ATHLETICS, Skill.PERCEPTION}),
         weapon_proficiencies=frozenset({"dagger"}),
+        death_save_successes=2,
+        death_save_failures=1,
     )
     inventory = InventoryState(
         owner_id="character_001",
@@ -288,6 +286,8 @@ def test_save_load_v8_preserves_weapon_source_state_combat_positions_and_action_
 
     assert loaded == original
     assert loaded.characters[0].weapon_proficiencies == frozenset({"dagger"})
+    assert loaded.characters[0].death_save_successes == 2
+    assert loaded.characters[0].death_save_failures == 1
     assert loaded.inventories == (inventory,)
     assert loaded.equipment == (equipment,)
     assert loaded.combat == combat
@@ -298,8 +298,18 @@ def test_save_load_v8_preserves_weapon_source_state_combat_positions_and_action_
 
     state_path = tmp_path / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 8
-    assert data["state"]["characters"][0]["weaponProficiencies"] == ["dagger"]
+    assert data["schemaVersion"] == 9
+    assert data["state"]["characters"][0] == {
+        "id": "character_001",
+        "totalLevel": 5,
+        "savingThrowProficiencies": ["constitution", "strength"],
+        "skillProficiencies": ["athletics", "perception"],
+        "weaponProficiencies": ["dagger"],
+        "deathSaveSuccesses": 2,
+        "deathSaveFailures": 1,
+        "deathSaveStable": False,
+        "dead": False,
+    }
     assert data["state"]["inventories"] == [
         {
             "ownerId": "character_001",

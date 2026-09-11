@@ -21,12 +21,12 @@ def campaign_state() -> CampaignState:
     )
 
 
-def creature_state(creature_id: str) -> CreatureState:
+def creature_state(creature_id: str, *, current_hp: int = 7) -> CreatureState:
     return CreatureState(
         id=creature_id,
         definition_id="goblin",
         ability_scores=AbilityScores(8, 14, 10, 10, 8, 8),
-        current_hp=7,
+        current_hp=current_hp,
         max_hp=7,
     )
 
@@ -40,7 +40,14 @@ def combat_state(*order: str, active_index: int = 0) -> CombatState:
     )
 
 
-def character_state(character_id: str) -> CharacterState:
+def character_state(
+    character_id: str,
+    *,
+    death_save_successes: int = 0,
+    death_save_failures: int = 0,
+    death_save_stable: bool = False,
+    dead: bool = False,
+) -> CharacterState:
     return CharacterState(
         id=character_id,
         total_level=5,
@@ -49,6 +56,10 @@ def character_state(character_id: str) -> CharacterState:
         ),
         skill_proficiencies=frozenset(),
         weapon_proficiencies=frozenset(),
+        death_save_successes=death_save_successes,
+        death_save_failures=death_save_failures,
+        death_save_stable=death_save_stable,
+        dead=dead,
     )
 
 
@@ -136,6 +147,102 @@ def test_snapshot_accepts_creature_without_character_state() -> None:
         characters=(),
     )
 
+    assert snapshot.characters == ()
+
+
+def test_snapshot_rejects_stable_character_with_positive_hp() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("character_001", current_hp=1),),
+            characters=(
+                character_state("character_001", death_save_stable=True),
+            ),
+        )
+
+
+def test_snapshot_rejects_dead_character_with_positive_hp() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("character_001", current_hp=1),),
+            characters=(character_state("character_001", dead=True),),
+        )
+
+
+def test_snapshot_rejects_positive_hp_with_death_save_success() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("character_001", current_hp=1),),
+            characters=(
+                character_state("character_001", death_save_successes=1),
+            ),
+        )
+
+
+def test_snapshot_rejects_positive_hp_with_death_save_failure() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("character_001", current_hp=1),),
+            characters=(
+                character_state("character_001", death_save_failures=1),
+            ),
+        )
+
+
+def test_snapshot_positive_hp_requires_stable_false() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("character_001", current_hp=1),),
+            characters=(
+                character_state("character_001", death_save_stable=True),
+            ),
+        )
+
+
+def test_snapshot_positive_hp_requires_dead_false() -> None:
+    with pytest.raises(ValueError):
+        StateSnapshot(
+            campaign=campaign_state(),
+            creatures=(creature_state("character_001", current_hp=1),),
+            characters=(character_state("character_001", dead=True),),
+        )
+
+
+@pytest.mark.parametrize(
+    "character",
+    [
+        character_state("character_001", death_save_successes=2),
+        character_state("character_001", death_save_failures=2),
+        character_state("character_001", death_save_stable=True),
+        character_state("character_001", death_save_failures=3, dead=True),
+        character_state("character_001", dead=True),
+    ],
+)
+def test_snapshot_accepts_zero_hp_character_lifecycle(
+    character: CharacterState,
+) -> None:
+    snapshot = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(creature_state("character_001", current_hp=0),),
+        characters=(character,),
+    )
+
+    assert snapshot.characters == (character,)
+
+
+def test_snapshot_zero_hp_creature_without_character_is_unaffected() -> None:
+    monster = creature_state("monster_001", current_hp=0)
+
+    snapshot = StateSnapshot(
+        campaign=campaign_state(),
+        creatures=(monster,),
+    )
+
+    assert snapshot.creatures == (monster,)
     assert snapshot.characters == ()
 
 

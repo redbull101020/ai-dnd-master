@@ -1,6 +1,9 @@
 import dataclasses
 
 from dnd_engine.application.services.event_metadata import EventMetadataProvider
+from dnd_engine.application.services.character_death_save import (
+    apply_active_character_death_save,
+)
 from dnd_engine.domain.commands.advance_turn import AdvanceTurnCommand
 from dnd_engine.domain.errors import EngineError, ErrorCode
 from dnd_engine.domain.events.advance_turn import (
@@ -13,6 +16,7 @@ from dnd_engine.domain.rules.advance_turn import (
     resolve_advance_turn,
 )
 from dnd_engine.domain.services.state_store import StateStore
+from dnd_engine.domain.services.dice import DiceEngine
 
 
 class AdvanceTurnHandler:
@@ -20,9 +24,11 @@ class AdvanceTurnHandler:
         self,
         *,
         state_store: StateStore,
+        dice: DiceEngine,
         event_metadata_provider: EventMetadataProvider,
     ) -> None:
         self._state_store = state_store
+        self._dice = dice
         self._event_metadata_provider = event_metadata_provider
 
     def handle(
@@ -73,6 +79,16 @@ class AdvanceTurnHandler:
 
         replacement_combat = apply_turn_advanced_v1(combat, event)
         replacement_snapshot = dataclasses.replace(snapshot, combat=replacement_combat)
+        replacement_snapshot, consequence_events = apply_active_character_death_save(
+            replacement_snapshot,
+            active_creature_id=replacement_combat.active_creature_id,
+            dice=self._dice,
+            event_metadata_provider=self._event_metadata_provider,
+            command_id=command.command_id,
+            campaign_id=command.campaign_id,
+            actor_id=command.actor_id,
+            caused_by=event.event_id,
+        )
 
         self._state_store.save(replacement_snapshot)
 
@@ -80,6 +96,6 @@ class AdvanceTurnHandler:
             success=True,
             command_id=command.command_id,
             outcome=outcome,
-            events=(event,),
+            events=(event, *consequence_events),
             errors=(),
         )

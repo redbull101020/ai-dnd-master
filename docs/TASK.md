@@ -1236,7 +1236,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0018
-- **Last reviewed:** 2026-09-09
+- **Last reviewed:** 2026-09-11
 
 ---
 
@@ -1244,62 +1244,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0017` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement minimal Character Death Save vertical slice |
 
 ---
 
 # Open task details
-
-## TSK-0017 — Implement minimal Character Death Save vertical slice
-
-**Status:** `Backlog`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / Zero-HP and combatant eligibility
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
-- `ARCHITECTURE.md` §3.25
-- `ARCHITECTURE.md` §3.31
-- `ARCHITECTURE.md` §3.34
-- `DEFERRED.md` — `DEF-0005`
-- `DEFERRED.md` — `DEF-0015`
-- `DEC-0050`
-
-**Depends on:** `TSK-0016`
-
-**Contract impact:** `none`
-
-### Goal
-
-Implement the canonical minimal Character zero-HP turn / Death Save
-contract defined by `ARCHITECTURE.md` §3.34 (DEC-0050) through
-deterministic Domain/Application/Event/State/persistence behavior and
-automated tests.
-
-TSK-0017 must implement the already-fixed semantic/Event/State/schema
-contracts §3.34 defines — no external `DeathSaveCommand`, the automatic
-`CombatStarted`/`TurnAdvanced` trigger, `CharacterDeathSaveResult`,
-`CharacterDeathSaveFailureResult`, `CharacterDeathSaveResolved` V1,
-`CharacterDeathSaveFailureRecorded` V1, the Character lifecycle State
-facts, and the target State schema V9 Character wire fields/compatibility
-semantics — rather than redefine them. Exact Python module placement,
-concrete helper/function names, and other implementation details §3.34
-deliberately does not fix remain for the TSK-0017 refinement/
-implementation pass.
-
-### Evidence / trigger
-
-TSK-0017 должен оставаться `Backlog` до тех пор, пока TSK-0016 не станет
-`Done`. Перед переводом в `Ready` требуется отдельный refinement pass,
-который сформирует точные `Scope`, `Out of scope`, `Acceptance criteria` и
-`Verification` из уже принятого канонического контракта §3.34/DEC-0050.
 
 ---
 
@@ -1307,8 +1255,6 @@ TSK-0017 должен оставаться `Backlog` до тех пор, пок�
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0003` | Define zero-HP Attack eligibility by creature category | PR #72 / merge commit `7ac97f6` |
-| `TSK-0006` | Implement active-turn Attack gating | PR #75 / merge commit `d590056` |
 | `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 | `TSK-0004` | Implement the approved minimal Character weapon source and persistence | PR #80 / merge commit `d1b23de` |
 | `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
@@ -1318,6 +1264,7 @@ TSK-0017 должен оставаться `Backlog` до тех пор, пок�
 | `TSK-0014` | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers | PR #88 |
 | `TSK-0015` | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers | PR #89 |
 | `TSK-0016` | Define minimal Character zero-HP turn and Death Save contract | PR #91 |
+| `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
 
 ---
 

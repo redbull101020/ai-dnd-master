@@ -69,7 +69,7 @@
 | Zero-HP Attack eligibility by creature category (TSK-0003) | §3.31 |
 | Character Dagger Attack/Damage contracts (TSK-0011) | §3.32 |
 | Current-turn ordinary Action expenditure, `TurnActionSpent` (TSK-0014/TSK-0015) | §3.33 |
-| Character zero-HP turn / Death Save contract (TSK-0016, decision-only) | §3.34 |
+| Character zero-HP turn / Death Save contract (TSK-0016 contract, TSK-0017 implementation) | §3.34 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -4727,7 +4727,7 @@ This slice does not implement, and does not imply a decision on:
 ```text
 CombatEnded / combat lifecycle end
 zero-HP action eligibility (DEF-0015) — this slice's eligibility gate is turn-order identity only
-Death Saves (DEF-0005) — canonically defined, not implemented, by §3.34 (TSK-0016)
+Death Saves (DEF-0005) — canonically defined by §3.34 (TSK-0016) and implemented as a separate Application-orchestrated consequence by TSK-0017, layered on top of this slice's own unchanged CombatStarted/TurnAdvanced Domain/Event contract
 movement, positions, reactions, opportunity attacks
 turn resources, action economy
 Attack -> Combat integration (Attack, §3.17, is unchanged by this slice)
@@ -6875,11 +6875,11 @@ This section resolves only the narrow zero-HP Attack-eligibility question
 named in TSK-0003, with production implementation delivered by TSK-0007; the
 death-save/stabilization exclusions listed above are this section's own
 boundary, not a claim about any other section's current status. §3.34
-(TSK-0016) now canonically defines, but does not yet deliver a production
-continuation of, the Character-specific Death Save mechanic those exclusions
-name — that production continuation remains pending TSK-0017. §3.34 does not
-change this section's `current_hp == 0` Attack-eligibility gate, which stays
-sufficient by itself with no separate stable/dead check. The broader
+(TSK-0016) canonically defines the Character-specific Death Save mechanic
+those exclusions name, and TSK-0017 has since delivered its production
+continuation. §3.34 does not change this section's `current_hp == 0`
+Attack-eligibility gate, which stays sufficient by itself with no separate
+stable/dead check. The broader
 DEF-0015 concern (Monster death policy, stabilization, and
 targetability/lifecycle questions beyond this narrow Attack-eligibility
 rule) remains open and is untouched by §3.34.
@@ -7705,22 +7705,22 @@ consumers — does not justify one.
 
 ### 3.34. Minimal Character zero-HP turn and Death Save contract (TSK-0016)
 
-Implementation status: **Contract defined by TSK-0016 (architecture-only).
-Production implementation is intentionally pending TSK-0017.** No production
-Python behavior — Command, Event, resolver, applier, Application handler, or
-State schema writer — is delivered by TSK-0016. The current production
-State schema writer remains exact V8 (§3.33, §12.13); this section's
-additive V9 target contract (see below) is not yet implemented.
+Implementation status: **Contract defined by TSK-0016 (architecture-only);
+production implementation delivered by TSK-0017.** Command, Event, resolver,
+applier, Application handler, and State schema writer behavior for this
+narrow Character Death Save slice are implemented in production. The current
+production State schema writer is exact V9 (§12.13), implementing this
+section's additive V9 contract (see below) over the prior V8 writer.
 
 This section resolves the architectural questions required for the minimal
 Character Death Save slice tracked by DEF-0005 (Character Death Saving
 Throws) and the Character-specific slice of DEF-0015 (zero-HP semantics),
 both of which remained open after §3.31/DEC-0046 fixed the narrow
-`AttackCommand` zero-HP eligibility question. It defines, but does not
-implement, the deterministic Engine consequence a Character at
-`current_hp == 0` triggers when their Combat turn begins; the production
-continuation of DEF-0005 remains pending TSK-0017, and DEF-0015's broader
-Monster/lifecycle scope remains open.
+`AttackCommand` zero-HP eligibility question. It defines the deterministic
+Engine consequence a Character at `current_hp == 0` triggers when their
+Combat turn begins; TSK-0017 has since delivered its production
+continuation, closing DEF-0005, while DEF-0015's broader Monster/lifecycle
+scope remains open.
 
 #### Mechanic identity
 
@@ -8089,7 +8089,7 @@ The existing `HealingApplied` V1 wire contract (`targetId`, `amount`,
 fact: `amount = 1`, `previousHp = 0`, `newHp = min(max_hp, 1) = 1` (every
 Character has `max_hp >= 1`, per the existing `CreatureState` invariant,
 §3.2.1). No `HealingApplied` V2 is introduced solely to carry Death-Save
-provenance. A later TSK-0017 may add a separate source-specific builder/
+provenance. TSK-0017 has added a separate source-specific builder/
 orchestration path that produces this same unchanged `HealingApplied` V1
 payload from a natural-20 Death Save; its exact Python API is not fixed
 here.
@@ -8494,17 +8494,17 @@ For ordinary Healing (§3.20):
 
 #### State schema V9 target contract
 
-The current production State schema writer remains exact V8 (§3.33,
-§12.13). This section defines, but does not implement, the target State
-schema V9: additive over V8, adding only the four Character death-save/
-lifecycle fields above. V9 does not change any root `state` key, does not
-change the `CreatureState` wire shape, does not change the `CombatState`
-wire shape, and does not change any Inventory/Equipment wire shape.
+The current production State schema writer is exact V9 (§3.34, §12.13),
+implemented by TSK-0017: additive over V8, adding only the four Character
+death-save/lifecycle fields above. V9 does not change any root `state` key,
+does not change the `CreatureState` wire shape, does not change the
+`CombatState` wire shape, and does not change any Inventory/Equipment wire
+shape.
 
-Legacy V1–V8 snapshots must decode, once a V9 reader is implemented, with
-the same canonical-compatibility-default discipline already established for
-`weapon_proficiencies`/`inventories`/`equipment` (V1–V5), `positions`
-(V5–V6), and `action_spent` (V5–V7) in §12.13:
+Legacy V1–V8 snapshots decode with the same canonical-compatibility-default
+discipline already established for `weapon_proficiencies`/`inventories`/
+`equipment` (V1–V5), `positions` (V5–V6), and `action_spent` (V5–V7) in
+§12.13:
 
 ```text
 deathSaveSuccesses = 0
@@ -8513,11 +8513,11 @@ deathSaveStable    = False
 dead               = False
 ```
 
-A V9 writer must write the real Character `deathSaveSuccesses`/
+The V9 writer writes the real Character `deathSaveSuccesses`/
 `deathSaveFailures`/`deathSaveStable`/`dead` facts explicitly; legacy V1–V8
 wire schemas are not retroactively extended to accept these V9-only fields.
 
-A V9 reader must finish decoding by constructing the authoritative
+The V9 reader finishes decoding by constructing the authoritative
 `StateSnapshot` (§3.2.3), exactly like every other schema version already
 does: it first decodes the exact wire fields (or, for legacy V1–V8, applies
 the canonical defaults above), then the resulting Character/Creature
@@ -8525,18 +8525,14 @@ projections must satisfy both `CharacterState`'s own intrinsic constructor
 invariants and the `StateSnapshot` Character↔Creature relational invariants
 fixed above (§"State ownership and authoritative facts"). A persisted V9
 combination that violates those relations — for example `dead=true`
-together with `currentHp>0` — is an invalid State and must be rejected, not
+together with `currentHp>0` — is an invalid State and is rejected, not
 silently accepted as authoritative. Legacy V1–V8 snapshots decode to the
 canonical `0`/`0`/`False`/`False` defaults above and then pass through this
 same `StateSnapshot` relational validation, exactly like every other
-projection they already carry. This section fixes only the target
+projection they already carry. This section fixes only the
 decode-then-validate contract; it does not fix a specific exception message
 or serializer helper name — Architecture has no existing general
-requirement on exact persistence-error text — and it changes no
-`StateSerializer` code, since it is not implemented by TSK-0016.
-
-This section only fixes the target V9 contract; it does not claim V9 is
-already implemented.
+requirement on exact persistence-error text.
 
 #### Compatibility with existing sections
 
@@ -10353,7 +10349,7 @@ narrow Character zero-HP/Death Save slice, by §3.34 (TSK-0016): the
 death-save/lifecycle facts live in the Character-specific projection,
 conceptually `CharacterState` (§3.2.4), under this same `Creature /
 CreatureDomain` owner — not under `CombatEngine` (§10.7) and not as a new
-State Owner. §3.34 defines this contract but does not implement it; broader
+State Owner. §3.34 defines this contract, implemented by TSK-0017; broader
 Monster life-state policy remains open (DEF-0015).
 
 Но важно разделить **ownership** и **resolution**.
@@ -11809,13 +11805,14 @@ Migration
 State v3
 ```
 
-Текущие production migration paths читают exact legacy V1–V7 и current V8
+Текущие production migration paths читают exact legacy V1–V8 и current V9
 согласно их фиксированным wire-контрактам; production writer выпускает exact
-V8 (§3.33), реализованный TSK-0015, additive поверх exact V7 (§3.30),
-реализованного TSK-0010, которая, в свою очередь, additive поверх exact V6
-(§3.29), реализованного TSK-0004. Reader сохраняет те же exact V1–V7 shapes
-и добавляет только те Domain projections, которых не было в исходной
-версии, как пустые migration results:
+V9 (§3.34), реализованный TSK-0017, additive поверх exact V8 (§3.33),
+реализованного TSK-0015, которая, в свою очередь, additive поверх exact V7
+(§3.30), реализованного TSK-0010, которая, в свою очередь, additive поверх
+exact V6 (§3.29), реализованного TSK-0004. Reader сохраняет те же exact
+V1–V8 shapes и добавляет только те Domain projections, которых не было в
+исходной версии, как пустые migration results:
 
 ```text
 V1–V5:
@@ -11828,34 +11825,52 @@ V5–V6 non-null combat:
 
 V5–V7 non-null combat:
     CombatState.action_spent = False
+
+V1–V8:
+    CharacterState.death_save_successes = 0
+    CharacterState.death_save_failures = 0
+    CharacterState.death_save_stable = False
+    CharacterState.dead = False
 ```
 
 V6 обязан сохранять свои реальные `weaponProficiencies`/`inventories`/
-`equipment`, а V7 — дополнительно свои реальные `positions`; это не empty
-defaults для этих версий. Legacy migration не выводит Dagger, Inventory,
-Equipment, weapon proficiency, tactical placement или Action-expenditure из
-class, Creature Definition, level либо других старых данных. Успешно
-загруженный V1–V5 snapshot при следующем сохранении записывается в exact
-V8: projections, отсутствовавшие в исходной версии, получают canonical
-empty/false defaults, как указано выше (`positions = ()`, `action_spent =
-False` включительно). Успешно загруженный V6 snapshot при следующем
-сохранении сохраняет свои реальные `weaponProficiencies`/`inventories`/
-`equipment` без изменений и получает `combat.positions = ()` и
-`combat.action_spent = False` при непустом `combat`. Успешно загруженный V7
+`equipment`, V7 — дополнительно свои реальные `positions`, а V8 —
+дополнительно свой реальный `actionSpent`; это не empty defaults для этих
+версий. Legacy migration не выводит Dagger, Inventory, Equipment, weapon
+proficiency, tactical placement, Action-expenditure или death-save/lifecycle
+facts из class, Creature Definition, level либо других старых данных.
+Успешно загруженный V1–V5 snapshot при следующем сохранении записывается в
+exact V9: projections, отсутствовавшие в исходной версии, получают
+canonical empty/false defaults, как указано выше (`positions = ()`,
+`action_spent = False`, `deathSaveSuccesses = 0`, `deathSaveFailures = 0`,
+`deathSaveStable = False`, `dead = False` включительно). Успешно загруженный
+V6 snapshot при следующем сохранении сохраняет свои реальные
+`weaponProficiencies`/`inventories`/`equipment` без изменений и получает
+`combat.positions = ()`, `combat.action_spent = False` при непустом
+`combat`, и canonical death-save/lifecycle defaults. Успешно загруженный V7
 snapshot при следующем сохранении сохраняет свои реальные
 `weaponProficiencies`/`inventories`/`equipment`/`positions` без изменений и
-получает `combat.action_spent = False` при непустом `combat`. Legacy wire
-schemas задним числом не расширяются; generic migration registry или
+получает `combat.action_spent = False` при непустом `combat` и canonical
+death-save/lifecycle defaults. Успешно загруженный V8 snapshot при
+следующем сохранении сохраняет свои реальные
+`weaponProficiencies`/`inventories`/`equipment`/`positions`/`actionSpent`
+без изменений и получает canonical death-save/lifecycle defaults. Legacy
+wire schemas задним числом не расширяются; generic migration registry или
 framework не вводится. State schema V7 (§3.30, TSK-0010) — additive spatial
 contract над V6: сохраняет все V6 поля (`weaponProficiencies`/
 `inventories`/`equipment`) без изменений и добавляет только обязательный
 `combat.positions` внутри non-null `combat`; V6 остаётся exact historical
 Combat shape без `positions`. State schema V8 (§3.33, TSK-0015, DEC-0049) —
-additive Action-expenditure contract над V7 и current production writer:
-сохраняет все V7 поля (`id`/`round`/`order`/`activeIndex`/`positions`) без
-изменений и добавляет только обязательный `combat.actionSpent: bool`
-внутри non-null `combat`; V7 остаётся exact historical Combat shape без
-`actionSpent`.
+additive Action-expenditure contract над V7: сохраняет все V7 поля
+(`id`/`round`/`order`/`activeIndex`/`positions`) без изменений и добавляет
+только обязательный `combat.actionSpent: bool` внутри non-null `combat`; V7
+остаётся exact historical Combat shape без `actionSpent`. State schema V9
+(§3.34, TSK-0017) — additive Character death-save/lifecycle contract над V8
+и current production writer: сохраняет все V8 поля без изменений и
+добавляет только `deathSaveSuccesses`/`deathSaveFailures`/`deathSaveStable`/
+`dead` к каждому Character; не меняет ни один root `state` key и не меняет
+`CreatureState`/`CombatState`/Inventory/Equipment wire shapes; V8 остаётся
+exact historical Character shape без этих четырёх полей.
 
 A legacy active Combat (V5–V7) decodes to `action_spent = False`, following
 the same compatibility-default discipline as the
@@ -11864,18 +11879,12 @@ the same compatibility-default discipline as the
 Action-expenditure fact and no durable Event replay exists to reconstruct
 one. This default is a deterministic compatibility value, not a
 reconstruction of what Action usage actually happened in that legacy game.
-
-State schema V9 (§3.34, TSK-0016) is the target, currently unimplemented,
-additive Character death-save/lifecycle contract over V8: it would add only
-`deathSaveSuccesses`, `deathSaveFailures`, `deathSaveStable`, and `dead` to
-each Character, without changing any root `state` key or the `CreatureState`
-/`CombatState`/Inventory/Equipment wire shapes. The current production
-writer remains exact V8; this is a defined target contract, not an
-implemented schema version. Once a V9 reader exists, a legacy V1–V8
-Character decodes with the same canonical-compatibility-default discipline
-as above: `deathSaveSuccesses = 0`, `deathSaveFailures = 0`,
-`deathSaveStable = False`, `dead = False` — because no pre-V9 snapshot
-recorded these facts and no durable Event replay exists to reconstruct them.
+The same reasoning applies to a legacy V1–V8 Character's death-save/
+lifecycle defaults above: no pre-V9 snapshot recorded
+`deathSaveSuccesses`/`deathSaveFailures`/`deathSaveStable`/`dead`, and no
+durable Event replay exists to reconstruct them, so the canonical `0`/`0`/
+`False`/`False` compatibility values are not a reconstruction of what Death
+Save progress actually happened in that legacy game.
 
 ---
 

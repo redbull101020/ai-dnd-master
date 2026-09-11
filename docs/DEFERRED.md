@@ -476,7 +476,7 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
 - **Origin:** [P2-SAVING-THROWS](#p2-saving-throws) and [P2-HP](#p2-hp).
 - **Created:** 2026-08-30
 - **Target:** Phase 3 — Character zero-HP lifecycle.
-- **Status:** In progress
+- **Status:** Done
 - **Description:** Implement the Character zero-HP death-save lifecycle, its
   counters, reset rules, outcomes, and authoritative State transitions.
 - **Motivation:** Death saves are not ordinary ability-based Saving Throws and
@@ -551,6 +551,26 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   outstanding, and no broader mechanic beyond §3.34's narrow scope
   (Monster Death Saves, Monster lifecycle, Combat removal/end, resurrection,
   massive damage) is resolved by this change.
+- **History:** 2026-09-11 — TSK-0017 implemented the production continuation
+  §3.34/DEC-0050 defined: the pure `CharacterDeathSaveResult`/
+  `CharacterDeathSaveFailureResult` resolvers, `CharacterDeathSaveResolved` V1/
+  `CharacterDeathSaveFailureRecorded` V1 builders and appliers, the automatic
+  turn-start Death Save orchestrated by `StartCombatHandler`/
+  `AdvanceTurnHandler`, the natural-20 → unchanged `HealingApplied` V1
+  HP-regain chain, Damage-at-zero failure consequences for both direct
+  `ApplyDamageCommand` and Attack-origin Damage (including critical
+  provenance), ordinary-Healing lifecycle reset and the dead-Character
+  rejection, and the State schema V9 reader/writer with V1–V8
+  canonical-compatibility-default reads. Confirmed through deterministic
+  Domain/Application tests and real-adapter/filesystem integration tests, and
+  by a full repository regression pass. Closed `Done`: every stated
+  Acceptance criterion is satisfied by this one narrow Character-specific
+  mechanic. **What `Done` does not mean:** Monster Death Saves, Monster
+  death/stabilization/lifecycle policy, broader zero-HP targetability, Combat
+  removal/`CombatEnded`, Medicine/external stabilization, the stable
+  1d4-hour natural-recovery rule, resurrection/revivification, temporary HP,
+  and massive-damage/instant-death rules are not implemented — those remain
+  open under [DEF-0015](#def-0015) and this record's own explicit exclusions.
 
 ## DEF-0006
 
@@ -1099,11 +1119,12 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   `current_hp == 0` — decided separately for Character and Monster — layered
   on top of the existing §3.28 active-turn boundary. TSK-0016
   ([§3.34](ARCHITECTURE.md#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016),
-  DEC-0050) has since canonically defined, but not yet implemented in
-  production (TSK-0017 pending), the coordinated Character death-save
-  lifecycle slice this record's "Prerequisites" previously named: trigger
-  timing, Character-owned persisted facts, and the Damage-at-zero/ordinary-
-  Healing interaction narrow enough for that one slice. The much broader
+  DEC-0050) canonically defined, and TSK-0017 has since implemented in
+  production, the coordinated Character death-save lifecycle slice this
+  record's "Prerequisites" previously named: trigger timing, Character-owned
+  persisted facts, and the Damage-at-zero/ordinary-Healing interaction narrow
+  enough for that one slice — closing [DEF-0005](#def-0005) `Done`. The much
+  broader
   DEF-0015 concern remains open beyond that narrow Character slice:
   targetability of a creature already at zero HP, further-Damage/
   stabilization/death outcomes outside the Character Death Save mechanic,
@@ -1132,8 +1153,8 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   persistence, and Event causation are deterministic; any additional lifecycle
   State is consumer-proven, and external layers cannot mutate or invent
   authoritative lifecycle facts. §3.34/DEC-0050 satisfies these criteria for
-  the narrow Character Death Save slice only (contract defined; production
-  implementation pending TSK-0017); Monster zero-HP lifecycle and the
+  the narrow Character Death Save slice only (contract defined and
+  implemented in production by TSK-0017); Monster zero-HP lifecycle and the
   remaining broader scope above are not yet specified.
 - **References:** [Architecture §3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.20](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b),
@@ -1177,6 +1198,18 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   resurrection), Combat removal/end behavior, and other action-eligibility
   consumers outside the current `AttackCommand` remain unresolved and
   `Deferred`.
+- **History:** 2026-09-11 — TSK-0017 implemented in production the narrow
+  coordinated Character Death Save slice this record's "Prerequisites"
+  named: the automatic turn-start trigger, Character-owned lifecycle facts,
+  Damage-at-zero/ordinary-Healing interaction, and the State schema V9
+  reader/writer, confirmed through deterministic tests and real-adapter/
+  filesystem integration tests. This closes [DEF-0005](#def-0005) `Done`.
+  DEF-0015 itself stays `Deferred`: targetability of a creature already at
+  zero HP, Monster death/stabilization/lifecycle policy and Monster Death
+  Saves, broader Healing-recovery semantics (rest recovery, external
+  stabilization, resurrection), Combat removal/end behavior, and other
+  action-eligibility consumers outside the current `AttackCommand` remain
+  unresolved.
 
 ## DEF-0016
 

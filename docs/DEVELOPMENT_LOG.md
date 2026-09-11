@@ -6776,3 +6776,192 @@ already-merged delivery branch.
   push, or merge was performed for this pass; the PR was not marked ready
   for review. A `review.patch` containing only these fresh prospective
   closure changes was produced for review.
+
+## 2026-09-11 — Refined and selected TSK-0017 as Current
+
+- Completed the TSK-0017 refinement from the already-accepted
+  `ARCHITECTURE.md` §3.34 / DEC-0050 contract, passed the readiness gate, and
+  selected it as the current executable Phase 3 slice after TSK-0016 became
+  authoritatively `Done` on `main`.
+- Added concrete scope, exclusions, acceptance criteria, verification,
+  expected touchpoints, and five implementation checkpoints to
+  `docs/TASK.md`; reconciled `Current` to TSK-0017 while leaving `Next` and
+  `Hard blockers` empty and `Next free ID` at TSK-0018.
+- This was documentation-only readiness reconciliation. TSK-0017 production
+  implementation, State schema V9, and Death Save runtime behavior are not
+  complete.
+
+## 2026-09-11 — Implemented TSK-0017 State and V9 persistence foundation
+
+- Added the four Character Death Save/HP lifecycle fields with neutral defaults
+  and intrinsic validation, plus Character-to-Creature lifecycle consistency
+  checks in `StateSnapshot`.
+- Introduced the exact State schema V9 Character wire fields while preserving
+  the V8 root, Creature, Combat, Inventory, and Equipment shapes. V1-V8 input
+  receives neutral lifecycle defaults and retains version-specific strictness;
+  V9 input is strictly validated.
+- Added serializer write-time lifecycle revalidation so invalid mutable nested
+  State cannot bypass the domain invariants, and covered V9 round trips,
+  historical compatibility, strict rejection cases, and real-filesystem store
+  persistence with focused Domain and Infrastructure tests.
+- This is TSK-0017 checkpoint 1 only. No Application handler, Death Save
+  Result/Event, or runtime resolution behavior was added or changed.
+- Verification: focused Character/Snapshot/serializer/store tests — 432
+  passed; full suite — 2088 passed (with writable `PIP_CACHE_DIR` and an
+  external `--basetemp` for the packaging fixture); `mypy src/dnd_engine` —
+  no issues in 112 source files.
+
+## 2026-09-11 — Implemented TSK-0017 pure Domain Death Save mechanics
+
+- Added immutable Character Death Save and Damage-at-zero failure Results
+  with deterministic resolvers using the existing normal-d20 and Damage
+  contracts, without State mutation or Event construction.
+- Added exact V1 builders and stale-state appliers for
+  `CharacterDeathSaveResolved` and `CharacterDeathSaveFailureRecorded`;
+  lifecycle application preserves unrelated Character facts and never owns HP.
+- Added focused Domain tests for roll boundaries, counter transitions,
+  Damage-at-zero preconditions, Event envelopes/payloads, stale input, and
+  preservation behavior. Application orchestration remains pending.
+- Strengthened both concrete Result types so manually constructed outcomes
+  must satisfy the exact roll- or critical-provenance transition semantics
+  before copy-only Event builders can consume them, including normal-roll and
+  valid stabilized-pre-state requirements; automatic consequence builders
+  also require complete string root/immediate-cause correlation.
+
+## 2026-09-11 — Integrated turn-start Character Death Saves
+
+- Integrated the automatic eligible Character Death Save consequence after
+  in-memory `CombatStarted` and `TurnAdvanced` application while retaining
+  the existing root outcomes and a single final State save.
+- Added the natural-20 chain through unchanged `HealingApplied` V1, preserving
+  root correlation, immediate Event causation, lifecycle reset, and the new
+  turn's unspent Action.
+- Added focused Application coverage for eligibility, roll transitions,
+  Event ordering/causation, HP recovery, save atomicity, Character snapshot
+  replacement, and unchanged Healing V1 consequence boundaries.
+
+## 2026-09-11 — Integrated direct Damage and ordinary Healing lifecycle consequences
+
+- Extended direct `ApplyDamageCommand` handling so Damage against a living
+  Character already at zero HP records the canonical non-critical
+  `CharacterDeathSaveFailureRecorded` consequence after `DamageApplied`, with
+  immediate `causedBy` correlation, unchanged root `DamageResult`, and one
+  final State save. Positive-HP-to-zero Damage, non-Character targets, and
+  already-dead Characters retain their required no-consequence behavior.
+- Extended ordinary `ApplyHealingCommand` handling with the Character-specific
+  dead-target gate before resolution and metadata allocation. Successful
+  zero-to-positive Character Healing keeps `HealingApplied` V1 as the only
+  Event while resetting both Death Save counters and stabilization in the same
+  final snapshot; Monster and positive-HP Character Healing remain unchanged.
+- Reused the existing narrow Character snapshot replacement helper and ordered
+  in-memory replacements so every constructed cross-projection snapshot remains
+  valid. `AttackHandler`, Event versions, and canonical architecture contracts
+  were not changed in this checkpoint.
+- Verification: focused Damage/Healing handler tests — 25 passed;
+  `mypy src/dnd_engine` — no issues in 115 source files; `git diff --check` —
+  no whitespace errors. Pytest also reported the existing sandbox warning that
+  `.pytest_cache` could not be created.
+
+## 2026-09-11 — Integrated Attack-origin Damage-at-zero lifecycle consequences
+
+- Extended the existing Monster Attack → Character Damage path so positive
+  Damage against a living Character already at zero HP records
+  `CharacterDeathSaveFailureRecorded` after `DamageApplied`, using the
+  source-specific Monster Attack critical-hit fact for the canonical one- or
+  two-failure transition. Positive-HP-to-zero and already-dead targets do not
+  receive the consequence.
+- Preserved the existing Event chain and correlations. In Combat,
+  `TurnActionSpent` remains the final Event and remains caused by
+  `MonsterAttackResolved`; the Character lifecycle Event is caused directly by
+  `DamageApplied`. Outside Combat, the lifecycle consequence is saved without
+  creating `TurnActionSpent`.
+- Narrowly changed ordinary-Action consumption to accept an already-prepared
+  snapshot, allowing target HP, Character lifecycle, and Combat action state to
+  be assembled into one valid final snapshot and saved exactly once. No generic
+  transaction/consequence abstraction was introduced, and Character Dagger
+  targetability remains limited to its prior Monster target path.
+- Added focused coverage for ordinary and critical failures, cap/death,
+  stabilization clearing, dead and positive-HP boundaries, in-Combat Event
+  order/causation and atomic State, outside-Combat behavior, and Character
+  Dagger target-scope regression.
+- Verification: targeted AttackHandler suite — 87 passed; all Application
+  tests — 193 passed; `mypy src/dnd_engine` — no issues in 115 source files;
+  `git diff --check` — no whitespace errors.
+
+## 2026-09-11 — Completed TSK-0017 integration, regression, and documentation sync
+
+- This is TSK-0017 checkpoint 5, closing the vertical slice: State schema V9
+  (`CharacterState.death_save_successes`/`death_save_failures`/
+  `death_save_stable`/`dead`, canonical V1–V8 compatibility defaults), the
+  automatic turn-start Character Death Save orchestrated by
+  `StartCombatHandler`/`AdvanceTurnHandler`, Damage-at-zero failure
+  consequences for both direct `ApplyDamageCommand` and Attack-origin Damage
+  (including critical provenance), and ordinary-Healing lifecycle reset plus
+  the dead-Character rejection are all implemented in production, exactly as
+  §3.34/DEC-0050 defines and with no additional gameplay scope.
+- Added `tests/integration/test_death_save_real_adapters.py`: a real
+  `FilesystemStateStore`/`PythonDiceEngine` V9 persistence round-trip with
+  non-default Character lifecycle facts (schema-version and exact-value
+  proof), one representative automatic turn-start Death Save through
+  `AdvanceTurnHandler`, and one direct `ApplyDamageCommand` Damage-at-zero
+  failure consequence — each confirming exactly one `StateStore.save()` and
+  a correct persisted reload. Combinatorial mechanic behavior remains owned
+  by the existing focused Domain/Application tests.
+- Ran the full repository regression suite and confirmed no existing Attack,
+  Saving Throw, Skill Check, Damage, Healing, Combat, or persistence behavior
+  regressed outside the approved §3.34 changes.
+- Synchronized factual documentation to stop claiming TSK-0017/State schema
+  V9 are unimplemented: `ARCHITECTURE.md` §3.34 implementation status,
+  §12.13 migration/writer narrative, and the cross-references in §3.25/§3.31/
+  §10.4 now describe the delivered production behavior without altering any
+  accepted §3.34 semantics; `ROADMAP.md`'s Zero-HP and combatant eligibility
+  row and TSK-0016/TSK-0017 status block now reflect the implemented narrow
+  Character slice while the capability itself stays unchecked; `DEFERRED.md`
+  DEF-0005 closed `Done` with a dated History entry, and DEF-0015 stays
+  `Deferred` with its own dated History entry noting the narrow coordinated
+  slice is now implemented while its broader Monster/lifecycle scope remains
+  open; `CLAUDE.md`'s implemented-contracts index and summary paragraph gained
+  the Death Save slice. `docs/TASK.md` intentionally still shows TSK-0017 as
+  `Current` — no Task Closure, `Recently completed` entry, or next-`Current`
+  selection was performed, since Task Closure requires an accepted PR number
+  and none was created in this pass.
+- Verification: full `python -m pytest` — 2162 passed; `python -m mypy
+  src/dnd_engine` — no issues in 115 source files; `git diff --check` — no
+  whitespace errors, including against the cumulative branch diff versus
+  `origin/main`; focused re-runs of the documentation reference tests, the
+  State serializer/store tests, the Death Save Domain tests, the
+  `StartCombatHandler`/`AdvanceTurnHandler` Application tests, the
+  Damage/Healing handler tests, and the `AttackHandler` tests all passed.
+
+## 2026-09-11 — Prepared TSK-0017 Task Closure (§18.1) in PR #92
+
+- TSK-0017 implementation and review are complete and accepted: the minimal
+  Character Death Save vertical slice production behavior (§3.34/DEC-0050)
+  and its follow-up integration/regression/documentation checkpoint (the
+  prior 2026-09-11 entry above) both landed and passed review in the same
+  delivery PR, [PR #92](https://github.com/redbull101020/ai-dnd-master/pull/92).
+- Prepared normal-path Task Closure (§18.1) for TSK-0017 in that same
+  delivery branch/PR, not a separate branch: `docs/TASK.md` removed
+  TSK-0017 from `Open task index` and deleted its full `Open task details`
+  record, and added it to `Recently completed` with evidence `PR #92` —
+  the oldest existing row, `TSK-0006`, was dropped to keep exactly the ten
+  most recent completions per §18/§19. No placeholder merge SHA was written
+  anywhere, per §19's explicit prohibition.
+- This closure is **prospective**, not authoritative (§4.5): `TASK.md` on
+  this branch describes what will become true only once PR #92 merges into
+  `main`. No merge commit exists yet, and none is invented here or in
+  `TASK.md`. Before that merge, TSK-0017 is not yet actually `Done` as a
+  fact of the project.
+- No new `Current` or `Next` task was selected, because `TASK.md` had no
+  existing `Ready`/`Next` candidate to promote: `Current position` now
+  reads `Current: —`, `Next: —`, `Hard blockers: —`. `Next free ID` remains
+  `TSK-0018` — unchanged, because no new task ID was allocated by this
+  closure.
+- `ROADMAP.md`/`DEFERRED.md` were already synchronized by the prior
+  checkpoint and required no further semantic change for this closure.
+- Verification: full `python -m pytest` — 2162 passed; `python -m mypy
+  src/dnd_engine` — no issues in 115 source files; `git diff --check` — no
+  whitespace errors; the documentation reference tests passed. Only
+  `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md` entry changed — no
+  production Python, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`,
+  `DEFERRED.md`, or `CLAUDE.md` file was touched.

@@ -102,7 +102,13 @@ def make_target(
 
 
 def make_character(
-    *, character_id: str = "character_001", total_level: int = 5
+    *,
+    character_id: str = "character_001",
+    total_level: int = 5,
+    death_save_successes: int = 0,
+    death_save_failures: int = 0,
+    death_save_stable: bool = False,
+    dead: bool = False,
 ) -> CharacterState:
     return CharacterState(
         id=character_id,
@@ -110,6 +116,10 @@ def make_character(
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
         weapon_proficiencies=frozenset(),
+        death_save_successes=death_save_successes,
+        death_save_failures=death_save_failures,
+        death_save_stable=death_save_stable,
+        dead=dead,
     )
 
 
@@ -281,6 +291,172 @@ def test_full_hp_no_op_still_emits_event_saves_and_returns_success() -> None:
         "maxHp": 20,
         "newHp": 20,
     }
+
+
+def test_live_positive_hp_character_healing_preserves_lifecycle_state() -> None:
+    actor = make_target()
+    target = make_actor()
+    character = make_character()
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+    )
+    store, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(
+        store,
+        metadata,
+        make_command(target_id=target.id, actor_id=actor.id, amount=4),
+    )
+
+    assert calls == ["load", "metadata", "save"]
+    assert len(store.save_calls) == 1
+    assert [event.type for event in result.events] == ["HealingApplied"]
+    assert result.outcome is not None
+    assert result.outcome.previous_hp == 20
+    assert result.outcome.new_hp == 20
+    assert store.save_calls[0].characters[0] is character
+
+
+def test_zero_hp_live_character_healing_resets_lifecycle_atomically() -> None:
+    actor = make_target()
+    target = make_creature(
+        creature_id="character_001",
+        definition_id="cleric",
+        current_hp=0,
+        max_hp=20,
+    )
+    character = make_character(
+        death_save_successes=2,
+        death_save_failures=1,
+    )
+    other_creature = make_creature(
+        creature_id="character_002",
+        definition_id="wizard",
+    )
+    other_character = make_character(character_id="character_002", total_level=3)
+    snapshot = make_snapshot(
+        creatures=(other_creature, actor, target),
+        characters=(other_character, character),
+    )
+    loaded_before = deepcopy(snapshot)
+    store, metadata, calls = make_dependencies(snapshot)
+
+    result = handle_with(
+        store,
+        metadata,
+        make_command(target_id=target.id, actor_id=actor.id, amount=8),
+    )
+
+    assert calls == ["load", "metadata", "save"]
+    assert metadata.next_calls == ["campaign_001"]
+    assert len(store.save_calls) == 1
+    assert result.success is True
+    assert result.outcome is not None
+    assert result.outcome.previous_hp == 0
+    assert result.outcome.new_hp == 8
+    assert len(result.events) == 1
+    assert result.events[0].type == "HealingApplied"
+    assert result.events[0].version == 1
+    assert result.events[0].payload == {
+        "targetId": target.id,
+        "amount": 8,
+        "previousHp": 0,
+        "maxHp": 20,
+        "newHp": 8,
+    }
+    assert all(event.type != "DeathSaveReset" for event in result.events)
+
+    saved = store.save_calls[0]
+    saved_target = next(
+        creature for creature in saved.creatures if creature.id == target.id
+    )
+    saved_character = next(
+        candidate for candidate in saved.characters if candidate.id == target.id
+    )
+    assert saved_target.current_hp == 8
+    assert saved_character.death_save_successes == 0
+    assert saved_character.death_save_failures == 0
+    assert saved_character.death_save_stable is False
+    assert saved_character.dead is False
+    assert saved.characters[0] is other_character
+    assert snapshot == loaded_before
+
+
+def test_zero_hp_stable_character_healing_clears_stable() -> None:
+    actor = make_target()
+    target = make_creature(
+        creature_id="character_001",
+        definition_id="cleric",
+        current_hp=0,
+        max_hp=20,
+    )
+    character = make_character(death_save_stable=True)
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+    )
+    store, metadata, _ = make_dependencies(snapshot)
+
+    result = handle_with(
+        store,
+        metadata,
+        make_command(target_id=target.id, actor_id=actor.id, amount=1),
+    )
+
+    assert [event.type for event in result.events] == ["HealingApplied"]
+    assert len(store.save_calls) == 1
+    saved_character = store.save_calls[0].characters[0]
+    assert saved_character.death_save_successes == 0
+    assert saved_character.death_save_failures == 0
+    assert saved_character.death_save_stable is False
+    assert saved_character.dead is False
+
+
+def test_dead_character_healing_is_rejected_before_resolution_or_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dnd_engine.application.handlers.healing as healing_handler_module
+
+    actor = make_target()
+    target = make_creature(
+        creature_id="character_001",
+        definition_id="cleric",
+        current_hp=0,
+        max_hp=20,
+    )
+    character = make_character(death_save_failures=3, dead=True)
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+    )
+    store, metadata, calls = make_dependencies(snapshot)
+
+    def unexpected_resolution(*args: object, **kwargs: object) -> None:
+        raise AssertionError("healing resolution must not run")
+
+    monkeypatch.setattr(
+        healing_handler_module,
+        "resolve_healing",
+        unexpected_resolution,
+    )
+
+    result = handle_with(
+        store,
+        metadata,
+        make_command(target_id=target.id, actor_id=actor.id),
+    )
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.INVALID_TARGET
+    assert result.errors[0].entity_id == target.id
+    assert result.errors[0].field == "target_id"
+    assert calls == ["load"]
+    assert metadata.next_calls == []
+    assert store.save_calls == []
 
 
 def test_missing_actor_returns_structured_failure_without_metadata_or_save() -> None:

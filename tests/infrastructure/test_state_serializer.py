@@ -69,8 +69,8 @@ COMBAT_DATA: dict[str, object] = {
 # Combat shape above (§3.30/DEC-0045).
 V7_COMBAT_DATA: dict[str, object] = {**COMBAT_DATA, "positions": []}
 
-# Current V8 Combat wire fixture: adds `actionSpent` to the exact V7 Combat
-# shape above (§3.33/DEC-0049).
+# Historical V8 Combat wire fixture: adds `actionSpent` to the exact V7 Combat
+# shape above (§3.33/DEC-0049). V9 keeps this Combat shape unchanged.
 V8_COMBAT_DATA: dict[str, object] = {**V7_COMBAT_DATA, "actionSpent": False}
 
 COMBAT_POSITION_DATA: dict[str, object] = {
@@ -151,14 +151,14 @@ CANONICAL_V6_DATA: dict[str, object] = {
 # Additive over V6 (§3.30/DEC-0045, §12.13): identical top-level/Character/
 # Inventory/Equipment shape; only non-null Combat gains `positions`. This
 # minimal fixture has no Combat, so its wire shape differs from V6 only in
-# `schemaVersion`. Superseded by V8 (below) as the current writer; kept for
-# explicit historical V7 reader tests (§12.13).
+# `schemaVersion`. Superseded by V8 (below), which is itself historical under
+# the current V9 writer; kept for explicit historical V7 reader tests (§12.13).
 CANONICAL_V7_DATA: dict[str, object] = {
     **deepcopy(CANONICAL_V6_DATA),
     "schemaVersion": 7,
 }
 
-# Current V8: exact state shape emitted by the current writer. Additive
+# Historical V8: exact state shape emitted by the former V8 writer. Additive
 # over V7 (§3.33/DEC-0049, §12.13): identical top-level/Character/
 # Inventory/Equipment/Combat-positions shape; only non-null Combat gains
 # `actionSpent`. This minimal fixture has no Combat, so its wire shape
@@ -167,6 +167,20 @@ CANONICAL_V8_DATA: dict[str, object] = {
     **deepcopy(CANONICAL_V7_DATA),
     "schemaVersion": 8,
 }
+
+# Current V9: exact state shape emitted by the current writer. Additive over
+# V8 (§3.34/DEC-0050, §12.13): only the Character shape gains four required
+# lifecycle fields; every other wire shape remains unchanged.
+CANONICAL_V9_DATA: dict[str, object] = deepcopy(CANONICAL_V8_DATA)
+CANONICAL_V9_DATA["schemaVersion"] = 9
+CANONICAL_V9_DATA["state"]["characters"][0].update(  # type: ignore[index,union-attr]
+    {
+        "deathSaveSuccesses": 0,
+        "deathSaveFailures": 0,
+        "deathSaveStable": False,
+        "dead": False,
+    }
+)
 
 # Legacy V3: current V1-V3 Character schema, no Creature `conditions` field.
 LEGACY_V3_DATA: dict[str, object] = deepcopy(CANONICAL_V4_DATA)
@@ -201,12 +215,13 @@ def creature_state(
     creature_id: str = "character_001",
     *,
     conditions: frozenset[Condition] = frozenset(),
+    current_hp: int = 28,
 ) -> CreatureState:
     return CreatureState(
         id=creature_id,
         definition_id="fighter",
         ability_scores=AbilityScores(16, 12, 14, 10, 10, 8),
-        current_hp=28,
+        current_hp=current_hp,
         max_hp=28,
         conditions=conditions,
     )
@@ -216,6 +231,10 @@ def character_state(
     character_id: str = "character_001",
     *,
     weapon_proficiencies: frozenset[str] = frozenset(),
+    death_save_successes: int = 0,
+    death_save_failures: int = 0,
+    death_save_stable: bool = False,
+    dead: bool = False,
 ) -> CharacterState:
     return CharacterState(
         id=character_id,
@@ -227,6 +246,10 @@ def character_state(
             {Skill.ATHLETICS, Skill.PERCEPTION}
         ),
         weapon_proficiencies=weapon_proficiencies,
+        death_save_successes=death_save_successes,
+        death_save_failures=death_save_failures,
+        death_save_stable=death_save_stable,
+        dead=dead,
     )
 
 
@@ -325,6 +348,10 @@ def v8_data() -> dict[str, object]:
     return deepcopy(CANONICAL_V8_DATA)
 
 
+def v9_data() -> dict[str, object]:
+    return deepcopy(CANONICAL_V9_DATA)
+
+
 def v5_data() -> dict[str, object]:
     return deepcopy(LEGACY_V5_DATA)
 
@@ -352,23 +379,25 @@ def nested(data: dict[str, object], *path: str | int) -> object:
     return value
 
 
-# --- V8 writer: exact shape, ordering, and field sets -----------------------
+# --- V9 writer: exact shape, ordering, and field sets -----------------------
 
 
-def test_serialize_emits_exact_canonical_v8_mapping() -> None:
+def test_serialize_emits_exact_canonical_v9_mapping() -> None:
     serialized = StateSerializer.serialize(
         snapshot(creature_state(), characters=(character_state(),))
     )
 
-    assert serialized == CANONICAL_V8_DATA
-    assert serialized["schemaVersion"] == 8
+    assert serialized == CANONICAL_V9_DATA
+    assert serialized["schemaVersion"] == 9
+    assert state_serializer.SCHEMA_V9_VERSION == 9
+    assert state_serializer.SCHEMA_VERSION == 9
 
 
-def test_serialize_emits_empty_projections_in_v8() -> None:
+def test_serialize_emits_empty_projections_in_v9() -> None:
     serialized = StateSerializer.serialize(snapshot())
 
     assert serialized == {
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "campaignId": "campaign_001",
         "state": {
             "campaign": {
@@ -385,7 +414,7 @@ def test_serialize_emits_empty_projections_in_v8() -> None:
     }
 
 
-def test_serialize_uses_exact_v8_state_and_nested_fields() -> None:
+def test_serialize_uses_exact_v9_state_and_nested_fields() -> None:
     serialized = StateSerializer.serialize(
         snapshot(
             creature_state("character_001"),
@@ -431,6 +460,10 @@ def test_serialize_uses_exact_v8_state_and_nested_fields() -> None:
         "savingThrowProficiencies",
         "skillProficiencies",
         "weaponProficiencies",
+        "deathSaveSuccesses",
+        "deathSaveFailures",
+        "deathSaveStable",
+        "dead",
     }
     assert set(inventory) == {"ownerId", "items"}
     assert set(item) == {"id", "definitionId"}
@@ -688,7 +721,7 @@ def test_serialize_emits_null_equipped_weapon_id() -> None:
     )
 
 
-def test_v8_round_trip_reconstructs_equivalent_current_snapshot() -> None:
+def test_v9_round_trip_reconstructs_equivalent_current_snapshot() -> None:
     original = snapshot(
         creature_state(conditions=frozenset({Condition.POISONED})),
         characters=(character_state(),),
@@ -699,7 +732,7 @@ def test_v8_round_trip_reconstructs_equivalent_current_snapshot() -> None:
     assert reconstructed == original
 
 
-def test_v8_round_trip_with_empty_conditions() -> None:
+def test_v9_round_trip_with_empty_conditions() -> None:
     original = snapshot(creature_state())
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
@@ -708,7 +741,7 @@ def test_v8_round_trip_with_empty_conditions() -> None:
     assert reconstructed.creatures[0].conditions == frozenset()
 
 
-def test_v8_round_trip_with_poisoned_condition() -> None:
+def test_v9_round_trip_with_poisoned_condition() -> None:
     original = snapshot(creature_state(conditions=frozenset({Condition.POISONED})))
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
@@ -717,7 +750,7 @@ def test_v8_round_trip_with_poisoned_condition() -> None:
     assert reconstructed.creatures[0].conditions == frozenset({Condition.POISONED})
 
 
-def test_v8_round_trip_with_combat_and_empty_positions() -> None:
+def test_v9_round_trip_with_combat_and_empty_positions() -> None:
     original = snapshot(
         creature_state("character_001"),
         creature_state("monster_001"),
@@ -731,7 +764,7 @@ def test_v8_round_trip_with_combat_and_empty_positions() -> None:
     assert reconstructed.combat.positions == ()  # type: ignore[union-attr]
 
 
-def test_v8_round_trip_with_non_empty_positions() -> None:
+def test_v9_round_trip_with_non_empty_positions() -> None:
     """`positions` is supplied already sorted by `creatureId` (matching the
     writer's deterministic output order, §3.30) so this test proves
     round-trip fidelity of `CombatPosition` content; the separate
@@ -759,7 +792,7 @@ def test_v8_round_trip_with_non_empty_positions() -> None:
     )
 
 
-def test_v8_round_trip_without_combat() -> None:
+def test_v9_round_trip_without_combat() -> None:
     original = snapshot(creature_state())
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
@@ -767,7 +800,7 @@ def test_v8_round_trip_without_combat() -> None:
     assert reconstructed.combat is None
 
 
-def test_v8_round_trip_with_weapon_proficiencies() -> None:
+def test_v9_round_trip_with_weapon_proficiencies() -> None:
     original = snapshot(
         creature_state(),
         characters=(
@@ -783,7 +816,7 @@ def test_v8_round_trip_with_weapon_proficiencies() -> None:
     )
 
 
-def test_v8_round_trip_with_inventory_and_equipment() -> None:
+def test_v9_round_trip_with_inventory_and_equipment() -> None:
     original = snapshot(
         creature_state(),
         characters=(character_state(),),
@@ -805,12 +838,12 @@ def test_v8_round_trip_with_inventory_and_equipment() -> None:
     )
 
 
-def test_v8_round_trip_combines_weapon_source_and_non_empty_positions() -> None:
+def test_v9_round_trip_combines_all_prior_state_projections() -> None:
     """Additive-relationship regression (§3.30/DEC-0045, §3.33/DEC-0049,
-    §12.13): V8 combines the already-existing V6/V7 weapon-source and
+    §12.13): V9 combines the already-existing V6/V7 weapon-source and
     spatial State (weaponProficiencies, Inventory, Equipment,
     Combat.positions) with a spent Combat.action_spent in a single
-    snapshot, proving V8 is additive over V7 rather than a replacement."""
+    snapshot, proving V9 preserves the full V8 shape rather than replacing it."""
     original = snapshot(
         creature_state("character_001"),
         creature_state("monster_001"),
@@ -833,7 +866,7 @@ def test_v8_round_trip_combines_weapon_source_and_non_empty_positions() -> None:
     serialized = StateSerializer.serialize(original)
     reconstructed = StateSerializer.deserialize(serialized)
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert reconstructed == original
     assert reconstructed.characters[0].weapon_proficiencies == frozenset({"dagger"})
     assert reconstructed.inventories == (
@@ -852,7 +885,7 @@ def test_v8_round_trip_combines_weapon_source_and_non_empty_positions() -> None:
     assert reconstructed.combat.action_spent is True  # type: ignore[union-attr]
 
 
-def test_v8_round_trip_with_combat_action_spent_false() -> None:
+def test_v9_round_trip_with_combat_action_spent_false() -> None:
     original = snapshot(
         creature_state("character_001"),
         creature_state("monster_001"),
@@ -865,7 +898,7 @@ def test_v8_round_trip_with_combat_action_spent_false() -> None:
     assert reconstructed.combat.action_spent is False  # type: ignore[union-attr]
 
 
-def test_v8_round_trip_with_combat_action_spent_true() -> None:
+def test_v9_round_trip_with_combat_action_spent_true() -> None:
     original = snapshot(
         creature_state("character_001"),
         creature_state("monster_001"),
@@ -876,6 +909,34 @@ def test_v8_round_trip_with_combat_action_spent_true() -> None:
 
     assert reconstructed == original
     assert reconstructed.combat.action_spent is True  # type: ignore[union-attr]
+
+
+def test_v9_round_trip_preserves_non_default_death_save_lifecycle() -> None:
+    original = snapshot(
+        creature_state(current_hp=0),
+        characters=(
+            character_state(
+                death_save_successes=2,
+                death_save_failures=1,
+            ),
+        ),
+    )
+
+    serialized = StateSerializer.serialize(original)
+    reconstructed = StateSerializer.deserialize(serialized)
+
+    assert reconstructed == original
+    assert serialized["state"]["characters"][0] == {  # type: ignore[index]
+        "id": "character_001",
+        "totalLevel": 5,
+        "savingThrowProficiencies": ["constitution", "strength"],
+        "skillProficiencies": ["athletics", "perception"],
+        "weaponProficiencies": [],
+        "deathSaveSuccesses": 2,
+        "deathSaveFailures": 1,
+        "deathSaveStable": False,
+        "dead": False,
+    }
 
 
 def test_serialize_emits_empty_skill_membership_as_array() -> None:
@@ -909,6 +970,22 @@ def test_v2_to_v5_deserialize_migrates_empty_weapon_source_state(
     assert reconstructed.equipment == ()
 
 
+@pytest.mark.parametrize(
+    "data_factory",
+    [v2_data, v3_data, v4_data, v5_data, v6_data, v7_data, v8_data],
+)
+def test_v2_to_v8_deserialize_uses_neutral_death_save_defaults(
+    data_factory: Callable[[], dict[str, object]],
+) -> None:
+    reconstructed = StateSerializer.deserialize(data_factory())
+    character = reconstructed.characters[0]
+
+    assert character.death_save_successes == 0
+    assert character.death_save_failures == 0
+    assert character.death_save_stable is False
+    assert character.dead is False
+
+
 def test_deserialize_v3_restores_skill_membership_and_empty_conditions() -> None:
     """Critical migration gate: a realistic V3 payload with non-empty
     skillProficiencies must still decode correctly under the V4 implementation,
@@ -921,10 +998,10 @@ def test_deserialize_v3_restores_skill_membership_and_empty_conditions() -> None
     assert reconstructed.creatures[0].conditions == frozenset()
 
 
-def test_legacy_v2_reserializes_as_current_v8() -> None:
+def test_legacy_v2_reserializes_as_current_v9() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v2_data()))
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == []
@@ -937,10 +1014,10 @@ def test_legacy_v2_reserializes_as_current_v8() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v3_reserializes_as_current_v8() -> None:
+def test_legacy_v3_reserializes_as_current_v9() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v3_data()))
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == ["athletics", "perception"]
@@ -953,10 +1030,10 @@ def test_legacy_v3_reserializes_as_current_v8() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v4_reserializes_as_current_v8() -> None:
+def test_legacy_v4_reserializes_as_current_v9() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v4_data()))
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == ["athletics", "perception"]
@@ -969,10 +1046,10 @@ def test_legacy_v4_reserializes_as_current_v8() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v5_reserializes_as_current_v8() -> None:
+def test_legacy_v5_reserializes_as_current_v9() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v5_data()))
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "weaponProficiencies"
     ] == []
@@ -981,12 +1058,12 @@ def test_legacy_v5_reserializes_as_current_v8() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v1_reserializes_as_current_v8() -> None:
+def test_legacy_v1_reserializes_as_current_v9() -> None:
     reconstructed = StateSerializer.deserialize(v1_data())
 
     serialized = StateSerializer.serialize(reconstructed)
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert serialized["state"]["characters"] == []  # type: ignore[index]
     assert serialized["state"]["creatures"][0]["conditions"] == []  # type: ignore[index]
     assert serialized["state"]["inventories"] == []  # type: ignore[index]
@@ -994,23 +1071,23 @@ def test_legacy_v1_reserializes_as_current_v8() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_v6_without_combat_reserializes_as_current_v8() -> None:
+def test_v6_without_combat_reserializes_as_current_v9() -> None:
     """A successfully loaded historical V6 snapshot with no Combat at all
-    (`combat: null`) saves again as the current V8 writer with `combat`
+    (`combat: null`) saves again as the current V9 writer with `combat`
     still `null` -- there is no Combat to attach `positions`/`actionSpent`
-    to. The sibling `test_v6_combat_reserializes_as_current_v8_with_empty_
-    positions` below covers the non-null-Combat case, where V8 does emit
+    to. The sibling `test_v6_combat_reserializes_as_current_v9_with_empty_
+    positions` below covers the non-null-Combat case, where V9 does emit
     an explicit empty `positions` list and `actionSpent: false` (§12.13)."""
     reconstructed = StateSerializer.deserialize(v6_data())
 
     serialized = StateSerializer.serialize(reconstructed)
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert reconstructed.combat is None
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_v6_combat_reserializes_as_current_v8_with_empty_positions() -> None:
+def test_v6_combat_reserializes_as_current_v9_with_empty_positions() -> None:
     data = v6_data()
     combat = deepcopy(COMBAT_DATA)
     combat["order"] = ["character_001"]
@@ -1020,7 +1097,7 @@ def test_v6_combat_reserializes_as_current_v8_with_empty_positions() -> None:
 
     serialized = StateSerializer.serialize(reconstructed)
 
-    assert serialized["schemaVersion"] == 8
+    assert serialized["schemaVersion"] == 9
     assert reconstructed.combat.positions == ()  # type: ignore[union-attr]
     assert reconstructed.combat.action_spent is False  # type: ignore[union-attr]
     assert serialized["state"]["combat"] == {  # type: ignore[index]
@@ -1303,14 +1380,14 @@ def test_v4_creature_shape_is_fixed_and_survives_future_schema_version_bump(
 ) -> None:
     """Regression: V4 Creature field/`conditions` decoding must be keyed to
     the fixed `SCHEMA_V4_VERSION` identity, not the mutable current-writer
-    `SCHEMA_VERSION`. The V5, V6, V7, and V8 bumps (adding top-level
-    `combat`, then `inventories`/`equipment`/`weaponProficiencies`, then
-    Combat `positions`, then Combat `actionSpent`) already happened for
-    real; this simulates the *next* hypothetical schema bump
-    (`SCHEMA_VERSION = 9`) and asserts a historical, already-persisted V4
+    `SCHEMA_VERSION`. The V5, V6, V7, V8, and V9 bumps (adding top-level
+    `combat`, then `inventories`/`equipment`/`weaponProficiencies`, Combat
+    `positions`, Combat `actionSpent`, then Character lifecycle fields) already
+    happened for real; this simulates the *next* hypothetical schema
+    bump (`SCHEMA_VERSION = 10`) and asserts a historical, already-persisted V4
     snapshot with `conditions` still decodes exactly as V4 -- it must not
     be silently misread against the pre-V4 Creature field set."""
-    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 9)
+    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 10)
     data = v4_data()
     nested(data, "state", "creatures", 0)["conditions"] = [  # type: ignore[index]
         "poisoned"
@@ -1331,9 +1408,9 @@ def test_v5_state_shape_is_fixed_and_survives_future_schema_version_bump(
     """Same regression as above for the V5 state-level `combat` addition:
     historical V5 semantics must be keyed to the fixed `SCHEMA_V5_VERSION`
     identity, not the mutable current-writer `SCHEMA_VERSION`. This simulates
-    the *next* hypothetical schema bump beyond the real V8 (`SCHEMA_VERSION =
-    9`)."""
-    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 9)
+    the *next* hypothetical schema bump beyond the real V9 (`SCHEMA_VERSION =
+    10`)."""
+    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 10)
     data = v5_data()
     nested(data, "state")["combat"] = {  # type: ignore[index]
         "id": "combat_001",
@@ -1355,11 +1432,11 @@ def test_v6_state_shape_is_fixed_and_survives_future_schema_version_bump(
     """Same regression as above for the V6 weapon-source additions:
     historical V6 semantics must be keyed to the fixed `SCHEMA_V6_VERSION`
     identity, not the mutable current-writer `SCHEMA_VERSION`. This simulates
-    the *next* hypothetical schema bump beyond the real V8 (`SCHEMA_VERSION =
-    9`) and asserts a historical, already-persisted V6 snapshot with real
+    the *next* hypothetical schema bump beyond the real V9 (`SCHEMA_VERSION =
+    10`) and asserts a historical, already-persisted V6 snapshot with real
     inventory, equipment, and weapon-proficiency content still decodes
     exactly as V6."""
-    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 9)
+    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 10)
     data = v6_data()
     nested(data, "state", "characters", 0)["weaponProficiencies"] = [  # type: ignore[index]
         "dagger"
@@ -1387,11 +1464,11 @@ def test_v7_state_shape_is_fixed_and_survives_future_schema_version_bump(
     """Same regression as above for the V7 Combat `positions` addition:
     historical V7 semantics must be keyed to the fixed `SCHEMA_V7_VERSION`
     identity, not the mutable current-writer `SCHEMA_VERSION`. This
-    simulates the *next* hypothetical schema bump beyond the real V8
-    (`SCHEMA_VERSION = 9`) and asserts a historical, already-persisted V7
+    simulates the *next* hypothetical schema bump beyond the real V9
+    (`SCHEMA_VERSION = 10`) and asserts a historical, already-persisted V7
     snapshot with a non-null Combat and a non-empty `positions` entry
     still decodes exactly as V7."""
-    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 9)
+    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 10)
     data = v7_data()
     combat = deepcopy(V7_COMBAT_DATA)
     combat["order"] = ["character_001"]
@@ -1420,10 +1497,10 @@ def test_v8_state_shape_is_fixed_and_survives_future_schema_version_bump(
     """Same regression as above for the V8 Combat `actionSpent` addition:
     historical V8 semantics must be keyed to the fixed `SCHEMA_V8_VERSION`
     identity, not the mutable current-writer `SCHEMA_VERSION`. This
-    simulates the *next* hypothetical schema bump (`SCHEMA_VERSION = 9`)
+    simulates the *next* hypothetical schema bump (`SCHEMA_VERSION = 10`)
     and asserts a historical, already-persisted V8 snapshot with a non-null
     Combat and a spent Action still decodes exactly as V8."""
-    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 9)
+    monkeypatch.setattr(state_serializer, "SCHEMA_VERSION", 10)
     data = v8_data()
     combat = deepcopy(V8_COMBAT_DATA)
     combat["order"] = ["character_001"]
@@ -1572,7 +1649,7 @@ def test_deserialize_rejects_invalid_hp(current_hp: int, max_hp: int) -> None:
         StateSerializer.deserialize(data)
 
 
-@pytest.mark.parametrize("schema_version", [0, 8, -1])
+@pytest.mark.parametrize("schema_version", [0, 10, -1])
 def test_deserialize_rejects_unsupported_schema_version(
     schema_version: int,
 ) -> None:
@@ -1611,6 +1688,25 @@ def test_serialize_rejects_mutated_invalid_character_state() -> None:
         StateSerializer.serialize(
             snapshot(creature_state(), characters=(character,))
         )
+
+
+def test_serialize_rejects_mutated_invalid_death_save_intrinsic_state() -> None:
+    character = character_state()
+    character.death_save_failures = 3
+
+    with pytest.raises(ValueError):
+        StateSerializer.serialize(
+            snapshot(creature_state(current_hp=0), characters=(character,))
+        )
+
+
+def test_serialize_rejects_mutated_invalid_death_save_relation() -> None:
+    character = character_state()
+    original = snapshot(creature_state(), characters=(character,))
+    character.death_save_successes = 1
+
+    with pytest.raises(ValueError, match="positive-HP"):
+        StateSerializer.serialize(original)
 
 
 def test_serialize_rejects_mutated_invalid_skill_membership() -> None:
@@ -2640,6 +2736,106 @@ def test_v7_deserialize_rejects_action_spent_field() -> None:
     combat["activeIndex"] = 0
     combat["actionSpent"] = False
     nested(data, "state")["combat"] = combat  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+# --- V9 state schema: strict Character lifecycle reader --------------------
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["deathSaveSuccesses", "deathSaveFailures", "deathSaveStable", "dead"],
+)
+def test_v9_deserialize_rejects_missing_character_lifecycle_field(
+    field: str,
+) -> None:
+    data = v9_data()
+    del nested(data, "state", "characters", 0)[field]  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v9_deserialize_rejects_unknown_character_field() -> None:
+    data = v9_data()
+    nested(data, "state", "characters", 0)["lifeState"] = "alive"  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("deathSaveSuccesses", True),
+        ("deathSaveSuccesses", "1"),
+        ("deathSaveFailures", False),
+        ("deathSaveFailures", 1.0),
+        ("deathSaveStable", 0),
+        ("dead", "false"),
+    ],
+)
+def test_v9_deserialize_rejects_wrong_character_lifecycle_type(
+    field: str,
+    value: object,
+) -> None:
+    data = v9_data()
+    nested(data, "state", "characters", 0)[field] = value  # type: ignore[index]
+
+    with pytest.raises(TypeError):
+        StateSerializer.deserialize(data)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("deathSaveSuccesses", -1),
+        ("deathSaveSuccesses", 3),
+        ("deathSaveFailures", -1),
+        ("deathSaveFailures", 4),
+    ],
+)
+def test_v9_deserialize_rejects_out_of_range_character_lifecycle_counter(
+    field: str,
+    value: int,
+) -> None:
+    data = v9_data()
+    nested(data, "state", "characters", 0)[field] = value  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        StateSerializer.deserialize(data)
+
+
+def test_v9_deserialize_rejects_invalid_character_creature_relation() -> None:
+    data = v9_data()
+    nested(data, "state", "characters", 0)["deathSaveSuccesses"] = 1  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="positive-HP"):
+        StateSerializer.deserialize(data)
+
+
+@pytest.mark.parametrize(
+    "data_factory",
+    [v2_data, v3_data, v4_data, v5_data, v6_data, v7_data, v8_data],
+)
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("deathSaveSuccesses", 0),
+        ("deathSaveFailures", 0),
+        ("deathSaveStable", False),
+        ("dead", False),
+    ],
+)
+def test_legacy_character_schema_rejects_v9_only_field(
+    data_factory: Callable[[], dict[str, object]],
+    field: str,
+    value: object,
+) -> None:
+    data = data_factory()
+    nested(data, "state", "characters", 0)[field] = value  # type: ignore[index]
 
     with pytest.raises(ValueError):
         StateSerializer.deserialize(data)
