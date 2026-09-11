@@ -1,5 +1,8 @@
+from dataclasses import replace
+
 from dnd_engine.application.services.event_metadata import EventMetadataProvider
 from dnd_engine.application.services.state_snapshot import (
+    replace_character_in_snapshot,
     replace_creature_in_snapshot,
 )
 from dnd_engine.domain.commands.healing import ApplyHealingCommand
@@ -75,6 +78,30 @@ class HealingHandler:
                 ),
             )
 
+        character = next(
+            (
+                candidate
+                for candidate in snapshot.characters
+                if candidate.id == target.id
+            ),
+            None,
+        )
+        if character is not None and character.dead:
+            return ResolutionResult(
+                success=False,
+                command_id=command.command_id,
+                outcome=None,
+                events=(),
+                errors=(
+                    EngineError(
+                        code=ErrorCode.INVALID_TARGET,
+                        message="A dead Character cannot be healed.",
+                        entity_id=character.id,
+                        field="target_id",
+                    ),
+                ),
+            )
+
         outcome = resolve_healing(command, target)
         metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
         event = build_healing_applied_v1(
@@ -85,8 +112,21 @@ class HealingHandler:
         )
 
         replacement_target = apply_healing_applied_v1(target, event)
+        replacement_snapshot = snapshot
+        if character is not None and outcome.previous_hp == 0 and outcome.new_hp > 0:
+            replacement_character = replace(
+                character,
+                death_save_successes=0,
+                death_save_failures=0,
+                death_save_stable=False,
+            )
+            replacement_snapshot = replace_character_in_snapshot(
+                replacement_snapshot,
+                replacement_character,
+            )
         replacement_snapshot = replace_creature_in_snapshot(
-            snapshot, replacement_target
+            replacement_snapshot,
+            replacement_target,
         )
 
         self._state_store.save(replacement_snapshot)

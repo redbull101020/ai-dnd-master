@@ -6839,3 +6839,25 @@ already-merged delivery branch.
 - Added focused Application coverage for eligibility, roll transitions,
   Event ordering/causation, HP recovery, save atomicity, Character snapshot
   replacement, and unchanged Healing V1 consequence boundaries.
+
+## 2026-09-11 — Integrated direct Damage and ordinary Healing lifecycle consequences
+
+- Extended direct `ApplyDamageCommand` handling so Damage against a living
+  Character already at zero HP records the canonical non-critical
+  `CharacterDeathSaveFailureRecorded` consequence after `DamageApplied`, with
+  immediate `causedBy` correlation, unchanged root `DamageResult`, and one
+  final State save. Positive-HP-to-zero Damage, non-Character targets, and
+  already-dead Characters retain their required no-consequence behavior.
+- Extended ordinary `ApplyHealingCommand` handling with the Character-specific
+  dead-target gate before resolution and metadata allocation. Successful
+  zero-to-positive Character Healing keeps `HealingApplied` V1 as the only
+  Event while resetting both Death Save counters and stabilization in the same
+  final snapshot; Monster and positive-HP Character Healing remain unchanged.
+- Reused the existing narrow Character snapshot replacement helper and ordered
+  in-memory replacements so every constructed cross-projection snapshot remains
+  valid. `AttackHandler`, Event versions, and canonical architecture contracts
+  were not changed in this checkpoint.
+- Verification: focused Damage/Healing handler tests — 25 passed;
+  `mypy src/dnd_engine` — no issues in 115 source files; `git diff --check` —
+  no whitespace errors. Pytest also reported the existing sandbox warning that
+  `.pytest_cache` could not be created.
