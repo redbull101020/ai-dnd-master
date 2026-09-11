@@ -6776,3 +6776,17 @@ already-merged delivery branch.
   push, or merge was performed for this pass; the PR was not marked ready
   for review. A `review.patch` containing only these fresh prospective
   closure changes was produced for review.
+
+## 2026-09-11 — Refined and selected TSK-0017 as Current
+
+- Completed the TSK-0017 refinement from the already-accepted
+  `ARCHITECTURE.md` §3.34 / DEC-0050 contract, passed the readiness gate, and
+  selected it as the current executable Phase 3 slice after TSK-0016 became
+  authoritatively `Done` on `main`.
+- Added concrete scope, exclusions, acceptance criteria, verification,
+  expected touchpoints, and five implementation checkpoints to
+  `docs/TASK.md`; reconciled `Current` to TSK-0017 while leaving `Next` and
+  `Hard blockers` empty and `Next free ID` at TSK-0018.
+- This was documentation-only readiness reconciliation. TSK-0017 production
+  implementation, State schema V9, and Death Save runtime behavior are not
+  complete.
