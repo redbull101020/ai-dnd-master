@@ -6861,3 +6861,29 @@ already-merged delivery branch.
   `mypy src/dnd_engine` — no issues in 115 source files; `git diff --check` —
   no whitespace errors. Pytest also reported the existing sandbox warning that
   `.pytest_cache` could not be created.
+
+## 2026-09-11 — Integrated Attack-origin Damage-at-zero lifecycle consequences
+
+- Extended the existing Monster Attack → Character Damage path so positive
+  Damage against a living Character already at zero HP records
+  `CharacterDeathSaveFailureRecorded` after `DamageApplied`, using the
+  source-specific Monster Attack critical-hit fact for the canonical one- or
+  two-failure transition. Positive-HP-to-zero and already-dead targets do not
+  receive the consequence.
+- Preserved the existing Event chain and correlations. In Combat,
+  `TurnActionSpent` remains the final Event and remains caused by
+  `MonsterAttackResolved`; the Character lifecycle Event is caused directly by
+  `DamageApplied`. Outside Combat, the lifecycle consequence is saved without
+  creating `TurnActionSpent`.
+- Narrowly changed ordinary-Action consumption to accept an already-prepared
+  snapshot, allowing target HP, Character lifecycle, and Combat action state to
+  be assembled into one valid final snapshot and saved exactly once. No generic
+  transaction/consequence abstraction was introduced, and Character Dagger
+  targetability remains limited to its prior Monster target path.
+- Added focused coverage for ordinary and critical failures, cap/death,
+  stabilization clearing, dead and positive-HP boundaries, in-Combat Event
+  order/causation and atomic State, outside-Combat behavior, and Character
+  Dagger target-scope regression.
+- Verification: targeted AttackHandler suite — 87 passed; all Application
+  tests — 193 passed; `mypy src/dnd_engine` — no issues in 115 source files;
+  `git diff --check` — no whitespace errors.

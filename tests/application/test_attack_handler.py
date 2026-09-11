@@ -235,6 +235,10 @@ def make_character(
     character_id: str = "character_001",
     total_level: int = 5,
     weapon_proficiencies: frozenset[str] = frozenset(),
+    death_save_successes: int = 0,
+    death_save_failures: int = 0,
+    death_save_stable: bool = False,
+    dead: bool = False,
 ) -> CharacterState:
     return CharacterState(
         id=character_id,
@@ -242,6 +246,10 @@ def make_character(
         saving_throw_proficiencies=frozenset(),
         skill_proficiencies=frozenset(),
         weapon_proficiencies=weapon_proficiencies,
+        death_save_successes=death_save_successes,
+        death_save_failures=death_save_failures,
+        death_save_stable=death_save_stable,
+        dead=dead,
     )
 
 
@@ -1086,6 +1094,11 @@ def test_monster_attack_lethal_damage_floors_hp_at_zero() -> None:
     result = handle_monster_attack_with(store, definitions, dice, metadata)
 
     assert len(result.events) == 3
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "DamageApplied",
+    ]
     assert result.events[2].payload == {
         "targetId": "character_001",
         "amount": 8,
@@ -1134,7 +1147,7 @@ def test_monster_attack_zero_source_damage_emits_two_events_without_save() -> No
     assert target.current_hp == 11
 
 
-def test_monster_attack_positive_damage_at_zero_hp_still_applies_and_saves() -> None:
+def test_monster_attack_at_zero_hp_records_failure_outside_combat() -> None:
     target = make_character_target(current_hp=0, max_hp=11)
     snapshot = make_snapshot(
         creatures=(make_monster_actor(), target),
@@ -1150,10 +1163,175 @@ def test_monster_attack_positive_damage_at_zero_hp_still_applies_and_saves() -> 
 
     result = handle_monster_attack_with(store, definitions, dice, metadata)
 
-    assert len(result.events) == 3
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "DamageApplied",
+        "CharacterDeathSaveFailureRecorded",
+    ]
     assert result.events[2].payload["previousHp"] == 0
     assert result.events[2].payload["newHp"] == 0
+    assert result.events[3].caused_by == result.events[2].event_id
+    assert result.events[3].payload == {
+        "characterId": "character_001",
+        "previousFailures": 0,
+        "failures": 1,
+        "previousStable": False,
+        "stable": False,
+        "previousDead": False,
+        "dead": False,
+        "criticalHit": False,
+    }
     assert len(store.save_calls) == 1
+    assert store.save_calls[0].combat is None
+    assert store.save_calls[0].characters[0].death_save_failures == 1
+
+
+@pytest.mark.parametrize(
+    ("previous_failures", "expected_failures", "expected_dead"),
+    [(0, 2, False), (2, 3, True)],
+)
+def test_monster_critical_attack_at_zero_hp_caps_failures_and_marks_death(
+    previous_failures: int,
+    expected_failures: int,
+    expected_dead: bool,
+) -> None:
+    target = make_character_target(current_hp=0, max_hp=11)
+    character = make_character(death_save_failures=previous_failures)
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), target),
+        characters=(character,),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(20, calls, additional_rolls=((1, 1),))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "DamageApplied",
+        "CharacterDeathSaveFailureRecorded",
+    ]
+    assert result.events[1].payload["criticalHit"] is True
+    assert result.events[3].payload["criticalHit"] is True
+    assert result.events[3].payload["previousFailures"] == previous_failures
+    assert result.events[3].payload["failures"] == expected_failures
+    assert result.events[3].payload["dead"] is expected_dead
+    assert len(store.save_calls) == 1
+    saved_character = store.save_calls[0].characters[0]
+    assert saved_character.death_save_failures == expected_failures
+    assert saved_character.dead is expected_dead
+
+
+def test_monster_attack_at_zero_hp_clears_stable_and_records_failure() -> None:
+    target = make_character_target(current_hp=0, max_hp=11)
+    character = make_character(death_save_stable=True)
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), target),
+        characters=(character,),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.events[3].type == "CharacterDeathSaveFailureRecorded"
+    assert result.events[3].payload["previousStable"] is True
+    assert result.events[3].payload["stable"] is False
+    assert result.events[3].payload["failures"] == 1
+    saved_character = store.save_calls[0].characters[0]
+    assert saved_character.death_save_stable is False
+    assert saved_character.death_save_failures == 1
+
+
+def test_monster_attack_at_zero_hp_dead_character_records_no_new_failure() -> None:
+    target = make_character_target(current_hp=0, max_hp=11)
+    character = make_character(death_save_failures=3, dead=True)
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), target),
+        characters=(character,),
+    )
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "DamageApplied",
+    ]
+    assert len(store.save_calls) == 1
+    assert store.save_calls[0].characters[0] is character
+
+
+def test_monster_attack_at_zero_hp_in_combat_saves_all_consequences_once() -> None:
+    actor = make_monster_actor()
+    target = make_character_target(current_hp=0, max_hp=11)
+    character = make_character(death_save_successes=1)
+    combat = CombatState(
+        id="combat_001",
+        round=2,
+        order=(actor.id, target.id),
+        active_index=0,
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(character,),
+        combat=combat,
+    )
+    loaded_before = deepcopy(snapshot)
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls
+    )
+    dice = ScriptedDiceEngine(10, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert [event.type for event in result.events] == [
+        "MonsterAttackResolved",
+        "MonsterAttackDamageResolved",
+        "DamageApplied",
+        "CharacterDeathSaveFailureRecorded",
+        "TurnActionSpent",
+    ]
+    attack_event, _, applied_event, failure_event, action_event = result.events
+    assert failure_event.caused_by == applied_event.event_id
+    assert action_event.caused_by == attack_event.event_id
+    assert result.events[-1] is action_event
+    assert calls.count("save") == 1
+    assert len(store.save_calls) == 1
+    saved = store.save_calls[0]
+    saved_target = next(
+        creature for creature in saved.creatures if creature.id == target.id
+    )
+    saved_character = saved.characters[0]
+    assert saved_target.current_hp == 0
+    assert saved_character.death_save_successes == 1
+    assert saved_character.death_save_failures == 1
+    assert saved_character.dead is False
+    assert saved.combat is not None
+    assert saved.combat.action_spent is True
+    assert snapshot == loaded_before
 
 
 def test_monster_attack_damage_preserves_existing_combat_state() -> None:
@@ -2774,6 +2952,55 @@ def test_character_weapon_target_not_in_combat_order_returns_invalid_target() ->
     assert result.errors[0].entity_id == "monster_001"
     assert result.errors[0].field == "target_id"
     assert calls == ["load", "definition", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+
+
+def test_character_dagger_attack_does_not_expand_to_character_target() -> None:
+    actor = make_weapon_actor()
+    target = make_creature(
+        creature_id="character_002",
+        definition_id="fighter",
+    )
+    combat = make_dagger_combat(
+        order=(actor.id, target.id),
+        positions=(
+            CombatPosition(creature_id=actor.id, x=0, y=0),
+            CombatPosition(creature_id=target.id, x=3, y=4),
+        ),
+    )
+    snapshot = make_snapshot(
+        creatures=(actor, target),
+        characters=(
+            make_character(),
+            make_character(character_id=target.id),
+        ),
+        inventories=(make_inventory(),),
+        equipment=(make_equipment(),),
+        combat=combat,
+    )
+    store, definitions, dice, metadata, calls = make_dependencies(
+        snapshot,
+        extra_definitions=(make_dagger_definition(),),
+    )
+
+    result = handle_weapon_with(
+        store,
+        definitions,
+        dice,
+        metadata,
+        make_weapon_command(target_id=target.id),
+    )
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    assert result.errors[0].code is ErrorCode.DEFINITION_NOT_FOUND
+    assert result.errors[0].entity_id == "fighter"
+    assert result.errors[0].field == "definition_id"
+    assert calls == ["load", "definition"]
     assert dice.roll_calls == []
     assert metadata.next_calls == []
     assert store.save_calls == []
