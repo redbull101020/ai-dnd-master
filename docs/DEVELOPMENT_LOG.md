@@ -6810,3 +6810,20 @@ already-merged delivery branch.
   passed; full suite — 2088 passed (with writable `PIP_CACHE_DIR` and an
   external `--basetemp` for the packaging fixture); `mypy src/dnd_engine` —
   no issues in 112 source files.
+
+## 2026-09-11 — Implemented TSK-0017 pure Domain Death Save mechanics
+
+- Added immutable Character Death Save and Damage-at-zero failure Results
+  with deterministic resolvers using the existing normal-d20 and Damage
+  contracts, without State mutation or Event construction.
+- Added exact V1 builders and stale-state appliers for
+  `CharacterDeathSaveResolved` and `CharacterDeathSaveFailureRecorded`;
+  lifecycle application preserves unrelated Character facts and never owns HP.
+- Added focused Domain tests for roll boundaries, counter transitions,
+  Damage-at-zero preconditions, Event envelopes/payloads, stale input, and
+  preservation behavior. Application orchestration remains pending.
+- Strengthened both concrete Result types so manually constructed outcomes
+  must satisfy the exact roll- or critical-provenance transition semantics
+  before copy-only Event builders can consume them, including normal-roll and
+  valid stabilized-pre-state requirements; automatic consequence builders
+  also require complete string root/immediate-cause correlation.
