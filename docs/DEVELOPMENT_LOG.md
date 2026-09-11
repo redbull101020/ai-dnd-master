@@ -6790,3 +6790,23 @@ already-merged delivery branch.
 - This was documentation-only readiness reconciliation. TSK-0017 production
   implementation, State schema V9, and Death Save runtime behavior are not
   complete.
+
+## 2026-09-11 — Implemented TSK-0017 State and V9 persistence foundation
+
+- Added the four Character Death Save/HP lifecycle fields with neutral defaults
+  and intrinsic validation, plus Character-to-Creature lifecycle consistency
+  checks in `StateSnapshot`.
+- Introduced the exact State schema V9 Character wire fields while preserving
+  the V8 root, Creature, Combat, Inventory, and Equipment shapes. V1-V8 input
+  receives neutral lifecycle defaults and retains version-specific strictness;
+  V9 input is strictly validated.
+- Added serializer write-time lifecycle revalidation so invalid mutable nested
+  State cannot bypass the domain invariants, and covered V9 round trips,
+  historical compatibility, strict rejection cases, and real-filesystem store
+  persistence with focused Domain and Infrastructure tests.
+- This is TSK-0017 checkpoint 1 only. No Application handler, Death Save
+  Result/Event, or runtime resolution behavior was added or changed.
+- Verification: focused Character/Snapshot/serializer/store tests — 432
+  passed; full suite — 2088 passed (with writable `PIP_CACHE_DIR` and an
+  external `--basetemp` for the packaging fixture); `mypy src/dnd_engine` —
+  no issues in 112 source files.

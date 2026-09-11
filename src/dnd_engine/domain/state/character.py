@@ -11,6 +11,10 @@ class CharacterState:
     saving_throw_proficiencies: frozenset[Ability]
     skill_proficiencies: frozenset[Skill]
     weapon_proficiencies: frozenset[str]
+    death_save_successes: int = 0
+    death_save_failures: int = 0
+    death_save_stable: bool = False
+    dead: bool = False
 
     def __post_init__(self) -> None:
         if type(self.total_level) is not int:
@@ -43,3 +47,25 @@ class CharacterState:
             raise TypeError(
                 "weapon_proficiencies must contain only str values"
             )
+        if type(self.death_save_successes) is not int:
+            raise TypeError("death_save_successes must be an int")
+        if not 0 <= self.death_save_successes <= 2:
+            raise ValueError("death_save_successes must be between 0 and 2")
+        if type(self.death_save_failures) is not int:
+            raise TypeError("death_save_failures must be an int")
+        if not 0 <= self.death_save_failures <= 3:
+            raise ValueError("death_save_failures must be between 0 and 3")
+        if type(self.death_save_stable) is not bool:
+            raise TypeError("death_save_stable must be a bool")
+        if type(self.dead) is not bool:
+            raise TypeError("dead must be a bool")
+        if self.death_save_stable and self.dead:
+            raise ValueError("death_save_stable and dead cannot both be true")
+        if self.death_save_stable and (
+            self.death_save_successes != 0 or self.death_save_failures != 0
+        ):
+            raise ValueError(
+                "a stable CharacterState must have reset death save counters"
+            )
+        if self.death_save_failures == 3 and not self.dead:
+            raise ValueError("three death save failures require dead to be true")

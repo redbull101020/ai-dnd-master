@@ -57,6 +57,23 @@ class StateSnapshot:
                 "every CharacterState must have a corresponding CreatureState"
             )
 
+        creatures_by_id = {creature.id: creature for creature in self.creatures}
+        for character in self.characters:
+            creature = creatures_by_id[character.id]
+            if character.death_save_stable and creature.current_hp != 0:
+                raise ValueError("a stable CharacterState must have zero current_hp")
+            if character.dead and creature.current_hp != 0:
+                raise ValueError("a dead CharacterState must have zero current_hp")
+            if creature.current_hp > 0 and (
+                character.death_save_successes != 0
+                or character.death_save_failures != 0
+                or character.death_save_stable
+                or character.dead
+            ):
+                raise ValueError(
+                    "a positive-HP Character must have reset death save lifecycle"
+                )
+
         inventory_owner_ids = [
             inventory.owner_id for inventory in self.inventories
         ]
