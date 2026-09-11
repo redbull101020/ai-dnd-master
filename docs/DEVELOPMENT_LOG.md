@@ -6932,3 +6932,36 @@ already-merged delivery branch.
   State serializer/store tests, the Death Save Domain tests, the
   `StartCombatHandler`/`AdvanceTurnHandler` Application tests, the
   Damage/Healing handler tests, and the `AttackHandler` tests all passed.
+
+## 2026-09-11 — Prepared TSK-0017 Task Closure (§18.1) in PR #92
+
+- TSK-0017 implementation and review are complete and accepted: the minimal
+  Character Death Save vertical slice production behavior (§3.34/DEC-0050)
+  and its follow-up integration/regression/documentation checkpoint (the
+  prior 2026-09-11 entry above) both landed and passed review in the same
+  delivery PR, [PR #92](https://github.com/redbull101020/ai-dnd-master/pull/92).
+- Prepared normal-path Task Closure (§18.1) for TSK-0017 in that same
+  delivery branch/PR, not a separate branch: `docs/TASK.md` removed
+  TSK-0017 from `Open task index` and deleted its full `Open task details`
+  record, and added it to `Recently completed` with evidence `PR #92` —
+  the oldest existing row, `TSK-0006`, was dropped to keep exactly the ten
+  most recent completions per §18/§19. No placeholder merge SHA was written
+  anywhere, per §19's explicit prohibition.
+- This closure is **prospective**, not authoritative (§4.5): `TASK.md` on
+  this branch describes what will become true only once PR #92 merges into
+  `main`. No merge commit exists yet, and none is invented here or in
+  `TASK.md`. Before that merge, TSK-0017 is not yet actually `Done` as a
+  fact of the project.
+- No new `Current` or `Next` task was selected, because `TASK.md` had no
+  existing `Ready`/`Next` candidate to promote: `Current position` now
+  reads `Current: —`, `Next: —`, `Hard blockers: —`. `Next free ID` remains
+  `TSK-0018` — unchanged, because no new task ID was allocated by this
+  closure.
+- `ROADMAP.md`/`DEFERRED.md` were already synchronized by the prior
+  checkpoint and required no further semantic change for this closure.
+- Verification: full `python -m pytest` — 2162 passed; `python -m mypy
+  src/dnd_engine` — no issues in 115 source files; `git diff --check` — no
+  whitespace errors; the documentation reference tests passed. Only
+  `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md` entry changed — no
+  production Python, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`,
+  `DEFERRED.md`, or `CLAUDE.md` file was touched.

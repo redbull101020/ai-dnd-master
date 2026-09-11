@@ -1232,7 +1232,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0017
+- **Current:** —
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0018
@@ -1244,199 +1244,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0017` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Zero-HP and combatant eligibility | Implement minimal Character Death Save vertical slice |
 
 ---
 
 # Open task details
-
-## TSK-0017 — Implement minimal Character Death Save vertical slice
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / Zero-HP and combatant eligibility
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Zero-HP and combatant eligibility
-- `ARCHITECTURE.md` §3.25
-- `ARCHITECTURE.md` §3.31
-- `ARCHITECTURE.md` §3.34
-- `DEFERRED.md` — `DEF-0005`
-- `DEFERRED.md` — `DEF-0015`
-- `DEC-0050`
-
-**Depends on:** `TSK-0016`
-
-**Contract impact:** `none`
-
-### Goal
-
-Implement the canonical minimal Character zero-HP turn / Death Save
-contract defined by `ARCHITECTURE.md` §3.34 (DEC-0050) through
-deterministic Domain/Application/Event/State/persistence behavior and
-automated tests.
-
-TSK-0017 must implement the already-fixed semantic/Event/State/schema
-contracts §3.34 defines — no external `DeathSaveCommand`, the automatic
-`CombatStarted`/`TurnAdvanced` trigger, `CharacterDeathSaveResult`,
-`CharacterDeathSaveFailureResult`, `CharacterDeathSaveResolved` V1,
-`CharacterDeathSaveFailureRecorded` V1, the Character lifecycle State
-facts, and the target State schema V9 Character wire fields/compatibility
-semantics — rather than redefine them. Exact Python module placement,
-concrete helper/function names, and other implementation details §3.34
-deliberately does not fix remain for the TSK-0017 implementation pass.
-
-### Why now
-
-TSK-0016 has completed the architectural prerequisite. `ARCHITECTURE.md`
-§3.34 and DEC-0050 now fully fix the mechanic, Event, State, and schema
-semantics, making TSK-0017 the next concrete Phase 3 vertical slice. No new
-architectural decision is required before implementation starts.
-
-### Scope
-
-- Extend `CharacterState` with `death_save_successes`,
-  `death_save_failures`, `death_save_stable`, and `dead`, enforcing all
-  canonical intrinsic invariants from §3.34: exact non-boolean integer ranges
-  `0..2` and `0..3`, exact booleans, stable/dead mutual exclusion, stable
-  implying reset counters, and three failures implying dead.
-- Enforce the §3.34 `StateSnapshot` Character↔Creature relational lifecycle
-  invariants: stable or dead implies zero HP; positive HP implies reset
-  counters and both lifecycle flags false.
-- Implement exact State schema V9 persistence for the four Character wire
-  fields, canonical `0`/`0`/`False`/`False` defaults when reading V1–V8,
-  strict V9 read/write, and no retroactive widening of legacy wire schemas.
-- Add the pure Domain `CharacterDeathSaveResult` and
-  `CharacterDeathSaveFailureResult`, normal-d20 Death Save resolution, and
-  Damage-at-zero failure resolution.
-- Add `CharacterDeathSaveResolved` V1 and
-  `CharacterDeathSaveFailureRecorded` V1 with concrete builders and appliers.
-- Orchestrate the automatic Death Save after `CombatStarted` or
-  `TurnAdvanced` establishes a new active creature; natural-20 recovery via
-  unchanged `HealingApplied` V1; ordinary-Healing lifecycle reset and
-  rejection for a dead Character; and Damage-at-zero consequences for both
-  direct `ApplyDamageCommand` and existing Attack-origin Damage paths.
-- For every successful root Command transaction that mutates authoritative
-  State as part of this slice, perform exactly one final `StateStore.save()`
-  after all in-memory consequences are assembled; preserve existing no-save
-  behavior for successful read-only branches.
-- Keep existing root Command outcome types and public Command contracts
-  unchanged.
-
-### Out of scope
-
-- `DeathSaveCommand` or any other external Death Save intent.
-- Monster Death Saves.
-- Monster death or lifecycle policy.
-- A universal `LifeState`.
-- A generic unconscious/dead hierarchy.
-- Broader zero-HP targetability.
-- Combat removal.
-- Automatic turn skipping.
-- `CombatEnded`.
-- Medicine or external stabilization.
-- Stable 1d4-hour recovery.
-- Resurrection or revivification.
-- Temporary HP.
-- Massive-damage or instant-death rules.
-- Movement.
-- Reactions.
-- Opportunity Attacks.
-- Character Dagger → Character targetability expansion.
-- A generic lifecycle framework.
-- A generic consequence pipeline.
-- A generic State mutation framework.
-- `UnitOfWork`, `TransactionManager`, or `WorkingState`.
-- An Event dispatcher or registry.
-- A generic `DamageSource`/`CriticalDamage` abstraction.
-
-### Acceptance criteria
-
-- `CharacterState` contains all four lifecycle fields and enforces every
-  intrinsic §3.34 invariant; `StateSnapshot` enforces every corresponding
-  Character↔Creature relational invariant.
-- State schema V9 reads and writes the four Character fields exactly, rejects
-  invalid V9 State, reads V1–V8 with canonical `0`/`0`/`False`/`False`
-  defaults, and does not accept V9-only fields in legacy schemas.
-- A newly active eligible Character receives exactly one automatic normal-d20
-  Death Save. No Death Save die is rolled for a Monster, positive-HP
-  Character, stable Character, or dead Character.
-- Death Save rolls resolve exactly as §3.34 defines: natural 1 records two
-  failures capped at three; 2..9 records one failure; 10..19 records one
-  success; natural 20 signals one HP of recovery without an ordinary success
-  increment.
-- A third success stabilizes the Character and resets both counters; a third
-  failure kills the Character and leaves stabilization false.
-- Natural 20 emits `CharacterDeathSaveResolved` followed by unchanged
-  `HealingApplied` V1, changes HP from 0 to 1, resets Death Save progression,
-  and does not spend the Character's Action.
-- Positive direct Damage against a living Character already at zero HP records
-  one failure. Ordinary Attack-origin Damage at zero records one failure, and
-  critical Attack-origin Damage at zero records two failures. Positive-HP →
-  zero-HP Damage alone records no Death Save failure.
-- Ordinary Healing from zero to positive HP resets both counters and
-  stabilization. Ordinary Healing against a dead Character returns
-  `INVALID_TARGET` before resolution, Event metadata allocation, or save.
-- `TurnActionSpent` remains the final Event for every successful in-Combat
-  Attack transaction; its existing `causedBy` remains the Attack-resolution
-  Event and is not repointed to `DamageApplied` or
-  `CharacterDeathSaveFailureRecorded`. When
-  `CharacterDeathSaveFailureRecorded` is emitted, its `causedBy` equals the
-  originating `DamageApplied.eventId`.
-- Every successful State-mutating root Command transaction affected by this
-  slice performs exactly one final `StateStore.save()` after all in-memory
-  consequences are assembled; successful read-only branches preserve their
-  existing no-save behavior, and no intermediate save occurs.
-- Root `ResolutionResult.outcome` types and public Command contracts remain
-  unchanged.
-- No generic lifecycle, consequence, or State-mutation framework is
-  introduced.
-
-### Verification
-
-- Focused deterministic Domain tests for lifecycle invariants, both Results,
-  both resolvers, and both Event builders/appliers.
-- Focused Application tests for turn-start eligibility, roll outcomes,
-  event ordering/causation, Damage/Healing interactions, rejection
-  precedence, root outcomes, and single-save atomicity.
-- State serializer/store tests for exact V9 persistence, strict validation,
-  and V1–V8 compatibility defaults.
-- Attack regression tests, including Damage-at-zero critical provenance and
-  the final-`TurnActionSpent` invariant.
-- Representative integration/real-adapter tests proving V9 persistence and
-  selected end-to-end Death Save/HP lifecycle paths; combinatorial mechanic
-  behavior remains covered by focused Domain/Application tests.
-- Full `python -m pytest`.
-- `python -m mypy src/dnd_engine`.
-- `git diff --check`.
-
-### Expected touchpoints
-
-- `CharacterState` / `StateSnapshot`.
-- `StateSerializer`.
-- New concrete Death Save rule and Event modules.
-- `StartCombatHandler` / `AdvanceTurnHandler`.
-- `DamageHandler` / `HealingHandler` / `AttackHandler`.
-- The existing snapshot replacement service, only if actual duplication
-  justifies its reuse or narrow extension.
-- Domain, Application, Infrastructure, Integration, and Attack regression
-  tests.
-- Final factual documentation synchronization.
-
-### Execution checkpoints
-
-1. State + V9 persistence.
-2. Pure Domain Results/rules/Events.
-3. Turn-start Death Save + natural-20 Healing.
-4. Damage/Healing/Attack lifecycle interactions.
-5. Integration/regression/documentation.
 
 ---
 
@@ -1444,7 +1255,6 @@ architectural decision is required before implementation starts.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0006` | Implement active-turn Attack gating | PR #75 / merge commit `d590056` |
 | `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 | `TSK-0004` | Implement the approved minimal Character weapon source and persistence | PR #80 / merge commit `d1b23de` |
 | `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
@@ -1454,6 +1264,7 @@ architectural decision is required before implementation starts.
 | `TSK-0014` | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers | PR #88 |
 | `TSK-0015` | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers | PR #89 |
 | `TSK-0016` | Define minimal Character zero-HP turn and Death Save contract | PR #91 |
+| `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
 
 ---
 
