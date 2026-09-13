@@ -6965,3 +6965,127 @@ already-merged delivery branch.
   `docs/TASK.md` and this `docs/DEVELOPMENT_LOG.md` entry changed — no
   production Python, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`,
   `DEFERRED.md`, or `CLAUDE.md` file was touched.
+
+## 2026-09-13 — TSK-0018 architecture decision: Combat end lifecycle contract (DEC-0051)
+
+- On branch `claude/tsk-0018-combat-end-contract`, created from `origin/main`
+  `3f040e8` (merge of PR #92 / TSK-0017; confirmed `origin/main:docs/TASK.md`
+  showed `Current: —`, `Next free ID: TSK-0018`, `TSK-0017` in `Recently
+  completed`, and active Roadmap phase Phase 3 — Combat). Re-read `AGENTS.md`,
+  `docs/ARCHITECTURE.md` (§§3.8, 3.9, 3.25, 3.28, 3.33, 3.34, 8.9, 9.x, 10.7,
+  12.9, 12.11–12.13), `docs/ROADMAP.md`, `docs/TASK.md`, `docs/DECISIONS.md`
+  (`DEC-0040`, `DEC-0043`, `DEC-0046`, `DEC-0049`, `DEC-0050`),
+  `docs/DEFERRED.md` (`DEF-0015`), `CLAUDE.md`, and the production
+  `StartCombat`/`AdvanceTurn` Command/Event/Application source
+  (`domain/commands/advance_turn.py`, `domain/events/advance_turn.py`,
+  `application/handlers/start_combat.py`, `application/handlers/
+  advance_turn.py`), `domain/state/combat.py`, `domain/state/snapshot.py`,
+  and `infrastructure/persistence/json/state_serializer.py` before editing.
+- Set up the Task Queue first (`docs/TASK.md` only): `Current position` moved
+  to `Current: TSK-0018`, `Next free ID: TSK-0020`; added `TSK-0018`
+  (`Current`, full task detail) and `TSK-0019` (`Backlog`, index row only,
+  intentionally not `Ready`/`Next` since its exact implementation scope
+  depends on the §3.35 contract this iteration produces) to the `Open task
+  index`.
+- Added `docs/ARCHITECTURE.md` §3.35 "Minimal Phase 3 Combat end lifecycle
+  (TSK-0018)" — a decision-only canonical contract, plus the Quick lookup
+  row and Table of contents entry. Went through four internal review/
+  revision passes before acceptance: an initial pass defining the full
+  Command/Result/Event/Application/Errors/Persistence/Abstraction-verdict
+  shape; then three correction passes fixing (1) the applier/Application
+  boundary so `apply_combat_ended_v1`'s returned value **is** the
+  replacement Combat projection (`None`) that Application consumes via
+  `dataclasses.replace(snapshot, combat=replacement_combat)`, rather than
+  Application independently re-deciding `combat=None` after only validating
+  the Event — preserving the canonical §3.18/DEC-0032 Event-driven
+  State-application flow exactly; (2) an overstated actor-validation claim
+  ("every other handler" uses actor-first order) narrowed to name
+  `StartCombatHandler` and other actor-resolving handlers specifically,
+  since `AdvanceTurnHandler` checks Combat first and has no separate actor
+  lookup; and (3) two precedent misattributions — §§3.19–3.21's existing
+  appliers return replacement `CreatureState` projections, not `CombatState`,
+  and `resolve_end_combat`'s defensive `command.payload.combat_id ==
+  combat.id` check mirrors `resolve_advance_turn`, not `build_turn_advanced_
+  v1`. The accepted §3.35 fixes, at a high level:
+  - Combat ending is **explicit only**: a concrete `EndCombatCommand(
+    combat_id)` — `EndCombatPayload(combat_id: str)` mirrors
+    `AdvanceTurnPayload` exactly — with no automatic victory/defeat or
+    encounter-resolution detection, and no `reason`/`encounterId`/
+    `victoryState`/reward field.
+  - `EndCombatHandler` validates actor existence first (`ENTITY_NOT_FOUND`,
+    matching `StartCombatHandler`'s convention), then active-Combat
+    existence/id match (`ENTITY_NOT_FOUND`, `field="combat_id"`, reusing
+    `AdvanceTurnHandler`'s exact shape) — no new `ErrorCode`. No active-turn
+    or participant-membership eligibility is added; `CombatState.
+    action_spent`/`TurnActionSpent` and `DiceEngine` are untouched.
+  - A pure `resolve_end_combat` produces `EndCombatResult(combat_id: str)`;
+    `CombatEnded` V1's payload is `combatId` only, `causedBy: null`, with no
+    free-text reason or victory/defeat outcome.
+  - `apply_combat_ended_v1(combat, event) -> None` structurally validates
+    the Event and returns the replacement Combat projection — `None`, since
+    absence is the authoritative result. Application consumes that returned
+    value directly (`replacement_combat = apply_combat_ended_v1(combat,
+    event)`, then `dataclasses.replace(snapshot, combat=replacement_combat)`)
+    rather than independently deciding `combat=None`, and persists exactly
+    once, with save failure propagating unmodified through the existing
+    `StateStoreError` boundary.
+  - Combat-owned transient State (`order`/`active_index`/`round`/
+    `positions`/`action_spent`) retires as a consequence of `CombatState` no
+    longer being present, not field-by-field resets; Creature/Character HP,
+    Conditions, death-save/lifecycle facts (§3.34), Inventory, and Equipment
+    are untouched.
+  - **No State schema version change**: verified directly against
+    `infrastructure/persistence/json/state_serializer.py` that the current
+    V9 writer already serializes `StateSnapshot.combat` as JSON `null` when
+    `None` and already decodes `null` back to `None` (true since V5). TSK-
+    0019 must not introduce a schema V10 for this slice.
+  - Once a successful `EndCombatCommand` has persisted, `StartCombatHandler`
+    's existing `snapshot.combat is not None` rejection no longer applies,
+    so a new `StartCombatCommand` may succeed using its unchanged contract.
+  - The abstraction verdict is **KEEP CONCRETE**: no `UnitOfWork`/
+    `TransactionManager`, generic Combat lifecycle framework, reducer,
+    dispatcher, or action abstraction is introduced.
+- Added `docs/DECISIONS.md` `DEC-0051`, recording the rationale for the
+  above — explicit-only design, the actor/Combat validation precedence and
+  exact error reuse, the Result/Event/applier boundaries and the corrected
+  Event-driven State-application flow, the verified no-schema-change
+  finding, and the deferred scope — without duplicating §3.35's exact
+  payload schemas.
+- Synchronized `CLAUDE.md`'s implemented/defined-contracts index (new row
+  marked "contract defined (TSK-0018); production implementation pending
+  TSK-0019") and a short invariant-summary paragraph (explicit `EndCombat`
+  only, `CombatEnded` V1 payload shape, `combat=None` reuse, no schema
+  change, Creature/Character/Inventory/Equipment untouched) — no
+  duplication of the full Architecture section.
+- Reconciled `docs/DEFERRED.md`: `DEF-0015` stays `Deferred` — the "Why
+  deferred", "Prerequisites", "Acceptance criteria", and "References"
+  fields now note that the narrow Combat removal/end contract is defined by
+  §3.35/DEC-0051 (production continuation: TSK-0019), while Monster death/
+  lifecycle policy, Monster Death Saves, zero-HP targetability, and broader
+  Healing-recovery semantics remain unresolved. Gained a dated `2026-09-13`
+  `History` entry; no earlier `History` entry was rewritten.
+- Reconciled `docs/ROADMAP.md`'s `Combat lifecycle / CombatEnded` row with a
+  **"Defined, not yet implemented"** marker, and added an explanatory
+  paragraph distinguishing **defined** (§3.35/DEC-0051: explicit `Command`/
+  `Result`/`Event`/applier boundaries, no-schema-change finding),
+  **pending** (TSK-0019: production types/resolver/builder/applier/
+  handler), and **still open** (DEF-0015: Monster death/lifecycle policy,
+  zero-HP targetability, surrender/fleeing, automatic victory/defeat
+  detection, broader Character zero-HP lifecycle beyond §3.34). The
+  capability row stays unchecked (`[ ]`): a canonical contract is not a
+  delivered capability.
+- `docs/TASK.md` intentionally still shows `TSK-0018` as `Current` and
+  `TSK-0019` as `Backlog` (non-executable, no dependency yet satisfied) —
+  no Task Closure was performed in this pass; that requires an accepted PR
+  and delivery-branch merge, per §18.1.
+- Verification: full `python -m pytest` — 2162 passed (the default run hit
+  128 environment-only `PermissionError` collection errors from a locked
+  Windows temp directory unrelated to this change; a `--basetemp` override
+  confirmed the full 2162-test suite passes cleanly); `python -m mypy
+  src/dnd_engine` — no issues in 115 source files; `git diff --check` — no
+  whitespace errors; the documentation reference tests passed. The
+  cumulative branch diff against `origin/main` touches only `CLAUDE.md`,
+  `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, `docs/DEFERRED.md`,
+  `docs/DEVELOPMENT_LOG.md`, `docs/ROADMAP.md`, and `docs/TASK.md` — no
+  production Python and no unrelated cleanup. Formatter/linter remain
+  `not configured`, per repo convention; none introduced.
