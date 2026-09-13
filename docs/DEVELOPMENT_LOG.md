@@ -12,6 +12,12 @@ This is an append-only journal of completed development iterations. It is not
 canonical architecture, a Roadmap, a Decision Log, or a source of truth for
 contracts.
 
+Entries are one concise factual delivery record per substantive `TSK`/PR by
+default; an intermediate checkpoint gets its own entry only when it carries
+durable information the final entry would otherwise lose. See `AGENTS.md`,
+"During implementation", for the exact policy. Existing entries are never
+rewritten.
+
 ## 2026-08-22 — Phase 1 Core contracts A
 
 ### Initial state
@@ -7235,3 +7241,81 @@ already-merged delivery branch.
   introduced. `docs/DECISIONS.md` gained no new entry: production matched
   the already-accepted §3.35/DEC-0051 contract exactly, with no genuine new
   architectural decision discovered during implementation.
+
+## 2026-09-13 — TSK-0020 Group 1: reconcile prospective Task Closure dependency semantics
+
+Allocated `TSK-0020` ("Tighten development workflow and task-governance
+automation") as `Current` (`P2`/`M`/`engineering`, cross-cutting
+engineering support for active Phase 3 delivery, no `src/dnd_engine`
+impact). Found a latent contradiction in `docs/TASK.md`: §§4.5/18.1
+allowed a prepared closure branch to prospectively promote a next
+`Current` before its dependency was authoritative `Done`, while §12 item 2
+and §17 item 10 stated that requirement unconditionally — the pattern PR
+#93 (TSK-0018 → TSK-0019) had already relied on informally. Adopted a
+single, narrowly bounded rule (new §18.1.1): a prepared closure branch may
+prospectively *represent* its own single immediate dependent task's
+post-merge Status, only when that task's sole outstanding dependency is
+the task the branch closes in the same atomic merge and no other
+dependency is unfinished. The authoritative `main`-state readiness
+invariant and the dependency/merge boundary (§5) are unchanged and remain
+unconditional; no new lifecycle status was introduced. No gameplay,
+Architecture, Roadmap, or Decisions changes. Verification:
+`python -m pytest tests/architecture/test_documentation_references.py` (2
+passed) and `git diff --check` (clean); full local `pytest`/`mypy` were
+intentionally not run for this docs-only checkpoint.
+
+## 2026-09-13 — TSK-0020 Group 2: add Task tracker structural invariant tests
+
+Added `tests/architecture/test_task_tracker.py`: a small stdlib-only
+parser reads the live `docs/TASK.md` (scoped per top-level `# ...`
+section, so numbered-spec/Appendix example IDs are never mistaken for
+real allocations) and enforces: `Current position` declares `Current`/
+`Next`/`Next free ID` at all (a missing field is not treated as `—`);
+single-`Current` consistency between `Current position` and `Open task
+index`; `Next` size/no-duplicate-ID/existence/`Ready` checks (order not
+re-derived); `Size`/`Roadmap target` presence for `Ready`/`Current`;
+closed `Status`/`Priority`/`Size`/`Group` enum membership; `Open task
+index`/`Open task details` ID uniqueness and correspondence; `Current`/
+`Ready`/`Blocked` full-detail coverage per §15; and `Next free ID`
+format/numeric-precedence over every ID allocated in `Open task index`
+and `Recently completed`. Authoritative dependency-`Done` semantics (§12
+item 2, §17 item 10) are intentionally **not** automated — not decidable
+from `docs/TASK.md` alone, and a §18.1.1 prepared closure branch may
+legitimately show a prospective dependent task as `Ready`/`Current`
+before its dependency is authoritative `Done` — that stays a
+human/review responsibility. No gameplay, Architecture, Roadmap, or
+Decisions changes. Verification: `python -m pytest
+tests/architecture/test_task_tracker.py` and `python -m pytest
+tests/architecture/` — 14 and 21 passed respectively; `git diff --check`
+clean.
+
+## 2026-09-13 — TSK-0020 Group 3: clarify checkpoint, review-patch, testing, and Development Log workflow
+
+Updated `AGENTS.md` (synced where `CLAUDE.md` duplicated the changed
+facts): execution checkpoints within a `TSK` are now risk-based rather
+than mechanical file-set splits; `review.patch` now distinguishes a fresh
+checkpoint diff from the final cumulative task/PR audit; local testing is
+split into production and documentation/process policies, with a
+mandatory final full regression for any task that changes executable
+test/tooling behavior; and the Development Log policy moved to one
+delivery-level entry per substantive `TSK`/PR by default. Verification:
+`python -m pytest tests/architecture/` — 21 passed; `git diff --check`
+clean.
+
+## 2026-09-13 — TSK-0020: Tighten development workflow and task-governance automation (delivery summary)
+
+Delivered: automated `docs/TASK.md` structural invariant tests
+(`tests/architecture/test_task_tracker.py`) plus a
+reconciled prospective-closure dependency contract (§18.1.1); tightened
+`AGENTS.md`/`CLAUDE.md` workflow/review/testing/Development-Log policy;
+and `.github/workflows/tests.yml` CI trigger dedup with PR-scoped
+concurrency. No gameplay, production `src/**`, Architecture, or Roadmap
+changes.
+
+Verification: full `python -m pytest` — 2215 passed; `python -m mypy
+src/dnd_engine` — clean; `tests/architecture/` — 21 passed; draft PR #95
+CI — pytest matrix and `mypy` jobs successful, no duplicate
+feature-branch `push` run.
+
+Next Phase 3 frontier intentionally not allocated — needs a separate
+refinement pass.

@@ -256,6 +256,19 @@ Closure (§18.2) is mandatory as a fallback, and the tracker must be
 reconciled — landing the closure on `main` — before implementation of the
 next `Current` task begins.
 
+Authoritative `main`-state invariant (§12 item 2, §17 item 10): on `main`,
+a task's Status reads `Ready` or `Current` only once every task in its
+`Depends on` is itself authoritative `Done` on `main`. This invariant is
+unconditional; prospective closure never weakens it, because nothing on a
+delivery branch is authoritative before merge.
+
+Prepared closure branch (§18.1): before merge, that branch's own diff may
+prospectively represent — not authoritatively grant — its single immediate
+dependent task's post-merge Status as `Ready`/`Current`, bounded by the
+conditions in §18.1.1. That representation becomes the authoritative
+`main`-state invariant above only once the branch's PR actually merges; if
+it never merges, it never was.
+
 ### 4.6 Superseded
 
 The task is no longer intended to be executed because its scope was:
@@ -297,7 +310,13 @@ Ready   → Superseded
 Current → Superseded
 ```
 
-A dependency boundary is normally also a merge boundary.
+A dependency boundary is normally also a merge boundary. §18.1.1 does not
+create an exception to that boundary: implementation of a prospectively
+represented dependent task remains blocked until the closure branch's PR
+actually merges. §18.1.1 only allows the prepared closure branch's own
+diff to prospectively represent, before that merge, what the dependent
+task's tracker Status will become once the merge lands — the dependency
+and implementation boundary itself stays exactly at the merge.
 
 If:
 
@@ -576,12 +595,18 @@ Do not infer execution order from table position.
 A task may become `Ready` only when all relevant conditions below are true:
 
 1. It belongs to current Roadmap scope or is an explicit prerequisite for it.
-2. All tasks in `Depends on` are `Done`.
+2. All tasks in `Depends on` are authoritative `Done` on `main`.
 3. No unresolved blocker or canonical conflict prevents execution.
 4. `Goal`, `Scope`, `Out of scope`, `Acceptance criteria`, and `Verification`
    are concrete enough for implementation and review.
 5. Size is `S` or `M`.
 6. The result is independently mergeable as one coherent slice.
+
+Condition 2 is unconditional on `main`. A prepared closure branch's own
+diff may prospectively represent condition 2 as met for its single
+immediate dependent task before merge, under the bounded conditions in
+§18.1.1; that representation is not authoritative, and does not make the
+dependent task actually `Ready` on `main`, until the branch's PR merges.
 
 If implementation would require an unapproved architectural decision, the
 implementation task is not `Ready`.
@@ -918,7 +943,8 @@ or dependencies.
 7. Priority is an input to sequencing, not sequencing itself.
 8. `Depends on` is the only task-to-task dependency relation.
 9. Dependency cycles are forbidden.
-10. A task with unfinished dependencies cannot be `Ready` or `Current`.
+10. A task with unfinished dependencies cannot be `Ready` or `Current` on
+    `main`.
 11. A size `L` task cannot be `Ready` or `Current`.
 12. Every `Ready` or `Current` task must identify a current Roadmap target or
     explicit prerequisite for it.
@@ -928,7 +954,11 @@ or dependencies.
 
 See §18 for the mandatory Task Closure reconciliation step — normally
 prepared before merge in the same delivery branch/PR, with post-merge
-reconciliation as a fallback.
+reconciliation as a fallback. §18.1.1 defines the single bounded case in
+which a prepared closure branch's own diff may prospectively represent
+item 10 as satisfied, before merge, for its own immediate dependent task;
+that representation is not authoritative on `main`, and item 10 remains
+unconditional there, until the branch's PR merges.
 
 ---
 
@@ -993,6 +1023,49 @@ re-check that `origin/main` has not materially changed Current/Next
 ordering, Roadmap scope, blockers, or any other fact the prepared closure
 depends on. If it has, the prepared closure is stale and must be
 reconciled against current `origin/main` before merging.
+
+### 18.1.1 Prospective immediate-dependent representation
+
+Authoritative `main`-state invariant (§12 item 2, §17 item 10): a task's
+Status reads `Ready` or `Current` only once every task in its `Depends on`
+is itself authoritative `Done` on `main`. This invariant is unconditional
+on `main`; nothing in this section weakens it.
+
+Prepared closure branch: before merge, a prepared §18.1 Task Closure
+branch/PR may prospectively represent, in its own diff, exactly **one**
+immediate dependent task's post-merge Status as `Ready`/`Current` — the
+task whose only outstanding dependency is the task being closed by that
+same branch/PR — when **all** of the following hold:
+
+1. the dependent task's only not-yet-authoritative-`Done` dependency is the
+   task this branch/PR closes;
+2. that dependency task becomes prospectively `Done` in this same closure
+   (§4.5) and lands as part of the same atomic merge;
+3. every other readiness condition in §12 is already satisfied for the
+   dependent task;
+4. the dependent task has no other unfinished dependency of any kind;
+5. no implementation may begin against the prospectively represented
+   dependent task, and no delivery branch may be created for it, until
+   this closure PR has actually merged and the representation becomes the
+   authoritative `main`-state invariant above;
+6. if this closure PR is never merged, the prospective representation
+   never becomes a fact of the project — the dependent task remains
+   exactly as ineligible for `Ready`/`Current` as it was before this
+   branch existed.
+
+If the dependent task also depends on any other task that is not `Done` by
+this same merge, this prospective representation is not permitted: the
+dependent task must remain ineligible for `Ready`/`Current` until every one
+of its dependencies is independently authoritative `Done` on `main`.
+
+This is a property of the prepared closure branch's own diff, not a new
+task status and not a weakening of the authoritative invariant above — the
+field still reads plain `Ready`/`Current`, never `Prospective Current` or
+`Prospective Ready`. It applies only to the branch's own single immediate
+dependent task and grants no license to prospectively represent any other
+task. It does not create an exception to the dependency/merge boundary in
+§5: implementation of the represented dependent task remains blocked until
+this branch's PR actually merges.
 
 ### 18.2 Fallback path — post-merge reconciliation
 
@@ -1235,7 +1308,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 - **Current:** —
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0020
+- **Next free ID:** TSK-0021
 - **Last reviewed:** 2026-09-13
 
 ---
@@ -1249,13 +1322,8 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 # Open task details
 
-_No open task details. No next executable task is currently selected.
-Grouped initiative remains evidence-gated by its own Roadmap requirement (a
-later concrete Monster/control consumer must demonstrate the need before it
-is added); the other remaining Phase 3 capabilities are not currently
-refined into a concrete reviewable `Ready` task and require a separate
-planning/refinement pass. `Current`/`Next` therefore remain empty, and
-`TSK-0020` is not allocated yet._
+_No open task details. No task currently passes the §12 readiness gate;
+Current/Next remain empty pending a separate refinement pass._
 
 ---
 
@@ -1263,7 +1331,6 @@ planning/refinement pass. `Current`/`Next` therefore remain empty, and
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
 | `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
 | `TSK-0012` | Implement Character Dagger weapon Attack resolution | PR #85 |
 | `TSK-0013` | Implement Character Dagger Attack → Damage → Monster HP consequence | PR #86 |
@@ -1273,6 +1340,7 @@ planning/refinement pass. `Current`/`Next` therefore remain empty, and
 | `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
 | `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
 | `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
+| `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
 
 ---
 
