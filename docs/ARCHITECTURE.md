@@ -71,6 +71,7 @@
 | Current-turn ordinary Action expenditure, `TurnActionSpent` (TSK-0014/TSK-0015) | §3.33 |
 | Character zero-HP turn / Death Save contract (TSK-0016 contract, TSK-0017 implementation) | §3.34 |
 | Combat end lifecycle contract, `EndCombatCommand`/`CombatEnded` V1 (TSK-0018 contract, TSK-0019 implementation) | §3.35 |
+| Initial Combat placement contract, `PlaceCombatantCommand`/`CombatantPlaced` V1 (TSK-0021, decision-only) | §3.36 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -140,6 +141,7 @@
   * [3.33. Minimal Phase 3 current-turn ordinary Action expenditure (TSK-0014)](#333-minimal-phase-3-current-turn-ordinary-action-expenditure-tsk-0014)
   * [3.34. Minimal Character zero-HP turn and Death Save contract (TSK-0016)](#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016)
   * [3.35. Minimal Phase 3 Combat end lifecycle (TSK-0018)](#335-minimal-phase-3-combat-end-lifecycle-tsk-0018)
+  * [3.36. Minimal Phase 3 initial Combat placement contract (TSK-0021)](#336-minimal-phase-3-initial-combat-placement-contract-tsk-0021)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -8823,6 +8825,291 @@ field already existed and already accepted `None`).
 
 ---
 
+### 3.36. Minimal Phase 3 initial Combat placement contract (TSK-0021)
+
+Implementation status: **Decision-only architecture task; no production
+implementation.** This section canonically defines the first concrete
+consumer of `CombatState.positions` (§3.30/DEC-0045) — a single Command
+that assigns exactly one not-yet-positioned combatant its initial
+combat-local `CombatPosition` — without implementing it. Production
+implementation remains TSK-0022.
+
+#### Scope
+
+TSK-0010 implemented `CombatPosition`/`CombatState.positions` and their
+additive State schema V7 persistence (§3.30); TSK-0012 implemented the only
+existing consumer, the Character Dagger melee reach check, which only
+*reads* `positions` and never writes them. `StartCombatCommand` (§3.25)
+always produces `positions == ()`, and no existing Command ever adds a
+`CombatPosition`. This section closes that gap for the narrowest concrete
+case:
+
+```text
+one PlaceCombatantCommand assigns one not-yet-positioned participant
+    of the current Combat its first CombatPosition
+```
+
+This is initial tactical placement, not voluntary Movement: it grants a
+position where none exists, once, and does not move an already-positioned
+combatant.
+
+#### Explicit exclusions
+
+This slice does not design or add:
+
+```text
+voluntary Movement Commands
+reposition/teleport of an already-positioned combatant
+authoritative speed source
+current-turn movement allowance/budget
+split movement
+Dash / Disengage
+forced movement
+difficult terrain
+pathfinding
+collision
+occupancy / creature footprint
+elevation
+Reactions
+Opportunity Attacks
+a temporary universal movement speed default (e.g. "30 ft for everyone")
+```
+
+These remain open for a later, separately evidenced concrete consumer, per
+§3.6's rule against introducing behaviour ahead of a concrete need. A future
+Movement contract must define its own relationship to
+`CombatState.positions` without introducing a second authoritative
+positional State.
+
+#### `PlaceCombatantCommand` / `PlaceCombatantResult`
+
+```text
+PlaceCombatantCommand(command_id, campaign_id, actor_id, payload)
+PlaceCombatantPayload(combat_id: str, creature_id: str, x: int, y: int)
+```
+
+`command.actor_id` and `payload.creature_id` are **not** required to match:
+this section introduces no authorization/GM-control policy beyond what
+already exists elsewhere in canon, exactly like `StartCombatCommand`'s
+actor need not be a participant (§3.25) and `EndCombatCommand`'s actor need
+not be the active combatant (§3.35). `x`/`y` follow the existing §3.30
+coordinate contract unchanged: combat-local feet, exact `int`, `bool`
+rejected, negative coordinates permitted. No `weaponId`, `speed`,
+`distance`, or `allowance` field is introduced.
+
+`resolve_place_combatant(command, combat) -> PlaceCombatantResult` is a
+pure function returning only the minimal resolved facts:
+
+```text
+PlaceCombatantResult(combat_id: str, creature_id: str, x: int, y: int)
+```
+
+No round, order, active combatant, or any other Combat fact is carried:
+none of those are needed to build or audit `CombatantPlaced` (below).
+
+#### `CombatantPlaced` V1
+
+Canonical payload:
+
+```text
+combatId
+creatureId
+x
+y
+```
+
+`actorId` is the Command actor (§8.2), matching every other Combat Event.
+`causedBy` is `null`: `CombatantPlaced` is caused directly by resolving
+`PlaceCombatantCommand`, not by a prior Event, exactly like
+`CombatStarted`/`TurnAdvanced`/`CombatEnded` (§§3.25, 3.35). Exactly one
+successful placement produces exactly one `CombatantPlaced` V1 Event.
+
+`apply_combatant_placed_v1(combat: CombatState, event: GameEvent) ->
+CombatState` structurally validates the Event (`type ==
+"CombatantPlaced"`, `version == 1`, exact payload field set), requires
+`payload.combatId == combat.id`, requires `payload.creatureId in
+combat.order`, and requires that no existing `CombatPosition` in
+`combat.positions` already names `payload.creatureId`. A stale/inconsistent
+Event that violates any of these is an integrity/programming failure
+(`TypeError`/`ValueError`), not a gameplay `EngineError`, matching the
+existing concrete-applier pattern (§§3.19–3.21, 3.25, 3.35). On success it
+returns a replacement `CombatState` with exactly one additional
+`CombatPosition(creature_id=payload.creatureId, x=payload.x,
+y=payload.y)` appended to the existing `combat.positions`, and every other
+existing `CombatPosition`, `id`, `round`, `order`, `active_index`, and
+`action_spent` unchanged. It performs no dice call, no Definition lookup,
+and no persistence I/O, per §3.18's Event → State contract.
+
+#### State ownership
+
+No new positional State is introduced. The sole authoritative tactical
+placement remains `CombatState.positions` (§3.30) under the unchanged
+`CombatEngine` State Owner (§10.7). A successful `CombatantPlaced` V1
+application:
+
+```text
+adds exactly one new immutable CombatPosition
+preserves every already-existing CombatPosition
+leaves id, round, order, active_index, and action_spent unchanged
+leaves Creature/Character/Inventory/Equipment State unchanged
+```
+
+This section does not add `CreatureState.position`, a World/non-combat
+position, a `MovementState`, a `SpatialState`, or any second authoritative
+positional source. The existing §3.30 contract — `positions` may be a
+partial subset of `combat.order`, a missing position does not by itself
+make `CombatState` structurally invalid, and empty/partial/full
+`positions` are each structurally valid — is unchanged and reused
+unmodified: this section adds one narrow way to grow a partial `positions`
+tuple by exactly one entry; it does not change what a valid `positions`
+tuple may look like.
+
+#### Initial placement semantics
+
+Because §3.30 already permits partial `positions`, one
+`PlaceCombatantCommand` places exactly one combatant; this section does not
+require or introduce atomic placement of every Combat participant. If
+`payload.creature_id` already has a `CombatPosition` in `combat.positions`,
+the Command is rejected (see "Validation precedence" below): this slice is
+initial placement only, not reposition, teleport, or Movement. Multiple
+combatants may share identical coordinates — occupancy, collision, and
+creature footprint remain explicitly out of scope, unchanged from §3.30.
+
+#### Validation precedence
+
+```text
+StateStore.load(command.campaign_id)
+→ actor CreatureState lookup in snapshot.creatures
+    missing → ENTITY_NOT_FOUND, entity_id=command.actor_id, field=None
+→ active Combat existence + exact combat_id match
+    missing/mismatch → ENTITY_NOT_FOUND, entity_id=payload.combat_id, field="combat_id"
+→ placement subject lookup in snapshot.creatures
+    missing → ENTITY_NOT_FOUND, entity_id=payload.creature_id, field="creature_id"
+→ payload.creature_id must be a member of combat.order
+    absent → ACTION_NOT_AVAILABLE, entity_id=payload.creature_id, field="creature_id"
+→ payload.creature_id must have no existing CombatPosition
+    already positioned → ACTION_NOT_AVAILABLE, entity_id=payload.creature_id, field="creature_id"
+→ resolve_place_combatant (pure resolver)
+→ Event metadata
+→ CombatantPlaced V1 construction
+→ apply_combatant_placed_v1
+→ replacement StateSnapshot
+→ exactly one StateStore.save()
+→ success returned only after a successful save
+```
+
+This precedence follows the actor-first shape `StartCombatHandler`/
+`EndCombatHandler` already use (§§3.25, 3.35): a missing actor is rejected
+before any Combat lookup. It reuses `AdvanceTurnHandler`'s/
+`EndCombatHandler`'s exact `ENTITY_NOT_FOUND`/`field="combat_id"` shape for
+a missing or mismatched Combat (§§3.25, 3.35). No new `ErrorCode` is
+introduced: `ENTITY_NOT_FOUND` and `ACTION_NOT_AVAILABLE` already exist in
+the closed §3.9 Error Contract.
+
+On any rejected path: zero Events, no Event metadata allocation past the
+point of rejection, zero State mutation, and zero `StateStore.save()`
+calls — the same side-effect boundary §§3.28, 3.31, 3.33 already establish.
+
+#### Turn / Action / HP boundary
+
+Initial tactical placement:
+
+```text
+does not require active-turn ownership (§3.28)
+does not check active_creature_id
+does not read or consume CombatState.action_spent (§3.33)
+is not an ordinary Action
+does not require or introduce a movement allowance/budget
+does not depend on current_hp
+a zero-HP combatant may receive an initial tactical position
+does not pull in the broader DEF-0015 zero-HP lifecycle scope
+```
+
+`command.actor_id` need not be the active combatant, and need not itself be
+a Combat participant — matching the existing precedent that
+`StartCombatCommand`'s and `EndCombatCommand`'s actors need not be
+participants either (§§3.25, 3.35).
+
+#### Movement boundary
+
+This section explicitly does not define voluntary Movement. The following
+remain unresolved for a later, separately evidenced concrete consumer:
+
+```text
+authoritative speed source
+current-turn movement allowance/budget
+split movement
+reposition
+Dash
+Disengage
+forced movement
+difficult terrain
+pathfinding
+collision
+occupancy/footprint
+elevation
+Reactions
+Opportunity Attacks
+```
+
+No temporary universal movement speed (e.g. "30 ft for everyone") is
+introduced as a stand-in default.
+
+#### Event application / atomicity
+
+```text
+PlaceCombatantCommand → PlaceCombatantResult → CombatantPlaced V1
+    → apply_combatant_placed_v1 replacement CombatState
+    → replacement StateSnapshot
+    → exactly one StateStore.save()
+```
+
+One `PlaceCombatantCommand` is one logical transaction, matching §3.8. Two
+distinct failure cases are kept explicit, matching the existing §3.18/
+concrete-handler contract (§§3.19–3.21, 3.25, 3.35) rather than one broad
+"failure with no Events and no mutation" statement:
+
+Validation/gameplay rejection before Event creation (any "Validation
+precedence" step above) yields an unsuccessful `ResolutionResult` with zero
+Events, no Event metadata allocation past the point of rejection, zero
+authoritative State mutation, and zero `StateStore.save()` calls — matching
+the side-effect boundary already established by §§3.28, 3.31, 3.33.
+
+Persistence failure after the Event and replacement State already exist
+in memory: `CombatantPlaced` V1 and the replacement `CombatState`/
+`StateSnapshot` may already be constructed before `StateStore.save()` is
+called exactly once; if that call raises `StateStoreError`, the error
+propagates unmodified (§12.9) and the handler returns no successful
+`ResolutionResult`. This is not converted into a gameplay `EngineError`,
+does not retroactively claim the Event was never built, and introduces no
+rollback, `EventStore`, or replay guarantee — exactly the same MVP
+atomicity boundary already fixed by §3.18 (loaded State not mutated,
+replacement built in isolation, save-once, no rollback-after-save, no
+EventStore/replay guarantee). Success is returned only after a successful
+save. No new atomicity guarantee is introduced.
+
+#### State schema
+
+No State schema V10 is introduced. `positions` is already a persisted
+field of the existing Combat wire shape since State schema V7 (§3.30); the
+current production writer is State schema V9 (§3.34, §12.13). This section
+changes the *content* one Command may add to an already-existing
+`positions` array, not the wire schema itself; the existing V7/V8/V9
+serializer contract (§§3.30, 3.33, 3.34, 12.9, 12.13) is unchanged.
+
+#### Abstraction verdict
+
+**KEEP CONCRETE.** No `MovementEngine`, `PlacementEngine`, `GeometryService`,
+generic spatial abstraction, generic movement resource, `TurnResources`,
+generic Event-applier registry, or generic state-transition framework is
+introduced. `PlaceCombatantCommand`/`apply_combatant_placed_v1` will follow
+the same concrete §3.18 mutating-command pattern already used by
+`StartCombatHandler`, `AdvanceTurnHandler`, and `EndCombatHandler` (§§3.25,
+3.35): it appends exactly one new `CombatPosition` to an existing tuple,
+with no dice, no Definition lookup, and no new State Owner.
+
+---
+
 ## 4. ID System
 
 ID являются частью архитектурного контракта.
@@ -11640,13 +11927,15 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Текущий production writer — exact State schema V8
-(`SCHEMA_V8_VERSION`), additive over V7; его точный field-by-field контракт
+filesystem I/O. Текущий production writer — exact State schema V9
+(`SCHEMA_V9_VERSION`), additive over V8; его точный field-by-field контракт
 (top-level `inventories`, `equipment`, Character `weaponProficiencies` —
 §3.29; non-null `combat.positions` — §3.30; non-null `combat.actionSpent` —
-§3.33) канонически определён в §3.29/§3.30/§3.33 и не дублируется здесь.
-Ниже — historical V5 example (предшествует V6/V7/V8 additions),
-иллюстрирующий общую envelope-форму; это не current writer shape:
+§3.33; required Character `deathSaveSuccesses`/`deathSaveFailures`/
+`deathSaveStable`/`dead` — §3.34) канонически определён в
+§3.29/§3.30/§3.33/§3.34 и не дублируется здесь. Ниже — historical V5
+example (предшествует V6/V7/V8/V9 additions), иллюстрирующий общую
+envelope-форму; это не current writer shape:
 
 ```json
 {
@@ -11694,17 +11983,21 @@ filesystem I/O. Текущий production writer — exact State schema V8
 }
 ```
 
-JSON использует camelCase. The current V8 writer always emits
-`schemaVersion: 8` and the exact V7 state fields defined in §3.30
-(`campaign`, `creatures`, `characters`, `inventories`, `equipment`,
+JSON использует camelCase. The current V9 writer always emits
+`schemaVersion: 9` and the exact V7 top-level state fields defined in
+§3.30 (`campaign`, `creatures`, `characters`, `inventories`, `equipment`,
 `combat`), additionally requiring `actionSpent` inside a non-null `combat`
-(§3.33). V6 preserves the V5 campaign, creature, and combat shapes and
-preserves the pre-existing Character fields/semantics, while adding the V6
-Character `weaponProficiencies` field and the top-level
-`inventories`/`equipment` projections defined in §3.29; V7 preserves this
-exact V6 shape unchanged and adds only `combat.positions`; V8 preserves
-this exact V7 shape unchanged and adds only `combat.actionSpent`. Preserved
-fields
+(§3.33) and requiring `deathSaveSuccesses`, `deathSaveFailures`,
+`deathSaveStable`, and `dead` on every Character entry (§3.34). V6
+preserves the V5 campaign, creature, and combat shapes and preserves the
+pre-existing Character fields/semantics, while adding the V6 Character
+`weaponProficiencies` field and the top-level `inventories`/`equipment`
+projections defined in §3.29; V7 preserves this exact V6 shape unchanged
+and adds only `combat.positions`; V8 preserves this exact V7 shape
+unchanged and adds only `combat.actionSpent`; V9 preserves this exact V8
+shape unchanged and adds only the four required Character death-save/
+lifecycle fields above (§3.34) — no other wire shape changes relative to
+V8. Preserved fields
 include `"characters": []` для пустой collection, `"conditions": []` для
 пустого Creature Condition membership (§3.21) и `"combat": null`, когда
 `StateSnapshot.combat is None` (§3.25). Creatures и Characters сортируются по runtime ID,
@@ -11714,7 +12007,7 @@ include `"characters": []` для пустой collection, `"conditions": []` д
 object с exact fields `id`, `round`, `order` (JSON array Creature ID strings в
 initiative-порядке) и `activeIndex`.
 
-Reader принимает восемь точных схем: legacy V1 с state fields `campaign` и
+Reader принимает девять точных схем: legacy V1 с state fields `campaign` и
 `creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
 обязательным дополнительным `skillProficiencies`, legacy V4 с обязательным
 `conditions` (без `combat`), legacy V5 с обязательным дополнительным
@@ -11723,10 +12016,13 @@ Reader принимает восемь точных схем: legacy V1 с state
 top-level `inventories`, `equipment` и Character `weaponProficiencies`
 (exact field-by-field контракт — §3.29, без `combat.positions`), legacy V7
 с теми же V6 полями плюс обязательным `positions` внутри non-null `combat`
-(exact field-by-field контракт — §3.30, без `combat.actionSpent`), и
-current V8 с теми же V7 полями плюс обязательным `actionSpent` внутри
-non-null `combat` (exact field-by-field контракт — §3.33). V1–V7 сохраняют
-свои exact historical shapes без retroactive расширения V8-полями. Поле
+(exact field-by-field контракт — §3.30, без `combat.actionSpent`), legacy
+V8 с теми же V7 полями плюс обязательным `actionSpent` внутри non-null
+`combat` (exact field-by-field контракт — §3.33, без Character death-save
+полей), и current V9 с теми же V8 полями плюс обязательными Character
+`deathSaveSuccesses`, `deathSaveFailures`, `deathSaveStable` и `dead`
+(exact field-by-field контракт — §3.34). V1–V8 сохраняют свои exact
+historical shapes без retroactive расширения V9-полями. Поле
 `characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
 `StateSnapshot.characters=()` и не придумывает level или proficiency
 defaults. V2 Character entry сохраняет exact legacy fields `id`,
@@ -11751,38 +12047,54 @@ tactical placement (§3.30). V7 обязан сохранять реальные
 `actionSpent` — оно unknown и запрещено для этих версий; при непустом
 `combat` успешное чтение любой из них создаёт `CombatState.action_spent =
 False` без реконструкции исторического Action-expenditure факта (§3.33).
+V1–V8 Character entries не содержат `deathSaveSuccesses`,
+`deathSaveFailures`, `deathSaveStable` или `dead` — они unknown и запрещены
+для этих восьми версий; успешное чтение любой из них создаёт
+`CharacterState` с `death_save_successes = 0`, `death_save_failures = 0`,
+`death_save_stable = False` и `dead = False` — canonical compatibility
+defaults, а не восстановленный исторический факт, потому что ни один
+pre-V9 snapshot не фиксировал эти поля (§3.34, DEC-0050). V9 обязан
+сохранять реальные значения этих четырёх полей — они не empty default для
+этой версии.
 
-Для всех восьми версий required fields и JSON primitive/container types
+Для всех девяти версий required fields и JSON primitive/container types
 точны; unknown fields, defaults, type coercion, несовпадение outer
 `campaignId` с `state.campaign.id`, невалидные Domain values и duplicate IDs
-запрещены. V2–V8 дополнительно требуют, чтобы каждый Character ID ссылался
-на существующий Creature ID; V5–V8 дополнительно требуют, чтобы каждый
+запрещены. V2–V9 дополнительно требуют, чтобы каждый Character ID ссылался
+на существующий Creature ID; V5–V9 дополнительно требуют, чтобы каждый
 `combat.order` ID ссылался на существующий Creature ID. V3–V5 Character
 entry содержит identical exact fields `id`, `totalLevel`,
 `savingThrowProficiencies` и `skillProficiencies` — Character schema не
 менялась с V3 по V5; V6, V7 и V8 Character entry дополнительно требуют
 `weaponProficiencies` (§3.29) — эти три версии идентичны друг другу в
-Character schema, ни §3.30, ни §3.33 не меняют Character schema. V4–V8
-Creature entry дополнительно требуют `conditions`: JSON list точных строк,
-каждая — известное значение `Condition`, без дубликатов; malformed
-non-list, unknown-value и duplicate-value payloads отклоняются (§3.21).
+Character schema, ни §3.30, ни §3.33 не меняют Character schema; V9
+Character entry дополнительно требует `deathSaveSuccesses`,
+`deathSaveFailures`, `deathSaveStable` и `dead` (§3.34) — V9 первая версия,
+меняющая Character schema с V6. V4–V9 Creature entry дополнительно требуют
+`conditions`: JSON list точных строк, каждая — известное значение
+`Condition`, без дубликатов; malformed non-list, unknown-value и
+duplicate-value payloads отклоняются (§3.21).
 
 Character decoding (включая ветку, читающую `skillProficiencies`) определяется
 явным сравнением с `LEGACY_SCHEMA_V2_VERSION`, а не сравнением только с
 текущим `SCHEMA_VERSION` — это защищает V3-чтение при будущих schema bump'ах.
-Симметрично, V4/V5/V6/V7/V8 Creature field set и `conditions` decoding
+Симметрично, V4/V5/V6/V7/V8/V9 Creature field set и `conditions` decoding
 определяются сравнением с fixed-identity множеством `{SCHEMA_V4_VERSION,
-SCHEMA_V5_VERSION, SCHEMA_V6_VERSION, SCHEMA_V7_VERSION, SCHEMA_V8_VERSION}`,
-а не с мутируемым `SCHEMA_VERSION`: `SCHEMA_VERSION = SCHEMA_V8_VERSION`
-сегодня, но эти имена не взаимозаменяемы — `SCHEMA_VERSION` обозначает
-current writer и используется только при записи, тогда как historical
-V4/V5/V6/V7/V8 read semantics зафиксированы на своих собственных fixed
-constants независимо от того, останется ли V8 current writer в будущем
-(§3.21 фиксирует эту regression-защиту как часть G6C1; §3.25 применяет тот
-же constant-based discipline к своему V5 `combat` addition, G7; §3.29
-применяет её же к своим V6 weapon-source additions, TSK-0004; §3.30
-применяет её же к своему V7 Combat `positions` addition, TSK-0010; §3.33
-применяет её же к своему V8 Combat `actionSpent` addition, TSK-0015).
+SCHEMA_V5_VERSION, SCHEMA_V6_VERSION, SCHEMA_V7_VERSION, SCHEMA_V8_VERSION,
+SCHEMA_V9_VERSION}`, а Character death-save/lifecycle field decoding (§3.34)
+определяется сравнением с fixed-identity `SCHEMA_V9_VERSION` — ни одно из
+этих сравнений не использует мутируемый `SCHEMA_VERSION`: `SCHEMA_VERSION =
+SCHEMA_V9_VERSION` сегодня, но эти имена не взаимозаменяемы —
+`SCHEMA_VERSION` обозначает current writer и используется только при
+записи, тогда как historical V4/V5/V6/V7/V8/V9 read semantics зафиксированы
+на своих собственных fixed constants независимо от того, останется ли V9
+current writer в будущем (§3.21 фиксирует эту regression-защиту как часть
+G6C1; §3.25 применяет тот же constant-based discipline к своему V5
+`combat` addition, G7; §3.29 применяет её же к своим V6 weapon-source
+additions, TSK-0004; §3.30 применяет её же к своему V7 Combat `positions`
+addition, TSK-0010; §3.33 применяет её же к своему V8 Combat `actionSpent`
+addition, TSK-0015; §3.34 применяет её же к своим V9 Character
+death-save/lifecycle field additions, TSK-0017).
 
 `FilesystemStateStore` хранит snapshot в:
 
@@ -11806,12 +12118,15 @@ revision fields и file/process/distributed locks отсутствуют.
 EventStore, replay и transaction ordering между Event persistence и State
 projection отложены до отдельного будущего решения.
 
-Текущая V6 schema содержит `CampaignState`, collection `CreatureState`
+Текущая (V9) schema содержит `CampaignState`, collection `CreatureState`
 (включая `conditions`, §3.21), character-specific collection `CharacterState`
-(включая `weapon_proficiencies`, §3.29), collections `InventoryState` и
-`EquipmentState` (§3.29) и optional `CombatState` (§3.25). По мере появления следующих State domains
-snapshot schema должна расширяться отдельным версионируемым контрактом, не
-превращая `CampaignState` в God Object.
+(включая `weapon_proficiencies` — §3.29 — и death-save/lifecycle facts
+`death_save_successes`/`death_save_failures`/`death_save_stable`/`dead` —
+§3.34), collections `InventoryState` и `EquipmentState` (§3.29) и optional
+`CombatState` (§3.25, включая `positions` — §3.30 — и `action_spent` —
+§3.33). По мере появления следующих State domains snapshot schema должна
+расширяться отдельным версионируемым контрактом, не превращая
+`CampaignState` в God Object.
 
 Snapshot не содержит:
 
