@@ -148,6 +148,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | Character Dagger source-Damage Resolution + `CharacterWeaponAttackDamageResolved` V1 + Monster HP consequence continuation (TSK-0013) | §3.29, §3.32 |
 | Current-turn ordinary Action expenditure (`CombatState.action_spent`, `TurnActionSpent` V1) + State schema V8 persistence (TSK-0014/TSK-0015) | §3.33, §12.13 |
 | Character Death Save vertical slice (`CharacterState` lifecycle fields, `CharacterDeathSaveResolved` V1, `CharacterDeathSaveFailureRecorded` V1) + State schema V9 persistence (TSK-0016/TSK-0017) | §3.34, §12.13 |
+| Combat end lifecycle contract (`EndCombatCommand`, `CombatEnded` V1) — contract defined (TSK-0018); production implementation pending TSK-0019 | §3.35 |
 
 Character weapon-source State/persistence, Combat-owned spatial State
 (`CombatPosition`/`CombatState.positions`, State schema V7) и production
@@ -197,6 +198,15 @@ Character), V1–V8 читаются с canonical compatibility defaults `0`/`0`
 broader zero-HP targetability, Combat removal/`CombatEnded`, resurrection,
 temporary HP и massive-damage/instant-death rules остаются pending
 (DEF-0015).
+
+Combat end lifecycle contract (§3.35, TSK-0018, DEC-0051) определён, но не
+реализован (production — TSK-0019): Combat заканчивается только явным
+`EndCombatCommand` — никакого automatic victory/defeat detection.
+`CombatEnded` V1 несёт только `combatId`. Применение Event переводит
+`StateSnapshot.combat` обратно в `None` — существующее State schema V9 уже
+сериализует `combat=None`, новая schema version не требуется. Creature/
+Character HP, Conditions, death-save/lifecycle facts, Inventory и Equipment
+этим переходом не трогаются.
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation

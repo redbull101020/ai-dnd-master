@@ -70,6 +70,7 @@
 | Character Dagger Attack/Damage contracts (TSK-0011) | §3.32 |
 | Current-turn ordinary Action expenditure, `TurnActionSpent` (TSK-0014/TSK-0015) | §3.33 |
 | Character zero-HP turn / Death Save contract (TSK-0016 contract, TSK-0017 implementation) | §3.34 |
+| Combat end lifecycle contract, `EndCombatCommand`/`CombatEnded` V1 (TSK-0018 contract, TSK-0019 implementation) | §3.35 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -138,6 +139,7 @@
   * [3.32. Minimal Phase 3 Character Dagger Attack and Damage contracts (TSK-0011)](#332-minimal-phase-3-character-dagger-attack-and-damage-contracts-tsk-0011)
   * [3.33. Minimal Phase 3 current-turn ordinary Action expenditure (TSK-0014)](#333-minimal-phase-3-current-turn-ordinary-action-expenditure-tsk-0014)
   * [3.34. Minimal Character zero-HP turn and Death Save contract (TSK-0016)](#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016)
+  * [3.35. Minimal Phase 3 Combat end lifecycle (TSK-0018)](#335-minimal-phase-3-combat-end-lifecycle-tsk-0018)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -8594,6 +8596,227 @@ solely for this mechanic. Two Death Save consumers exist in this slice
 (turn-start resolution and Damage-at-zero failure), and both remain concrete
 per the same evidence-driven abstraction discipline (§3.6) already applied
 throughout §§3.19–3.33.
+
+---
+
+### 3.35. Minimal Phase 3 Combat end lifecycle (TSK-0018)
+
+Implementation status: **Contract defined by TSK-0018 (architecture-only).
+Production implementation is intentionally pending TSK-0019.** No production
+Python behavior — Command, Event, resolver, applier, Application handler —
+is delivered by TSK-0018. The current production State schema writer
+remains exact V9 (§3.34, §12.13); this section introduces no new schema
+version (see "Persistence" below).
+
+This section resolves the architectural questions DEF-0015 and Roadmap
+Phase 3's `Combat lifecycle / CombatEnded` row left open after G7 (§3.25,
+DEC-0040): G7 delivered `StartCombatCommand`/`AdvanceTurnCommand` and a
+persisted `CombatState`, but no Command or Event exists to end a Combat once
+started. `StartCombatHandler` already rejects a new Combat while
+`snapshot.combat is not None` (§3.25), so the absence of a way to end
+Combat is already a concrete, observed lifecycle gap in implemented
+production behavior, not a speculative future need. This section defines,
+but does not implement, the smallest explicit transition that returns an
+active Combat to absent.
+
+#### Scope
+
+```text
+EndCombatCommand(combat_id) -> exactly one CombatEnded V1 Event
+Combat ending is explicit only; no automatic victory/defeat detection
+StateSnapshot.combat transitions from the current CombatState to None
+no State schema version change; V9 already serializes combat=None
+Combat-owned transient State (order, active_index, round, positions, action_spent) is retired as a consequence of CombatState no longer being present, not reset field by field
+Creature/Character State, Inventory, Equipment, and death-save/lifecycle facts are untouched
+```
+
+#### Explicit exclusions
+
+This section does not design, decide, or implement:
+
+```text
+automatic victory/defeat/encounter-resolution detection
+Monster death/lifecycle policy or Monster Death Saves
+zero-HP targetability
+surrender or fleeing semantics
+XP, rewards, or loot
+the encounter system
+Movement, Reactions, Opportunity Attacks
+grouped initiative, broader action economy
+Creature/Character removal from the campaign
+EventStore, durable Event persistence, or replay
+a generic Combat lifecycle framework, reducer, dispatcher, or action abstraction
+```
+
+These stay open in DEF-0015 and elsewhere for later, separately evidenced
+consumers, per §3.6's rule against introducing future behaviour ahead of a
+concrete need. In particular, this section does not decide *why* a Combat
+ends — that remains an external (DM/AI) judgement the caller has already
+made before submitting `EndCombatCommand`, exactly like `StartCombatCommand`
+does not decide *who* is fighting (§3.25).
+
+#### `EndCombatCommand` / `EndCombatResult`
+
+```text
+EndCombatCommand(command_id, campaign_id, actor_id, payload)
+EndCombatPayload(combat_id: str)
+```
+
+`EndCombatPayload` carries only `combat_id`, matching `AdvanceTurnPayload`
+(§3.25) exactly: the caller names the specific Combat it intends to end, and
+the Command is rejected if that does not match the authoritative
+`snapshot.combat`. No `reason`, `encounterId`, `victoryState`, or reward
+field is introduced — deciding why or with what outcome Combat ends is
+external DM/AI judgement, not an Engine fact.
+
+`EndCombatHandler` follows the actor-first validation shape already used by
+`StartCombatHandler` and other actor-resolving handlers (`AttackHandler`,
+`DamageHandler`, `ApplyConditionHandler`; §3.25) — not every Combat handler:
+`AdvanceTurnHandler` checks Combat first and has no separate actor-existence
+lookup, because its actor check is itself defined in terms of Combat data
+(`command.actor_id == combat.active_creature_id`). `EndCombatHandler`'s own
+actor check does not depend on Combat data, so it stays first: it looks up
+`command.actor_id` in authoritative `snapshot.creatures` — a missing actor
+returns `ENTITY_NOT_FOUND` (`entity_id=actor_id`, `field=None`) before any
+Combat lookup, `EventMetadataProvider` call, or persistence. Only then does
+it require `snapshot.combat is not None and snapshot.combat.id ==
+payload.combat_id`, reusing `AdvanceTurnHandler`'s own exact failure shape
+(`ENTITY_NOT_FOUND`, `entity_id=payload.combat_id`, `field="combat_id"`) on
+mismatch or absence. `EndCombatCommand` intentionally adds no active-turn
+eligibility (§3.28) and no participant-membership check: existing canon
+gives no reason the actor ending Combat must be the current active
+combatant or even a participant — `StartCombatCommand`'s actor already need
+not be a participant either (§3.25) — and no concrete consumer motivates
+adding one now. `EndCombatCommand` does not consume `CombatState.action_spent`
+(§3.33) and does not produce `TurnActionSpent`: ending Combat is not an
+ordinary Action.
+
+`resolve_end_combat(command: EndCombatCommand, combat: CombatState) ->
+EndCombatResult` is a pure function: it asserts `command.payload.combat_id
+== combat.id` (the same defensive Command/supplied-State consistency check
+`resolve_advance_turn` already performs) and returns:
+
+```text
+EndCombatResult(combat_id: str)
+```
+
+No round, order, active combatant, or position is carried into the Result:
+none of those facts are needed to build or audit `CombatEnded` (see below),
+and this section does not require the Engine to explain *why* Combat ended.
+
+#### `CombatEnded` V1
+
+Canonical payload:
+
+```text
+combatId
+```
+
+`build_combat_ended_v1(*, event_id, timestamp, command, outcome) ->
+GameEvent` copies `outcome.combat_id` verbatim into `payload.combatId` after
+checking `outcome.combat_id == command.payload.combat_id`, exactly like
+`build_turn_advanced_v1`. `caused_by` is `None`: `CombatEnded` is caused
+directly by resolving the `EndCombatCommand`, not by a prior Event, matching
+`CombatStarted`/`TurnAdvanced` (§3.25). No free-text reason, victory/defeat
+outcome, or encounter reference is carried: the payload's sole authoritative
+fact is which Combat ended.
+
+`apply_combat_ended_v1(combat: CombatState, event: GameEvent) -> None`
+structurally validates the Event (`type == "CombatEnded"`, `version == 1`,
+exact payload field set) and requires `payload.combatId == combat.id`, the
+same stale-input integrity check `apply_turn_advanced_v1` already performs.
+Its return value **is** the replacement Combat projection — `None`, because
+absence is the authoritative replacement here, unlike the existing concrete
+appliers in §§3.19–3.21 and §3.25, which return a replacement projection of
+their respective State Owner (`CreatureState` or `CombatState`). This
+preserves the canonical §3.18/DEC-0032 Event-driven
+State-application flow (`Event -> applier -> replacement projection ->
+replacement StateSnapshot -> StateStore.save()`) exactly: Application
+consumes this returned value directly (see "Application orchestration and
+persistence" below) instead of independently re-deciding `combat=None` after
+merely validating the Event. It performs no dice call, no Definition
+lookup, and no persistence I/O, per §3.18's Event → State contract.
+
+#### Application orchestration and persistence
+
+```text
+EndCombatHandler:
+    load snapshot -> require actor exists -> require active combat matches payload.combat_id
+    -> resolve_end_combat -> build CombatEnded V1
+    -> replacement_combat = apply_combat_ended_v1(combat, event)   # None
+    -> replacement_snapshot = dataclasses.replace(snapshot, combat=replacement_combat)
+    -> StateStore.save(replacement_snapshot) once
+```
+
+`EndCombatHandler` requires no `DiceEngine`: no d20, damage, or Initiative
+roll is part of this transition. `replacement_combat` is `apply_combat_ended_v1`'s
+own returned replacement Combat projection, not a value Application
+independently re-derives; `dataclasses.replace(snapshot,
+combat=replacement_combat)` consumes it directly, mirroring exactly how
+`StartCombatHandler`/`AdvanceTurnHandler` already consume
+`apply_combat_started_v1`/`apply_turn_advanced_v1`'s own returned
+`CombatState` the same way (§3.25) — a single optional field needs no by-ID
+tuple search, so the §3.23 `replace_creature_in_snapshot` helper does not
+apply here either. `creatures`
+and `characters` are reused unchanged from the loaded snapshot: no
+Creature/Character HP, conditions, death-save/lifecycle fact (§3.34),
+Inventory, or Equipment is read, mutated, or reset by this transition.
+Retiring `CombatState.order`/`active_index`/`round`/`positions`/
+`action_spent` is a consequence of the `CombatState` object no longer being
+present in the snapshot, not a series of individual field resets — there is
+no intermediate State in which some of those fields are cleared and others
+are not. `StateStore.save()` is called exactly once, only after the Event
+has been built and applied, matching §3.18's persistence ordering and
+"return success, save later" prohibition; a `StateStore.save()` failure
+propagates unmodified through the existing `StateStoreError` boundary
+(§12.9) and never yields a successful `ResolutionResult`, exactly like every
+other mutating consumer in §§3.19–3.21 and §3.25 — no transaction or
+rollback abstraction is introduced for this narrower single-field
+transition.
+
+Once a successful `EndCombatCommand` has persisted, `snapshot.combat is
+None` again, so `StartCombatHandler`'s existing `snapshot.combat is not
+None` rejection (§3.25) no longer applies and a new `StartCombatCommand` may
+succeed using its unchanged contract. This is a consequence of the existing
+`StartCombatHandler` check, not a new behaviour this section adds to it.
+
+#### Errors
+
+```text
+missing EndCombat actor CreatureState -> EngineError(code=ENTITY_NOT_FOUND, entity_id=<actor_id>, field=None)
+no combat / combat id mismatch        -> EngineError(code=ENTITY_NOT_FOUND, entity_id=<payload.combat_id>, field="combat_id")
+Event/State integrity mismatch        -> propagating TypeError / ValueError, not a gameplay EngineError
+StateStore.save() failure             -> propagates unmodified through the existing StateStoreError boundary (§12.9)
+```
+
+No new `ErrorCode` value is introduced; `ENTITY_NOT_FOUND` already exists in
+the closed §3.9 Error Contract and is reused verbatim from
+`AdvanceTurnHandler`'s own "no combat / combat id mismatch" shape (§3.25).
+
+#### Persistence
+
+No State schema version change. State schema V9 (§3.34, §12.13) — the
+current production writer — already serializes `StateSnapshot.combat` as
+JSON `null` when it is `None` and already decodes a `null` `state.combat`
+back to `StateSnapshot.combat = None`; this has been true since V5 first
+introduced the `combat` key (§3.25) and is unchanged through every
+subsequent additive Combat version (V6–V9, §12.13). `EndCombatCommand`
+therefore produces a snapshot the existing V9 writer already knows how to
+persist without any serializer change. **TSK-0019 must not introduce a
+State schema V10 or any other schema bump for this slice.**
+
+#### Abstraction verdict
+
+**KEEP CONCRETE**, and no new transaction or lifecycle abstraction.
+`EndCombatHandler` is a third concrete producer of the same §3.18 mutating-
+command pattern `StartCombatHandler`/`AdvanceTurnHandler` already establish
+(§3.25); its snapshot transition is strictly simpler than either of them — a
+single optional field set to `None`, with no dice, no by-ID search, and no
+successor State object to construct. This section changes no existing
+Command, Event, `ResolutionResult`, `ErrorCode`, `StateStore`, or State
+schema contract; it adds exactly one new Command, one new Event, and one new
+pure Result type, and leaves `StateSnapshot`'s shape unchanged (the `combat`
+field already existed and already accepted `None`).
 
 ---
 
