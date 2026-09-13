@@ -1305,10 +1305,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0021
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0021
+- **Next free ID:** TSK-0024
 - **Last reviewed:** 2026-09-13
 
 ---
@@ -1317,13 +1317,169 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0021` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Movement | Define minimal Combat Movement and placement-boundary contract |
+| `TSK-0022` | `Backlog` | `P1` | `L` | `mechanics` | Phase 3 / Movement | Implement first minimal Combat Movement vertical slice |
+| `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
 
 ---
 
 # Open task details
 
-_No open task details. No task currently passes the §12 readiness gate;
-Current/Next remain empty pending a separate refinement pass._
+## TSK-0021 — Define minimal Combat Movement and placement-boundary contract
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `S`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Movement
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Movement
+- `ARCHITECTURE.md` §10.7
+- `ARCHITECTURE.md` §3.30
+- `ARCHITECTURE.md` §3.33
+- `ARCHITECTURE.md` §3.28
+- `ARCHITECTURE.md` §3.8
+- `ARCHITECTURE.md` §12.9
+- `ARCHITECTURE.md` §12.11
+- `DEFERRED.md` — `DEF-0011`
+- `DEFERRED.md` — `DEF-0015`
+- `DEC-0045`
+- `DEC-0049`
+- `DEC-0043`
+
+**Depends on:** `—`
+
+**Contract impact:** `decision required before implementation`
+
+### Goal
+
+Определить минимальный контракт, необходимый для первого authoritative
+изменения `CombatState.positions`, и разрешить только те вопросы
+placement/Movement, которые блокируют следующий production-срез — не
+предрешая ответы как уже одобренное поведение и не проектируя Reactions,
+Opportunity Attacks, forced movement, terrain или generic movement/action
+framework.
+
+### Why now
+
+`CombatPosition`/`CombatState.positions` уже существуют в production (TSK-0010,
+§3.30/DEC-0045), но `StartCombat` оставляет их пустыми (`positions = ()` без
+синтеза), и ни один существующий Command их не заполняет и не изменяет —
+единственный текущий consumer, Character Dagger reach-проверка, только читает
+уже существующие позиции. Roadmap Phase 3 / Movement остаётся полностью
+неотмеченным пунктом. Это конкретный, наблюдаемый пробел в уже реализованном
+фундаменте (foundation), а не гипотетическая будущая потребность, и следующий
+implementation-срез не может быть корректно specified без предварительного
+архитектурного решения по перечисленным ниже вопросам.
+
+### Scope
+
+TSK-0021 должен канонически **разрешить**, но не реализовывать production
+behavior. Задача обязана явно закрыть — как открытые вопросы, требующие
+решения, а не как предрешённые ответы:
+
+- какой первый конкретный Movement/placement consumer выбирается;
+- принадлежит ли initial tactical placement этому же срезу, является
+  отдельным prerequisite, или остаётся полностью вне текущего среза;
+- если выбранный consumer требует movement allowance — какой источник этого
+  allowance становится authoritative;
+- требуется ли какой-либо mutable/current-turn movement budget, и если да —
+  кто им владеет (State Owner);
+- как выбранный Movement/placement transition использует и обновляет уже
+  существующую Combat-owned authoritative tactical placement, представленную
+  `CombatState.positions`, в соответствии с уже принятым контрактом §3.30 —
+  не вводя вторую конкурирующую authoritative positional State; если анализ в
+  рамках TSK-0021 покажет, что сам принятый §3.30 spatial-контракт должен
+  измениться, это должно быть explicit зафиксировано как canonical
+  conflict/change, требующий отдельного намеренного решения, а не как рядовая
+  implementation-опция;
+- границу Command / Result / Event / State-transition для выбранного среза;
+- eligibility и validation precedence, включая связь с текущим ходом
+  (active-turn boundary, §3.28);
+- точное отношение к существующему `CombatState.action_spent` (§3.33);
+- узкое zero-HP eligibility взаимодействие — **только если** выбранный
+  consumer реально его требует; если нет, явно зафиксировать, что оно не
+  требуется;
+- Event application, persistence/atomicity (§3.8) и Event ordering (§12.11),
+  и любое влияние на State-схему/версионирование (§12.9), где применимо;
+- abstraction verdict: используется ли какая-либо generic abstraction, и
+  почему нет, если нет;
+- требование при исполнении TSK-0021 обновить `ARCHITECTURE.md` и добавить
+  новую запись `DEC-*`, фиксирующую принятое решение.
+
+### Out of scope
+
+- production Python implementation — вне TSK-0021; на текущем этапе она
+  представлена компактным `Backlog`-placeholder'ом size `L`, `TSK-0022`,
+  который остаётся предметом refinement/decomposition после того, как
+  контракт TSK-0021 будет принят;
+- Reactions и Reaction resource;
+- Opportunity Attacks;
+- Dash / Disengage;
+- forced movement;
+- difficult terrain;
+- terrain/pathfinding/collision;
+- grid/hex frameworks;
+- occupancy и creature footprint/size;
+- elevation;
+- Cover / Visibility;
+- world/non-combat placement;
+- generic movement/effect/modifier frameworks;
+- generic `TurnResources`/`ActionEconomy`;
+- широкий DEF-0015 zero-HP lifecycle за пределами узкого взаимодействия,
+  явно затронутого выбранным consumer'ом (если затронутого вообще).
+
+### Acceptance criteria
+
+TSK-0021 считается выполненным только когда:
+
+1. Итоговый контракт называет конкретного первого Movement/placement
+   consumer без амбигуитета.
+2. Явно решено, входит ли initial tactical placement в этот срез, является
+   отдельным prerequisite, или остаётся вне — без промежуточного состояния.
+3. Если consumer требует movement allowance, источник этого allowance
+   зафиксирован explicit.
+4. Явно решено, нужен ли mutable current-turn movement budget, и если да —
+   кто им владеет; если нет, это тоже зафиксировано explicit.
+5. Использование и обновление существующей authoritative
+   `CombatState.positions` выбранным transition зафиксировано explicit и
+   согласовано с уже принятым §3.30, без введения второй конкурирующей
+   authoritative positional State; любое требуемое изменение самого §3.30
+   зафиксировано как явный canonical conflict/change, а не как implementation
+   деталь.
+6. Command/Result/Event/State-transition boundary полностью определена для
+   выбранного среза.
+7. Eligibility/validation precedence, включая связь с активным ходом,
+   зафиксированы explicit.
+8. Отношение к `CombatState.action_spent` зафиксировано explicit.
+9. Zero-HP eligibility взаимодействие рассмотрено, только если выбранный
+   consumer его реально требует; в противном случае явно отмечено как не
+   требуемое.
+10. Event application, persistence/atomicity и любое schema/versioning
+    влияние зафиксированы explicit.
+11. Abstraction verdict зафиксирован explicit.
+12. Принятое решение сопровождается новым `DEC-*` и требуемым обновлением
+    `ARCHITECTURE.md`.
+13. Ничего из списка Out of scope не введено — ни как реализация, ни как уже
+    предрешённое каноническое поведение.
+14. TSK-0021 сам не меняет production Python.
+
+### Verification
+
+- consistency review против текущих §10.7, §3.30, §3.33, §3.28, §3.8, §12.9,
+  §12.11;
+- проверка границы с `DEF-0011`, `DEF-0015` и уже принятыми `DEC-0045`,
+  `DEC-0049`, `DEC-0043`;
+- architecture/documentation reference tests;
+- `git diff --check`;
+- проверка, что production Python не менялся;
+- проверка итогового diff на отсутствие несвязанных изменений.
 
 ---
 
