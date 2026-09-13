@@ -7257,3 +7257,28 @@ Architecture, Roadmap, or Decisions changes. Verification:
 `python -m pytest tests/architecture/test_documentation_references.py` (2
 passed) and `git diff --check` (clean); full local `pytest`/`mypy` were
 intentionally not run for this docs-only checkpoint.
+
+## 2026-09-13 — TSK-0020 Group 2: add Task tracker structural invariant tests
+
+Added `tests/architecture/test_task_tracker.py`: a small stdlib-only
+parser reads the live `docs/TASK.md` (scoped per top-level `# ...`
+section, so numbered-spec/Appendix example IDs are never mistaken for
+real allocations) and enforces: `Current position` declares `Current`/
+`Next`/`Next free ID` at all (a missing field is not treated as `—`);
+single-`Current` consistency between `Current position` and `Open task
+index`; `Next` size/no-duplicate-ID/existence/`Ready` checks (order not
+re-derived); `Size`/`Roadmap target` presence for `Ready`/`Current`;
+closed `Status`/`Priority`/`Size`/`Group` enum membership; `Open task
+index`/`Open task details` ID uniqueness and correspondence; `Current`/
+`Ready`/`Blocked` full-detail coverage per §15; and `Next free ID`
+format/numeric-precedence over every ID allocated in `Open task index`
+and `Recently completed`. Authoritative dependency-`Done` semantics (§12
+item 2, §17 item 10) are intentionally **not** automated — not decidable
+from `docs/TASK.md` alone, and a §18.1.1 prepared closure branch may
+legitimately show a prospective dependent task as `Ready`/`Current`
+before its dependency is authoritative `Done` — that stays a
+human/review responsibility. No gameplay, Architecture, Roadmap, or
+Decisions changes. Verification: `python -m pytest
+tests/architecture/test_task_tracker.py` and `python -m pytest
+tests/architecture/` — 14 and 21 passed respectively; `git diff --check`
+clean.
