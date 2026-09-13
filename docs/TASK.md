@@ -1305,7 +1305,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0020
+- **Current:** —
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0021
@@ -1317,225 +1317,13 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0020` | `Current` | `P2` | `M` | `engineering` | Cross-cutting engineering support for active Phase 3 delivery | Tighten development workflow and task-governance automation |
 
 ---
 
 # Open task details
 
-## TSK-0020 — Tighten development workflow and task-governance automation
-
-**Status:** `Current`
-
-**Priority:** `P2`
-
-**Size:** `M`
-
-**Group:** `engineering`
-
-**Roadmap target:** Cross-cutting engineering support for active Phase 3 delivery
-
-**References:**
-
-- `AGENTS.md` — Change authorisation and diff review; Definition of Done
-- `docs/TASK.md` §§4.5, 5, 12, 17, 18 — prospective Task Closure and readiness/dependency invariants
-- PR #93 / PR #94 — observed TSK-0018 → TSK-0019 prospective-dependency Task Closure pattern this task formalizes
-
-**Depends on:** `—`
-
-**Contract impact:** `none; development/task-governance workflow only`
-
-### Goal
-
-Codify and automate the development workflow already used in practice so
-that: prepared prospective Task Closure no longer contradicts the
-dependency/readiness invariants; checkpoint review stays pre-commit and
-shows only the current review slice; documentation/process-only work does
-not require unnecessary local full-regression runs; the Task tracker gains
-minimal automated structural checks; GitHub Actions stops running
-duplicate `push` + `pull_request` workflow runs for the same feature-branch
-SHA; and `docs/DEVELOPMENT_LOG.md` stops duplicating every commit/PR's
-detail without losing durable history.
-
-### Why now
-
-This is cross-cutting engineering support for the active Phase 3 delivery
-cadence (TSK-0010…TSK-0019), not new gameplay scope. PR #93 already relied
-on prospectively promoting TSK-0019 to `Current` while its sole dependency
-(TSK-0018) became authoritative `Done` in that same merge — a pattern the
-tracker's own readiness invariants did not actually permit as written.
-Leaving that contradiction undocumented would keep forcing the same
-judgment call, undocumented, on every future closure with a same-merge
-dependency; resolving it now, alongside the other already-observed
-workflow friction (CI duplication, log verbosity, ungated tracker
-invariants), keeps the process layer consistent before the next Phase 3
-vertical slice needs it again.
-
-### Scope
-
-- **Group 1 — TASK prospective-dependency consistency.** Resolve the
-  contradiction between `docs/TASK.md` §§4.5, 5, 12, 17, and 18 about
-  prospective dependency readiness by distinguishing the unconditional
-  authoritative `main`-state invariant from the single, narrowly bounded
-  prospective representation permitted only inside a prepared closure
-  branch (new §18.1.1); introduce no new lifecycle status.
-- **Group 2 — automated TASK structural invariant tests.** Add a minimal
-  automated check (`tests/architecture/test_task_tracker.py`) that reads
-  the live `docs/TASK.md` and enforces its own core structural invariants.
-- **Group 3 — `AGENTS.md` workflow efficiency.** Document in `AGENTS.md`:
-  risk-based checkpoint review guidance; the distinction between a fresh
-  per-checkpoint `review.patch` and the final cumulative `review.patch`
-  produced before Task Closure; a documentation/process-vs-production
-  local testing policy; a concise Development Log entry policy; and sync
-  `CLAUDE.md` only where it already duplicates a changed workflow fact.
-- **Group 4 — GitHub Actions deduplication/concurrency.** Change
-  `.github/workflows/tests.yml` so feature branches run CI on
-  `pull_request` only, `main` keeps `push`-triggered CI, and the existing
-  Python 3.12/3.13/3.14 matrix and `mypy` job are preserved unchanged.
-- **Group 5 — final consistency/regression + Task Closure.** Run the full
-  local verification suite, audit the cumulative branch diff against fresh
-  `origin/main` for scope, gather CI evidence for the Group 4 trigger
-  change, and prepare Task Closure (§18.1) for `TSK-0020` in the same
-  delivery branch/PR.
-- Follow the Development Log policy this task itself establishes: Groups
-  1–2 append a factual entry per the current per-iteration policy; from
-  Group 3 onward the policy shifts to concise delivery-level logging, so
-  an ordinary checkpoint gets its own entry only when it carries
-  independently meaningful durable information; and a short cumulative
-  delivery summary is added before Task Closure.
-
-### Out of scope
-
-- any `src/dnd_engine/**` change;
-- gameplay mechanics;
-- `Definitions` / `State` / `Commands` / `Events` changes;
-- Rule Engine changes;
-- State schema changes;
-- Event contract changes;
-- Roadmap capability ordering/status changes;
-- `docs/ARCHITECTURE.md` changes;
-- `docs/DECISIONS.md` changes;
-- `docs/DEFERRED.md` changes;
-- `README.md` changes;
-- dropping the `review.patch` diff-review practice;
-- revoking or generalizing the separate commit/push/PR/merge authorizations;
-- merging the architecture-task and implementation-task model by default;
-- a new task-management framework;
-- new production dependencies;
-- formatter/linter additions;
-- CI path filters;
-- reducing the Python CI test matrix.
-
-### Acceptance criteria
-
-- `docs/TASK.md` §§4.5, 5, 12, 17, and 18 state one mutually consistent
-  readiness/dependency model: the authoritative `main`-state invariant
-  (`Ready`/`Current` requires every `Depends on` task authoritative `Done`
-  on `main`) is unconditional, and the single narrowly bounded prospective
-  representation permitted inside a prepared closure branch (§18.1.1) is
-  described as a pre-merge representation of that same invariant — never
-  as a weakening of it and never as an exception to the dependency/merge
-  boundary in §5. No new lifecycle status exists.
-- `tests/architecture/test_task_tracker.py` exists and, against the live
-  `docs/TASK.md`, enforces the approved structural invariants:
-  - at most one `Current` task, matched by `Current position.Current`;
-  - `Next` contains at most five entries and each is `Ready`;
-  - every open task's `Status`/`Priority`/`Size`/`Group` value comes only
-    from its closed enum set;
-  - every `Ready`/`Current` task has `Size ∈ {S, M}` and a `Roadmap
-    target` that is neither empty nor `—`;
-  - task IDs are unique within `Open task index`; full-detail headings in
-    `Open task details` are unique; every full detail corresponds to a
-    task row present in `Open task index`; and every `Current`, `Ready`,
-    or `Blocked` task has a full detail section, per §15 (a task
-    correctly appearing in both the index and its own full detail is not
-    a duplicate);
-  - `Next free ID` is numerically greater than every task ID actually
-    allocated and visible in `Open task index` and `Recently completed`
-    — IDs occurring only in examples, templates, or explanatory prose
-    (e.g. Appendix A/B, `TSK-XXXX` placeholders) are not counted.
-
-  This check does not verify authoritative dependency-`Done` semantics
-  (§12 item 2, §17 item 10): whether a `Depends on` task is actually
-  `Done` on `main` is not decidable from `docs/TASK.md` alone — a `Done`
-  task's full detail is intentionally removed from `Open task details`,
-  and it may also have aged out of the last-ten `Recently completed`
-  table (§18) — so that invariant remains a human/review responsibility,
-  not an automated one.
-- `AGENTS.md` documents risk-based checkpoint review guidance, fresh
-  per-checkpoint vs. final cumulative `review.patch` semantics, a
-  documentation/process-vs-production local testing policy, and the
-  Development Log policy below; `CLAUDE.md` is synced wherever it
-  duplicates a changed workflow fact, and nowhere else.
-- `.github/workflows/tests.yml` triggers CI on `pull_request` for feature
-  branches and on `push` for `main`, with no duplicate `pull_request` and
-  `push` run for the same feature-branch SHA, while still running the
-  full Python 3.12/3.13/3.14 matrix with `mypy` coverage.
-- `docs/DEVELOPMENT_LOG.md` reflects the transitional logging policy this
-  task itself adopts: Groups 1–2 follow the current per-iteration entry
-  policy; Group 3 changes that policy to concise delivery-level logging;
-  after Group 3, an ordinary checkpoint gets its own entry only when it
-  carries independently meaningful durable information; and `TSK-0020`
-  gains one short cumulative delivery summary entry before Task Closure.
-- Before Task Closure is prepared: a full local `pytest` run passes, a
-  full local `mypy src/dnd_engine` run passes, `git diff --check` passes,
-  a cumulative diff/scope audit against fresh `origin/main` shows no
-  out-of-scope file changed, and CI evidence for the open feature-branch
-  PR shows exactly one `pull_request` workflow run and no duplicate
-  `push` run for that same SHA. A `main` `push` run is only possible
-  after this branch merges and is not itself a pre-closure requirement.
-
-### Verification
-
-- Group 1: `python -m pytest tests/architecture/test_documentation_references.py`
-  plus `git diff --check`.
-- Group 2: `python -m pytest tests/architecture/test_task_tracker.py` and
-  the full `python -m pytest tests/architecture/` suite, plus
-  `git diff --check`.
-- Group 3: the full `python -m pytest tests/architecture/` suite, plus
-  `git diff --check`, plus a manual workflow-consistency review of the
-  changed `AGENTS.md`/`CLAUDE.md` sections.
-- Group 4: `git diff --check` plus a static review of the changed
-  `.github/workflows/tests.yml` config (trigger keys, matrix, `mypy` job)
-  for correctness — no CI run is required to be exercised yet.
-- Group 5 (final, before Task Closure): once a draft PR is open for this
-  branch, confirm exactly one `pull_request` workflow run for the
-  feature-branch SHA and no duplicate `push` run for that same SHA; then
-  run a full `python -m pytest`; a full `python -m mypy src/dnd_engine`;
-  `git diff --check`; and a cumulative diff/scope audit of the branch
-  against fresh `origin/main`.
-
-### Expected touchpoints
-
-```text
-docs/TASK.md
-AGENTS.md
-CLAUDE.md
-docs/DEVELOPMENT_LOG.md
-tests/architecture/test_task_tracker.py
-.github/workflows/tests.yml
-```
-
-This is a planning aid, not a contract — not every listed file is
-guaranteed to change, and the actual file list may differ once each group
-is executed (§15).
-
-### Execution checkpoints
-
-1. Group 1 — TASK prospective-dependency consistency: reconcile
-   §§4.5, 5, 12, 17, 18 (new §18.1.1), allocate `TSK-0020`, and record the
-   Development Log entry.
-2. Group 2 — add `tests/architecture/test_task_tracker.py` covering the
-   Task tracker's core structural invariants.
-3. Group 3 — extend `AGENTS.md` (syncing `CLAUDE.md` only where it
-   duplicates the changed facts) with risk-based checkpoint guidance,
-   fresh-vs-final `review.patch` semantics, a documentation/process-vs-
-   production testing policy, and a concise Development Log policy.
-4. Group 4 — deduplicate `.github/workflows/tests.yml` triggers (feature
-   branches: `pull_request` only; `main`: `push`), preserving the existing
-   Python matrix and `mypy` job.
-5. Group 5 — final consistency/regression pass, cumulative scope audit,
-   and Task Closure for `TSK-0020`.
+_No open task details. No task currently passes the §12 readiness gate;
+Current/Next remain empty pending a separate refinement pass._
 
 ---
 
@@ -1543,7 +1331,6 @@ is executed (§15).
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
 | `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
 | `TSK-0012` | Implement Character Dagger weapon Attack resolution | PR #85 |
 | `TSK-0013` | Implement Character Dagger Attack → Damage → Monster HP consequence | PR #86 |
@@ -1553,6 +1340,7 @@ is executed (§15).
 | `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
 | `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
 | `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
+| `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
 
 ---
 

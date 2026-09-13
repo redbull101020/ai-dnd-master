@@ -7301,3 +7301,21 @@ test/tooling behavior; and the Development Log policy moved to one
 delivery-level entry per substantive `TSK`/PR by default. Verification:
 `python -m pytest tests/architecture/` — 21 passed; `git diff --check`
 clean.
+
+## 2026-09-13 — TSK-0020: Tighten development workflow and task-governance automation (delivery summary)
+
+Delivered: automated `docs/TASK.md` structural invariant tests
+(`tests/architecture/test_task_tracker.py`) plus a
+reconciled prospective-closure dependency contract (§18.1.1); tightened
+`AGENTS.md`/`CLAUDE.md` workflow/review/testing/Development-Log policy;
+and `.github/workflows/tests.yml` CI trigger dedup with PR-scoped
+concurrency. No gameplay, production `src/**`, Architecture, or Roadmap
+changes.
+
+Verification: full `python -m pytest` — 2215 passed; `python -m mypy
+src/dnd_engine` — clean; `tests/architecture/` — 21 passed; draft PR #95
+CI — pytest matrix and `mypy` jobs successful, no duplicate
+feature-branch `push` run.
+
+Next Phase 3 frontier intentionally not allocated — needs a separate
+refinement pass.
