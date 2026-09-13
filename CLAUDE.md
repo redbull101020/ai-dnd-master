@@ -149,6 +149,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | Current-turn ordinary Action expenditure (`CombatState.action_spent`, `TurnActionSpent` V1) + State schema V8 persistence (TSK-0014/TSK-0015) | §3.33, §12.13 |
 | Character Death Save vertical slice (`CharacterState` lifecycle fields, `CharacterDeathSaveResolved` V1, `CharacterDeathSaveFailureRecorded` V1) + State schema V9 persistence (TSK-0016/TSK-0017) | §3.34, §12.13 |
 | Combat end lifecycle vertical slice (`EndCombatCommand`, `CombatEnded` V1) (TSK-0018/TSK-0019) | §3.35 |
+| Initial Combat tactical placement vertical slice (`PlaceCombatantCommand`, `CombatantPlaced` V1) (TSK-0021/TSK-0022) | §3.36 |
 
 Character weapon-source State/persistence, Combat-owned spatial State
 (`CombatPosition`/`CombatState.positions`, State schema V7) и production
@@ -210,6 +211,25 @@ existence/id-match, без `DiceEngine`, ровно один `StateStore.save()`
 Character HP, Conditions, death-save/lifecycle facts, Inventory и Equipment
 этим переходом не трогаются — подтверждено real-adapter/filesystem
 `StartCombat → EndCombat → reload → StartCombat` round trip.
+
+Initial Combat tactical placement vertical slice (§3.36, TSK-0021/TSK-0022,
+DEC-0052) реализована: `PlaceCombatantCommand`/`PlaceCombatantPayload`
+(`combat_id`, `creature_id`, `x`, `y`; `actor_id` и `creature_id` не обязаны
+совпадать), pure `resolve_place_combatant`, `CombatantPlaced` V1
+(`combatId`/`creatureId`/`x`/`y`, `causedBy: null`) builder/applier и
+`PlaceCombatantHandler` (actor-first validation, затем active-Combat
+existence/id-match, затем placement-subject lookup, затем
+`combat.order`-membership, затем no-existing-position check, без
+`DiceEngine`, ровно один `StateStore.save()` на успешном пути) реализованы
+в production. `apply_combatant_placed_v1` добавляет ровно один новый
+`CombatPosition` к существующему `CombatState.positions` tuple, не меняя
+`id`/`round`/`order`/`active_index`/`action_spent`; State schema не менялась
+(current writer остаётся V9) — подтверждено real-adapter/filesystem round
+trip. Это initial tactical placement, не voluntary Movement: broader
+Movement (authoritative speed, movement allowance/budget, reposition,
+Dash/Disengage, forced movement, terrain/pathfinding/collision,
+occupancy/footprint, elevation, Reactions, Opportunity Attacks) остаётся
+полностью pending и undesigned.
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation
