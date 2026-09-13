@@ -1232,11 +1232,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0018
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0018
-- **Last reviewed:** 2026-09-11
+- **Next free ID:** TSK-0020
+- **Last reviewed:** 2026-09-13
 
 ---
 
@@ -1244,10 +1244,147 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0018` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Combat lifecycle / CombatEnded | Define minimal Combat end lifecycle contract |
+| `TSK-0019` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Combat lifecycle / CombatEnded | Implement minimal CombatEnded vertical slice |
 
 ---
 
 # Open task details
+
+## TSK-0018 — Define minimal Combat end lifecycle contract
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `S`
+
+**Group:** `architecture`
+
+**Roadmap target:** Phase 3 / Combat lifecycle / CombatEnded
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Combat lifecycle / CombatEnded
+- `ARCHITECTURE.md` §10.7
+- `ARCHITECTURE.md` §3.25
+- `ARCHITECTURE.md` §3.8
+- `ARCHITECTURE.md` §12.11
+- `DEFERRED.md` — `DEF-0015`
+- `DEC-0040`
+- `DEC-0050`
+
+**Depends on:** `—`
+
+**Contract impact:** `new canonical ARCHITECTURE.md section and new DECISIONS.md record required before production implementation`
+
+### Goal
+
+Определить наименьший явный Combat-ending Command → Result → Event → State
+transition contract, который позволяет уже существующему active Combat снова
+стать absent, не проектируя при этом broader Monster lifecycle или
+automatic encounter-resolution правила.
+
+### Why now
+
+Текущая production-система умеет начинать Combat и сохранять активный Combat
+(§3.25, G7), но не имеет authoritative способа его завершить. Существующий
+`StartCombatHandler` уже отклоняет новый Combat, пока текущий активен —
+значит, отсутствие способа завершить Combat уже является конкретным,
+наблюдаемым lifecycle gap в реализованном `StartCombat` flow, а не
+гипотетической будущей потребностью. Grouped initiative и broader action
+economy остаются consumer-gated и не создают такой же немедленной
+необходимости.
+
+### Scope
+
+TSK-0018 должен канонически определить, но не реализовывать production
+behavior. Scope обязан явно закрыть:
+
+- явную Command boundary для завершения Combat;
+- Result boundary;
+- `CombatEnded` V1 Event boundary;
+- validation и error precedence;
+- Combat State ownership для этого перехода;
+- transition существующей active Combat projection (`StateSnapshot.combat`)
+  обратно в отсутствующее состояние;
+- Event ordering/causation относительно существующих Combat Events (§3.25,
+  §12.11);
+- persistence semantics перехода;
+- взаимодействие с уже существующими Character death-save/lifecycle
+  фактами (§3.34/DEC-0050), не расширяя их;
+- нужен ли вообще State schema change, и если да — его точную
+  compatibility-границу;
+- является ли завершение Combat explicit или automatic (см. Approved design
+  direction ниже — вопрос закрывается в эту сторону явно, а не по
+  умолчанию).
+
+Принятое архитектурное решение сопровождается новым `DEC-*` и, при
+необходимости, factual reconciliation в Roadmap/Deferred/CLAUDE — но только
+там, где принятый контракт реально меняет их канонические или статусные
+утверждения.
+
+**Approved design direction** (уже зафиксированное решение, которое эта
+задача обязана закрепить в контракте, а не переоткрывать):
+
+- только явный `EndCombat` Command; никакого automatic victory/defeat
+  detection;
+- никакого Monster death/lifecycle inference;
+- никаких zero-HP targetability правил;
+- никакого generic lifecycle framework;
+- если текущий serializer contract уже это поддерживает — предпочесть
+  возврат существующей `StateSnapshot` combat projection к `None`, а не
+  новую State-структуру;
+- Combat end не сбрасывает несвязанный Creature/Character State.
+
+### Out of scope
+
+- production Python implementation (это TSK-0019);
+- Monster Death Saves;
+- universal `LifeState`;
+- automatic victory detection;
+- surrender/fleeing semantics;
+- XP/rewards/loot;
+- encounter system;
+- Movement;
+- Reactions;
+- Opportunity Attacks;
+- grouped initiative;
+- broader action economy;
+- удаление Creature/Character;
+- EventStore/replay;
+- generic reducer/transaction abstractions.
+
+### Acceptance criteria
+
+TSK-0018 считается выполненным только когда:
+
+1. Итоговый контракт однозначен: любое ключевое поведение перехода
+   `EndCombat` → Result → `CombatEnded` → State не оставлено implicit для
+   TSK-0019.
+2. Контракт реализуем без прямой AI/UI мутации State.
+3. Никакой broader DEF-0015 concern не закрывается молча этим узким
+   контрактом — DEF-0015 остаётся `Deferred` за пределами явно описанного
+   Combat-ending среза.
+4. Approved design direction (явный `EndCombat`, отсутствие automatic
+   detection/inference, отсутствие нового lifecycle framework) отражена в
+   контракте без отклонений.
+5. Explicit vs. automatic termination явно решено в пользу explicit и
+   зафиксировано, а не оставлено открытым вопросом.
+6. Verdict по необходимости State schema change явный и обоснованный.
+7. Принятое решение сопровождается новым `DEC-*`.
+8. TSK-0019 остаётся `Backlog` до тех пор, пока TSK-0018 не станет
+   authoritatively `Done`.
+9. В самой decision-only TSK-0018 нет production-кода.
+
+### Verification
+
+- consistency review против текущих §3.8, §3.25, §10.7, §12.11;
+- проверка границы с `DEF-0015` и уже принятыми `DEC-0040`, `DEC-0050`;
+- architecture/documentation reference tests;
+- `git diff --check`;
+- проверка, что production Python не менялся;
+- проверка итогового diff на отсутствие несвязанных изменений.
 
 ---
 
