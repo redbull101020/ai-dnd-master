@@ -1123,47 +1123,61 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   production, the coordinated Character death-save lifecycle slice this
   record's "Prerequisites" previously named: trigger timing, Character-owned
   persisted facts, and the Damage-at-zero/ordinary-Healing interaction narrow
-  enough for that one slice — closing [DEF-0005](#def-0005) `Done`. The much
-  broader
-  DEF-0015 concern remains open beyond that narrow Character slice:
+  enough for that one slice — closing [DEF-0005](#def-0005) `Done`. TSK-0018
+  ([§3.35](ARCHITECTURE.md#335-minimal-phase-3-combat-end-lifecycle-tsk-0018),
+  DEC-0051) has since canonically defined, but not yet implemented in
+  production (TSK-0019 pending), the narrow Combat removal/end contract this
+  record's "why deferred" list previously named only as an open item: an
+  explicit `EndCombatCommand` returns `StateSnapshot.combat` to `None`
+  through `CombatEnded` V1, with no automatic victory/defeat detection and no
+  State schema change. The much broader
+  DEF-0015 concern remains open beyond those two narrow slices:
   targetability of a creature already at zero HP, further-Damage/
   stabilization/death outcomes outside the Character Death Save mechanic,
   Monster-specific death/lifecycle policy and Monster Death Saves, broader
   Healing-recovery semantics (rest recovery, external stabilization,
-  resurrection), Combat removal/end behavior, and any zero-HP
-  action-eligibility question outside the current `AttackCommand`.
+  resurrection), and any zero-HP action-eligibility question outside the
+  current `AttackCommand`.
 - **Prerequisites:** The current-`AttackCommand` actor-eligibility prerequisite
   is satisfied by §3.31/DEC-0046. The Character death-save timing/ownership
   contract this record coordinated with DEF-0005 is now satisfied by
-  §3.34/DEC-0050 (production continuation: TSK-0017). Still needed before the
-  remaining broader scope can be resolved: a concrete consumer for
-  targetability at zero HP, a concrete consumer for further-Damage/
-  stabilization/death outcomes beyond the Character Death Save mechanic, a
-  Monster-specific death/lifecycle policy consumer, and any additional
-  action-eligibility consumer beyond the current `AttackCommand`.
+  §3.34/DEC-0050 (production continuation: TSK-0017). The narrow Combat
+  removal/end contract is now satisfied by §3.35/DEC-0051 (production
+  continuation: TSK-0019). Still needed before the remaining broader scope
+  can be resolved: a concrete consumer for targetability at zero HP, a
+  concrete consumer for further-Damage/stabilization/death outcomes beyond
+  the Character Death Save mechanic, a Monster-specific death/lifecycle
+  policy consumer, and any additional action-eligibility consumer beyond the
+  current `AttackCommand`.
 - **Planned approach:** Treat `current_hp == 0` as the already-authoritative
   fact. Add only the category-specific authoritative lifecycle State and Events
   that the concrete consumer proves necessary; do not predefine a universal
   `LifeState` enum/model. UI, AI, and API may consume resolved facts but must
   not invent them. §3.34/DEC-0050 is the first concrete application of this
-  approach, scoped to the Character category only; a Monster-specific
-  lifecycle consumer remains to be designed separately.
+  approach, scoped to the Character category only; §3.35/DEC-0051 is a
+  narrower, orthogonal Combat-lifecycle contract (whether a Combat exists at
+  all, not a Creature's zero-HP eligibility); a Monster-specific lifecycle
+  consumer remains to be designed separately.
 - **Acceptance criteria:** Character and Monster zero-HP behavior is specified
   separately; further Damage, Healing, stabilization/death, action eligibility,
   persistence, and Event causation are deterministic; any additional lifecycle
   State is consumer-proven, and external layers cannot mutate or invent
   authoritative lifecycle facts. §3.34/DEC-0050 satisfies these criteria for
   the narrow Character Death Save slice only (contract defined and
-  implemented in production by TSK-0017); Monster zero-HP lifecycle and the
+  implemented in production by TSK-0017); §3.35/DEC-0051 satisfies the
+  narrow Combat removal/end criterion (contract defined; production
+  implementation pending TSK-0019); Monster zero-HP lifecycle and the
   remaining broader scope above are not yet specified.
 - **References:** [Architecture §3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.20](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b),
   [§3.28](ARCHITECTURE.md#328-minimal-phase-3-attack-active-turn-eligibility),
   [§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003),
   [§3.34](ARCHITECTURE.md#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016),
+  [§3.35](ARCHITECTURE.md#335-minimal-phase-3-combat-end-lifecycle-tsk-0018),
   [§10.4](ARCHITECTURE.md#104-creature-state-owner),
   [DEC-0046](DECISIONS.md#dec-0046--character-and-monster-zero-hp-attack-eligibility-uses-current_hp-without-a-universal-life-state-model),
-  and [DEC-0050](DECISIONS.md#dec-0050--character-death-saves-are-automatic-turn-start-consequences-with-character-owned-lifecycle-state).
+  [DEC-0050](DECISIONS.md#dec-0050--character-death-saves-are-automatic-turn-start-consequences-with-character-owned-lifecycle-state),
+  and [DEC-0051](DECISIONS.md#dec-0051--combat-ends-only-through-an-explicit-endcombatcommand-that-returns-statesnapshotcombat-to-none).
 - **History:** 2026-08-30 — Created from the Phase 2 closure review; no
   implementation or scheduling commitment.
 - **History:** 2026-08-31 — TSK-0002 established the canonical active-turn
@@ -1210,6 +1224,22 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   stabilization, resurrection), Combat removal/end behavior, and other
   action-eligibility consumers outside the current `AttackCommand` remain
   unresolved.
+- **History:** 2026-09-13 — TSK-0018
+  ([§3.35](ARCHITECTURE.md#335-minimal-phase-3-combat-end-lifecycle-tsk-0018),
+  DEC-0051) canonically defined the narrow Combat removal/end contract this
+  record's "why deferred" list previously named only as an open item: an
+  explicit `EndCombatCommand` (no automatic victory/defeat or
+  encounter-resolution detection) that returns `StateSnapshot.combat` to
+  `None` through a `CombatEnded` V1 Event, reusing the existing `combat:
+  CombatState | None` field with no State schema version change, and
+  leaving Creature/Character HP, Conditions, death-save/lifecycle facts,
+  Inventory, and Equipment untouched. Production implementation remains
+  **pending TSK-0019**; TSK-0018 itself changes no production Python.
+  DEF-0015 stays `Deferred`: this closes only the narrow Combat-ending
+  transition itself, not Monster death/stabilization/lifecycle policy or
+  Monster Death Saves, zero-HP targetability, broader Healing-recovery
+  semantics, or other action-eligibility consumers outside the current
+  `AttackCommand`, all of which remain unresolved.
 
 ## DEF-0016
 

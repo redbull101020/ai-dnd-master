@@ -1232,11 +1232,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0019
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0018
-- **Last reviewed:** 2026-09-11
+- **Next free ID:** TSK-0020
+- **Last reviewed:** 2026-09-13
 
 ---
 
@@ -1244,10 +1244,158 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0019` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Combat lifecycle / CombatEnded | Implement minimal CombatEnded vertical slice |
 
 ---
 
 # Open task details
+
+## TSK-0019 — Implement minimal CombatEnded vertical slice
+
+**Status:** `Current`
+
+**Priority:** `P1`
+
+**Size:** `M`
+
+**Group:** `mechanics`
+
+**Roadmap target:** Phase 3 / Combat lifecycle / CombatEnded
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 / Combat lifecycle / CombatEnded
+- `ARCHITECTURE.md` §3.35
+- `ARCHITECTURE.md` §10.7
+- `ARCHITECTURE.md` §3.8
+- `ARCHITECTURE.md` §12.11
+- `DEFERRED.md` — `DEF-0015`
+- `DEC-0051`
+
+**Depends on:** `TSK-0018`
+
+**Contract impact:** `none`; implement the already accepted §3.35 contract.
+
+### Goal
+
+Реализовать канонический §3.35 explicit Combat-end vertical slice end-to-end:
+Domain (`EndCombatCommand`/`EndCombatPayload`, `resolve_end_combat`,
+`EndCombatResult`, `CombatEnded` V1 builder/applier), Application
+(`EndCombatHandler`) и Event-driven transition `StateSnapshot.combat` к
+`None`, с ровно одной успешной persistence через существующий `StateStore`
+boundary.
+
+### Why now
+
+Контракт уже принят (§3.35, DEC-0051, TSK-0018): production gap конкретен —
+`StartCombatHandler` уже отклоняет новый Combat, пока текущий активен, но
+завершить активный Combat нечем — задача не требует нового архитектурного
+решения, и её объём полностью зафиксирован принятым контрактом.
+
+### Scope
+
+- `EndCombatCommand(command_id, campaign_id, actor_id, payload)` /
+  `EndCombatPayload(combat_id: str)` — ровно как канонизировано в §3.35, без
+  новых полей;
+- pure `resolve_end_combat(command, combat) -> EndCombatResult(combat_id:
+  str)`, включая defensive `command.payload.combat_id == combat.id` check;
+- `CombatEnded` V1 builder (`build_combat_ended_v1`) и applier
+  (`apply_combat_ended_v1`), возвращающий replacement Combat projection
+  (`None`);
+- `EndCombatHandler`: actor-first validation (`ENTITY_NOT_FOUND`,
+  `field=None`), затем active-Combat existence/id-match (`ENTITY_NOT_FOUND`,
+  `field="combat_id"`) — точный validation/error precedence §3.35, без
+  active-turn/participant eligibility;
+- authoritative transition `dataclasses.replace(snapshot,
+  combat=replacement_combat)`, где `replacement_combat` — возвращаемое
+  значение `apply_combat_ended_v1`, а не независимо решённое Application;
+- ровно один `StateStore.save()` только после построения и применения
+  Event, с save-failure, пропагирующим через существующий `StateStoreError`
+  boundary;
+- deterministic Domain/Application tests для resolver/builder/applier/
+  handler;
+- real `FilesystemStateStore` lifecycle round trip (`EndCombat` → reload →
+  `snapshot.combat is None`);
+- regression: `StartCombat` → `EndCombat` → reload → новый `StartCombat`
+  succeeds.
+
+### Out of scope
+
+- automatic victory detection;
+- Monster lifecycle/Death Saves;
+- zero-HP targetability;
+- surrender/fleeing semantics;
+- rewards/XP/loot;
+- Movement/Reactions/Opportunity Attacks;
+- grouped initiative;
+- broader action economy;
+- generic lifecycle/reducer frameworks;
+- State schema V10 (§3.35 уже подтвердил, что V9 nullable `combat` этого не
+  требует).
+
+### Acceptance criteria
+
+1. missing actor → `ENTITY_NOT_FOUND`, `entity_id=actor_id`, `field=None`,
+   до любого Combat lookup, `EventMetadataProvider` call или persistence.
+2. no active Combat / `combat_id` mismatch → `ENTITY_NOT_FOUND`,
+   `entity_id=payload.combat_id`, `field="combat_id"`.
+3. никакой новый `ErrorCode` не введён.
+4. успешный `EndCombatCommand` производит ровно один `CombatEnded` V1
+   Event, `causedBy: null`, payload — только `combatId`.
+5. `apply_combat_ended_v1` возвращает `None` как replacement Combat
+   projection; Application потребляет это значение напрямую
+   (`dataclasses.replace(snapshot, combat=replacement_combat)`), не
+   переопределяя `combat=None` самостоятельно.
+6. `StateSnapshot.combat is None` после успешного round trip; `creatures`/
+   `characters`/Inventory/Equipment остаются неизменными, кроме `combat`.
+7. ровно один `StateStore.save()` на успешный Command; save failure не даёт
+   successful `ResolutionResult`.
+8. State schema остаётся exact V9 — никакой V10 не введён.
+9. после успешного `EndCombatCommand` новый `StartCombatCommand` проходит
+   существующую `snapshot.combat is not None` проверку и succeeds.
+10. никакая generic lifecycle/reducer/transaction abstraction не введена.
+11. Character death-save/lifecycle facts (§3.34), Conditions, HP,
+    Inventory, Equipment не участвуют в EndCombat gameplay
+    eligibility/resolution и не мутируются этим transition — они сохраняются
+    неизменными; нормальная `StateSnapshot` invariant validation (которая
+    может их инспектировать при построении replacement snapshot) продолжает
+    применяться как обычно.
+
+### Verification
+
+- Domain tests: `resolve_end_combat`, `build_combat_ended_v1`,
+  `apply_combat_ended_v1` (успешный путь и intrinsic/structural validation
+  failures);
+- Application handler tests: missing actor, no-Combat/id-mismatch,
+  successful path (event count, `causedBy`, save call count, side-effect
+  ordering);
+- real-adapter `FilesystemStateStore` round trip, подтверждающий persisted
+  `combat: null` и unrelated State сохранённым;
+- explicit no-Combat failure regression (`snapshot.combat is None` →
+  `ENTITY_NOT_FOUND`);
+- preservation-of-unrelated-State assertions (Creature HP/Conditions,
+  Character death-save facts, Inventory, Equipment неизменны);
+- `StartCombat → EndCombat → reload → StartCombat` regression test;
+- полный `python -m pytest` suite и `python -m mypy src/dnd_engine` по
+  завершении.
+
+### Expected touchpoints
+
+```text
+src/dnd_engine/domain/commands/end_combat.py
+src/dnd_engine/domain/rules/end_combat.py
+src/dnd_engine/domain/events/end_combat.py
+src/dnd_engine/application/handlers/end_combat.py
+tests/domain/...
+tests/application/test_end_combat_handler.py
+tests/integration/test_combat_real_adapters.py
+docs/ROADMAP.md
+docs/DEFERRED.md
+CLAUDE.md
+docs/ARCHITECTURE.md (conditional: §3.35 implementation-status wording only, if it becomes stale; no new contract/Decision)
+docs/TASK.md
+docs/DEVELOPMENT_LOG.md
+```
 
 ---
 
@@ -1255,7 +1403,6 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 | `TSK-0004` | Implement the approved minimal Character weapon source and persistence | PR #80 / merge commit `d1b23de` |
 | `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
 | `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
@@ -1265,6 +1412,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | `TSK-0015` | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers | PR #89 |
 | `TSK-0016` | Define minimal Character zero-HP turn and Death Save contract | PR #91 |
 | `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
+| `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
 
 ---
 
