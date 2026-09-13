@@ -159,8 +159,8 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [x] Attack active-turn gating foundation — `AttackHandler` applies the canonical §3.28/DEC-0043 gate for all currently supported in-Combat `AttackCommand` paths (Character unarmed, Monster Goblin Scimitar, and Character Dagger), immediately after actor lookup and before Character/Monster/source routing: outside Combat, existing behavior is unchanged; inside Combat, a non-active actor is rejected with `ACTION_NOT_AVAILABLE` before any Definition/dice/Event/persistence side effects (TSK-0006). The Character Dagger path (§3.32, TSK-0012/TSK-0013) inherits this gate unchanged because the §3.28 check sits before any Character/Monster/weapon-source routing, so it did not require a separate implementation change. Action/bonus-action/reaction resource budgets and broader turn/action economy remain open below.
 * [ ] Initiative: SRD 5.1 grouped initiative for identical GM-controlled creatures — G7 is individual-participant only; a later concrete Monster/control consumer must evidence this before it is added.
 * [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn) — §3.28/DEC-0043 define and implement the canonical active-turn eligibility boundary for the currently supported `AttackCommand` paths (row above, TSK-0006); §3.33/DEC-0049 (TSK-0014) canonically defined the first narrow ordinary-Action resource contract for those same three currently implemented `AttackCommand` consumers, and TSK-0015 has now implemented it in production: `CombatState.action_spent`, `TurnActionSpent` V1 and its applier, the `AttackHandler` ordinary-Action gate and consumption (a successful in-Combat Attack spends the Action even on a miss), Action-aware `CombatStarted`/`TurnAdvanced` projections, combined HP+Action atomic persistence, and State schema V8 read/write with V5–V7 `action_spent=False` compatibility, confirmed through a real-adapter/filesystem round trip. This remains a narrow baseline-Action slice for exactly these three consumers, not a general action-economy framework. Bonus Action and Reaction resources, Movement, Extra Attack, Action Surge, Multiattack, per-turn resets beyond this narrow slice, and the broader action economy remain open, so this capability stays unchecked.
-* [ ] Combat lifecycle / `CombatEnded` — G7 has no combat-ending Command or Event. **Defined, not yet implemented:** TSK-0018 ([§3.35](ARCHITECTURE.md#335-minimal-phase-3-combat-end-lifecycle-tsk-0018), DEC-0051) canonically defines the minimal explicit `EndCombatCommand` → `CombatEnded` V1 → `StateSnapshot.combat = None` contract — Combat ends only through an explicit Command, with no automatic victory/defeat or encounter-resolution detection, reusing the existing `combat: CombatState | None` field with no State schema change, and leaving Creature/Character HP, Conditions, death-save/lifecycle facts (§3.34), Inventory, and Equipment untouched; production implementation is **pending TSK-0019**. Broader Monster death/lifecycle policy, zero-HP targetability, surrender/fleeing semantics, and any encounter-resolution concern remain outside this slice and stay open under [DEF-0015](DEFERRED.md#def-0015). This capability stays unchecked: a canonical contract is not a delivered capability.
-* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — `AttackHandler` now implements the canonical Character/Monster zero-HP `AttackCommand` eligibility contract ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046, TSK-0007), after §3.28 active-turn eligibility and Character/Monster category establishment. **Now implemented:** TSK-0016 ([§3.34](ARCHITECTURE.md#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016), DEC-0050) canonically defined the minimal Character zero-HP turn / Death Save contract, and TSK-0017 has since delivered its production continuation — the automatic turn-start trigger (`CombatStarted`/`TurnAdvanced`), Character-owned lifecycle facts, the concrete resolvers/Results/Event builders/appliers, Application orchestration across `StartCombatHandler`/`AdvanceTurnHandler`/`AttackHandler`/`DamageHandler`/`HealingHandler`, and the additive State schema V9 reader/writer over the prior production V8 writer, confirmed through deterministic Domain/Application tests and real-adapter/filesystem integration tests. This closes [DEF-0005](DEFERRED.md#def-0005) `Done`. Still open under DEF-0015 beyond that narrow implemented slice: the broader Character zero-HP lifecycle outside §3.34 (e.g. Combat removal/end interaction), Monster Death Saves and Monster death/stabilization/lifecycle policy, zero-HP targetability, other action-eligibility consumers beyond the current `AttackCommand`, and Combat removal/end (`CombatEnded`) itself. This capability stays unchecked: one narrow implemented Character-specific slice is not the full delivered capability.
+* [x] Combat lifecycle / `CombatEnded` — G7 had no combat-ending Command or Event. **Now implemented:** TSK-0018 ([§3.35](ARCHITECTURE.md#335-minimal-phase-3-combat-end-lifecycle-tsk-0018), DEC-0051) canonically defined the minimal explicit `EndCombatCommand` → `CombatEnded` V1 → `StateSnapshot.combat = None` contract, and TSK-0019 has since delivered its production continuation: the concrete `EndCombatCommand`/`EndCombatPayload`/`EndCombatResult` types, pure `resolve_end_combat`, the `CombatEnded` V1 builder/applier, and `EndCombatHandler` (actor-first validation, then active-Combat existence/id-match, no `DiceEngine` use, exactly one `StateStore.save()` on success). Combat ends only through this explicit Command, with no automatic victory/defeat or encounter-resolution detection, reusing the existing `combat: CombatState | None` field with no State schema change (State schema stays exact V9), and leaving Creature/Character HP, Conditions, death-save/lifecycle facts (§3.34), Inventory, and Equipment untouched — confirmed through deterministic Domain/Application tests and a real-adapter/filesystem `StartCombat → EndCombat → reload → StartCombat` round trip. Broader Monster death/lifecycle policy, zero-HP targetability, surrender/fleeing semantics, and any encounter-resolution concern remain outside this narrow slice and stay open under [DEF-0015](DEFERRED.md#def-0015).
+* [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — `AttackHandler` now implements the canonical Character/Monster zero-HP `AttackCommand` eligibility contract ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046, TSK-0007), after §3.28 active-turn eligibility and Character/Monster category establishment. **Now implemented:** TSK-0016 ([§3.34](ARCHITECTURE.md#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016), DEC-0050) canonically defined the minimal Character zero-HP turn / Death Save contract, and TSK-0017 has since delivered its production continuation — the automatic turn-start trigger (`CombatStarted`/`TurnAdvanced`), Character-owned lifecycle facts, the concrete resolvers/Results/Event builders/appliers, Application orchestration across `StartCombatHandler`/`AdvanceTurnHandler`/`AttackHandler`/`DamageHandler`/`HealingHandler`, and the additive State schema V9 reader/writer over the prior production V8 writer, confirmed through deterministic Domain/Application tests and real-adapter/filesystem integration tests. This closes [DEF-0005](DEFERRED.md#def-0005) `Done`. Still open under DEF-0015 beyond that narrow implemented slice: the broader Character zero-HP lifecycle outside §3.34, Monster Death Saves and Monster death/stabilization/lifecycle policy, zero-HP targetability, and other action-eligibility consumers beyond the current `AttackCommand`. This capability stays unchecked: one narrow implemented Character-specific slice is not the full delivered capability.
 * [ ] Movement
 * [ ] Reactions
 * [ ] Opportunity attacks
@@ -290,22 +290,22 @@ STILL OPEN (DEF-0015, beyond §3.34's narrow Character slice):
     Monster Death Saves and Monster death/stabilization/lifecycle policy
     zero-HP targetability
     other action-eligibility consumers beyond the current AttackCommand
-    Combat removal / CombatEnded
 ```
 
 This marks the narrow Character Death Save mechanic implemented and closes
 [DEF-0005](DEFERRED.md#def-0005) `Done`, but does not close the broader
-Zero-HP and combatant eligibility capability and does not mark Combat
-lifecycle complete; the capability row above stays unchecked because
-Monster lifecycle, broader zero-HP targetability, and Combat removal remain
-open under DEF-0015.
+Zero-HP and combatant eligibility capability; the capability row above
+stays unchecked because Monster lifecycle and broader zero-HP targetability
+remain open under DEF-0015. Combat removal / `CombatEnded` was a separate
+open item at this point and is addressed by TSK-0018/TSK-0019 below.
 
-TSK-0018 (§3.35, DEC-0051) canonically **defines** the Combat-ending
-question this section's rows have left open since G7 — a decision-only
-architecture task that changes no production code:
+TSK-0018 (§3.35, DEC-0051) canonically **defined** the Combat-ending
+question this section's rows had left open since G7 — a decision-only
+architecture task that changed no production code — and TSK-0019 has since
+**implemented** it in production:
 
 ```text
-DEFINED (§3.35, DEC-0051):
+DEFINED (§3.35, DEC-0051) AND IMPLEMENTED (TSK-0019):
     explicit EndCombatCommand(combat_id); no automatic victory/defeat or
         encounter-resolution detection
     actor-first validation, then active-Combat existence/id-match, reusing
@@ -321,11 +321,12 @@ DEFINED (§3.35, DEC-0051):
         action_spent) retired as a consequence of CombatState no longer
         being present; Creature/Character HP, Conditions, death-save/
         lifecycle facts, Inventory, and Equipment untouched
-
-PENDING (TSK-0019):
-    production EndCombatCommand/EndCombatPayload/EndCombatResult types,
-        resolve_end_combat, the CombatEnded V1 builder/applier, and
-        EndCombatHandler
+    EndCombatHandler: no DiceEngine use, exactly one StateStore.save() on
+        the successful path, zero saves/Events on a rejected path
+    confirmed through deterministic Domain/Application tests and a real
+        FilesystemStateStore/production-V9-serializer StartCombat ->
+        EndCombat -> reload -> StartCombat round trip (also proving a
+        persisted Condition, e.g. Poisoned, survives EndCombat unchanged)
 
 STILL OPEN (DEF-0015, beyond §3.35's narrow Combat-ending slice):
     Monster death/lifecycle policy and Monster Death Saves
@@ -335,10 +336,11 @@ STILL OPEN (DEF-0015, beyond §3.35's narrow Combat-ending slice):
     broader Character zero-HP lifecycle beyond §3.34's Death Save mechanic
 ```
 
-This does not mark Combat lifecycle implemented, does not mark `CombatEnded`
-delivered, and does not close DEF-0015; the `Combat lifecycle / CombatEnded`
-capability row above stays unchecked because production implementation
-remains TSK-0019 and Monster/broader zero-HP lifecycle scope remains open.
+This marks the `Combat lifecycle / CombatEnded` capability row above
+implemented and closes the narrow Combat-ending slice of DEF-0015, but does
+not close DEF-0015 itself: Monster death/lifecycle policy, zero-HP
+targetability, surrender/fleeing semantics, and any encounter-resolution
+concern remain open there.
 
 ## Phase 4 — Magic
 

@@ -7089,3 +7089,149 @@ already-merged delivery branch.
   `docs/DEVELOPMENT_LOG.md`, `docs/ROADMAP.md`, and `docs/TASK.md` — no
   production Python and no unrelated cleanup. Formatter/linter remain
   `not configured`, per repo convention; none introduced.
+
+## 2026-09-13 — TSK-0019 production implementation: Combat end lifecycle vertical slice
+
+- Implemented the already-approved §3.35/DEC-0051 contract (TSK-0018) in
+  production, across four groups on branch `claude/tsk-0019-combat-ended`
+  (created directly from `origin/main` at `1784297`, the merge of PR #93 /
+  TSK-0018; confirmed `origin/main:docs/TASK.md` showed `Current: TSK-0019`,
+  `Next free ID: TSK-0020`, and `TSK-0018` in `Recently completed`).
+- **Group 1 (Domain, commit `4890be7`):** added
+  `src/dnd_engine/domain/commands/end_combat.py`
+  (`EndCombatPayload(combat_id: str)`, `EndCombatCommand`, matching
+  `AdvanceTurnPayload`'s exact shape); `src/dnd_engine/domain/rules/end_combat.py`
+  (pure `resolve_end_combat(command, combat) -> EndCombatResult(combat_id:
+  str)`, asserting `command.payload.combat_id == combat.id`); and
+  `src/dnd_engine/domain/events/end_combat.py` (`CombatEndedPayloadV1`,
+  `build_combat_ended_v1` — `causedBy: null`, payload `combatId` only — and
+  `apply_combat_ended_v1(combat, event) -> None`, whose structural/
+  integrity-checked return value **is** the replacement Combat projection,
+  exactly as §3.35 specifies). 27 new deterministic tests in
+  `tests/domain/test_end_combat_command.py`, `tests/domain/test_end_combat.py`,
+  and `tests/domain/test_end_combat_event.py` (immutability, exact-field
+  invariants, wrong-type/combat-id-mismatch rejection, canonical Event
+  shape, JSON round trip through the existing generic `EventSerializer`,
+  and applier rejection of a stale/mismatched `combatId` or wrong
+  type/version/payload-fields).
+- **Group 2 (Application, commit `58ea7f6`):** added
+  `src/dnd_engine/application/handlers/end_combat.py` — `EndCombatHandler`
+  takes only `state_store` and `event_metadata_provider` (no `DiceEngine`
+  dependency at all, matching §3.35's "no dice call" requirement);
+  `handle()` looks up `command.actor_id` in `snapshot.creatures` first
+  (`ENTITY_NOT_FOUND`, `field=None`, before any Combat lookup), then
+  requires `snapshot.combat is not None and combat.id ==
+  payload.combat_id` (`ENTITY_NOT_FOUND`, `field="combat_id"`, reusing
+  `AdvanceTurnHandler`'s exact failure shape — no new `ErrorCode`), then
+  resolves, builds `CombatEnded` V1, applies it via
+  `apply_combat_ended_v1`, and calls
+  `dataclasses.replace(snapshot, combat=replacement_combat)` (consuming the
+  applier's own returned `None` directly, not re-deciding `combat=None`
+  independently) before exactly one `StateStore.save()`. `mypy` flagged the
+  canonical `replacement_combat = apply_combat_ended_v1(...)` assignment as
+  `func-returns-value` (the call is annotated `-> None`, exactly as §3.35
+  fixes it); resolved with a narrow `# type: ignore[func-returns-value]` on
+  that one call, matching this repo's existing narrow-ignore convention
+  rather than deviating from the canonical signature/orchestration shape.
+  11 new tests in `tests/application/test_end_combat_handler.py` cover:
+  successful path (exact one save/one Event/no `dice` call recorded, no
+  `dice` constructor parameter at all), actor-missing-takes-priority-over-
+  no-Combat precedence, no-Combat and Combat-id-mismatch rejection (zero
+  saves/Events), metadata-failure and save-failure propagation (save
+  attempted exactly once), and explicit preservation of unrelated Creature/
+  Character/Inventory/Equipment State and existing Character death-save/
+  lifecycle facts.
+- **Group 3 (real-adapter evidence, commit `8174519`, the final reviewed
+  commit — based directly on `58ea7f6` and already containing the
+  `Condition.POISONED` correction requested during review):** extended
+  `tests/integration/test_combat_real_adapters.py` with
+  `test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reopens`,
+  proving the full production lifecycle through a real
+  `FilesystemStateStore` and the production V9 `StateSerializer`: an
+  initial `combat=None` snapshot (with a persisted Character `CharacterState`
+  lifecycle record, one `InventoryState`/`InventoryItemState`, one
+  `EquipmentState`, and a Creature carrying a non-empty `Condition.POISONED`
+  membership) is saved; a real `StartCombatHandler` (real `PythonDiceEngine`
+  initiative) persists an active `CombatState`, confirmed via a fresh
+  reload; a real `EndCombatHandler` (no dice) returns `combat` to `None`
+  with exactly one `CombatEnded` V1 Event, confirmed via a fresh reload
+  that also proves the deserialized Creature/Character/Inventory/Equipment
+  projections — including the persisted `Condition.POISONED` membership and
+  Character death-save/lifecycle facts — survive unchanged across
+  persistence and a fresh reload; raw `state.json` inspection at three
+  points confirms `schemaVersion` stays `9` throughout and the root/`state`
+  key sets are identical before and after `EndCombat` (no schema bump, no
+  new persisted field). Neither the deserialized-projection comparisons nor
+  the raw-JSON checks compare serialized bytes or complete raw JSON
+  subtrees byte-for-byte. A brand-new `StartCombatCommand` (a fresh
+  `combat_id`, since Instance IDs are never reused after their entity is
+  removed) succeeds again afterward. The `Condition.POISONED` membership
+  and its explicit post-reload assertion are the review-requested
+  correction, included directly in commit `8174519`; no production or
+  persistence code was touched by that correction.
+- **Group 4 (documentation sync, this entry):** updated `docs/ARCHITECTURE.md`
+  §3.35's implementation-status sentence from "production implementation is
+  intentionally pending TSK-0019" to "production implementation delivered
+  by TSK-0019" (naming the concrete production types and the real-adapter
+  round trip), without redesigning the section — no new Decision was
+  needed, since production matched §3.35 exactly. Updated
+  `docs/ROADMAP.md`'s `Combat lifecycle / CombatEnded` capability row from
+  unchecked/"Defined, not yet implemented" to checked/"Now implemented",
+  narrowly describing the delivered `EndCombatCommand`/`CombatEnded`
+  V1/Event-driven `combat=None` transition/persistence/real-adapter
+  evidence without claiming any broader encounter/lifecycle mechanics; also
+  updated the `TSK-0018 (§3.35, DEC-0051)` narrative block's
+  `PENDING (TSK-0019)` marker to `IMPLEMENTED (TSK-0019)` with the delivered
+  contents, and removed the now-stale "Combat removal / CombatEnded" item
+  from the earlier TSK-0016/TSK-0017 block's "still open" list (with a
+  pointer to this section) to avoid two adjacent paragraphs contradicting
+  each other. Updated `docs/DEFERRED.md` `DEF-0015`: the "why deferred",
+  "Prerequisites", and "Acceptance criteria" fields now say the narrow
+  Combat removal/end contract is defined **and implemented in production**
+  by TSK-0019 (previously "pending"); DEF-0015 itself stays `Deferred` —
+  Monster death/lifecycle policy, Monster Death Saves, zero-HP
+  targetability, and broader Healing-recovery semantics remain open; gained
+  a new dated `2026-09-13` `History` entry (the existing TSK-0018 `History`
+  entry was left as an accurate historical snapshot, not rewritten).
+  Synchronized `CLAUDE.md`'s implemented-contracts index row (from
+  "contract defined (TSK-0018); production implementation pending
+  TSK-0019" to a plain implemented vertical-slice row) and its short
+  invariant-summary paragraph (now names `resolve_end_combat`, the
+  `CombatEnded` V1 builder/applier, and `EndCombatHandler`'s validation
+  precedence/no-`DiceEngine` property as implemented, and drops
+  `CombatEnded` from the still-pending list next to it) — no duplication of
+  the full Architecture section. `README.md` needed no change: it names no
+  Combat-lifecycle/`CombatEnded`/TSK-0018/TSK-0019 fact that TSK-0019 makes
+  stale. `docs/TASK.md` intentionally still shows `TSK-0019` as `Current` —
+  no Task Closure was performed in this pass; per §18.1, prospective Task
+  Closure may be prepared, in the same delivery branch/PR, once the
+  implementation/documentation diff has been reviewed/accepted and the
+  delivery PR already exists (so its PR number is known and usable as
+  `Recently completed` evidence) — merge is what makes that prepared
+  closure authoritative on `main`.
+- Verification: narrow `pytest tests/domain/test_end_combat*.py
+  tests/application/test_end_combat_handler.py
+  tests/integration/test_combat_real_adapters.py` — 40 passed; full
+  `python -m pytest -q` — 2201 passed (a `--basetemp` override was used to
+  route around a pre-existing, unrelated Windows `PermissionError` on the
+  default pytest temp-directory cleanup, confirmed environment-only and not
+  caused by this change); `python -m mypy src/dnd_engine` — no issues in
+  119 source files; `git diff --check` — no whitespace errors. The
+  cumulative branch diff against `origin/main` touches
+  `src/dnd_engine/domain/commands/end_combat.py`,
+  `src/dnd_engine/domain/rules/end_combat.py`,
+  `src/dnd_engine/domain/events/end_combat.py`,
+  `src/dnd_engine/application/handlers/end_combat.py`,
+  `tests/domain/test_end_combat_command.py`, `tests/domain/test_end_combat.py`,
+  `tests/domain/test_end_combat_event.py`,
+  `tests/application/test_end_combat_handler.py`,
+  `tests/integration/test_combat_real_adapters.py`, `CLAUDE.md`,
+  `docs/ARCHITECTURE.md`, `docs/DEFERRED.md`, `docs/DEVELOPMENT_LOG.md`, and
+  `docs/ROADMAP.md` — no unrelated refactor, no automatic
+  encounter-resolution behavior, no Monster lifecycle semantics, no schema
+  bump, no generic lifecycle framework, and no direct State mutation
+  outside the authoritative `EndCombatHandler` → `StateStore.save()` flow.
+  Formatter/linter remain `not configured`, per repo convention; none
+  introduced. `docs/DECISIONS.md` gained no new entry: production matched
+  the already-accepted §3.35/DEC-0051 contract exactly, with no genuine new
+  architectural decision discovered during implementation.
