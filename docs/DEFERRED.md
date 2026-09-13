@@ -1125,12 +1125,14 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   persisted facts, and the Damage-at-zero/ordinary-Healing interaction narrow
   enough for that one slice — closing [DEF-0005](#def-0005) `Done`. TSK-0018
   ([§3.35](ARCHITECTURE.md#335-minimal-phase-3-combat-end-lifecycle-tsk-0018),
-  DEC-0051) has since canonically defined, but not yet implemented in
-  production (TSK-0019 pending), the narrow Combat removal/end contract this
-  record's "why deferred" list previously named only as an open item: an
-  explicit `EndCombatCommand` returns `StateSnapshot.combat` to `None`
-  through `CombatEnded` V1, with no automatic victory/defeat detection and no
-  State schema change. The much broader
+  DEC-0051) canonically defined, and TSK-0019 has since implemented in
+  production, the narrow Combat removal/end contract this record's "why
+  deferred" list previously named only as an open item: an explicit
+  `EndCombatCommand` returns `StateSnapshot.combat` to `None` through
+  `CombatEnded` V1, with no automatic victory/defeat detection and no State
+  schema change, confirmed through a real-adapter/filesystem `StartCombat ->
+  EndCombat -> reload -> StartCombat` round trip. This closes the narrow
+  Combat removal/end item of this record's remaining scope. The much broader
   DEF-0015 concern remains open beyond those two narrow slices:
   targetability of a creature already at zero HP, further-Damage/
   stabilization/death outcomes outside the Character Death Save mechanic,
@@ -1165,9 +1167,9 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   authoritative lifecycle facts. §3.34/DEC-0050 satisfies these criteria for
   the narrow Character Death Save slice only (contract defined and
   implemented in production by TSK-0017); §3.35/DEC-0051 satisfies the
-  narrow Combat removal/end criterion (contract defined; production
-  implementation pending TSK-0019); Monster zero-HP lifecycle and the
-  remaining broader scope above are not yet specified.
+  narrow Combat removal/end criterion (contract defined and implemented in
+  production by TSK-0019); Monster zero-HP lifecycle and the remaining
+  broader scope above are not yet specified.
 - **References:** [Architecture §3.19](ARCHITECTURE.md#319-minimal-damage--hp-mutation-vertical-slice-g6a),
   [§3.20](ARCHITECTURE.md#320-minimal-healing--hp-mutation-vertical-slice-g6b),
   [§3.28](ARCHITECTURE.md#328-minimal-phase-3-attack-active-turn-eligibility),
@@ -1240,6 +1242,24 @@ derived from a DEF is represented and sequenced as `TSK-*` in `TASK.md`.
   Monster Death Saves, zero-HP targetability, broader Healing-recovery
   semantics, or other action-eligibility consumers outside the current
   `AttackCommand`, all of which remain unresolved.
+- **History:** 2026-09-13 — TSK-0019 implemented in production the narrow
+  Combat removal/end contract TSK-0018 (§3.35, DEC-0051) defined: the
+  concrete `EndCombatCommand`/`EndCombatPayload`/`EndCombatResult` types,
+  pure `resolve_end_combat`, the `CombatEnded` V1 builder/applier, and
+  `EndCombatHandler` (actor-first validation, then active-Combat
+  existence/id-match, no `DiceEngine` use, exactly one `StateStore.save()`
+  on success), confirmed through deterministic Domain/Application tests and
+  a real-adapter/filesystem `StartCombat -> EndCombat -> reload ->
+  StartCombat` round trip that also proves a persisted Condition (e.g.
+  Poisoned), Creature HP, Character death-save/lifecycle facts, Inventory,
+  and Equipment survive `EndCombat` unchanged, and that State schema stays
+  exact V9 with no version bump. This closes the narrow Combat removal/end
+  item that this record's "why deferred" list and "Prerequisites" tracked.
+  DEF-0015 itself stays `Deferred`: Monster death/stabilization/lifecycle
+  policy and Monster Death Saves, zero-HP targetability, broader
+  Healing-recovery semantics (rest recovery, external stabilization,
+  resurrection), and other action-eligibility consumers outside the current
+  `AttackCommand` remain unresolved.
 
 ## DEF-0016
 

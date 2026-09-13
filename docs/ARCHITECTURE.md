@@ -8601,12 +8601,15 @@ throughout §§3.19–3.33.
 
 ### 3.35. Minimal Phase 3 Combat end lifecycle (TSK-0018)
 
-Implementation status: **Contract defined by TSK-0018 (architecture-only).
-Production implementation is intentionally pending TSK-0019.** No production
-Python behavior — Command, Event, resolver, applier, Application handler —
-is delivered by TSK-0018. The current production State schema writer
-remains exact V9 (§3.34, §12.13); this section introduces no new schema
-version (see "Persistence" below).
+Implementation status: **Contract defined by TSK-0018 (architecture-only);
+production implementation delivered by TSK-0019.** `EndCombatCommand`/
+`EndCombatPayload`, `resolve_end_combat`, `EndCombatResult`, the
+`CombatEnded` V1 builder/applier, and `EndCombatHandler` are implemented in
+production, confirmed through deterministic Domain/Application tests and a
+real-adapter/filesystem `StartCombat → EndCombat → reload → StartCombat`
+round trip. The current production State schema writer remains exact V9
+(§3.34, §12.13); this section introduced no new schema version, confirmed
+by that same round trip (see "Persistence" below).
 
 This section resolves the architectural questions DEF-0015 and Roadmap
 Phase 3's `Combat lifecycle / CombatEnded` row left open after G7 (§3.25,
