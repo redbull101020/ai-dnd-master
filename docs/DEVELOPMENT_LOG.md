@@ -7319,3 +7319,24 @@ feature-branch `push` run.
 
 Next Phase 3 frontier intentionally not allocated — needs a separate
 refinement pass.
+
+## 2026-09-13 — TSK-0021: Define minimal Combat placement contract (delivery summary)
+
+Delivered Architecture §3.36/DEC-0052 (decision-only): the canonical
+one-combatant initial tactical placement contract —
+`PlaceCombatantCommand` → validation → `PlaceCombatantResult` →
+`CombatantPlaced` V1 → concrete Event application → replacement
+`CombatState.positions`. The authoritative tactical placement remains
+exactly `CombatState.positions` (§3.30); no second positional State was
+introduced. Voluntary Movement — authoritative speed, movement
+allowance/budget, reposition, Dash/Disengage, forced movement, terrain,
+pathfinding, collision, occupancy, elevation, Reactions, and Opportunity
+Attacks — remains explicitly deferred for a later, separately evidenced
+consumer. Also reconciled Architecture §12.9 with the already-implemented
+State schema V9 (TSK-0017/§3.34): current writer, schema count, and wire-
+shape chain were still describing V8 as current; corrected as a
+documentation consistency fix, not a new architectural decision. TSK-0021
+changed no production Python.
+
+Verification: `python -m pytest tests/architecture/` — 21 passed; `git
+diff --check` clean. Production continuation is TSK-0022.
