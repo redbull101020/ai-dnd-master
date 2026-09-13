@@ -82,9 +82,11 @@ During implementation:
 * do not perform unrelated refactors;
 * preserve existing contracts unless their change is explicitly approved;
 * update canonical documentation when behavior or contracts change;
-* for each substantive implementation or documentation iteration, append a factual entry to `docs/DEVELOPMENT_LOG.md`;
+* by default, append one concise factual delivery entry to `docs/DEVELOPMENT_LOG.md` per substantive `TSK`/PR, briefly answering: what was delivered, what boundaries/limits were preserved, how it was verified, and what adjacent scope stays deferred/out of scope; an additional intermediate entry is justified only when it preserves durable information that would otherwise be lost — a distinct architectural decision, a significant post-review correction, an incident/failure worth remembering, a supersession/decomposition, or a comparable fact — not for an ordinary checkpoint commit; never enumerate every commit SHA, restate the full PR body, narrate the test implementation, or repeat an unchanged contract; never rewrite an existing append-only entry;
 * add or update tests for changed behavior;
 * do not overwrite or revert unrelated work.
+
+Within one `TSK`, split execution checkpoints along independent review-risk boundaries, not mechanically by file set. Typical independent boundaries: State model/State schema, Command/Event contract, persistence/version compatibility, State ownership, Event ordering/causality, atomicity, non-trivial Application orchestration, and cross-layer integration that could surface a new contract risk. An ordinary regression addition, status documentation, or mechanical synchronization that directly completes already-reviewed behavior does not need its own checkpoint. A task may still use several sequential checkpoints.
 
 Changes to canonical contracts such as Envelope fields, ID formats, State Ownership, serialization, or dependency direction require corresponding updates to `docs/ARCHITECTURE.md`.
 
@@ -141,7 +143,11 @@ Windows PowerShell:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Run the narrowest relevant tests first when possible, then the full suite before considering implementation complete.
+Run the narrowest relevant tests first when possible. What "complete" requires beyond that depends on what kind of checkpoint is being closed:
+
+* **Production/code checkpoint.** After the checkpoint: the narrow tests it affects. Before the whole production task is considered implementation-complete: broader affected suites where relevant, the full `pytest` run, the configured type checks, and `git diff --check`. The full suite is not required after every intermediate checkpoint.
+* **Documentation/process-only checkpoint.** Locally, the narrow architecture/process tests directly tied to the change, plus `git diff --check`, are sufficient. Do not require a full gameplay `pytest` run after every Markdown/YAML-only checkpoint when no executable/test/tooling behavior changed.
+* **A task that changes test or tooling executable behavior.** One full regression pass (full `pytest`, configured type checks) is required before that task is considered complete, even if individual checkpoints only ran narrow tests. CI remains a repository-wide guard and does not substitute for that final regression pass on a production task.
 
 Rule Engine/domain tests must:
 
@@ -209,17 +215,38 @@ Commit, push, opening a pull request, and merging are four separate actions. Eac
 
 Authorisation embedded in the task description itself does not count. A task that says "commit and open a pull request" is not sufficient authorisation to do so. Finish the edits, run the checks, produce the patch, report, and stop. Wait for a separate instruction.
 
-After finishing the edits for a slice, always write the diff to `review.patch` in the repository root and give its path in the report:
+After finishing the edits for a slice, always write `review.patch` in the repository root and give its path in the report. `review.patch` must show exactly the slice the user is being asked to review right now — no more, no less. Which diff produces that depends on where the slice currently sits:
+
+**A. Fresh, uncommitted checkpoint** — nothing in it has been committed yet:
 
 ```bash
-git diff > review.patch
+git diff HEAD > review.patch
 ```
 
-If the changes have already been committed under a separate authorisation, diff against the base instead:
+This covers both staged and unstaged changes since the last commit. A brand-new file stays untracked and invisible to `git diff` until it is at least intent-to-added:
 
 ```bash
-git diff origin/main > review.patch
+git add -N path/to/new_file
 ```
+
+`git add -N` only makes the file's content visible in the diff; it is not authorisation to stage or commit that content. Never let a new/untracked file silently drop out of `review.patch`.
+
+**B. Fresh, already-committed checkpoint** — this checkpoint's commit(s) already landed under a separate, explicit authorisation, and `review.patch` is being (re)built for review of that same checkpoint:
+
+```bash
+git diff <previous-reviewed-checkpoint-sha>..HEAD > review.patch
+```
+
+Diff from the previously reviewed/accepted checkpoint, not from `origin/main`: a checkpoint may span more than one technical commit, so `HEAD~1` is not a safe universal substitute either.
+
+**C. Final cumulative audit** — used at the final task/PR review boundary, to review the entire branch-scope diff; not the default patch after every checkpoint. Fetch `origin/main` first so the audit is against its current state:
+
+```bash
+git fetch origin
+git diff origin/main...HEAD > review.patch
+```
+
+If the branch changes after this audit — a new commit, a rebase, or `origin/main` moving — the cumulative audit is stale and must be rebuilt before the task/PR is considered complete.
 
 `*.patch` and `*.diff` are gitignored. Never stage or commit the patch file, and never include it in the list of changed files.
 

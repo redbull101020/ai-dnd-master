@@ -12,6 +12,12 @@ This is an append-only journal of completed development iterations. It is not
 canonical architecture, a Roadmap, a Decision Log, or a source of truth for
 contracts.
 
+Entries are one concise factual delivery record per substantive `TSK`/PR by
+default; an intermediate checkpoint gets its own entry only when it carries
+durable information the final entry would otherwise lose. See `AGENTS.md`,
+"During implementation", for the exact policy. Existing entries are never
+rewritten.
+
 ## 2026-08-22 — Phase 1 Core contracts A
 
 ### Initial state
@@ -7281,4 +7287,17 @@ human/review responsibility. No gameplay, Architecture, Roadmap, or
 Decisions changes. Verification: `python -m pytest
 tests/architecture/test_task_tracker.py` and `python -m pytest
 tests/architecture/` — 14 and 21 passed respectively; `git diff --check`
+clean.
+
+## 2026-09-13 — TSK-0020 Group 3: clarify checkpoint, review-patch, testing, and Development Log workflow
+
+Updated `AGENTS.md` (synced where `CLAUDE.md` duplicated the changed
+facts): execution checkpoints within a `TSK` are now risk-based rather
+than mechanical file-set splits; `review.patch` now distinguishes a fresh
+checkpoint diff from the final cumulative task/PR audit; local testing is
+split into production and documentation/process policies, with a
+mandatory final full regression for any task that changes executable
+test/tooling behavior; and the Development Log policy moved to one
+delivery-level entry per substantive `TSK`/PR by default. Verification:
+`python -m pytest tests/architecture/` — 21 passed; `git diff --check`
 clean.
