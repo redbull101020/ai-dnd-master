@@ -7235,3 +7235,25 @@ already-merged delivery branch.
   introduced. `docs/DECISIONS.md` gained no new entry: production matched
   the already-accepted §3.35/DEC-0051 contract exactly, with no genuine new
   architectural decision discovered during implementation.
+
+## 2026-09-13 — TSK-0020 Group 1: reconcile prospective Task Closure dependency semantics
+
+Allocated `TSK-0020` ("Tighten development workflow and task-governance
+automation") as `Current` (`P2`/`M`/`engineering`, cross-cutting
+engineering support for active Phase 3 delivery, no `src/dnd_engine`
+impact). Found a latent contradiction in `docs/TASK.md`: §§4.5/18.1
+allowed a prepared closure branch to prospectively promote a next
+`Current` before its dependency was authoritative `Done`, while §12 item 2
+and §17 item 10 stated that requirement unconditionally — the pattern PR
+#93 (TSK-0018 → TSK-0019) had already relied on informally. Adopted a
+single, narrowly bounded rule (new §18.1.1): a prepared closure branch may
+prospectively *represent* its own single immediate dependent task's
+post-merge Status, only when that task's sole outstanding dependency is
+the task the branch closes in the same atomic merge and no other
+dependency is unfinished. The authoritative `main`-state readiness
+invariant and the dependency/merge boundary (§5) are unchanged and remain
+unconditional; no new lifecycle status was introduced. No gameplay,
+Architecture, Roadmap, or Decisions changes. Verification:
+`python -m pytest tests/architecture/test_documentation_references.py` (2
+passed) and `git diff --check` (clean); full local `pytest`/`mypy` were
+intentionally not run for this docs-only checkpoint.
