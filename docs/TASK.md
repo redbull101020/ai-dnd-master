@@ -1232,7 +1232,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0018
+- **Current:** TSK-0019
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0020
@@ -1244,147 +1244,158 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0018` | `Current` | `P1` | `S` | `architecture` | Phase 3 / Combat lifecycle / CombatEnded | Define minimal Combat end lifecycle contract |
-| `TSK-0019` | `Backlog` | `P1` | `M` | `mechanics` | Phase 3 / Combat lifecycle / CombatEnded | Implement minimal CombatEnded vertical slice |
+| `TSK-0019` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Combat lifecycle / CombatEnded | Implement minimal CombatEnded vertical slice |
 
 ---
 
 # Open task details
 
-## TSK-0018 — Define minimal Combat end lifecycle contract
+## TSK-0019 — Implement minimal CombatEnded vertical slice
 
 **Status:** `Current`
 
 **Priority:** `P1`
 
-**Size:** `S`
+**Size:** `M`
 
-**Group:** `architecture`
+**Group:** `mechanics`
 
 **Roadmap target:** Phase 3 / Combat lifecycle / CombatEnded
 
 **References:**
 
 - `ROADMAP.md` — Phase 3 / Combat lifecycle / CombatEnded
+- `ARCHITECTURE.md` §3.35
 - `ARCHITECTURE.md` §10.7
-- `ARCHITECTURE.md` §3.25
 - `ARCHITECTURE.md` §3.8
 - `ARCHITECTURE.md` §12.11
 - `DEFERRED.md` — `DEF-0015`
-- `DEC-0040`
-- `DEC-0050`
+- `DEC-0051`
 
-**Depends on:** `—`
+**Depends on:** `TSK-0018`
 
-**Contract impact:** `new canonical ARCHITECTURE.md section and new DECISIONS.md record required before production implementation`
+**Contract impact:** `none`; implement the already accepted §3.35 contract.
 
 ### Goal
 
-Определить наименьший явный Combat-ending Command → Result → Event → State
-transition contract, который позволяет уже существующему active Combat снова
-стать absent, не проектируя при этом broader Monster lifecycle или
-automatic encounter-resolution правила.
+Реализовать канонический §3.35 explicit Combat-end vertical slice end-to-end:
+Domain (`EndCombatCommand`/`EndCombatPayload`, `resolve_end_combat`,
+`EndCombatResult`, `CombatEnded` V1 builder/applier), Application
+(`EndCombatHandler`) и Event-driven transition `StateSnapshot.combat` к
+`None`, с ровно одной успешной persistence через существующий `StateStore`
+boundary.
 
 ### Why now
 
-Текущая production-система умеет начинать Combat и сохранять активный Combat
-(§3.25, G7), но не имеет authoritative способа его завершить. Существующий
-`StartCombatHandler` уже отклоняет новый Combat, пока текущий активен —
-значит, отсутствие способа завершить Combat уже является конкретным,
-наблюдаемым lifecycle gap в реализованном `StartCombat` flow, а не
-гипотетической будущей потребностью. Grouped initiative и broader action
-economy остаются consumer-gated и не создают такой же немедленной
-необходимости.
+Контракт уже принят (§3.35, DEC-0051, TSK-0018): production gap конкретен —
+`StartCombatHandler` уже отклоняет новый Combat, пока текущий активен, но
+завершить активный Combat нечем — задача не требует нового архитектурного
+решения, и её объём полностью зафиксирован принятым контрактом.
 
 ### Scope
 
-TSK-0018 должен канонически определить, но не реализовывать production
-behavior. Scope обязан явно закрыть:
-
-- явную Command boundary для завершения Combat;
-- Result boundary;
-- `CombatEnded` V1 Event boundary;
-- validation и error precedence;
-- Combat State ownership для этого перехода;
-- transition существующей active Combat projection (`StateSnapshot.combat`)
-  обратно в отсутствующее состояние;
-- Event ordering/causation относительно существующих Combat Events (§3.25,
-  §12.11);
-- persistence semantics перехода;
-- взаимодействие с уже существующими Character death-save/lifecycle
-  фактами (§3.34/DEC-0050), не расширяя их;
-- нужен ли вообще State schema change, и если да — его точную
-  compatibility-границу;
-- является ли завершение Combat explicit или automatic (см. Approved design
-  direction ниже — вопрос закрывается в эту сторону явно, а не по
-  умолчанию).
-
-Принятое архитектурное решение сопровождается новым `DEC-*` и, при
-необходимости, factual reconciliation в Roadmap/Deferred/CLAUDE — но только
-там, где принятый контракт реально меняет их канонические или статусные
-утверждения.
-
-**Approved design direction** (уже зафиксированное решение, которое эта
-задача обязана закрепить в контракте, а не переоткрывать):
-
-- только явный `EndCombat` Command; никакого automatic victory/defeat
-  detection;
-- никакого Monster death/lifecycle inference;
-- никаких zero-HP targetability правил;
-- никакого generic lifecycle framework;
-- если текущий serializer contract уже это поддерживает — предпочесть
-  возврат существующей `StateSnapshot` combat projection к `None`, а не
-  новую State-структуру;
-- Combat end не сбрасывает несвязанный Creature/Character State.
+- `EndCombatCommand(command_id, campaign_id, actor_id, payload)` /
+  `EndCombatPayload(combat_id: str)` — ровно как канонизировано в §3.35, без
+  новых полей;
+- pure `resolve_end_combat(command, combat) -> EndCombatResult(combat_id:
+  str)`, включая defensive `command.payload.combat_id == combat.id` check;
+- `CombatEnded` V1 builder (`build_combat_ended_v1`) и applier
+  (`apply_combat_ended_v1`), возвращающий replacement Combat projection
+  (`None`);
+- `EndCombatHandler`: actor-first validation (`ENTITY_NOT_FOUND`,
+  `field=None`), затем active-Combat existence/id-match (`ENTITY_NOT_FOUND`,
+  `field="combat_id"`) — точный validation/error precedence §3.35, без
+  active-turn/participant eligibility;
+- authoritative transition `dataclasses.replace(snapshot,
+  combat=replacement_combat)`, где `replacement_combat` — возвращаемое
+  значение `apply_combat_ended_v1`, а не независимо решённое Application;
+- ровно один `StateStore.save()` только после построения и применения
+  Event, с save-failure, пропагирующим через существующий `StateStoreError`
+  boundary;
+- deterministic Domain/Application tests для resolver/builder/applier/
+  handler;
+- real `FilesystemStateStore` lifecycle round trip (`EndCombat` → reload →
+  `snapshot.combat is None`);
+- regression: `StartCombat` → `EndCombat` → reload → новый `StartCombat`
+  succeeds.
 
 ### Out of scope
 
-- production Python implementation (это TSK-0019);
-- Monster Death Saves;
-- universal `LifeState`;
 - automatic victory detection;
+- Monster lifecycle/Death Saves;
+- zero-HP targetability;
 - surrender/fleeing semantics;
-- XP/rewards/loot;
-- encounter system;
-- Movement;
-- Reactions;
-- Opportunity Attacks;
+- rewards/XP/loot;
+- Movement/Reactions/Opportunity Attacks;
 - grouped initiative;
 - broader action economy;
-- удаление Creature/Character;
-- EventStore/replay;
-- generic reducer/transaction abstractions.
+- generic lifecycle/reducer frameworks;
+- State schema V10 (§3.35 уже подтвердил, что V9 nullable `combat` этого не
+  требует).
 
 ### Acceptance criteria
 
-TSK-0018 считается выполненным только когда:
-
-1. Итоговый контракт однозначен: любое ключевое поведение перехода
-   `EndCombat` → Result → `CombatEnded` → State не оставлено implicit для
-   TSK-0019.
-2. Контракт реализуем без прямой AI/UI мутации State.
-3. Никакой broader DEF-0015 concern не закрывается молча этим узким
-   контрактом — DEF-0015 остаётся `Deferred` за пределами явно описанного
-   Combat-ending среза.
-4. Approved design direction (явный `EndCombat`, отсутствие automatic
-   detection/inference, отсутствие нового lifecycle framework) отражена в
-   контракте без отклонений.
-5. Explicit vs. automatic termination явно решено в пользу explicit и
-   зафиксировано, а не оставлено открытым вопросом.
-6. Verdict по необходимости State schema change явный и обоснованный.
-7. Принятое решение сопровождается новым `DEC-*`.
-8. TSK-0019 остаётся `Backlog` до тех пор, пока TSK-0018 не станет
-   authoritatively `Done`.
-9. В самой decision-only TSK-0018 нет production-кода.
+1. missing actor → `ENTITY_NOT_FOUND`, `entity_id=actor_id`, `field=None`,
+   до любого Combat lookup, `EventMetadataProvider` call или persistence.
+2. no active Combat / `combat_id` mismatch → `ENTITY_NOT_FOUND`,
+   `entity_id=payload.combat_id`, `field="combat_id"`.
+3. никакой новый `ErrorCode` не введён.
+4. успешный `EndCombatCommand` производит ровно один `CombatEnded` V1
+   Event, `causedBy: null`, payload — только `combatId`.
+5. `apply_combat_ended_v1` возвращает `None` как replacement Combat
+   projection; Application потребляет это значение напрямую
+   (`dataclasses.replace(snapshot, combat=replacement_combat)`), не
+   переопределяя `combat=None` самостоятельно.
+6. `StateSnapshot.combat is None` после успешного round trip; `creatures`/
+   `characters`/Inventory/Equipment остаются неизменными, кроме `combat`.
+7. ровно один `StateStore.save()` на успешный Command; save failure не даёт
+   successful `ResolutionResult`.
+8. State schema остаётся exact V9 — никакой V10 не введён.
+9. после успешного `EndCombatCommand` новый `StartCombatCommand` проходит
+   существующую `snapshot.combat is not None` проверку и succeeds.
+10. никакая generic lifecycle/reducer/transaction abstraction не введена.
+11. Character death-save/lifecycle facts (§3.34), Conditions, HP,
+    Inventory, Equipment не участвуют в EndCombat gameplay
+    eligibility/resolution и не мутируются этим transition — они сохраняются
+    неизменными; нормальная `StateSnapshot` invariant validation (которая
+    может их инспектировать при построении replacement snapshot) продолжает
+    применяться как обычно.
 
 ### Verification
 
-- consistency review против текущих §3.8, §3.25, §10.7, §12.11;
-- проверка границы с `DEF-0015` и уже принятыми `DEC-0040`, `DEC-0050`;
-- architecture/documentation reference tests;
-- `git diff --check`;
-- проверка, что production Python не менялся;
-- проверка итогового diff на отсутствие несвязанных изменений.
+- Domain tests: `resolve_end_combat`, `build_combat_ended_v1`,
+  `apply_combat_ended_v1` (успешный путь и intrinsic/structural validation
+  failures);
+- Application handler tests: missing actor, no-Combat/id-mismatch,
+  successful path (event count, `causedBy`, save call count, side-effect
+  ordering);
+- real-adapter `FilesystemStateStore` round trip, подтверждающий persisted
+  `combat: null` и unrelated State сохранённым;
+- explicit no-Combat failure regression (`snapshot.combat is None` →
+  `ENTITY_NOT_FOUND`);
+- preservation-of-unrelated-State assertions (Creature HP/Conditions,
+  Character death-save facts, Inventory, Equipment неизменны);
+- `StartCombat → EndCombat → reload → StartCombat` regression test;
+- полный `python -m pytest` suite и `python -m mypy src/dnd_engine` по
+  завершении.
+
+### Expected touchpoints
+
+```text
+src/dnd_engine/domain/commands/end_combat.py
+src/dnd_engine/domain/rules/end_combat.py
+src/dnd_engine/domain/events/end_combat.py
+src/dnd_engine/application/handlers/end_combat.py
+tests/domain/...
+tests/application/test_end_combat_handler.py
+tests/integration/test_combat_real_adapters.py
+docs/ROADMAP.md
+docs/DEFERRED.md
+CLAUDE.md
+docs/ARCHITECTURE.md (conditional: §3.35 implementation-status wording only, if it becomes stale; no new contract/Decision)
+docs/TASK.md
+docs/DEVELOPMENT_LOG.md
+```
 
 ---
 
@@ -1392,7 +1403,6 @@ TSK-0018 считается выполненным только когда:
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0007` | Implement zero-HP Attack eligibility | PR #77 / merge commit `7798ed7` |
 | `TSK-0004` | Implement the approved minimal Character weapon source and persistence | PR #80 / merge commit `d1b23de` |
 | `TSK-0010` | Implement Combat-owned positioning and State schema V7 | PR #83 |
 | `TSK-0011` | Define exact Character Dagger Attack and Damage contracts | PR #84 |
@@ -1402,6 +1412,7 @@ TSK-0018 считается выполненным только когда:
 | `TSK-0015` | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers | PR #89 |
 | `TSK-0016` | Define minimal Character zero-HP turn and Death Save contract | PR #91 |
 | `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
+| `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
 
 ---
 
