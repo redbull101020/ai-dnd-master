@@ -1305,11 +1305,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0022
+- **Current:** —
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0024
-- **Last reviewed:** 2026-09-13
+- **Last reviewed:** 2026-09-14
 
 ---
 
@@ -1317,177 +1317,13 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0022` | `Current` | `P1` | `M` | `mechanics` | Phase 3 / Movement | Implement initial Combat tactical placement vertical slice |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
 
 ---
 
 # Open task details
 
-## TSK-0022 — Implement initial Combat tactical placement vertical slice
-
-**Status:** `Current`
-
-**Priority:** `P1`
-
-**Size:** `M`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / Movement
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 / Movement
-- `ARCHITECTURE.md` §3.36
-- `ARCHITECTURE.md` §3.30
-- `ARCHITECTURE.md` §12.9
-- `ARCHITECTURE.md` §12.13
-- `DEC-0052`
-
-**Depends on:** `TSK-0021`
-
-**Contract impact:** `none`
-
-### Goal
-
-Реализовать в production принятый §3.36 one-combatant initial tactical
-placement vertical slice: `PlaceCombatantCommand` → validation →
-`PlaceCombatantResult` → `CombatantPlaced` V1 → concrete Event application →
-replacement `CombatState.positions` → replacement `StateSnapshot` → ровно
-один successful `StateStore.save()`.
-
-### Why now
-
-§3.36/DEC-0052 (TSK-0021) канонически зафиксировали exact Command/Result/
-Event/State-application boundary, validation precedence и failure shape для
-первого authoritative writer'а `CombatState.positions`, не реализуя его.
-`positions` остаётся структурно valid (empty/partial/full), но ни один
-существующий Command её не заполняет. TSK-0022 — единственный immediate
-dependent этого уже принятого контракта; он реализует принятое решение, а не
-меняет его (`Contract impact: none`).
-
-### Scope
-
-- immutable typed `PlaceCombatantPayload(combat_id: str, creature_id: str, x: int, y: int)`;
-- immutable typed `PlaceCombatantCommand(command_id, campaign_id, actor_id, payload)`;
-- pure `resolve_place_combatant(command, combat) -> PlaceCombatantResult`;
-- `CombatantPlaced` V1 builder (`combatId`/`creatureId`/`x`/`y`, `causedBy: null`);
-- concrete `apply_combatant_placed_v1(combat, event) -> CombatState`;
-- `PlaceCombatantHandler`, реализующий exact validation precedence §3.36:
-  actor lookup → active Combat existence/id-match → placement-subject lookup
-  → `combat.order` membership → no-existing-position check → pure resolver →
-  Event metadata → `CombatantPlaced` V1 → applier → replacement snapshot →
-  ровно один `StateStore.save()`;
-- preservation уже существующих partial `positions`; добавление ровно одной
-  новой `CombatPosition`;
-- persistence через неизменённый V9 `StateSerializer`/`FilesystemStateStore`
-  (без schema bump);
-- deterministic Domain/Event/Application тесты;
-- real filesystem adapter round-trip, доказывающий, что placed position
-  переживает save/reload;
-- documentation sync (`ARCHITECTURE.md`/`ROADMAP.md` implementation-status
-  text) — только если implementation реально меняет факт статуса,
-  зафиксированный §3.36 как "not yet implemented".
-
-### Out of scope
-
-- reposition / voluntary Movement;
-- authoritative creature speed;
-- current-turn movement budget;
-- split movement;
-- Dash / Disengage;
-- forced movement;
-- difficult terrain;
-- pathfinding;
-- collision;
-- occupancy / creature footprint;
-- elevation;
-- Reactions;
-- Opportunity Attacks;
-- Cover / Visibility;
-- world/non-combat placement;
-- generic movement/spatial/turn-resource frameworks (`MovementEngine`,
-  `PlacementEngine`, `GeometryService`, `TurnResources`);
-- `CreatureState.position`;
-- редизайн `StartCombatCommand`;
-- bulk all-participants placement command.
-
-### Acceptance criteria
-
-1. Missing actor → `ENTITY_NOT_FOUND`, `entity_id=actor_id`, `field=None`.
-2. Отсутствующий/несовпадающий Combat → `ENTITY_NOT_FOUND`,
-   `entity_id=payload.combat_id`, `field="combat_id"`.
-3. Отсутствующий placement-subject Creature → `ENTITY_NOT_FOUND`,
-   `entity_id=payload.creature_id`, `field="creature_id"`.
-4. Subject не входит в `combat.order` → `ACTION_NOT_AVAILABLE`,
-   `entity_id=payload.creature_id`, `field="creature_id"`.
-5. Subject уже имеет `CombatPosition` → `ACTION_NOT_AVAILABLE`, тот же shape.
-6. Любой rejected path — ноль Events, ноль allocation Event metadata после
-   точки rejection, ноль State mutation, ноль `StateStore.save()`.
-7. Successful path — ровно один `CombatantPlaced` V1 и ровно один
-   `StateStore.save()`.
-8. Если единственный `StateStore.save()` вызывает `StateStoreError`:
-   исключение propagates unmodified; handler не конвертирует его в gameplay
-   `EngineError`; handler не возвращает successful `ResolutionResult`;
-   loaded authoritative snapshot не мутируется in-place; никакие
-   rollback/`EventStore`/replay guarantees не вводятся (§3.36 "Event
-   application / atomicity").
-9. Все существующие `CombatPosition` в `combat.positions` сохраняются без
-   изменений; добавляется ровно одна новая позиция.
-10. `action_spent`, `round`, `order`, `active_index` не меняются этим Command.
-11. Нет active-turn требования — §3.28 не применяется к этому Command.
-12. Нет ordinary-Action expenditure: `action_spent` не читается и не пишется.
-13. Нет zero-HP gate — zero-HP combatant может быть placed.
-14. Нет speed/movement-budget требования.
-15. Дублирующиеся координаты у разных combatants остаются допустимыми
-    (occupancy/collision вне scope, §3.30 unchanged).
-16. State schema version не меняется (остаётся exact V9).
-17. `CombatStarted` V1 не меняет версию.
-18. Нет прямой мутации `CombatState`, минующей Event application.
-
-### Verification
-
-- focused unit-тесты Command/Payload/Result/pure resolver;
-- Event builder/applier тесты, включая stale/inconsistent Event integrity
-  failures (`TypeError`/`ValueError`, не gameplay `EngineError`);
-- handler тесты на каждый rejection path из §3.36 validation precedence, на
-  success path, и на side-effect boundary (0 Events/0 save на rejection; 1
-  Event/1 save на success);
-- real-adapter/filesystem `FilesystemStateStore`/V9 `StateSerializer` round
-  trip, подтверждающий, что placed position переживает save/reload;
-- `StateStore.save()` failure regression: `StateStoreError` propagates
-  unchanged after Event/replacement construction, без successful result и
-  без мутации originally loaded snapshot;
-- regression: уже существующие partial `positions` сохраняются точно;
-- regression: `action_spent` и turn-order facts (`round`/`order`/
-  `active_index`) не меняются этим Command.
-
-### Expected touchpoints
-
-```text
-src/dnd_engine/domain/commands/place_combatant.py
-src/dnd_engine/domain/rules/place_combatant.py
-src/dnd_engine/domain/events/place_combatant.py
-src/dnd_engine/application/handlers/place_combatant.py
-tests/domain/...
-tests/application/...
-tests/integration/... (real-adapter round trip)
-docs/ARCHITECTURE.md (implementation-status text only, if changed)
-docs/ROADMAP.md (Movement row, only if implementation changes its factual status)
-```
-
-### Execution checkpoints
-
-Optional — может остаться одним mergeable срезом, если review не потребует
-staged review.
-
-1. Domain contract (Command/Payload/Result/pure resolver/Event
-   builder/applier).
-2. Application orchestration (`PlaceCombatantHandler`, validation
-   precedence, persistence).
-3. Real-adapter/filesystem integration round trip.
-4. Documentation sync, только если implementation-status факты изменились.
+No `Current`, `Ready`, or `Blocked` task currently requires full detail.
 
 ---
 
@@ -1495,7 +1331,6 @@ staged review.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0012` | Implement Character Dagger weapon Attack resolution | PR #85 |
 | `TSK-0013` | Implement Character Dagger Attack → Damage → Monster HP consequence | PR #86 |
 | `TSK-0014` | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers | PR #88 |
 | `TSK-0015` | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers | PR #89 |
@@ -1505,6 +1340,7 @@ staged review.
 | `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
 | `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
 | `TSK-0021` | Define minimal Combat Movement and placement-boundary contract | PR #97 |
+| `TSK-0022` | Implement initial Combat tactical placement vertical slice | PR #98 |
 
 ---
 
