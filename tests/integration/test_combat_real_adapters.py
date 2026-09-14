@@ -5,6 +5,7 @@ from pathlib import Path
 
 from dnd_engine.application.handlers.advance_turn import AdvanceTurnHandler
 from dnd_engine.application.handlers.end_combat import EndCombatHandler
+from dnd_engine.application.handlers.place_combatant import PlaceCombatantHandler
 from dnd_engine.application.handlers.start_combat import StartCombatHandler
 from dnd_engine.application.services.event_metadata import EventMetadata
 from dnd_engine.domain.commands.advance_turn import (
@@ -12,6 +13,10 @@ from dnd_engine.domain.commands.advance_turn import (
     AdvanceTurnPayload,
 )
 from dnd_engine.domain.commands.end_combat import EndCombatCommand, EndCombatPayload
+from dnd_engine.domain.commands.place_combatant import (
+    PlaceCombatantCommand,
+    PlaceCombatantPayload,
+)
 from dnd_engine.domain.commands.start_combat import (
     StartCombatCommand,
     StartCombatPayload,
@@ -19,6 +24,7 @@ from dnd_engine.domain.commands.start_combat import (
 from dnd_engine.domain.errors import ErrorCode
 from dnd_engine.domain.state.campaign import CampaignState
 from dnd_engine.domain.state.character import CharacterState
+from dnd_engine.domain.state.combat import CombatPosition, CombatState
 from dnd_engine.domain.state.creature import CreatureState
 from dnd_engine.domain.state.equipment import EquipmentState
 from dnd_engine.domain.state.inventory import InventoryItemState, InventoryState
@@ -418,6 +424,151 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     after_reopen = FilesystemStateStore(campaigns_root).load("campaign_001")
     assert after_reopen.combat is not None
     assert after_reopen.combat.id == "combat_002"
+
+    # no Event history/EventStore artifacts, no other files created
+    assert sorted(
+        path.relative_to(state_path.parent).as_posix()
+        for path in state_path.parent.rglob("*")
+        if path.is_file()
+    ) == ["state.json"]
+
+
+def test_place_combatant_persists_new_position_through_fresh_reload(
+    tmp_path: Path,
+) -> None:
+    """Real-adapter production proof for §3.36/TSK-0022: a real
+    FilesystemStateStore and the production V9 StateSerializer persist a new
+    CombatPosition written by a real PlaceCombatantHandler, visible after a
+    fresh reload, alongside an existing pre-populated CombatPosition. The
+    writer canonically sorts combat.positions by creature_id on serialize, so
+    this test checks persisted position values/identity rather than assuming
+    input tuple order survives a save/reload. No schema bump or unrelated
+    wire-shape change occurs: schemaVersion stays 9 and the raw JSON top-level
+    and state keys are unchanged before and after placement."""
+    campaigns_root = tmp_path / "campaigns"
+    character = CreatureState(
+        id="character_001",
+        definition_id="fighter",
+        ability_scores=AbilityScores(
+            strength=16,
+            dexterity=10,
+            constitution=14,
+            intelligence=10,
+            wisdom=10,
+            charisma=10,
+        ),
+        current_hp=20,
+        max_hp=20,
+    )
+    monster = CreatureState(
+        id="monster_001",
+        definition_id="goblin",
+        ability_scores=AbilityScores(
+            strength=8,
+            dexterity=14,
+            constitution=10,
+            intelligence=10,
+            wisdom=8,
+            charisma=8,
+        ),
+        current_hp=7,
+        max_hp=7,
+    )
+    existing_position = CombatPosition(creature_id="monster_001", x=2, y=3)
+    combat = CombatState(
+        id="combat_001",
+        round=1,
+        order=("character_001", "monster_001"),
+        active_index=0,
+        positions=(existing_position,),
+    )
+    snapshot = StateSnapshot(
+        campaign=CampaignState(
+            id="campaign_001", ruleset_id="dnd_5e", ruleset_version="5.1"
+        ),
+        creatures=(character, monster),
+        combat=combat,
+    )
+    FilesystemStateStore(campaigns_root).save(snapshot)
+
+    state_path = campaigns_root / "campaign_001" / "state.json"
+    before_raw = json.loads(state_path.read_text(encoding="utf-8"))
+    assert before_raw["schemaVersion"] == SCHEMA_VERSION == 9
+
+    # --- Place Combatant -> save -> fresh reload -> new position present ---
+
+    place_result = PlaceCombatantHandler(
+        state_store=FilesystemStateStore(campaigns_root),
+        event_metadata_provider=FixedEventMetadataProvider(),
+    ).handle(
+        PlaceCombatantCommand(
+            command_id="command_place_001",
+            campaign_id="campaign_001",
+            actor_id="character_001",
+            payload=PlaceCombatantPayload(
+                combat_id="combat_001",
+                creature_id="character_001",
+                x=5,
+                y=10,
+            ),
+        )
+    )
+
+    assert place_result.success is True
+    assert place_result.outcome is not None
+    assert place_result.outcome.creature_id == "character_001"
+    assert place_result.outcome.x == 5
+    assert place_result.outcome.y == 10
+    assert len(place_result.events) == 1
+    placed_event = place_result.events[0]
+    assert placed_event.type == "CombatantPlaced"
+    assert placed_event.version == 1
+    assert placed_event.payload == {
+        "combatId": "combat_001",
+        "creatureId": "character_001",
+        "x": 5,
+        "y": 10,
+    }
+
+    after_place = FilesystemStateStore(campaigns_root).load("campaign_001")
+    assert after_place.combat is not None
+    positions_by_creature_id = {
+        position.creature_id: position for position in after_place.combat.positions
+    }
+    assert positions_by_creature_id.keys() == {"character_001", "monster_001"}
+    assert positions_by_creature_id["character_001"] == CombatPosition(
+        creature_id="character_001", x=5, y=10
+    )
+    # pre-existing position value survived unchanged
+    assert positions_by_creature_id["monster_001"] == existing_position
+
+    # unrelated Combat facts untouched
+    assert after_place.combat.id == "combat_001"
+    assert after_place.combat.round == 1
+    assert after_place.combat.order == ("character_001", "monster_001")
+    assert after_place.combat.active_index == 0
+    assert after_place.combat.action_spent is False
+
+    # unrelated Creature state untouched
+    assert after_place.creatures == snapshot.creatures
+
+    # --- current production V9 persistence contract: no schema bump --------
+
+    after_raw = json.loads(state_path.read_text(encoding="utf-8"))
+    assert after_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert after_raw.keys() == before_raw.keys()
+    assert after_raw["state"].keys() == before_raw["state"].keys()
+    assert after_raw["state"]["combat"].keys() == before_raw["state"]["combat"].keys()
+
+    # positions are persisted sorted by creatureId, not necessarily input order
+    persisted_positions = after_raw["state"]["combat"]["positions"]
+    assert {
+        (position["creatureId"], position["x"], position["y"])
+        for position in persisted_positions
+    } == {("character_001", 5, 10), ("monster_001", 2, 3)}
+    assert [position["creatureId"] for position in persisted_positions] == sorted(
+        position["creatureId"] for position in persisted_positions
+    )
 
     # no Event history/EventStore artifacts, no other files created
     assert sorted(

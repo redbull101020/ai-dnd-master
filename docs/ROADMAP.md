@@ -161,7 +161,7 @@ they do not keep Phase 2 open. Rationale: [DEC-0039](DECISIONS.md#dec-0039--phas
 * [ ] Turn/action economy and turn resources (actions, bonus actions, reactions budget per turn) — §3.28/DEC-0043 define and implement the canonical active-turn eligibility boundary for the currently supported `AttackCommand` paths (row above, TSK-0006); §3.33/DEC-0049 (TSK-0014) canonically defined the first narrow ordinary-Action resource contract for those same three currently implemented `AttackCommand` consumers, and TSK-0015 has now implemented it in production: `CombatState.action_spent`, `TurnActionSpent` V1 and its applier, the `AttackHandler` ordinary-Action gate and consumption (a successful in-Combat Attack spends the Action even on a miss), Action-aware `CombatStarted`/`TurnAdvanced` projections, combined HP+Action atomic persistence, and State schema V8 read/write with V5–V7 `action_spent=False` compatibility, confirmed through a real-adapter/filesystem round trip. This remains a narrow baseline-Action slice for exactly these three consumers, not a general action-economy framework. Bonus Action and Reaction resources, Movement, Extra Attack, Action Surge, Multiattack, per-turn resets beyond this narrow slice, and the broader action economy remain open, so this capability stays unchecked.
 * [x] Combat lifecycle / `CombatEnded` — G7 had no combat-ending Command or Event. **Now implemented:** TSK-0018 ([§3.35](ARCHITECTURE.md#335-minimal-phase-3-combat-end-lifecycle-tsk-0018), DEC-0051) canonically defined the minimal explicit `EndCombatCommand` → `CombatEnded` V1 → `StateSnapshot.combat = None` contract, and TSK-0019 has since delivered its production continuation: the concrete `EndCombatCommand`/`EndCombatPayload`/`EndCombatResult` types, pure `resolve_end_combat`, the `CombatEnded` V1 builder/applier, and `EndCombatHandler` (actor-first validation, then active-Combat existence/id-match, no `DiceEngine` use, exactly one `StateStore.save()` on success). Combat ends only through this explicit Command, with no automatic victory/defeat or encounter-resolution detection, reusing the existing `combat: CombatState | None` field with no State schema change (State schema stays exact V9), and leaving Creature/Character HP, Conditions, death-save/lifecycle facts (§3.34), Inventory, and Equipment untouched — confirmed through deterministic Domain/Application tests and a real-adapter/filesystem `StartCombat → EndCombat → reload → StartCombat` round trip. Broader Monster death/lifecycle policy, zero-HP targetability, surrender/fleeing semantics, and any encounter-resolution concern remain outside this narrow slice and stay open under [DEF-0015](DEFERRED.md#def-0015).
 * [ ] Zero-HP and combatant eligibility ([DEF-0005](DEFERRED.md#def-0005), [DEF-0015](DEFERRED.md#def-0015)) — `AttackHandler` now implements the canonical Character/Monster zero-HP `AttackCommand` eligibility contract ([§3.31](ARCHITECTURE.md#331-minimal-phase-3-zero-hp-attack-eligibility-tsk-0003), DEC-0046, TSK-0007), after §3.28 active-turn eligibility and Character/Monster category establishment. **Now implemented:** TSK-0016 ([§3.34](ARCHITECTURE.md#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016), DEC-0050) canonically defined the minimal Character zero-HP turn / Death Save contract, and TSK-0017 has since delivered its production continuation — the automatic turn-start trigger (`CombatStarted`/`TurnAdvanced`), Character-owned lifecycle facts, the concrete resolvers/Results/Event builders/appliers, Application orchestration across `StartCombatHandler`/`AdvanceTurnHandler`/`AttackHandler`/`DamageHandler`/`HealingHandler`, and the additive State schema V9 reader/writer over the prior production V8 writer, confirmed through deterministic Domain/Application tests and real-adapter/filesystem integration tests. This closes [DEF-0005](DEFERRED.md#def-0005) `Done`. Still open under DEF-0015 beyond that narrow implemented slice: the broader Character zero-HP lifecycle outside §3.34, Monster Death Saves and Monster death/stabilization/lifecycle policy, zero-HP targetability, and other action-eligibility consumers beyond the current `AttackCommand`. This capability stays unchecked: one narrow implemented Character-specific slice is not the full delivered capability.
-* [ ] Movement ([§3.36](ARCHITECTURE.md#336-minimal-phase-3-initial-combat-placement-contract-tsk-0021), DEC-0052) — TSK-0021 canonically defined, decision-only, the first concrete `CombatState.positions` writer: a narrow `PlaceCombatantCommand` that gives exactly one not-yet-positioned Combat participant its initial tactical `CombatPosition`, reusing the existing §3.30 spatial State without a second authoritative positional source. Production implementation is not yet delivered (TSK-0022). Voluntary Movement itself — authoritative speed, movement allowance/budget, reposition, Dash/Disengage, forced movement, terrain/pathfinding/collision, occupancy/footprint, elevation, Reactions, and Opportunity Attacks — remains entirely undesigned. This capability stays unchecked.
+* [ ] Movement ([§3.36](ARCHITECTURE.md#336-minimal-phase-3-initial-combat-placement-contract-tsk-0021), DEC-0052) — TSK-0021 canonically defined the first concrete `CombatState.positions` writer: a narrow `PlaceCombatantCommand` that gives exactly one not-yet-positioned Combat participant its initial tactical `CombatPosition`, reusing the existing §3.30 spatial State without a second authoritative positional source. **Now implemented:** TSK-0022 has delivered its production continuation — the concrete `PlaceCombatantCommand`/`PlaceCombatantPayload`/`PlaceCombatantResult` types, pure `resolve_place_combatant`, the `CombatantPlaced` V1 builder/applier, and `PlaceCombatantHandler` (actor-first validation, then active-Combat existence/id-match, placement-subject lookup, `combat.order` membership, no-existing-position check, no `DiceEngine` use, exactly one `StateStore.save()` on success), confirmed through deterministic Domain/Application tests and a real-adapter/filesystem round trip that persists a new `CombatPosition` alongside an existing one with no State schema change (State schema stays exact V9). This is initial tactical placement only, not voluntary Movement. Voluntary Movement itself — authoritative speed, movement allowance/budget, reposition, Dash/Disengage, forced movement, terrain/pathfinding/collision, occupancy/footprint, elevation, Reactions, and Opportunity Attacks — remains entirely undesigned. This capability stays unchecked: one narrow initial-placement writer is not the full delivered Movement capability.
 * [ ] Reactions
 * [ ] Opportunity attacks
 * [ ] Weapon attacks ([DEF-0011](DEFERRED.md#def-0011)) — Character-target resolution is proven by G8. Already implemented are §3.29/DEC-0044's authoritative Inventory/Equipment weapon-source and weapon-proficiency State with exact State schema V6 persistence (TSK-0004), plus §3.30/DEC-0045's Combat-owned spatial State and additive State schema V7 persistence (TSK-0010). TSK-0012 implemented the narrow §3.32/DEC-0048 Character Dagger Attack Result/Event boundary in production: unchanged `AttackResult`, Definition-based weapon-proficiency contribution, explicit Finesse execution, the §3.30 production reach-validation handoff, and `CharacterWeaponAttackResolved` V1, evidenced through deterministic Domain/Application tests and a real-adapter round trip. TSK-0013 has since implemented the narrow Character Dagger source-Damage continuation on top of it: `resolve_character_weapon_attack_damage`, `CharacterWeaponAttackDamageResolved` V1, and the optional unchanged `DamageApplied` V1/Monster HP application, evidenced through deterministic Domain/Application tests and a real-adapter/filesystem round trip. Other weapons and ranged/thrown/ammunition remain open. This broad capability stays unchecked.
@@ -342,12 +342,13 @@ not close DEF-0015 itself: Monster death/lifecycle policy, zero-HP
 targetability, surrender/fleeing semantics, and any encounter-resolution
 concern remain open there.
 
-TSK-0021 (§3.36, DEC-0052) canonically **defined**, decision-only, the
-first concrete authoritative writer of `CombatState.positions` — a
-narrow initial tactical placement Command, not voluntary Movement:
+TSK-0021 (§3.36, DEC-0052) canonically **defined** the first concrete
+authoritative writer of `CombatState.positions` — a narrow initial
+tactical placement Command, not voluntary Movement — and TSK-0022 has now
+**implemented** it in production:
 
 ```text
-DEFINED (§3.36, DEC-0052), NOT YET IMPLEMENTED (TSK-0022):
+DEFINED (§3.36, DEC-0052) AND IMPLEMENTED (TSK-0022):
     PlaceCombatantCommand(combat_id, creature_id, x, y); actor_id and
         creature_id need not match, no new authorization/GM-control policy
     one Command places exactly one not-yet-positioned participant; already
@@ -365,7 +366,8 @@ DEFINED (§3.36, DEC-0052), NOT YET IMPLEMENTED (TSK-0022):
     no active-turn (§3.28) or action_spent (§3.33) gating; not an ordinary
         Action; zero-HP combatant may be placed
     no State schema version change (positions already persisted since V7;
-        current writer remains V9)
+        current writer remains V9), confirmed through a real-adapter/
+        filesystem round trip
 
 STILL UNDESIGNED (voluntary Movement, later separately evidenced consumer):
     authoritative speed source, movement allowance/budget, split movement
@@ -374,11 +376,11 @@ STILL UNDESIGNED (voluntary Movement, later separately evidenced consumer):
     Reactions, Opportunity Attacks
 ```
 
-This gives `TSK-0022` an unambiguous Command/Result/Event/State-application
-contract for the narrowest concrete placement case; the `Movement`
-capability row above stays unchecked because production implementation is
-not yet delivered and voluntary Movement itself remains entirely
-undesigned.
+TSK-0022 delivered the production implementation of that unambiguous
+Command/Result/Event/State-application contract for the narrowest concrete
+placement case; the `Movement` capability row above stays unchecked
+because voluntary Movement itself remains entirely undesigned — one narrow
+initial-placement writer is not the full delivered Movement capability.
 
 ## Phase 4 — Magic
 

@@ -8827,12 +8827,20 @@ field already existed and already accepted `None`).
 
 ### 3.36. Minimal Phase 3 initial Combat placement contract (TSK-0021)
 
-Implementation status: **Decision-only architecture task; no production
-implementation.** This section canonically defines the first concrete
-consumer of `CombatState.positions` (§3.30/DEC-0045) — a single Command
-that assigns exactly one not-yet-positioned combatant its initial
-combat-local `CombatPosition` — without implementing it. Production
-implementation remains TSK-0022.
+Implementation status: **Contract defined by TSK-0021 (architecture-only);
+production implementation delivered by TSK-0022.** This section canonically
+defines and TSK-0022 implements the first concrete consumer of
+`CombatState.positions` (§3.30/DEC-0045) — a single Command that assigns
+exactly one not-yet-positioned combatant its initial combat-local
+`CombatPosition`. `PlaceCombatantCommand`/`PlaceCombatantPayload`,
+`resolve_place_combatant`, `PlaceCombatantResult`, the `CombatantPlaced` V1
+builder/applier, and `PlaceCombatantHandler` are implemented in production,
+confirmed through deterministic Domain/Application tests and a
+real-adapter/filesystem round trip that persists a new `CombatPosition`
+alongside an existing one and reloads both correctly. The current
+production State schema writer remains exact V9 (§3.34, §12.13); this
+section introduced no new schema version, confirmed by that same round
+trip (see "State schema" below).
 
 #### Scope
 
@@ -9102,8 +9110,8 @@ serializer contract (§§3.30, 3.33, 3.34, 12.9, 12.13) is unchanged.
 **KEEP CONCRETE.** No `MovementEngine`, `PlacementEngine`, `GeometryService`,
 generic spatial abstraction, generic movement resource, `TurnResources`,
 generic Event-applier registry, or generic state-transition framework is
-introduced. `PlaceCombatantCommand`/`apply_combatant_placed_v1` will follow
-the same concrete §3.18 mutating-command pattern already used by
+introduced. `PlaceCombatantCommand`/`apply_combatant_placed_v1` follow the
+same concrete §3.18 mutating-command pattern already used by
 `StartCombatHandler`, `AdvanceTurnHandler`, and `EndCombatHandler` (§§3.25,
 3.35): it appends exactly one new `CombatPosition` to an existing tuple,
 with no dice, no Definition lookup, and no new State Owner.

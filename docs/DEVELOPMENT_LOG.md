@@ -7340,3 +7340,35 @@ changed no production Python.
 
 Verification: `python -m pytest tests/architecture/` — 21 passed; `git
 diff --check` clean. Production continuation is TSK-0022.
+
+## 2026-09-13 — TSK-0022: Implement initial Combat tactical placement vertical slice (delivery summary)
+
+Delivered the production continuation of the §3.36/DEC-0052 contract:
+`PlaceCombatantCommand`/`PlaceCombatantPayload`, pure
+`resolve_place_combatant`/`PlaceCombatantResult`, the `CombatantPlaced` V1
+builder/applier, and `PlaceCombatantHandler`. Validation precedence is
+actor-first, then active-Combat existence/id-match, then placement-subject
+lookup, then `combat.order` membership, then no-existing-position check,
+then the pure resolver — reusing `ENTITY_NOT_FOUND`/`ACTION_NOT_AVAILABLE`
+with no new `ErrorCode`. `apply_combatant_placed_v1` appends exactly one
+new `CombatPosition` to the existing `CombatState.positions` tuple via
+replacement construction, leaving `id`/`round`/`order`/`active_index`/
+`action_spent` and all Creature/Character/Inventory/Equipment State
+unchanged; no active-turn or `action_spent` gating, not an ordinary Action,
+zero-HP combatant may be placed, duplicate coordinates across combatants
+remain allowed. No State schema change: the current production writer
+remains exact V9. Broader voluntary Movement — authoritative speed,
+movement allowance/budget, reposition, Dash/Disengage, forced movement,
+terrain/pathfinding/collision, occupancy/footprint, elevation, Reactions,
+and Opportunity Attacks — stays entirely out of scope and undesigned.
+
+Verification: focused Domain/Application tests for the new Command/
+Result/Event/Handler, including atomicity regressions (metadata-failure
+and `StateStoreError` propagation) and side-effect-boundary assertions
+(zero Events/save/source-snapshot-mutation on every rejection path); a
+real-adapter/filesystem `FilesystemStateStore`/V9 `StateSerializer` round
+trip persisting a new `CombatPosition` alongside an existing one; full
+`python -m pytest`; `python -m mypy src/dnd_engine`; `git diff --check`
+clean. Architecture §3.36, Roadmap Phase 3 `Movement`, and `CLAUDE.md`'s
+implemented-contract index updated to reflect production-implemented
+status; the `Movement` Roadmap checkbox stays unchecked.
