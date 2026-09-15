@@ -552,10 +552,13 @@ Required regression coverage (behavioral, not implementation-prescriptive):
 
 ## 19. Explicit v1 out-of-scope list
 
-This document, and any v1 implementation built from it, explicitly does
-**not** include:
+This document (`TSK-0025`) is design/contract only and does not itself
+implement a runner/orchestrator. `TSK-0026` is explicitly the task that
+implements the minimal v1 runner/orchestrator described here.
 
-- the runner/orchestrator implementation itself;
+Beyond that, this document, and any v1 implementation built from it
+(including `TSK-0026`), explicitly does **not** include:
+
 - refinement of `TSK-0023`;
 - a real autonomous pilot run;
 - a GitHub Actions autonomous runner;
