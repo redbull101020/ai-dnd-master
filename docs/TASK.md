@@ -1072,16 +1072,17 @@ this branch's PR actually merges.
 If a task's accepted result lands on `main` without a prepared closure — by
 mistake, or for an exceptional reason — reconciliation remains mandatory:
 perform the same closure procedure above, starting from current
-`origin/main`, through the normal branch/review/authorization workflow
-`AGENTS.md` establishes for any other change. This section does not
-authorize a direct commit or other substantive work on `main`; the
-reconciliation itself is prepared on a dedicated branch and reviewed/merged
-like any other change. Implementation of the next `Current` task must not
-begin until the tracker is reconciled.
+`origin/main`, through the normal `MANUAL` branch/review/authorization
+workflow `AGENTS.md` establishes for any other change — this fallback
+reconciliation is not an `AUTONOMOUS_PR` prospective Task Closure path. This
+section does not authorize a direct commit or other substantive work on
+`main`; the reconciliation itself is prepared on a dedicated branch and
+reviewed/merged like any other change. Implementation of the next `Current`
+task must not begin until the tracker is reconciled.
 
 ```text
 accepted result on main without prepared closure
-→ branch from current origin/main (normal AGENTS.md workflow)
+→ branch from current origin/main (normal MANUAL workflow)
 → close/reconcile that task in TASK.md
 → select/reconcile Current + Next + blockers
 → review + merge the reconciliation
