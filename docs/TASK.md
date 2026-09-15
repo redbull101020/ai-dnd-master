@@ -1306,10 +1306,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0026
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0025
+- **Next free ID:** TSK-0027
 - **Last reviewed:** 2026-09-15
 
 ---
@@ -1318,11 +1318,127 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0026` | `Current` | `P2` | `M` | `engineering` | Cross-cutting engineering prerequisite for piloting the approved `AUTONOMOUS_PR` workflow on current Phase 3 development | Implement minimal local `AUTONOMOUS_PR` execution harness |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
 
 ---
 
 # Open task details
+
+## TSK-0026 — Implement minimal local AUTONOMOUS_PR execution harness
+
+**Status:** `Current`
+
+**Priority:** `P2`
+
+**Size:** `M`
+
+**Group:** `engineering`
+
+**Roadmap target:** Cross-cutting engineering prerequisite for piloting the approved `AUTONOMOUS_PR` workflow on current Phase 3 development
+
+**References:**
+
+- `AGENTS.md` — "Change authorisation and diff review", `AUTONOMOUS_PR` (bounded exception)
+- `docs/AUTONOMOUS_PR_HARNESS.md` — the execution-mechanics contract this task implements
+- `TSK-0025` — Define minimal `AUTONOMOUS_PR` execution-harness contract
+
+**Depends on:** `TSK-0025`
+
+**Contract impact:** `none`
+
+### Goal
+
+Implement the minimal local Python execution harness defined by
+`docs/AUTONOMOUS_PR_HARNESS.md`, capable of executing an already-authorised
+single-task `AUTONOMOUS_PR` run through deterministic gates to draft PR /
+`READY_FOR_HUMAN_MERGE` / `STOP`, using configured external
+implementer/reviewer commands and without autonomous merge or persisted
+orchestration state.
+
+### Why now
+
+`TSK-0025` defined the minimal, provider-neutral execution-harness contract
+this task now gives a first concrete implementation. It is the next
+engineering prerequisite before `AUTONOMOUS_PR` can actually be piloted on
+current Phase 3 development. `TSK-0023` remains `Backlog / P2 / L` and is
+not touched by this task.
+
+### Scope
+
+- Implementation under `tools/autonomous_pr/` or an equally narrow
+  repository-tooling location justified by current structure;
+- Python 3.12 stdlib-first, no production dependency;
+- deterministic state/gate orchestration matching the harness contract's
+  phase model;
+- trusted invocation input boundary that never treats a CLI arg/task ID as
+  authorization on its own;
+- freshly fetched `Current`-task validation before implementation begins;
+- a separated implementer/reviewer process/context boundary;
+- explicit task/plan/patch/verdict handoff artifacts;
+- a strict reviewer-verdict parser (`APPROVED`/`CHANGES_REQUESTED`/
+  `BLOCKED` only; anything else is terminal `BLOCKED`, never repair);
+- deterministic verification command execution;
+- the existing `review.patch` A/B/C semantics, including the pre-closure
+  cumulative implementation review vs. mode C distinction;
+- orchestrator-owned branch/commit/push/draft-PR side effects;
+- no merge, no direct `main` write, no GitHub REST fallback;
+- in-memory live-run state only;
+- a bounded repair loop with a finite implementation-level limit;
+- safe fail-closed behavior wherever restart/replay cannot be proven safe;
+- `origin/main` revalidation and cumulative-audit invalidation/replay;
+- fake-agent/temp-Git deterministic tests;
+- no real LLM/network dependency for core harness tests;
+- documentation sync directly caused by this implementation (if any).
+
+### Out of scope
+
+- `TSK-0023` refinement/implementation;
+- autonomous merge;
+- a GitHub Actions autonomous runner;
+- cloud/container orchestration;
+- a DB/broker/dashboard;
+- persisted run state;
+- a provider SDK;
+- a generic provider adapter framework;
+- multi-task/parallel orchestration;
+- automatic queue traversal/task discovery;
+- gameplay changes;
+- new production dependencies.
+
+### Acceptance criteria
+
+- the harness cannot originate or infer user authorization;
+- correct `Current`-task validation against freshly fetched `origin/main`;
+- implementer/reviewer isolation is enforced;
+- explicit handoffs exist for every load-bearing artifact;
+- strict three-verdict handling, with any other outcome terminal `BLOCKED`;
+- commit/push happen only after an accepted review;
+- no `main` writes, no merge/auto-merge;
+- draft PR only, through `gh`;
+- exact `review.patch` A/B/C range gates are respected;
+- a stale cumulative audit is rebuilt/re-reviewed or the run fails closed;
+- bounded repair with a finite limit;
+- no implicit resume after lost run state;
+- fake-agent/temp-repository tests exist and pass;
+- no network/real LLM requirement for core tests;
+- no new production dependency is introduced.
+
+### Verification
+
+Because this task changes executable tooling behavior (per `AGENTS.md`
+"Testing"):
+
+- focused harness tests;
+- full `pytest`;
+- `mypy` must cover the harness source — either by extending
+  `[tool.mypy].files` in `pyproject.toml` to include the harness
+  implementation path (e.g. `tools/autonomous_pr`), or by running the
+  already-configured `mypy` explicitly against that path — so the type
+  check exercises the harness code itself, not only `src/dnd_engine`;
+- `git diff --check`;
+- deterministic fake-agent/temp-repository coverage;
+- no real provider/network requirement for core verification.
 
 ---
 
@@ -1330,7 +1446,6 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0014` | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers | PR #88 |
 | `TSK-0015` | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers | PR #89 |
 | `TSK-0016` | Define minimal Character zero-HP turn and Death Save contract | PR #91 |
 | `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
@@ -1340,6 +1455,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | `TSK-0021` | Define minimal Combat Movement and placement-boundary contract | PR #97 |
 | `TSK-0022` | Implement initial Combat tactical placement vertical slice | PR #98 |
 | `TSK-0024` | Define bounded `AUTONOMOUS_PR` development-governance contract | PR #101 |
+| `TSK-0025` | Define minimal `AUTONOMOUS_PR` execution-harness contract | PR #102 |
 
 ---
 
