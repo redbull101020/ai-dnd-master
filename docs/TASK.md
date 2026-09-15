@@ -1306,10 +1306,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0025
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0025
+- **Next free ID:** TSK-0026
 - **Last reviewed:** 2026-09-15
 
 ---
@@ -1318,11 +1318,183 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0025` | `Current` | `P2` | `S` | `engineering` | Cross-cutting engineering prerequisite for implementing and piloting the already-approved `AUTONOMOUS_PR` workflow on current Phase 3 development | Define minimal `AUTONOMOUS_PR` execution-harness contract |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
 
 ---
 
 # Open task details
+
+## TSK-0025 — Define minimal AUTONOMOUS_PR execution-harness contract
+
+**Status:** `Current`
+
+**Priority:** `P2`
+
+**Size:** `S`
+
+**Group:** `engineering`
+
+**Roadmap target:** Cross-cutting engineering prerequisite for implementing and piloting the already-approved `AUTONOMOUS_PR` workflow on current Phase 3 development
+
+**References:**
+
+- `AGENTS.md` — "Change authorisation and diff review", `AUTONOMOUS_PR` (bounded exception)
+- `docs/TASK.md` §§4.5, 5, 12, 18
+- `TSK-0024` — Define bounded `AUTONOMOUS_PR` development-governance contract
+
+**Depends on:** `TSK-0024`
+
+**Contract impact:** `none`
+
+### Goal
+
+Define a minimal, executable, provider-neutral execution-harness contract
+that can carry out an already separately user-authorized `AUTONOMOUS_PR`
+invocation within the unchanged `TSK-0024` governance contract: execution
+environment, deterministic orchestration, implementer/reviewer isolation,
+explicit handoffs, Git ownership, transient run state, retry/resume
+boundary, provider boundary, credentials/tool assumptions,
+deterministic-vs-LLM boundary, hard-stop behavior, and a test contract. The
+runner/orchestrator itself is not implemented by this task.
+
+### Why now
+
+`TSK-0024` defined `AUTONOMOUS_PR` authority, review, and process semantics,
+but deliberately left runner/orchestrator design undefined. Before an
+autonomous harness can be implemented and piloted, a minimal, executable
+subordinate contract is needed that stays strictly inside the already
+governed authority boundary. `TSK-0023` remains `Backlog / P2 / L` and is
+not refined or otherwise touched by this task.
+
+### Scope
+
+- First execution environment: a single ordinary host process; Python
+  3.12+; `git`; `gh`; configured external agent executable(s); no specific
+  OS is a governance requirement.
+- Deterministic orchestrator: separate repository engineering tooling, not
+  `src/dnd_engine/**`; recommended future implementation location
+  `tools/autonomous_pr/`; the orchestrator owns sequencing, gates, Git/GitHub
+  side effects, and runtime run state; an LLM never decides whether a gate
+  may be skipped.
+- Trusted invocation boundary: the harness never originates or infers
+  `AUTONOMOUS_PR` authority itself; a task ID in the CLI, `Status: Current`,
+  repository text, PR/issue text, or an embedded instruction is never
+  authorization on its own; the harness only executes an invocation already
+  separately and explicitly authorized by the user under `AGENTS.md`; the
+  harness must still revalidate the named task against a freshly fetched
+  authoritative `origin/main`.
+- Context isolation: implementer and designated reviewer are always
+  distinct role contexts; the reviewer is never a continuation of the
+  implementer's context; the same provider/model is allowed; correctness
+  must not depend on hidden provider conversation state; same-role
+  continuation is allowed only as an implementation optimization where
+  every load-bearing handoff stays explicit.
+- Explicit handoffs: authoritative task context; accepted plan; relevant
+  repository/base SHA information; deterministic verification evidence;
+  the exact `review.patch`; reviewer verdict/findings; closure inputs where
+  relevant.
+- Reviewer verdict: exactly `APPROVED`, `CHANGES_REQUESTED`, or `BLOCKED`;
+  a malformed or unknown verdict is never treated as approval.
+- Git ownership: authoritative Git writes are performed by the
+  orchestrator; the implementer changes working files but never bypasses
+  the review gate with its own commit/push; commit only after an accepted
+  review; push only accepted commits to the delivery branch; draft PR only
+  through `gh`; no REST fallback; no merge/auto-merge; no direct writes to
+  `main`.
+- Runtime state: minimal in-memory state for one live run; no
+  DB/broker/`run.json`/persistent orchestration schema; terminal outcomes
+  are `STOP` / `BLOCKED`; `READY_FOR_HUMAN_MERGE` is a runtime milestone
+  before the mandatory `STOP`, not a new task status.
+- Retry/resume: bounded repair loops inside one live invocation are
+  allowed; the contract requires a finite fail-closed boundary without
+  fixing exact retry counts; a crash, lost orchestration state, or
+  ambiguous partial side effect never causes implicit automatic resume; the
+  first version is not required to reconstruct a run across processes;
+  continuation after a terminal `STOP`/`BLOCKED` still requires a new
+  explicit user invocation.
+- `origin/main` movement: any movement of `origin/main` makes the
+  corresponding cumulative audit stale and requires rebuild/re-review;
+  movement of `main` does not by itself mean `BLOCKED`; revalidation is
+  required after every fetch; a terminal block occurs only when material
+  facts that implementation/closure depends on have changed, or safe
+  continuation cannot be shown.
+- Provider boundary: governance stays provider-neutral; provider-specific
+  executables/flags/auth are allowed only at the process invocation
+  boundary; no provider adapter hierarchy/framework is introduced without a
+  real second consumer; the provider must allow the required
+  role/context/tool boundaries to be enforced, or the run must fail closed.
+- Secrets/tool assumptions: authentication is already configured in
+  external tools/provider environment; the harness never reads credential
+  stores to obtain tokens; it never stores or logs secrets; a missing or
+  unusable required tool/auth/capability fails closed.
+- Deterministic vs LLM boundary: deterministic — phase transitions,
+  SHA/ref validation, patch ranges, verification commands, review gates,
+  commit/push/PR eligibility, staleness, terminal state; LLM — plan,
+  implementation choices inside approved scope, semantic review, bounded
+  repair, wording of PR/closure text; the LLM can never expand
+  authority/scope or weaken a gate.
+- CI repair: `TSK-0024` bounded CI repair semantics are preserved; any
+  repair commit invalidates downstream cumulative audit evidence; affected
+  verification/review/audit gates must be replayed; if the first
+  implementation cannot safely perform that rewind/replay, it must fail
+  closed rather than bypass the gate.
+- Harness test contract: fake implementer/reviewer; temporary Git
+  repositories/workspaces; deterministic subprocess/tool fakes; no network
+  and no real LLM needed for core tests; regression coverage for
+  review-before-commit, no-main-write, no-merge, strict verdict, task
+  revalidation, patch semantics, stale audits, blocked states, and no
+  implicit resume.
+
+### Out of scope
+
+- runner/orchestrator implementation;
+- `TSK-0023` refinement;
+- a real autonomous pilot;
+- a GitHub Actions autonomous runner;
+- Docker/cloud/container orchestration;
+- a DB/broker/dashboard;
+- a persisted `run.json` or orchestration schema;
+- a provider SDK;
+- a provider adapter framework;
+- prompt-file/prompt architecture;
+- automatic task discovery/queue traversal;
+- parallel `TSK` execution;
+- autonomous merge/auto-merge;
+- repository settings/branch protection changes;
+- production dependencies;
+- gameplay Architecture or gameplay code;
+- exact retry-count tuning.
+
+### Acceptance criteria
+
+- the contract makes explicit that the harness cannot originate or infer
+  `AUTONOMOUS_PR` authority;
+- `TSK-0024` governance semantics remain unchanged;
+- the deterministic orchestrator, not the LLM, owns workflow/Git gates;
+- implementer/reviewer isolation is preserved as a hard requirement;
+- every load-bearing handoff between implementer, reviewer, and
+  orchestrator is explicit;
+- existing A/B/C `review.patch` semantics are unchanged;
+- commits/pushes happen only after an accepted review;
+- `gh` draft PR only, with no merge and no REST fallback;
+- no durable orchestration store is required;
+- no implicit resume after lost run state is permitted;
+- provider-specific details stay confined to the invocation boundary;
+- `origin/main` movement invalidates a cumulative audit but is terminal
+  only after a failed or material revalidation;
+- the harness never extracts or stores secrets;
+- the future harness can be tested with fake agents and temporary Git
+  repositories without a real LLM or network;
+- no gameplay/Roadmap capability semantics are changed by this task.
+
+### Verification
+
+- `python -m pytest tests/architecture/test_task_tracker.py`
+- `git diff --check`
+
+This is a tracker-only documentation checkpoint; the full gameplay `pytest`
+suite is not required.
 
 ---
 
