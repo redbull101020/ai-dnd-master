@@ -22,12 +22,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import repository
 from .model import TaskContext, TaskStatus
 
 _TASK_ID = r"TSK-\d{4,}"
 
 _ANY_HEADING = re.compile(r"^#{1,2}\s", re.MULTILINE)
 _LEVEL_ONE_HEADING = re.compile(r"^#\s", re.MULTILINE)
+_HORIZONTAL_RULE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
 _CURRENT_POSITION_HEADING = re.compile(r"^#\s+Current position\s*$", re.MULTILINE)
 _OPEN_TASK_INDEX_HEADING = re.compile(r"^#\s+Open task index\s*$", re.MULTILINE)
 _OPEN_TASK_DETAILS_HEADING = re.compile(r"^#\s+Open task details\s*$", re.MULTILINE)
@@ -63,10 +65,18 @@ class TaskRevalidationError(Exception):
     """
 
 
-def load_task_queue_text(repository_root: Path) -> str:
-    """Read the authoritative ``docs/TASK.md`` text. No parsing happens here."""
+def load_task_queue_text_at_ref(repo: Path, ref: str) -> str:
+    """Read the authoritative ``docs/TASK.md`` text as it exists at ``ref``.
 
-    return (repository_root / "docs" / "TASK.md").read_text(encoding="utf-8")
+    Delegates to :func:`.repository.read_file_at_ref` (``git show
+    <ref>:docs/TASK.md``) rather than reading the local working tree: a
+    clean local branch can still be stale or different from
+    ``origin/main``, so preflight revalidation must never trust the local
+    filesystem's ``docs/TASK.md`` (``docs/AUTONOMOUS_PR_HARNESS.md`` §3). No
+    parsing happens here.
+    """
+
+    return repository.read_file_at_ref(repo, ref, "docs/TASK.md")
 
 
 def revalidate_current_task(task_queue_text: str, task_id: str) -> TaskContext:
@@ -118,12 +128,13 @@ def revalidate_current_task(task_queue_text: str, task_id: str) -> TaskContext:
 
     _require_current_index_row(task_queue_text, task_id)
 
-    detail_block = _find_detail_block(task_queue_text, task_id)
-    if detail_block is None:
+    detail_section = _find_detail_section(task_queue_text, task_id)
+    if detail_section is None:
         raise TaskRevalidationError(
             f"no '{task_id}' section found inside the authoritative "
             "'# Open task details'"
         )
+    detail_text, detail_block = detail_section
 
     status = _require_current_status(detail_block, task_id)
     roadmap_target = _require_roadmap_target(detail_block, task_id)
@@ -135,6 +146,7 @@ def revalidate_current_task(task_queue_text: str, task_id: str) -> TaskContext:
         status=status,
         roadmap_target=roadmap_target,
         depends_on=depends_on,
+        detail_text=detail_text,
     )
 
 
@@ -230,7 +242,30 @@ def _require_current_index_row(task_queue_text: str, task_id: str) -> None:
         )
 
 
-def _find_detail_block(task_queue_text: str, task_id: str) -> str | None:
+def _find_detail_section(
+    task_queue_text: str, task_id: str
+) -> tuple[str, str] | None:
+    """Locate the task's authoritative detail section.
+
+    Returns ``(full_text, body_text)`` — ``full_text`` is the exact
+    heading-and-body text (``## <task_id> — ...`` through its Goal, Scope,
+    Out of scope, Acceptance criteria, Verification, and anything else the
+    section happens to contain), used verbatim as explicit handoff evidence
+    (:attr:`.model.TaskContext.detail_text`, §6). ``body_text`` is the
+    heading-less remainder the narrow field extractors below search within,
+    unchanged from before this field was added. Returns ``None`` when no
+    such section exists.
+
+    The section ends at the next heading (as before) or at the next
+    ``docs/TASK.md`` horizontal-rule section separator (``---`` alone on
+    its line), whichever comes first: when a task's detail is the last one
+    inside ``# Open task details`` (the common case — real usage currently
+    has exactly one), nothing but that separator marks where its own
+    content ends before ``# Recently completed`` begins, so without this
+    the captured text would trail off into the next section's separator
+    rather than stopping at the task's own content.
+    """
+
     section = _section_after(
         task_queue_text, _OPEN_TASK_DETAILS_HEADING, boundary=_LEVEL_ONE_HEADING
     )
@@ -240,10 +275,18 @@ def _find_detail_block(task_queue_text: str, task_id: str) -> str | None:
     )
     if match is None:
         return None
-    start = match.end()
-    next_heading = _ANY_HEADING.search(section, pos=start)
-    end = next_heading.start() if next_heading is not None else len(section)
-    return section[start:end]
+    start_of_heading = match.start()
+    start_of_body = match.end()
+    end = len(section)
+    next_heading = _ANY_HEADING.search(section, pos=start_of_body)
+    if next_heading is not None:
+        end = min(end, next_heading.start())
+    horizontal_rule = _HORIZONTAL_RULE.search(section, pos=start_of_body)
+    if horizontal_rule is not None:
+        end = min(end, horizontal_rule.start())
+    full_text = section[start_of_heading:end].strip("\n")
+    body_text = section[start_of_body:end]
+    return full_text, body_text
 
 
 def _require_current_status(detail_block: str, task_id: str) -> TaskStatus:

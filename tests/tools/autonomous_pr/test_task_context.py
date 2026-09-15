@@ -156,22 +156,54 @@ def _task_queue_text(
 
 
 def test_correct_current_task_accepted() -> None:
+    depends_on = ("TSK-0025",)
+    roadmap_target = "Cross-cutting engineering prerequisite"
     text = _task_queue_text(
         current_id="TSK-0026",
         task_id="TSK-0026",
-        depends_on=("TSK-0025",),
-        done_ids=("TSK-0025",),
-        roadmap_target="Cross-cutting engineering prerequisite",
+        depends_on=depends_on,
+        done_ids=depends_on,
+        roadmap_target=roadmap_target,
     )
 
     context = revalidate_current_task(text, "TSK-0026")
 
+    expected_detail_text = _detail_block(
+        task_id="TSK-0026",
+        detail_status="Current",
+        roadmap_target=roadmap_target,
+        depends_on=depends_on,
+        depends_on_present=True,
+        depends_on_raw=None,
+        duplicate_status_field=False,
+        duplicate_roadmap_field=False,
+        duplicate_depends_on_field=False,
+    )
     assert context == TaskContext(
         task_id="TSK-0026",
         status=TaskStatus.CURRENT,
-        roadmap_target="Cross-cutting engineering prerequisite",
-        depends_on=("TSK-0025",),
+        roadmap_target=roadmap_target,
+        depends_on=depends_on,
+        detail_text=expected_detail_text,
     )
+
+
+def test_detail_text_captures_full_section_stopping_before_separator() -> None:
+    """``detail_text`` must carry the exact authoritative section verbatim
+    (heading through Goal) but stop before the following '---' section
+    separator and '# Recently completed' -- the common real case where a
+    task's detail is the only (or last) one inside '# Open task details'
+    has nothing else to mark where its own content ends."""
+
+    text = _task_queue_text(current_id="TSK-0026", task_id="TSK-0026")
+
+    context = revalidate_current_task(text, "TSK-0026")
+
+    assert context.detail_text.startswith("## TSK-0026 — Example task")
+    assert "### Goal" in context.detail_text
+    assert "Deliver it." in context.detail_text
+    assert "---" not in context.detail_text
+    assert "Recently completed" not in context.detail_text
 
 
 def test_wrong_task_id_rejected() -> None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 
 class TaskStatus(Enum):
@@ -80,12 +81,24 @@ class TaskContext:
     check has already passed (``task_context.revalidate_current_task``);
     this is descriptive execution input, never proof of user authorization
     for ``AUTONOMOUS_PR`` (``docs/AUTONOMOUS_PR_HARNESS.md`` §3).
+
+    ``detail_text`` is the exact, unparsed authoritative ``## <task_id> —
+    ...`` section text (heading and full body — Goal, Scope, Out of scope,
+    Acceptance criteria, Verification, and anything else the section
+    happens to contain) as it stood at revalidation time. It exists so the
+    full task detail can be handed to the implementer/reviewer roles and
+    recorded as an explicit artifact verbatim (§6), without this module
+    growing a Markdown AST or a field for every possible task-detail
+    subsection. It is also compared for exact equality when detecting
+    whether ``origin/main`` moving between preflight and delivery-branch
+    creation changed anything the already-accepted plan depended on.
     """
 
     task_id: str
     status: TaskStatus
     roadmap_target: str
     depends_on: tuple[str, ...]
+    detail_text: str
 
 
 @dataclass(frozen=True)
@@ -95,3 +108,55 @@ class ReviewResult:
     verdict: ReviewVerdict
     findings: str
     raw_output: str
+
+
+@dataclass(frozen=True)
+class VerificationCommandResult:
+    """The outcome of one orchestrator-owned deterministic verification subprocess.
+
+    Pass/fail is derived only from ``returncode`` — the LLM never decides
+    whether a failing check is "good enough" (``docs/AUTONOMOUS_PR_HARNESS.md``
+    §15).
+    """
+
+    command: tuple[str, ...]
+    returncode: int
+    stdout: str
+    stderr: str
+    passed: bool
+
+
+@dataclass(frozen=True)
+class VerificationEvidence:
+    """Explicit handoff evidence for one deterministic verification run (§6)."""
+
+    commands: tuple[VerificationCommandResult, ...]
+    passed: bool
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """The outcome of one orchestrator run/slice, returned to the CLI caller.
+
+    This Group 3 slice only ever implements phases up to an accepted,
+    committed, and pushed implementation checkpoint
+    (``docs/AUTONOMOUS_PR_HARNESS.md`` §9's ``preflight`` through
+    ``implementation checkpoint / deterministic verification / checkpoint
+    review`` cycle) — never the draft-PR/Task Closure/mode-C/final-CI tail
+    that actually leads to the run's real terminal ``STOP``. So ``outcome``
+    here is only ever :attr:`RunOutcome.BLOCKED` (a genuine fail-closed
+    terminal condition) or ``None`` (this slice completed the requested
+    phases normally; the invocation has not reached a terminal outcome).
+    This slice never manufactures a premature :attr:`RunOutcome.STOP` —
+    only a later slice that actually reaches ``READY_FOR_HUMAN_MERGE`` may
+    report that.
+    """
+
+    task_id: str
+    phase: Phase
+    outcome: RunOutcome | None
+    delivery_branch: str | None
+    head_sha: str | None
+    repair_count: int
+    blocked_reason: str | None
+    artifacts_dir: Path | None

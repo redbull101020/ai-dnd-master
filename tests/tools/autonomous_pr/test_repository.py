@@ -104,6 +104,88 @@ def test_branch_created_from_exact_origin_main(git_env: GitEnv) -> None:
     assert repo_module.resolve_sha(work, "delivery") == expected_base
 
 
+def test_fetch_and_capture_origin_main_sha_matches_origin_main_sha(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+
+    captured = repo_module.fetch_and_capture_origin_main_sha(work)
+
+    assert captured == repo_module.origin_main_sha(work)
+
+
+def test_create_delivery_branch_from_sha_anchors_to_exact_sha_not_origin_main(
+    git_env: GitEnv,
+) -> None:
+    """The branch must be created from the given SHA even if origin/main
+    has since moved past it -- this function never re-fetches or
+    re-resolves origin/main itself."""
+
+    work = git_env.work
+    seed = git_env.seed
+    captured_sha = repo_module.fetch_and_capture_origin_main_sha(work)
+
+    _push_new_commit_to_origin_main(seed, filename="moved-on.txt")
+
+    repo_module.create_delivery_branch_from_sha(work, "delivery", captured_sha)
+
+    assert repo_module.current_branch(work) == "delivery"
+    assert repo_module.resolve_sha(work, "delivery") == captured_sha
+
+    repo_module.fetch_origin(work)
+    assert repo_module.resolve_sha(work, "delivery") != repo_module.origin_main_sha(work)
+
+
+def test_create_delivery_branch_from_sha_never_fetches(
+    git_env: GitEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = git_env.work
+    base_sha = repo_module.fetch_and_capture_origin_main_sha(work)
+    real_run = repo_module.subprocess.run
+
+    def fail_if_fetch(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["git", "fetch"]:
+            raise AssertionError("create_delivery_branch_from_sha must never fetch")
+        return real_run(args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repo_module.subprocess, "run", fail_if_fetch)
+
+    repo_module.create_delivery_branch_from_sha(work, "delivery", base_sha)
+
+    assert repo_module.resolve_sha(work, "delivery") == base_sha
+
+
+def test_create_delivery_branch_from_sha_refuses_protected_name(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    base_sha = repo_module.fetch_and_capture_origin_main_sha(work)
+
+    with pytest.raises(RepositoryError):
+        repo_module.create_delivery_branch_from_sha(work, "main", base_sha)
+
+
+def test_create_delivery_branch_from_sha_refuses_dirty_worktree(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    base_sha = repo_module.fetch_and_capture_origin_main_sha(work)
+    (work / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(RepositoryError):
+        repo_module.create_delivery_branch_from_sha(work, "delivery", base_sha)
+
+
+def test_create_delivery_branch_from_sha_refuses_collision(git_env: GitEnv) -> None:
+    work = git_env.work
+    base_sha = repo_module.fetch_and_capture_origin_main_sha(work)
+    repo_module.create_delivery_branch_from_sha(work, "delivery", base_sha)
+    _run_git(["checkout", "-q", "main"], cwd=work)
+
+    with pytest.raises(RepositoryError):
+        repo_module.create_delivery_branch_from_sha(work, "delivery", base_sha)
+
+
 def test_create_delivery_branch_refuses_dirty_worktree(git_env: GitEnv) -> None:
     work = git_env.work
     (work / "dirty.txt").write_text("dirty\n", encoding="utf-8")

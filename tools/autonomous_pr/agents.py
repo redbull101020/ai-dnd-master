@@ -42,6 +42,57 @@ class AgentInvocationSpec:
     Provider-specific detail (executable, flags, sandbox/tool-access flags,
     how context is injected) is confined to this invocation boundary per
     §13; this dataclass does not interpret any of it.
+
+    Deliberately carries no session/resume-identifier field, and
+    :func:`run_agent` never generates one — every invocation is a plain,
+    independent ``subprocess.run`` call with the fixed ``args`` given here.
+    That structurally guarantees two things: the orchestrator can never
+    forward an implementer session/resume reference to the reviewer (there
+    is nowhere to put one), and every call is its own separate OS process.
+
+    It does **not** by itself guarantee that the external executable named
+    by ``executable`` is internally stateless/one-shot — an opaque
+    configured CLI could, for example, default to resuming its own last
+    conversation regardless of being launched as a fresh process each time.
+    Whether the configured reviewer integration is genuinely one-shot/
+    fresh-context capable is a property of that external command, verified
+    by whoever configures it (per ``docs/AUTONOMOUS_PR_HARNESS.md`` §13's
+    "the run must fail closed rather than proceed with a weakened isolation
+    guarantee" if it is not) — this module has no way to inspect an
+    arbitrary executable's internal behavior and does not claim to.
+
+    ``fresh_context_capable``, ``can_edit_working_files``, and
+    ``has_git_or_github_write_access`` are explicit **operator/
+    configuration assertions** about how the external command named by
+    ``executable`` is itself sandboxed or configured — never user
+    authorization for ``AUTONOMOUS_PR`` (``AGENTS.md`` "Valid invocation"),
+    and never inferred, derived, or verified by this module. Generic Python
+    cannot inspect an opaque external process and prove any of these
+    properties true; declaring them here is a narrow, provider-neutral
+    precondition ``.orchestrator.OrchestratorConfig`` checks before any
+    agent invocation (fail closed if a required one was not positively
+    declared as required for that role), not a runtime capability
+    negotiation protocol, a provider registry, or an SDK. Whoever configures
+    a spec is responsible for these being true of the actual integration —
+    e.g. that a reviewer executable really does start fresh each call, and
+    that neither role's configured command/sandbox is actually able to
+    write to Git/GitHub directly. The post-invocation fingerprint/branch-
+    head guards elsewhere in this package remain defense-in-depth
+    regardless of what is declared here.
+
+    ``has_git_or_github_write_access`` is deliberately three-valued
+    (``bool | None``, default ``None``) rather than a plain ``bool``
+    defaulting to ``False``: a plain boolean defaulting to ``False`` would
+    make "nobody positively declared this command sandboxed away from
+    ``git push``/``gh``/GitHub credentials" indistinguishable from "an
+    operator explicitly asserted it is" — exactly the silent, unearned
+    safety claim this precondition exists to prevent, especially since a
+    real external command typically inherits the host environment/PATH and
+    this module has no way to confirm it cannot reach Git/GitHub directly.
+    ``None`` means "not positively declared" and is refused exactly like
+    ``True``; only an explicit ``False`` — an operator's positive assertion
+    that the configured command/sandbox has no direct Git/GitHub write
+    capability — satisfies the precondition.
     """
 
     role: AgentRole
@@ -50,6 +101,9 @@ class AgentInvocationSpec:
     cwd: Path | None = None
     timeout_seconds: float = 600.0
     env: Mapping[str, str] | None = field(default=None)
+    fresh_context_capable: bool = False
+    can_edit_working_files: bool = False
+    has_git_or_github_write_access: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +142,12 @@ def run_agent(spec: AgentInvocationSpec, input_text: str) -> AgentInvocationResu
     :class:`AgentInvocationResult` instead, so the strict, fail-closed
     verdict handling in :func:`run_reviewer` never has to guess whether a
     caught exception means "no verdict" or something else.
+
+    stdin/stdout/stderr are all encoded/decoded as UTF-8 explicitly —
+    ``text=True`` alone decodes using the platform's default locale
+    encoding, which on Windows is a codepage other than UTF-8 and would
+    otherwise corrupt any non-ASCII content passed in ``input_text`` (task
+    detail, plan text) or produced by the external process.
     """
 
     env = dict(spec.env) if spec.env is not None else None
@@ -97,6 +157,7 @@ def run_agent(spec: AgentInvocationSpec, input_text: str) -> AgentInvocationResu
             input=input_text,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             cwd=spec.cwd,
             env=env,
             timeout=spec.timeout_seconds,

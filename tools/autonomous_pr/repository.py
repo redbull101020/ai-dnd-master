@@ -99,6 +99,47 @@ class ReviewPatch:
 
 
 @dataclass(frozen=True)
+class BranchHead:
+    """The narrow (branch, HEAD SHA) pair the orchestrator checks around an
+    implementer invocation.
+
+    Deliberately narrower than :class:`RepositoryFingerprint`: an
+    implementer is expected to edit working-tree content (that is its job),
+    so only branch/HEAD movement — not working-tree content — is a
+    violation for that role. Reviewer isolation stays covered by the
+    stricter :class:`RepositoryFingerprint` check below, which also covers
+    worktree content.
+    """
+
+    branch: str
+    head_sha: str
+
+
+def capture_branch_head(repo: Path) -> BranchHead:
+    return BranchHead(branch=current_branch(repo), head_sha=head_sha(repo))
+
+
+def verify_branch_head_unchanged(
+    repo: Path, expected: BranchHead, *, context: str
+) -> None:
+    """Fail closed if branch or HEAD moved since ``expected`` was captured.
+
+    Used around an implementer invocation, which is given working-file
+    write access but never Git/GitHub write access
+    (``docs/AUTONOMOUS_PR_HARNESS.md`` §§5, 8, 14): any branch checkout or
+    commit made by that process is a violation, detected here regardless of
+    whether it left the working tree clean afterward.
+    """
+
+    current = capture_branch_head(repo)
+    if current != expected:
+        raise RepositoryError(
+            f"branch/HEAD changed unexpectedly during {context}: expected "
+            f"{expected!r}, found {current!r}"
+        )
+
+
+@dataclass(frozen=True)
 class RepositoryFingerprint:
     """A snapshot of facts an external agent process must never change.
 
@@ -118,12 +159,23 @@ class RepositoryFingerprint:
 def _run(
     args: Sequence[str], *, cwd: Path, timeout: float = _DEFAULT_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess[str]:
+    """Run ``args`` and decode stdout/stderr as UTF-8 explicitly.
+
+    ``text=True`` alone decodes using the platform's default locale
+    encoding, which on Windows is a codepage other than UTF-8 — silently
+    corrupting any non-ASCII byte ``git``/``gh`` output (e.g. the em dash
+    ``docs/TASK.md`` uses for "no dependencies"). Every Git/GitHub
+    interaction here is UTF-8 (this repository's canonical text encoding),
+    so decoding must never depend on the host's locale.
+    """
+
     try:
         return subprocess.run(
             list(args),
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
             check=False,
         )
@@ -167,6 +219,42 @@ def fetch_origin(repo: Path) -> None:
     """``git fetch origin``."""
 
     _git(repo, ["fetch", "origin"])
+
+
+def fetch_and_capture_origin_main_sha(repo: Path) -> str:
+    """Fetch origin and immediately return the resulting exact
+    ``origin/main`` SHA.
+
+    This is the single authoritative fetch point for one revalidation
+    decision. A caller that captures the SHA this way — instead of
+    re-resolving the mutable ``origin/main`` ref again later — can make one
+    decision (revalidate the task, then create a delivery branch from
+    exactly that commit) that stays valid even if ``origin/main`` moves
+    again immediately afterward (``docs/AUTONOMOUS_PR_HARNESS.md`` §3,
+    §12): nothing about a later, unrelated fetch elsewhere can move the
+    base out from under an already-made decision, because nothing after
+    this call re-fetches or re-resolves the symbolic ref on that decision's
+    behalf.
+    """
+
+    fetch_origin(repo)
+    return origin_main_sha(repo)
+
+
+def read_file_at_ref(repo: Path, ref: str, path: str) -> str:
+    """Read ``path`` as it exists at ``ref``, via ``git show <ref>:<path>``.
+
+    Never checks out, resets, or otherwise moves the working tree or the
+    currently checked-out branch — this reads one blob's content directly
+    out of Git's object store. This is the narrow mechanism preflight uses
+    to revalidate the authoritative ``docs/TASK.md`` against a freshly
+    fetched ``origin/main`` regardless of what the local working tree or
+    currently checked-out branch happens to contain
+    (``docs/AUTONOMOUS_PR_HARNESS.md`` §3): a clean local branch can still
+    be stale or different from ``origin/main``.
+    """
+
+    return _git(repo, ["show", f"{ref}:{path}"])
 
 
 def resolve_sha(repo: Path, ref: str) -> str:
@@ -276,6 +364,45 @@ def create_delivery_branch_from_origin_main(repo: Path, branch: str) -> str:
     return base_sha
 
 
+def create_delivery_branch_from_sha(repo: Path, branch: str, base_sha: str) -> None:
+    """Create ``branch`` pointing at exactly ``base_sha``.
+
+    Unlike :func:`create_delivery_branch_from_origin_main`, this never
+    fetches and never re-resolves the mutable ``origin/main`` ref itself —
+    it anchors the checkout to the exact commit the caller already decided
+    to use (typically one captured with
+    :func:`fetch_and_capture_origin_main_sha` and then positively
+    revalidated). This is what closes the fetch race a two-step
+    fetch-then-create flow would otherwise have: nothing between an earlier
+    revalidation decision and this call can silently move the base out from
+    under it, because this function performs no fetch of its own and never
+    resolves ``origin/main`` again.
+
+    Same hard guards as :func:`create_delivery_branch_from_origin_main` —
+    refuses a protected branch name, requires a clean worktree, and refuses
+    a local/remote branch-name collision (against whatever remote-tracking
+    state is already present; the caller is responsible for having fetched
+    before deciding on ``base_sha``). ``base_sha`` itself is trusted as
+    already authoritative and revalidated — this function's job is only to
+    anchor the checkout to it exactly, never to re-derive or re-validate
+    it.
+    """
+
+    if branch in _PROTECTED_BRANCHES:
+        raise RepositoryError(f"refusing to use protected branch name {branch!r}")
+    if not is_worktree_clean(repo):
+        raise RepositoryError(
+            "working tree is not clean; refusing to create a delivery branch"
+        )
+    if _branch_collision_exists(repo, branch):
+        raise RepositoryError(
+            f"branch {branch!r} already exists locally or on origin; "
+            "refusing to reuse or resume a possibly stale or crashed prior "
+            "run"
+        )
+    _git(repo, ["checkout", "-b", branch, base_sha])
+
+
 def intent_to_add_untracked_files(repo: Path) -> tuple[str, ...]:
     """Run ``git add -N`` for every currently untracked file.
 
@@ -297,6 +424,31 @@ def intent_to_add_untracked_files(repo: Path) -> tuple[str, ...]:
     for path in untracked:
         _git(repo, ["add", "-N", "--", path])
     return tuple(untracked)
+
+
+def changed_paths(repo: Path) -> tuple[str, ...]:
+    """Every path with a staged, unstaged, or untracked change.
+
+    Reads ``git status --porcelain=v1`` directly rather than deriving paths
+    from a diff, so it stays correct after
+    :func:`intent_to_add_untracked_files` has run. This is the narrow
+    "what am I about to commit" input :func:`commit_reviewed_checkpoint`
+    needs as its ``paths`` argument for an accepted checkpoint — it is
+    never itself authorization to stage or commit anything.
+    """
+
+    status = _git(repo, ["status", "--porcelain=v1"])
+    paths: list[str] = []
+    for line in status.splitlines():
+        if not line:
+            continue
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+        paths.append(path)
+    return tuple(paths)
 
 
 def _build_review_patch(
