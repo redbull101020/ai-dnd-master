@@ -411,6 +411,18 @@ explicit AUTONOMOUS_PR invocation
 → STOP
 ```
 
+#### Execution mechanics (subordinate)
+
+[`docs/AUTONOMOUS_PR_HARNESS.md`](docs/AUTONOMOUS_PR_HARNESS.md) describes
+the minimal execution mechanics (process model, orchestrator
+responsibility, role isolation, handoff artifacts, run-state/phase model,
+retry/resume boundary, provider boundary, and harness test contract) a
+future harness uses to carry out an invocation of the flow above. It is
+subordinate to this section: it cannot expand, redefine, or weaken any
+authority, review, test, closure, or merge gate defined here, this section
+wins on any conflict, and that document is never itself a valid
+`AUTONOMOUS_PR` invocation.
+
 #### Fail-closed
 
 `AUTONOMOUS_PR` stops and requires a human decision the moment any of the
