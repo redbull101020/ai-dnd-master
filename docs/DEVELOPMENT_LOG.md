@@ -7372,3 +7372,29 @@ trip persisting a new `CombatPosition` alongside an existing one; full
 clean. Architecture §3.36, Roadmap Phase 3 `Movement`, and `CLAUDE.md`'s
 implemented-contract index updated to reflect production-implemented
 status; the `Movement` Roadmap checkbox stays unchecked.
+
+## 2026-09-15 — TSK-0024: Define bounded `AUTONOMOUS_PR` development-governance contract (delivery summary)
+
+Delivered a provider-neutral `AUTONOMOUS_PR` development-governance contract
+in `AGENTS.md`, alongside the existing `MANUAL` workflow. `MANUAL` semantics
+are unchanged: commit, push, PR creation, and merge remain four separate
+user-authorised actions, and authorisation embedded in a task description
+still does not count. `AUTONOMOUS_PR` is a narrow, explicitly user-invoked
+bounded exception scoped to one named authoritative `Current` `TSK`: bounded
+authority covers preflight through a reviewed draft PR and prospective Task
+Closure (the only `docs/TASK.md` mutation it may make), with independent
+fresh-context review (`APPROVED`/`CHANGES_REQUESTED`/`BLOCKED`), the existing
+`review.patch` A/B/C diff-range semantics unchanged (pre-closure cumulative
+implementation review explicitly distinguished from the mode C final
+cumulative branch audit), and explicit fail-closed conditions. Merge and
+auto-merge remain explicit-human-only in both modes, and no direct write to
+`main` is ever authorised. `CLAUDE.md` was synced to reference both modes
+compactly, and `docs/TASK.md` §18.2 received one wording-only clarification
+distinguishing its fallback reconciliation from an `AUTONOMOUS_PR`
+prospective Task Closure path. No autonomous runner/orchestrator was built,
+and `TSK-0023` was not refined or promoted.
+
+Verification: `python -m pytest tests/architecture/` — 21 passed (run with a
+disposable `--basetemp` to avoid a pre-existing, unrelated Windows temp-
+directory permission issue); `git diff --check` clean. No production,
+dependency, CI, repository-setting, or gameplay Architecture changes.

@@ -1072,16 +1072,17 @@ this branch's PR actually merges.
 If a task's accepted result lands on `main` without a prepared closure — by
 mistake, or for an exceptional reason — reconciliation remains mandatory:
 perform the same closure procedure above, starting from current
-`origin/main`, through the normal branch/review/authorization workflow
-`AGENTS.md` establishes for any other change. This section does not
-authorize a direct commit or other substantive work on `main`; the
-reconciliation itself is prepared on a dedicated branch and reviewed/merged
-like any other change. Implementation of the next `Current` task must not
-begin until the tracker is reconciled.
+`origin/main`, through the normal `MANUAL` branch/review/authorization
+workflow `AGENTS.md` establishes for any other change — this fallback
+reconciliation is not an `AUTONOMOUS_PR` prospective Task Closure path. This
+section does not authorize a direct commit or other substantive work on
+`main`; the reconciliation itself is prepared on a dedicated branch and
+reviewed/merged like any other change. Implementation of the next `Current`
+task must not begin until the tracker is reconciled.
 
 ```text
 accepted result on main without prepared closure
-→ branch from current origin/main (normal AGENTS.md workflow)
+→ branch from current origin/main (normal MANUAL workflow)
 → close/reconcile that task in TASK.md
 → select/reconcile Current + Next + blockers
 → review + merge the reconciliation
@@ -1305,7 +1306,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** TSK-0024
+- **Current:** —
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0025
@@ -1317,206 +1318,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0024` | `Current` | `P2` | `S` | `engineering` | Cross-cutting engineering prerequisite for the planned autonomous-development pilot on current Phase 3 work | Define bounded `AUTONOMOUS_PR` development-governance contract |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
 
 ---
 
 # Open task details
-
-## TSK-0024 — Define bounded `AUTONOMOUS_PR` development-governance contract
-
-**Status:** `Current`
-
-**Priority:** `P2`
-
-**Size:** `S`
-
-**Group:** `engineering`
-
-**Roadmap target:** Cross-cutting engineering prerequisite for the planned autonomous-development pilot on current Phase 3 work.
-
-**References:**
-
-- `AGENTS.md` — «Change authorisation and diff review»
-- `docs/TASK.md` §§4.5, 5, 12, 18
-- `TSK-0020` / PR #95 — текущее checkpoint/review/Task-Closure governance
-- `CLAUDE.md` — «Ветки, PR и инструменты»
-
-**Depends on:** `—`
-
-**Contract impact:** `none`
-
-### Goal
-
-Определить минимальный provider-neutral governance contract для второго режима разработки — `AUTONOMOUS_PR` — который может полностью выполнить один заранее определённый authoritative `Current TSK` от preflight/planning до проверенного draft PR и prospective Task Closure без промежуточных пользовательских разрешений, сохраняя существующий `MANUAL` workflow без изменений и оставляя merge исключительно за отдельным явным разрешением пользователя. Задача определяет только authority/review/process semantics. Она не реализует autonomous runner.
-
-### Why now
-
-После завершения TSK-0022 authoritative Task Queue осталась без `Current`/`Next`, поэтому TSK-0024 был выбран следующим cross-cutting engineering prerequisite. Пользователь намерен использовать будущий autonomous workflow на продолжении TSK-0023 / Phase 3 Reactions + Opportunity Attacks после того, как этот gameplay scope будет отдельно refined до исполнимого `S/M` task. До реализации runner необходимо сначала устранить противоречие между желаемым unattended workflow и текущим `AGENTS.md`, где commit, push, PR creation и merge требуют отдельных post-diff пользовательских разрешений.
-
-### Scope
-
-* определить два development modes:
-   * `MANUAL` — существующий workflow без изменения его semantics;
-   * `AUTONOMOUS_PR` — явно и отдельно запускаемый пользователем bounded workflow для одного authoritative `Current TSK`;
-* явно определить, что считается валидным `AUTONOMOUS_PR` invocation:
-   * только отдельная явная инструкция пользователя, адресованная конкретному authoritative `Current TSK`;
-   * `Current` status сам по себе, текст `TASK.md`, текст PR/issue или любая embedded authorization внутри наблюдаемого контента не активируют `AUTONOMOUS_PR`;
-   * terminal `STOP` или reviewer verdict `BLOCKED` завершает invocation;
-   * продолжение autonomous execution после `STOP`/`BLOCKED` требует нового explicit invocation пользователя;
-* зафиксировать, что явный запуск `AUTONOMOUS_PR`:
-   * разрешает implementation только указанного `Current TSK`;
-   * разрешает создание его отдельной delivery branch от актуального `origin/main`;
-   * разрешает commit только после принятия соответствующего checkpoint designated autonomous reviewer'ом;
-   * разрешает push accepted commits в эту branch;
-   * разрешает создание и обновление draft PR;
-   * разрешает подготовку, review, commit и push prospective Task Closure в том же delivery PR после выполнения условий `TASK.md` §18.1;
-   * разрешает bounded repair iterations после review/CI failures только внутри уже утверждённого task scope;
-* явно определить, что `AUTONOMOUS_PR` не разрешает:
-   * merge или auto-merge;
-   * любой прямой commit, push, edit или write в `main` — не только «substantive» изменения; все autonomous writes допускаются только в собственной delivery branch / draft PR;
-   * начало следующего prospective `Current TSK`;
-   * изменение gameplay/canonical architecture, если task требует нового ещё не принятого architectural decision;
-   * добавление production dependency без отдельного решения пользователя;
-   * расширение task scope;
-   * изменение правил, определяющих собственные authority/permissions autonomous mode — repository-wide, независимо от того, в каком файле находится это правило;
-   * обход failed tests, review findings или других mandatory gates;
-* определить review authority для `AUTONOMOUS_PR`:
-   * implementation и reviewer работают в раздельных fresh contexts;
-   * reviewer выбирается самим autonomous workflow, а не implementer'ом или его output;
-   * reviewer может быть тем же provider/model family, но не продолжением implementer context;
-   * другой provider допускается как дополнительный defense-in-depth, но не является обязательным;
-   * reviewer выдаёт один из verdict: `APPROVED`; `CHANGES_REQUESTED`; `BLOCKED`;
-   * `APPROVED` designated autonomous reviewer'а считается accepted review checkpoint'а в `AUTONOMOUS_PR`;
-   * после cumulative implementation review такой `APPROVED` удовлетворяет требованию `TASK.md` §18.1 о reviewed/accepted implementation и разрешает подготовить prospective Task Closure;
-* сохранить обязательный `review.patch`:
-   * существующие A/B/C diff-range semantics (fresh uncommitted / already-committed checkpoint / final cumulative branch audit) сохраняются без изменений и без введения дополнительных под-режимов (например `C1`/`C2`);
-   * в `MANUAL` patch предъявляется пользователю;
-   * в `AUTONOMOUS_PR` patch является exact review input designated autonomous reviewer'а и audit artifact;
-   * pre-closure cumulative implementation review, удовлетворяющий `TASK.md` §18.1, использует `origin/main...HEAD` как review input, но этим не становится mode C;
-   * mode C остаётся исключительно final cumulative branch audit после того, как Task Closure reviewed/committed/pushed, и после revalidation текущего `origin/main`;
-   * любой последующий commit/rebase branch или любое движение `origin/main` после cumulative audit делает его stale и требует rebuild/re-review;
-* зафиксировать минимальную последовательность `AUTONOMOUS_PR`, явно разделяя cumulative implementation review (до Task Closure, закрывающий §18.1 prerequisite) и final cumulative branch audit (после того как Task Closure reviewed/committed/pushed и после revalidation текущего `origin/main`; покрывает полный `origin/main...HEAD`; любой последующий commit/rebase branch или любое движение `origin/main` делает его stale и требует rebuild/re-review до `READY_FOR_HUMAN_MERGE`):
-
-```text
-explicit AUTONOMOUS_PR invocation
-→ preflight against freshly fetched, validated origin/main
-→ read-only planning
-→ independent plan review
-→ delivery branch
-→ implementation checkpoint
-→ deterministic verification
-→ review.patch
-→ independent checkpoint review
-→ accepted commit/push
-→ repeat as needed
-→ full verification
-→ final cumulative implementation review (satisfies §18.1)
-→ draft PR
-→ prospective Task Closure
-→ independent closure review
-→ commit/push closure
-→ revalidate current origin/main
-→ final cumulative branch audit (origin/main...HEAD)
-→ required CI
-→ READY_FOR_HUMAN_MERGE
-→ STOP
-
-```
-
-* определить fail-closed boundary: autonomous run обязан остановиться с явным human-decision/block reason, если обнаружено хотя бы одно из следующего:
-   * конфликт между authoritative project sources;
-   * необходимость нового architectural decision;
-   * необходимость новой production dependency;
-   * существенное расширение утверждённого TSK scope;
-   * task больше не является допустимым authoritative execution target до начала implementation;
-   * reviewer не принимает изменения в пределах bounded repair policy;
-   * mandatory tests/checks невозможно привести в green внутри task scope;
-   * `origin/main` materially изменил факты, от которых зависит implementation или prepared Task Closure;
-   * продолжение потребовало бы ослабить существующий test/review/governance gate;
-   * корректное поведение невозможно определить из утверждённых контрактов;
-* зафиксировать, что prospective Task Closure не даёт права выполнять следующий task:
-   * новый `Current`, записанный в closure branch, остаётся prospective до merge;
-   * `AUTONOMOUS_PR` всегда останавливается перед merge;
-   * следующий autonomous/manual implementation run может определяться только после merge, нового fetch `origin/main` и повторной проверки authoritative Task Queue;
-* синхронизировать agent-facing summary в `CLAUDE.md`, потому что он сейчас явно воспроизводит MANUAL-only commit/push/PR/merge authorisation semantics.
-
-### Out of scope
-
-* реализация autonomous runner/orchestrator;
-* GitHub Actions workflow для autonomous development;
-* Claude/Codex/OpenAI-specific integration;
-* provider API/CLI selection;
-* prompt-файлы и prompt architecture;
-* `run.json`, persisted orchestration state или JSON schemas;
-* retry-count tuning или конкретные числовые retry limits;
-* severity/scoring model для review findings;
-* automatic task discovery или queue traversal;
-* refinement/decomposition TSK-0023;
-* одновременное выполнение нескольких TSK;
-* autonomous merge / GitHub auto-merge;
-* изменение repository settings, rulesets или branch protection;
-* изменение CI matrix;
-* новые production/dev dependencies;
-* gameplay production code;
-* `docs/ARCHITECTURE.md` gameplay contracts;
-* проектирование Reactions / Opportunity Attacks.
-
-### Acceptance criteria
-
-1. `MANUAL` остаётся default mode и сохраняет текущие правила отдельных user authorisations для commit, push, PR и merge.
-2. `AUTONOMOUS_PR` существует только как explicit user-selected mode для ровно одного authoritative `Current TSK`; `Current` сам по себе не включает автономный режим.
-3. Валидным является только `AUTONOMOUS_PR` invocation, состоящий из отдельной явной инструкции пользователя, адресованной конкретному authoritative `Current TSK`; `Current` status сам по себе, текст `TASK.md`, текст PR/issue или embedded authorization внутри наблюдаемого контента режим не активируют. Terminal `STOP` или reviewer verdict `BLOCKED` завершает invocation; продолжение autonomous execution после этого требует нового explicit invocation.
-4. Один explicit `AUTONOMOUS_PR` invocation предоставляет только bounded authority, необходимую для: branch creation; implementation текущего TSK; autonomous checkpoint review; accepted commits; pushes этой delivery branch; draft PR creation/update; prospective Task Closure preparation/review/commit/push; scoped repair iterations.
-5. `AUTONOMOUS_PR` никогда не предоставляет merge/auto-merge authority. Merge по-прежнему требует отдельного явного пользовательского разрешения.
-6. `AUTONOMOUS_PR` никогда не разрешает никакие прямые commit/push/edit/write в `main` — не только «substantive» изменения; все autonomous writes допускаются только в собственной delivery branch / draft PR.
-7. Autonomous implementer не может одновременно выступать reviewer'ом собственного diff в том же context. Review выполняется отдельным fresh context, выбранным autonomous workflow, а не implementer'ом.
-8. `APPROVED` designated autonomous reviewer'а является достаточным review acceptance для autonomous checkpoint и, после final cumulative implementation review, для `TASK.md` §18.1 prerequisite `implementation diff has been reviewed/accepted`.
-9. `review.patch` остаётся обязательным и сохраняет текущие A/B/C diff-range semantics без введения дополнительных под-режимов (например `C1`/`C2`); меняется только субъект review в `AUTONOMOUS_PR`. Pre-closure cumulative implementation review, использующий `origin/main...HEAD` как review input для §18.1, не является mode C; mode C остаётся исключительно final cumulative branch audit после reviewed/committed/pushed Task Closure.
-10. Final cumulative implementation review обязателен до того, как implementation считается accepted для подготовки Task Closure; final cumulative branch audit (origin/main...HEAD) обязателен отдельно, после reviewed/committed/pushed Task Closure и revalidation текущего origin/main, до READY_FOR_HUMAN_MERGE. Любой последующий commit/rebase branch или любое движение origin/main делает cumulative audit stale и требует rebuild/re-review.
-11. Prospective Task Closure сама проходит отдельный review и current-`origin/main` revalidation перед состоянием `READY_FOR_HUMAN_MERGE`.
-12. `AUTONOMOUS_PR` не начинает implementation следующего task на основании prospective closure и всегда останавливается перед merge.
-13. Hard-stop/fail-closed conditions явно перечислены; ambiguous architectural/scope/governance cases не разрешаются агентом самостоятельно.
-14. Autonomous mode не может расширять собственные authority/permissions или ослаблять review/test/merge gates в ходе обычного autonomous run — repository-wide, независимо от того, какой файл несёт это правило; любое такое governance-изменение требует `MANUAL`. Единственная разрешённая `AUTONOMOUS_PR`-мутация `docs/TASK.md` — prospective Task Closure.
-15. Governance contract остаётся provider-neutral: ни Claude, ни Codex/OpenAI не получают специальных canonical privileges.
-16. `CLAUDE.md` не противоречит обновлённому `AGENTS.md` по branch/commit/push/PR/merge/review semantics.
-17. Никакие gameplay contracts, production Python, dependencies, CI workflows или repository settings этой задачей не меняются.
-
-### Verification
-
-* manually verify `AGENTS.md` содержит непротиворечивые `MANUAL` и `AUTONOMOUS_PR` authority boundaries;
-* manually verify current MANUAL authorization behavior сохранён полностью;
-* manually verify valid `AUTONOMOUS_PR` invocation ограничен отдельной явной user-инструкцией для конкретного authoritative `Current TSK`, а `Current` status/`TASK.md` text/PR-issue text/embedded authorization сами по себе его не активируют, и что terminal `STOP`/`BLOCKED` требует нового explicit invocation для продолжения;
-* manually verify merge остаётся explicit-human-only в обоих режимах, и что `AUTONOMOUS_PR` не разрешает никакой прямой commit/push/edit/write в `main`, включая non-substantive;
-* manually verify `review.patch` A/B/C rules не ослаблены и не расширены дополнительными под-режимами, и что pre-closure cumulative implementation review (origin/main...HEAD, §18.1) явно отличён от final cumulative branch audit (mode C);
-* manually verify Task Closure semantics совместимы с `TASK.md` §§4.5/18 и не позволяют prospective next-task execution;
-* manually verify `CLAUDE.md` согласован с `AGENTS.md`;
-* `python -m pytest tests/architecture/` (полный suite, exit code 0 — не описывать команду с errors как passed);
-* `git diff --check`;
-* confirm no `src/dnd_engine/**`, dependency, CI workflow, repository-setting or gameplay Architecture changes.
-
-### Expected touchpoints
-
-```text
-AGENTS.md
-CLAUDE.md
-docs/TASK.md
-docs/DEVELOPMENT_LOG.md
-
-```
-
-`docs/DEVELOPMENT_LOG.md` получает обычную delivery-level запись при завершении TSK — краткую, фактическую; детальный контракт остаётся в `AGENTS.md`, не дублируется в Log.
-Новый autonomous-specific document не создаётся без доказанной необходимости: сначала контракт должен оставаться достаточно мал, чтобы жить в `AGENTS.md`.
-
-### Execution checkpoints
-
-Один substantive governance checkpoint.
-Отдельный checkpoint допустим только если review покажет, что изменение `TASK.md`/Task Closure semantics требует самостоятельного review-risk boundary.
-
-### Evidence / trigger
-
-TSK-0022 завершён существующим MANUAL workflow и предоставляет свежий baseline текущего процесса. TSK-0023 существует как будущий Phase 3 Reactions + Opportunity Attacks continuation, но сейчас остаётся `Backlog / L`; он не является исполнимым autonomous pilot до отдельного refinement/decomposition в `S/M Ready/Current` task.
 
 ---
 
@@ -1524,7 +1330,6 @@ TSK-0022 завершён существующим MANUAL workflow и предо
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0013` | Implement Character Dagger Attack → Damage → Monster HP consequence | PR #86 |
 | `TSK-0014` | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers | PR #88 |
 | `TSK-0015` | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers | PR #89 |
 | `TSK-0016` | Define minimal Character zero-HP turn and Death Save contract | PR #91 |
@@ -1534,6 +1339,7 @@ TSK-0022 завершён существующим MANUAL workflow и предо
 | `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
 | `TSK-0021` | Define minimal Combat Movement and placement-boundary contract | PR #97 |
 | `TSK-0022` | Implement initial Combat tactical placement vertical slice | PR #98 |
+| `TSK-0024` | Define bounded `AUTONOMOUS_PR` development-governance contract | PR #101 |
 
 ---
 
