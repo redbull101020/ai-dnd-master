@@ -7398,3 +7398,47 @@ Verification: `python -m pytest tests/architecture/` — 21 passed (run with a
 disposable `--basetemp` to avoid a pre-existing, unrelated Windows temp-
 directory permission issue); `git diff --check` clean. No production,
 dependency, CI, repository-setting, or gameplay Architecture changes.
+
+## 2026-09-15 — TSK-0025: Define minimal `AUTONOMOUS_PR` execution-harness contract (delivery summary)
+
+Delivered `docs/AUTONOMOUS_PR_HARNESS.md`, a minimal, executable,
+provider-neutral **execution-mechanics** contract subordinate to the
+`AUTONOMOUS_PR` governance defined in `AGENTS.md` (§"Change authorisation
+and diff review"), plus one short cross-reference added to `AGENTS.md`
+itself. The document does not restate or reinterpret `TSK-0024` governance
+— authority, review, test, closure, and merge gates are unchanged, and the
+document is explicitly never a valid `AUTONOMOUS_PR` invocation on its own.
+It fixes: the trusted explicit-invocation boundary (no CLI arg, task ID,
+`Status: Current`, or repository text ever originates authorization; the
+harness still revalidates `origin/main` before implementation); a
+deterministic orchestrator (recommended future implementation location
+`tools/autonomous_pr/`, outside `src/dnd_engine/**`) that owns phase
+transitions, Git/`gh` side effects, and gate decisions, never
+gameplay/architecture judgment; hard implementer/
+reviewer context isolation with explicit handoff artifacts (no hidden
+provider conversation state); a strict three-verdict reviewer contract
+(`APPROVED`/`CHANGES_REQUESTED`/`BLOCKED`) where any missing, malformed, or
+ambiguous verdict — or a reviewer-process failure — is always terminal
+`BLOCKED`, never routed into the bounded repair loop; unchanged A/B/C
+`review.patch` semantics, with the pre-closure cumulative implementation
+review (`origin/main...HEAD`, satisfies `docs/TASK.md` §18.1) explicitly
+distinguished from the mode C final cumulative branch audit; a minimal
+in-memory, single-run phase model with no persisted `run.json`/DB/broker,
+where `READY_FOR_HUMAN_MERGE` is a runtime milestone immediately before the
+mandatory terminal `STOP`, never a third terminal outcome and never a new
+`docs/TASK.md` status; bounded repair with no implicit cross-process resume
+after a crash or lost run state; `origin/main`-movement/staleness handling
+that revalidates before blocking; a provider-neutral invocation boundary
+with no adapter framework; secrets/tool-access assumptions (no credential-
+store reads, fail closed on missing tools/auth); an explicit deterministic-
+vs-LLM decision boundary; a CI-repair replay rule preserving `TSK-0024`'s
+bounded-repair allowance; a harness test contract (fake implementer/
+reviewer, temp Git repos, no real LLM/network needed); and an explicit v1
+out-of-scope list. No runner/orchestrator implementation was built, and
+`TSK-0023` was not refined or promoted; that implementation is deferred to
+`TSK-0026`.
+
+Verification: `python -m pytest tests/architecture/` — 21 passed (run with a
+disposable `--basetemp` to avoid a pre-existing, unrelated Windows temp-
+directory permission issue); `git diff --check` clean. No production,
+dependency, CI, repository-setting, or gameplay Architecture changes.
