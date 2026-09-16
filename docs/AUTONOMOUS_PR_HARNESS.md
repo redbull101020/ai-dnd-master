@@ -1,10 +1,19 @@
 # AUTONOMOUS_PR Execution Harness — Minimal Contract
 
 `TSK-0025`. This document defines the minimal, executable,
-provider-neutral **execution mechanics** a future harness/orchestrator uses
-to carry out an already-authorized `AUTONOMOUS_PR` invocation. It does not
-implement a runner. No orchestrator, CLI, or `tools/autonomous_pr/` code
-exists yet; this is a design contract only.
+provider-neutral **execution mechanics** a harness/orchestrator uses to
+carry out an already-authorized `AUTONOMOUS_PR` invocation. It is a design
+contract, not an operator manual: it does not itself implement a runner.
+
+The v1 orchestrator/CLI this contract describes was implemented by
+`TSK-0026` and lives at `tools/autonomous_pr/` (local entrypoint: `python -m
+tools.autonomous_pr <task_id> --implementer ... --reviewer ... --verify
+...`; run `python -m tools.autonomous_pr --help` for the full flag list).
+Its tests live at `tests/tools/autonomous_pr/`. This document remains the
+authoritative execution-mechanics contract that implementation must
+conform to — it yields to `AGENTS.md` on any conflict (§1), and the
+implementation existing does not itself change or supersede anything this
+document specifies.
 
 ---
 
@@ -508,8 +517,13 @@ following harness-level situations end the run exactly like a terminal
 
 ## 18. Minimal harness test contract
 
-No harness tests are implemented by this task. A future v1 implementation
-is expected to be testable under these conditions:
+No harness tests are implemented by this document (`TSK-0025` is
+design/contract only). The `TSK-0026` v1 implementation's tests, at
+`tests/tools/autonomous_pr/`, satisfy the conditions below using fakes/
+stubs and disposable local Git fixtures — this section remains the
+contract that implementation must conform to, not a description generated
+from it. A v1 implementation is expected to be testable under these
+conditions:
 
 - a fake/stub implementer and a fake/stub reviewer, so tests do not require
   a real LLM;
