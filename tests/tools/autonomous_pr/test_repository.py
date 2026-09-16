@@ -389,6 +389,90 @@ def test_cumulative_patch_rejects_checkpoint_purpose(git_env: GitEnv) -> None:
         repo_module.build_cumulative_patch(work, ReviewPurpose.CHECKPOINT)
 
 
+def test_cumulative_patch_from_base_uses_exact_sha_not_origin_main(
+    git_env: GitEnv,
+) -> None:
+    """The whole point of the exact-base variant: it must anchor to the
+    caller-supplied SHA even when origin/main has since moved past it."""
+
+    work = git_env.work
+    seed = git_env.seed
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    captured_base = repo_module.origin_main_sha(work)
+    (work / "c.txt").write_text("c\n", encoding="utf-8")
+    patch = repo_module.build_checkpoint_patch_uncommitted(work)
+    repo_module.commit_reviewed_checkpoint(
+        work, reviewed_patch=patch, message="add c", paths=["c.txt"]
+    )
+
+    _push_new_commit_to_origin_main(seed, filename="moved-on.txt")
+    repo_module.fetch_origin(work)
+    assert repo_module.origin_main_sha(work) != captured_base
+
+    cumulative = repo_module.build_cumulative_patch_from_base(
+        work, ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW, captured_base
+    )
+
+    assert cumulative.base_sha == captured_base
+    assert cumulative.range_description == f"{captured_base}...HEAD"
+    assert "c.txt" in cumulative.diff_text
+    assert "moved-on.txt" not in cumulative.diff_text
+
+
+def test_cumulative_patch_from_base_never_fetches(
+    git_env: GitEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    base_sha = repo_module.origin_main_sha(work)
+    real_run = repo_module.subprocess.run
+
+    def fail_if_fetch(
+        args: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["git", "fetch"]:
+            raise AssertionError(
+                "build_cumulative_patch_from_base must never fetch"
+            )
+        return real_run(args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repo_module.subprocess, "run", fail_if_fetch)
+
+    patch = repo_module.build_cumulative_patch_from_base(
+        work, ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
+    )
+
+    assert patch.base_sha == base_sha
+
+
+def test_cumulative_patch_from_base_rejects_checkpoint_purpose(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    base_sha = repo_module.origin_main_sha(work)
+
+    with pytest.raises(RepositoryError):
+        repo_module.build_cumulative_patch_from_base(
+            work, ReviewPurpose.CHECKPOINT, base_sha
+        )
+
+
+@pytest.mark.parametrize(
+    "purpose",
+    [ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW, ReviewPurpose.FINAL_CUMULATIVE_AUDIT],
+)
+def test_cumulative_patch_from_base_rejects_dirty_state(
+    git_env: GitEnv, purpose: ReviewPurpose
+) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    base_sha = repo_module.origin_main_sha(work)
+    (work / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(RepositoryError):
+        repo_module.build_cumulative_patch_from_base(work, purpose, base_sha)
+
+
 @pytest.mark.parametrize(
     "purpose",
     [ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW, ReviewPurpose.FINAL_CUMULATIVE_AUDIT],
@@ -519,6 +603,58 @@ def test_fingerprint_detects_worktree_mutation_without_commit(git_env: GitEnv) -
         )
 
 
+def test_fingerprint_detects_untracked_file_content_rewrite_with_unchanged_status(
+    git_env: GitEnv,
+) -> None:
+    """A porcelain-status-only fingerprint cannot distinguish "an
+    already-untracked file's content changed" from "nothing changed",
+    since its status line (``?? work_output.txt``) is byte-identical
+    before and after -- only a content-sensitive fingerprint catches
+    this."""
+
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    (work / "work_output.txt").write_text("original\n", encoding="utf-8")
+    fingerprint = repo_module.capture_fingerprint(work)
+
+    status_before = _run_git(["status", "--porcelain=v1"], cwd=work)
+    (work / "work_output.txt").write_text("rewritten\n", encoding="utf-8")
+    status_after = _run_git(["status", "--porcelain=v1"], cwd=work)
+
+    assert status_before == status_after  # structurally unchanged
+
+    with pytest.raises(RepositoryError):
+        repo_module.verify_fingerprint_unchanged(
+            work, fingerprint, context="deterministic verification"
+        )
+
+
+def test_fingerprint_detects_already_modified_tracked_file_further_content_rewrite(
+    git_env: GitEnv,
+) -> None:
+    """The same problem exists for an already-dirty tracked file:
+    'M file.py' can have its content rewritten again while retaining
+    exactly the same porcelain status flag."""
+
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    (work / "README.md").write_text("seed\nfirst change\n", encoding="utf-8")
+    fingerprint = repo_module.capture_fingerprint(work)
+
+    status_before = _run_git(["status", "--porcelain=v1"], cwd=work)
+    (work / "README.md").write_text(
+        "seed\nsecond, different change\n", encoding="utf-8"
+    )
+    status_after = _run_git(["status", "--porcelain=v1"], cwd=work)
+
+    assert status_before == status_after  # structurally unchanged (still "M README.md")
+
+    with pytest.raises(RepositoryError):
+        repo_module.verify_fingerprint_unchanged(
+            work, fingerprint, context="deterministic verification"
+        )
+
+
 def test_changed_reviewed_diff_prevents_commit(git_env: GitEnv) -> None:
     work = git_env.work
     repo_module.create_delivery_branch_from_origin_main(work, "delivery")
@@ -611,6 +747,580 @@ def test_missing_gh_fails_closed_on_pr_checks(git_env: GitEnv) -> None:
     with pytest.raises(RepositoryError):
         repo_module.pr_checks(
             work, "1", gh_command=("this-executable-does-not-exist-anywhere",)
+        )
+
+
+def test_missing_gh_fails_closed_on_pr_checks_json(git_env: GitEnv) -> None:
+    work = git_env.work
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=("this-executable-does-not-exist-anywhere",)
+        )
+
+
+def test_pr_checks_json_parses_structured_output(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys, json\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    assert args[2] == '1'\n"
+        "    assert '--json' in args\n"
+        "    print(json.dumps([\n"
+        "        {'name': 'build', 'state': 'SUCCESS', 'bucket': 'pass'},\n"
+        "        {'name': 'lint', 'state': 'FAILURE', 'bucket': 'fail'},\n"
+        "    ]))\n"
+        # A mixed pass/fail result is gh's exit-1 outcome, never exit 0 --
+        # realistic exit semantics, matching gh's own documented behavior.
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    checks = repo_module.pr_checks_json(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert checks == [
+        {"name": "build", "state": "SUCCESS", "bucket": "pass"},
+        {"name": "lint", "state": "FAILURE", "bucket": "fail"},
+    ]
+
+
+def test_pr_checks_json_rejects_non_json_output(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    print('not json at all')\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_checks_json_rejects_non_array_json_output(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    print('{\"not\": \"a list\"}')\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_checks_json_invokes_required_flag(git_env: GitEnv) -> None:
+    """The required-CI gate must query only checks GitHub actually marks
+    required -- an unrelated optional check must never be able to block or
+    satisfy it."""
+
+    work = git_env.work
+    fake_gh = (
+        "import sys, json\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    assert '--required' in args, args\n"
+        "    print(json.dumps([{'name': 'build', 'state': 'SUCCESS', 'bucket': 'pass'}]))\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    checks = repo_module.pr_checks_json(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert checks == [{"name": "build", "state": "SUCCESS", "bucket": "pass"}]
+
+
+_FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE = (
+    "import sys, json\n"
+    "args = sys.argv[1:]\n"
+    "if args[:2] == ['pr', 'checks']:\n"
+    "    sys.stdout.write({body!r})\n"
+    "    sys.exit({exit_code})\n"
+    "else:\n"
+    "    raise SystemExit(1)\n"
+)
+
+
+def test_pr_checks_json_exit_0_with_passing_json(git_env: GitEnv) -> None:
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "SUCCESS", "bucket": "pass"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=0)
+
+    checks = repo_module.pr_checks_json(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert checks == [{"name": "build", "state": "SUCCESS", "bucket": "pass"}]
+
+
+def test_pr_checks_json_exit_8_pending_is_parsed_not_raised(git_env: GitEnv) -> None:
+    """``gh pr checks`` documents exit 8 for still-pending checks -- the
+    generic strict ``_gh()`` would raise on this before ever parsing the
+    JSON body; ``pr_checks_json`` must not route through it."""
+
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "PENDING", "bucket": "pending"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=8)
+
+    checks = repo_module.pr_checks_json(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert checks == [{"name": "build", "state": "PENDING", "bucket": "pending"}]
+
+
+def test_pr_checks_json_exit_1_with_failing_json_is_parsed_not_raised(
+    git_env: GitEnv,
+) -> None:
+    """``gh pr checks`` documents exit 1 for failing/incomplete checks --
+    valid structured JSON consistent with a non-passing result is accepted
+    rather than treated as a bare tool error."""
+
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "FAILURE", "bucket": "fail"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=1)
+
+    checks = repo_module.pr_checks_json(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert checks == [{"name": "build", "state": "FAILURE", "bucket": "fail"}]
+
+
+def test_pr_checks_json_exit_1_with_all_passing_json_is_inconsistent(
+    git_env: GitEnv,
+) -> None:
+    """An exit 1 (gh's own failing/incomplete signal) whose JSON body
+    claims every check passed is an inconsistent, ambiguous result --
+    never silently resolved in either direction."""
+
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "SUCCESS", "bucket": "pass"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=1)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_checks_json_exit_1_with_malformed_output_raises(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(
+        body="not json at all", exit_code=1
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_checks_json_exit_1_with_empty_output_raises(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body="[]", exit_code=1)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_checks_json_unexpected_exit_code_raises(git_env: GitEnv) -> None:
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "SUCCESS", "bucket": "pass"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=2)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_head_sha_parses_head_ref_oid(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys, json\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'view']:\n"
+        "    assert args[2] == '1'\n"
+        "    assert '--json' in args and 'headRefOid' in args\n"
+        "    print(json.dumps({'headRefOid': 'abc123'}))\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    sha = repo_module.pr_head_sha(work, "1", gh_command=(sys.executable, "-c", fake_gh))
+
+    assert sha == "abc123"
+
+
+def test_pr_head_sha_rejects_missing_field(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys, json\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'view']:\n"
+        "    print(json.dumps({'somethingElse': 'x'}))\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_head_sha(work, "1", gh_command=(sys.executable, "-c", fake_gh))
+
+
+def test_pr_head_sha_rejects_non_json_output(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'view']:\n"
+        "    print('not json')\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_head_sha(work, "1", gh_command=(sys.executable, "-c", fake_gh))
+
+
+def test_missing_gh_fails_closed_on_pr_head_sha(git_env: GitEnv) -> None:
+    work = git_env.work
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_head_sha(
+            work, "1", gh_command=("this-executable-does-not-exist-anywhere",)
+        )
+
+
+# --- pr_required_checks: "no required checks configured" is the empty set -----
+
+
+def test_pr_required_checks_recognizes_no_required_checks_configured(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    sys.stderr.write('no required checks reported on the \"main\" branch\\n')\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert result.no_required_checks is True
+    assert result.checks == []
+
+
+def test_pr_required_checks_exit_1_auth_error_raises(git_env: GitEnv) -> None:
+    """A genuine auth/tool error must never be misclassified as "no
+    required checks configured", even if its message happens to also
+    mention required checks."""
+
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    sys.stderr.write(\n"
+        "        'authentication failed: no required checks could be reached\\n'\n"
+        "    )\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_exit_1_unrecognized_empty_output_raises(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+# --- an empty JSON array "[]" is never an ordinary checks result -------------
+
+
+def test_pr_required_checks_exit_0_with_empty_array_raises(git_env: GitEnv) -> None:
+    """Ambiguous/empty CI evidence must never silently satisfy the gate:
+    exit 0 with stdout "[]" is not a decidable checks result."""
+
+    work = git_env.work
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body="[]", exit_code=0)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_exit_8_with_empty_array_raises(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body="[]", exit_code=8)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_exit_1_with_empty_array_and_recognized_diagnostic_is_no_required_checks(
+    git_env: GitEnv,
+) -> None:
+    """An empty JSON array at exit 1 must fall through to the
+    positively-recognized "no required checks configured" stderr
+    diagnostic, rather than being consumed by the ordinary (now
+    non-empty-only) checks-JSON path and raising an inconsistency error
+    before that diagnostic is ever consulted."""
+
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    sys.stdout.write('[]')\n"
+        "    sys.stderr.write('no required checks reported on the \"main\" branch\\n')\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert result.no_required_checks is True
+    assert result.checks == []
+    assert result.returncode == 1
+
+
+def test_pr_required_checks_exit_1_with_empty_array_and_no_diagnostic_raises(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body="[]", exit_code=1)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_pass_pending_fail_unchanged(git_env: GitEnv) -> None:
+    """Existing exit 0/8/1 pass/pending/fail behavior is unaffected by the
+    "no required checks" distinction -- it only ever applies for the
+    positively recognized signal."""
+
+    work = git_env.work
+
+    passing = json.dumps([{"name": "build", "state": "SUCCESS", "bucket": "pass"}])
+    fake_gh_pass = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=passing, exit_code=0)
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh_pass)
+    )
+    assert result.no_required_checks is False
+    assert result.checks == [{"name": "build", "state": "SUCCESS", "bucket": "pass"}]
+
+    pending = json.dumps([{"name": "build", "state": "PENDING", "bucket": "pending"}])
+    fake_gh_pending = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=pending, exit_code=8)
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh_pending)
+    )
+    assert result.no_required_checks is False
+    assert result.checks == [{"name": "build", "state": "PENDING", "bucket": "pending"}]
+
+    failing = json.dumps([{"name": "build", "state": "FAILURE", "bucket": "fail"}])
+    fake_gh_fail = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=failing, exit_code=1)
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh_fail)
+    )
+    assert result.no_required_checks is False
+    assert result.checks == [{"name": "build", "state": "FAILURE", "bucket": "fail"}]
+
+
+def test_pr_required_checks_failing_check_named_no_required_checks_is_never_misclassified(
+    git_env: GitEnv,
+) -> None:
+    """A real, valid, non-empty checks JSON array is ALWAYS a real checks
+    result -- never reclassified as "no required checks configured"
+    because of text inside it. A required check literally named "No
+    Required Checks Policy" that is failing must still be reported as a
+    failing check, not silently discarded as an empty required set."""
+
+    work = git_env.work
+    failing = json.dumps(
+        [{"name": "No Required Checks Policy", "state": "FAILURE", "bucket": "fail"}]
+    )
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=failing, exit_code=1)
+
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert result.no_required_checks is False
+    assert result.checks == [
+        {"name": "No Required Checks Policy", "state": "FAILURE", "bucket": "fail"}
+    ]
+
+
+def test_pr_required_checks_exit_8_with_all_passing_json_is_inconsistent(
+    git_env: GitEnv,
+) -> None:
+    """Exit 8 (gh's own "pending" signal) whose JSON body claims every
+    check already passed is inconsistent -- never silently accepted as
+    success."""
+
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "SUCCESS", "bucket": "pass"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=8)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_malformed_check_object_cannot_satisfy_ci(
+    git_env: GitEnv,
+) -> None:
+    """A check entry missing ``name``/``state`` (only ``bucket`` present)
+    is malformed and must never be accepted as valid checks evidence."""
+
+    work = git_env.work
+    body = json.dumps([{"bucket": "pass"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=0)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_unrecognized_bucket_value_cannot_satisfy_ci(
+    git_env: GitEnv,
+) -> None:
+    """A ``bucket`` value outside gh's own known set (pass/fail/pending/
+    skipping/cancel) is malformed output -- never silently treated as any
+    particular outcome."""
+
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "SOMETHING", "bucket": "unknown"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=0)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_exit_0_with_skipping_bucket_satisfies_gate(
+    git_env: GitEnv,
+) -> None:
+    """GitHub treats a skipped/neutral required check as a successful
+    conclusion -- gh's own exit 0 ("every required check succeeded") must
+    be accepted even when the only check present carries bucket
+    "skipping" rather than "pass"."""
+
+    work = git_env.work
+    body = json.dumps([{"name": "docs", "state": "SKIPPED", "bucket": "skipping"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=0)
+
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert result.no_required_checks is False
+    assert result.returncode == 0
+    assert result.checks == [{"name": "docs", "state": "SKIPPED", "bucket": "skipping"}]
+
+
+def test_pr_required_checks_exit_0_mixed_pass_and_skipping_satisfies_gate(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    body = json.dumps(
+        [
+            {"name": "build", "state": "SUCCESS", "bucket": "pass"},
+            {"name": "docs", "state": "SKIPPED", "bucket": "skipping"},
+        ]
+    )
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=0)
+
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert result.no_required_checks is False
+    assert result.returncode == 0
+    assert len(result.checks) == 2
+
+
+def test_pr_required_checks_exit_0_with_fail_bucket_is_inconsistent(
+    git_env: GitEnv,
+) -> None:
+    """gh's own exit 0 ("every required check succeeded") whose JSON body
+    contains a failing check is inconsistent -- never silently accepted
+    as success."""
+
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "FAILURE", "bucket": "fail"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=0)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+def test_pr_required_checks_exit_0_with_pending_bucket_is_inconsistent(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "PENDING", "bucket": "pending"}])
+    fake_gh = _FAKE_GH_CHECKS_EXIT_CODE_TEMPLATE.format(body=body, exit_code=0)
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
         )
 
 

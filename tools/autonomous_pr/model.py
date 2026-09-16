@@ -128,28 +128,40 @@ class VerificationCommandResult:
 
 @dataclass(frozen=True)
 class VerificationEvidence:
-    """Explicit handoff evidence for one deterministic verification run (§6)."""
+    """Explicit handoff evidence for one deterministic verification run (§6).
+
+    ``head_sha`` is the exact commit this evidence was produced against —
+    the repository ``HEAD`` at the moment the verification commands ran.
+    Binding evidence to an exact SHA lets a later consumer (prospective
+    Task Closure's handoff) positively prove it is presenting verification
+    evidence for the same commit as the accepted implementation diff it is
+    handed alongside, rather than silently reusing stale evidence from an
+    earlier commit a since-repaired checkpoint invalidated.
+    """
 
     commands: tuple[VerificationCommandResult, ...]
     passed: bool
+    head_sha: str
 
 
 @dataclass(frozen=True)
 class RunResult:
-    """The outcome of one orchestrator run/slice, returned to the CLI caller.
+    """The outcome of one orchestrator run, returned to the CLI caller.
 
-    This Group 3 slice only ever implements phases up to an accepted,
-    committed, and pushed implementation checkpoint
-    (``docs/AUTONOMOUS_PR_HARNESS.md`` §9's ``preflight`` through
-    ``implementation checkpoint / deterministic verification / checkpoint
-    review`` cycle) — never the draft-PR/Task Closure/mode-C/final-CI tail
-    that actually leads to the run's real terminal ``STOP``. So ``outcome``
-    here is only ever :attr:`RunOutcome.BLOCKED` (a genuine fail-closed
-    terminal condition) or ``None`` (this slice completed the requested
-    phases normally; the invocation has not reached a terminal outcome).
-    This slice never manufactures a premature :attr:`RunOutcome.STOP` —
-    only a later slice that actually reaches ``READY_FOR_HUMAN_MERGE`` may
-    report that.
+    ``outcome`` is :attr:`RunOutcome.BLOCKED` for any genuine fail-closed
+    terminal condition, :attr:`RunOutcome.STOP` once the run has actually
+    reached ``READY_FOR_HUMAN_MERGE`` (``docs/AUTONOMOUS_PR_HARNESS.md``
+    §10) — the full ``preflight`` through draft-PR / prospective Task
+    Closure / mode C final cumulative audit / required-CI tail — or
+    ``None`` if a caller obtained this value from an internal phase helper
+    before the run reached either terminal state (only :func:`.orchestrator.run`
+    itself should ever observe ``None`` in practice). ``STOP`` is never
+    manufactured before every required gate — closure review, post-closure
+    origin/main revalidation, a fresh mode C audit, and green required CI —
+    has actually passed.
+
+    ``pr_url`` is populated once the draft PR exists (``None`` before that
+    phase, or on any run that never reaches it).
     """
 
     task_id: str
@@ -160,3 +172,4 @@ class RunResult:
     repair_count: int
     blocked_reason: str | None
     artifacts_dir: Path | None
+    pr_url: str | None = None

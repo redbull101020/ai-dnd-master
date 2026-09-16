@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.autonomous_pr.__main__ import main
+from tools.autonomous_pr.__main__ import _split_verify_command, main
 
 _TASK_ID = "TSK-9001"
 
@@ -101,7 +101,13 @@ def env(tmp_path: Path) -> Env:
 _IMPLEMENTER_SCRIPT = (
     "import sys\n"
     "data = sys.stdin.read()\n"
-    "if 'PLAN:' not in data:\n"
+    "if 'DRAFT_PR_NUMBER:' in data:\n"
+    "    with open('docs/TASK.md', 'a', encoding='utf-8') as f:\n"
+    "        f.write('\\n<!-- prospective closure -->\\n')\n"
+    "    with open('docs/DEVELOPMENT_LOG.md', 'a', encoding='utf-8') as f:\n"
+    "        f.write('\\n- TSK-9001 closed.\\n')\n"
+    "    print('closed')\n"
+    "elif 'PLAN:' not in data:\n"
     "    print('PLAN: implement the thing')\n"
     "else:\n"
     "    with open('work_output.txt', 'w', encoding='utf-8') as f:\n"
@@ -127,12 +133,9 @@ def _base_argv(env: Env, *, extra: list[str]) -> list[str]:
     # is rejected, so every value that could itself start with "-" is
     # joined with "=" instead.
     #
-    # --verify is shlex-split by the CLI, and shlex's default POSIX mode
-    # treats "\" as an escape character -- it would mangle a Windows
-    # executable path. Forward slashes are accepted by Windows path APIs
-    # too, so using them here sidesteps that without needing a real
-    # executable found on PATH.
-    verify_python = sys.executable.replace("\\", "/")
+    # --verify uses the REAL sys.executable path verbatim (backslashes and
+    # all, on Windows) -- this exercises _split_verify_command's Windows-
+    # path-safe parsing directly, rather than working around it.
     return [
         _TASK_ID,
         "--repo",
@@ -145,7 +148,7 @@ def _base_argv(env: Env, *, extra: list[str]) -> list[str]:
         sys.executable,
         "--reviewer-arg=-c",
         f"--reviewer-arg={_REVIEWER_SCRIPT}",
-        f"--verify={verify_python} -c \"raise SystemExit(0)\"",
+        f"--verify={sys.executable} -c \"raise SystemExit(0)\"",
         "--max-repairs",
         "1",
         "--delivery-branch",
@@ -161,6 +164,13 @@ _ALL_CAPABILITY_FLAGS = [
 ]
 
 
+def _artifacts_dir_from_output(out: str) -> Path:
+    for line in out.splitlines():
+        if line.startswith("artifacts_dir:"):
+            return Path(line.split(":", 1)[1].strip())
+    raise AssertionError(f"no 'artifacts_dir:' line found in CLI output:\n{out}")
+
+
 def _origin_branch_exists(env: Env, branch: str) -> bool:
     result = subprocess.run(
         ["git", "--git-dir", str(env.origin), "rev-parse", f"refs/heads/{branch}"],
@@ -168,6 +178,62 @@ def _origin_branch_exists(env: Env, branch: str) -> bool:
         text=True,
     )
     return result.returncode == 0
+
+
+# --- --verify command splitting (Windows-path regression) ---------------------
+
+
+def test_split_verify_command_preserves_windows_backslash_path() -> None:
+    """shlex.split()'s default POSIX mode treats '\\' as an escape
+    character and would corrupt a Windows executable path (e.g. turning
+    'C:\\Users\\me\\python.exe' into 'C:Usersmepython.exe'). This is the
+    unit-level regression proving _split_verify_command does not do that,
+    while still supporting a double-quoted argument."""
+
+    entry = r'C:\Users\me\python.exe -c "raise SystemExit(0)"'
+
+    result = _split_verify_command(entry)
+
+    assert result == (r"C:\Users\me\python.exe", "-c", "raise SystemExit(0)")
+
+
+def test_split_verify_command_handles_plain_whitespace_and_quotes() -> None:
+    assert _split_verify_command("pytest tests/foo") == ("pytest", "tests/foo")
+    assert _split_verify_command('cmd "two words" tail') == (
+        "cmd",
+        "two words",
+        "tail",
+    )
+    assert _split_verify_command("   ") == ()
+
+
+def test_split_verify_command_rejects_unterminated_quote() -> None:
+    with pytest.raises(ValueError):
+        _split_verify_command('cmd "unterminated')
+
+
+def test_cli_verify_command_with_real_windows_backslash_path_executes(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end regression: --verify carrying the real sys.executable
+    path (backslashes and all, as _base_argv now passes verbatim) must
+    actually parse and execute successfully through the full CLI, not just
+    the unit-level splitter. Reaching an accepted checkpoint is sufficient
+    proof -- deterministic verification (which the backslash-path --verify
+    command feeds) is a hard prerequisite for it, and this test does not
+    need a real `gh` to reach that far (the CLI has no --gh-command
+    override; the draft-PR phase beyond this point needs a real GitHub
+    remote and is exercised with fakes at the orchestrator level instead,
+    see test_orchestrator.py)."""
+
+    argv = _base_argv(env, extra=list(_ALL_CAPABILITY_FLAGS))
+
+    main(argv)
+
+    out = capsys.readouterr().out
+    assert "unterminated" not in out.lower()
+    artifacts_dir = _artifacts_dir_from_output(out)
+    assert (artifacts_dir / "accepted_checkpoint.txt").exists()
 
 
 # --- capability preconditions fail closed before any agent runs ---------------
@@ -230,12 +296,22 @@ def test_cli_fails_configuration_when_reviewer_fresh_context_flag_omitted(
 # --- happy path with all required capability assertions supplied --------------
 
 
-def test_cli_happy_path_with_all_required_capability_flags(env: Env) -> None:
+def test_cli_happy_path_with_all_required_capability_flags(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Valid capability declarations let the CLI proceed all the way
+    through an accepted, committed, pushed implementation checkpoint (the
+    CLI has no --gh-command override, so the draft-PR/closure/mode-C/CI
+    tail needs a real GitHub remote and is exercised with fakes at the
+    orchestrator level instead, see test_orchestrator.py)."""
+
     argv = _base_argv(env, extra=list(_ALL_CAPABILITY_FLAGS))
 
-    exit_code = main(argv)
+    main(argv)
 
-    assert exit_code == 0
+    out = capsys.readouterr().out
+    artifacts_dir = _artifacts_dir_from_output(out)
+    assert (artifacts_dir / "accepted_checkpoint.txt").exists()
     assert _origin_branch_exists(env, "delivery")
     log = _run_git(["log", "-1", "--format=%s"], cwd=env.work).strip()
     assert log.startswith(_TASK_ID)

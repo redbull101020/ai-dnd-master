@@ -1,17 +1,24 @@
-"""Minimal local CLI entrypoint for the Group 3 AUTONOMOUS_PR orchestration slice.
+"""Minimal local CLI entrypoint for the AUTONOMOUS_PR orchestrator.
 
 Executes :func:`tools.autonomous_pr.orchestrator.run` for exactly one named
-task, using configured external implementer/reviewer commands. Per
-``docs/AUTONOMOUS_PR_HARNESS.md`` §3, the task ID accepted here is
-execution input only, never proof of authorization — running this CLI is
-never itself evidence that the user gave a separate, explicit
+task, using configured external implementer/reviewer commands, through the
+full lifecycle to ``READY_FOR_HUMAN_MERGE``/``STOP`` or a fail-closed
+``BLOCKED``. Per ``docs/AUTONOMOUS_PR_HARNESS.md`` §3, the task ID accepted
+here is execution input only, never proof of authorization — running this
+CLI is never itself evidence that the user gave a separate, explicit
 ``AUTONOMOUS_PR`` invocation for the named task, and this CLI intentionally
 has no "authorization proof" flag. Confirming that a real invocation was
-given is the caller's responsibility, outside this module entirely.
+given is the caller's responsibility, outside this module entirely. This
+CLI never merges or auto-merges anything.
 
 Every external command is invoked as an explicit argv list
 (``subprocess.run([...], ...)``, never ``shell=True``); no provider SDK is
-used.
+used. ``--verify`` values are split by :func:`_split_verify_command`, a
+narrow hand-written whitespace/double-quote tokenizer — not
+``shlex.split``, whose default POSIX mode treats ``\\`` as an escape
+character and would corrupt a Windows executable path; and not a shell, so
+no variable expansion, single-quote handling, or backslash escaping is
+supported.
 
 ``--reviewer-fresh-context-capable``, ``--implementer-no-git-github-write-capability``,
 and ``--reviewer-no-git-github-write-capability`` are all required: omitting
@@ -30,22 +37,59 @@ way to grant Git/GitHub write access to either role.
 from __future__ import annotations
 
 import argparse
-import shlex
 import sys
 from pathlib import Path
 
 from .agents import AgentInvocationSpec
-from .model import AgentRole, RunResult
+from .model import AgentRole, RunOutcome, RunResult
 from .orchestrator import OrchestratorConfig, run
+
+
+def _split_verify_command(entry: str) -> tuple[str, ...]:
+    """Split one ``--verify`` command string into an argv tuple.
+
+    Splits on whitespace, treating a double-quoted segment as one token
+    (quotes stripped, content taken verbatim). Backslashes are never
+    treated as escape characters, so a Windows path like
+    ``C:\\Users\\me\\python.exe`` survives intact — unlike
+    ``shlex.split()``'s default POSIX mode, which would corrupt it. This is
+    deliberately not a shell-compatible parser (no single-quote handling,
+    no backslash escaping, no variable expansion): it exists only to let
+    one self-contained argv list be written on one command line, not to
+    introduce shell semantics or a command framework.
+    """
+
+    tokens: list[str] = []
+    i = 0
+    n = len(entry)
+    while i < n:
+        while i < n and entry[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        if entry[i] == '"':
+            end = entry.find('"', i + 1)
+            if end == -1:
+                raise ValueError(
+                    f"unterminated double quote in verification command: {entry!r}"
+                )
+            tokens.append(entry[i + 1 : end])
+            i = end + 1
+        else:
+            start = i
+            while i < n and not entry[i].isspace():
+                i += 1
+            tokens.append(entry[start:i])
+    return tuple(tokens)
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m tools.autonomous_pr",
         description=(
-            "Execute the Group 3 deterministic orchestration slice "
-            "(preflight through an accepted checkpoint commit/push) for "
-            "one already-authorized AUTONOMOUS_PR task."
+            "Execute the deterministic AUTONOMOUS_PR orchestrator (preflight "
+            "through READY_FOR_HUMAN_MERGE/STOP, or a fail-closed BLOCKED) "
+            "for one already-authorized task."
         ),
     )
     parser.add_argument(
@@ -125,8 +169,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=[],
         dest="verify_commands",
         help=(
-            "One deterministic verification command, shlex-split into an "
-            "argv list; may repeat."
+            "One deterministic verification command, split into an argv "
+            "list by _split_verify_command (whitespace/double-quote only "
+            "-- not a shell, and safe for Windows paths); may repeat."
         ),
     )
     parser.add_argument(
@@ -184,7 +229,7 @@ def _build_config(args: argparse.Namespace) -> OrchestratorConfig:
         has_git_or_github_write_access=reviewer_has_write_access,
     )
     verification_commands = tuple(
-        tuple(shlex.split(entry)) for entry in args.verify_commands
+        _split_verify_command(entry) for entry in args.verify_commands
     )
     delivery_branch = args.delivery_branch or f"autonomous-pr/{args.task_id.lower()}"
 
@@ -208,6 +253,8 @@ def _report(result: RunResult) -> None:
     print(f"delivery_branch: {result.delivery_branch}")
     print(f"head_sha: {result.head_sha}")
     print(f"repair_count: {result.repair_count}")
+    if result.pr_url is not None:
+        print(f"pr_url: {result.pr_url}")
     if result.blocked_reason is not None:
         print(f"blocked_reason: {result.blocked_reason}")
     if result.artifacts_dir is not None:
@@ -223,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     result = run(config)
     _report(result)
-    return 0 if result.outcome is None else 1
+    return 0 if result.outcome in (RunOutcome.STOP, None) else 1
 
 
 if __name__ == "__main__":

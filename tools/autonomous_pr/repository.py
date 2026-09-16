@@ -33,11 +33,12 @@ violate the same phase discipline the rest of this harness follows.
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 _PROTECTED_BRANCHES = frozenset({"main", "master"})
 _DEFAULT_GH_COMMAND: tuple[str, ...] = ("gh",)
@@ -141,19 +142,30 @@ def verify_branch_head_unchanged(
 
 @dataclass(frozen=True)
 class RepositoryFingerprint:
-    """A snapshot of facts an external agent process must never change.
+    """A snapshot of facts an external agent process — or a deterministic
+    verification command — must never change.
 
     Used to detect an implementer/reviewer process moving the branch or
     HEAD it was never given Git/GitHub write access to, or leaving behind
     unexpected worktree mutation (``docs/AUTONOMOUS_PR_HARNESS.md`` §§5,
-    14). ``status_digest`` covers the full working-tree/index state, not
-    just HEAD, so a mutation that never advances HEAD (e.g. an uncommitted
-    stray edit) is still detected.
+    14) — and, since a configured deterministic verification command is
+    never trusted to be read-only by convention either, the identical
+    guard around every verification command
+    (:func:`.orchestrator._run_verification`).
+
+    ``content_digest`` is content-sensitive, not merely status-sensitive:
+    it covers the actual bytes of every tracked and untracked visible
+    file (:func:`capture_fingerprint`), not just each path's porcelain
+    status flag. A command that rewrites a file's *content* while leaving
+    its status line unchanged — an already-untracked file staying
+    untracked, or an already-modified tracked file staying modified with
+    different bytes — is still detected; the porcelain status text alone
+    cannot distinguish that from "nothing changed".
     """
 
     branch: str
     head_sha: str
-    status_digest: str
+    content_digest: str
 
 
 def _run(
@@ -544,6 +556,45 @@ def build_cumulative_patch(repo: Path, purpose: ReviewPurpose) -> ReviewPatch:
     )
 
 
+def build_cumulative_patch_from_base(
+    repo: Path, purpose: ReviewPurpose, base_sha: str
+) -> ReviewPatch:
+    """``git diff <base_sha>...HEAD`` against an exact, already-validated
+    base — never fetches, never resolves the mutable ``origin/main`` ref
+    itself.
+
+    Same purpose restriction, range shape, and canonical-A/B/C semantics as
+    :func:`build_cumulative_patch` (still the "C" range; this is not a
+    fourth diff mode) — the only difference is anchoring to a caller-
+    supplied exact commit rather than resolving ``origin/main`` internally.
+    This closes the same revalidation/fetch race
+    :func:`create_delivery_branch_from_sha` already closes for branch
+    creation: a caller that has just fetched and positively revalidated
+    ``origin/main`` at a specific SHA can build the cumulative diff against
+    that exact commit, immune to ``origin/main`` moving again in between.
+
+    Requires a clean worktree/index first: this is a commit-to-commit
+    range, so unlike mode A, ``git add -N`` cannot make uncommitted content
+    appear in it — a dirty state would silently produce an incomplete
+    review artifact rather than fail loudly.
+    """
+
+    if purpose not in _CUMULATIVE_PURPOSES:
+        raise RepositoryError(
+            f"build_cumulative_patch_from_base requires a cumulative "
+            f"ReviewPurpose, got {purpose!r}"
+        )
+    _require_clean_state(repo, context=purpose.value)
+    diff_text = _git(repo, ["diff", f"{base_sha}...HEAD"])
+    return _build_review_patch(
+        repo,
+        purpose=purpose,
+        range_description=f"{base_sha}...HEAD",
+        base_sha=base_sha,
+        diff_text=diff_text,
+    )
+
+
 def verify_patch_unchanged(repo: Path, reviewed_patch: ReviewPatch) -> None:
     """Fail closed if the working diff no longer matches what was reviewed.
 
@@ -582,11 +633,58 @@ def verify_patch_unchanged(repo: Path, reviewed_patch: ReviewPatch) -> None:
 
 
 def capture_fingerprint(repo: Path) -> RepositoryFingerprint:
-    status = _git(repo, ["status", "--porcelain=v1"])
+    """Capture a content-sensitive fingerprint of branch/HEAD/full
+    worktree+index state.
+
+    ``content_digest`` folds together, in this fixed order:
+
+    - the porcelain status line set (``git status --porcelain=v1``), so
+      each path's status flag is still covered;
+    - the byte-for-byte tracked worktree diff against HEAD (``git diff
+      --binary HEAD``), which alone already reflects both staged and
+      unstaged tracked-file content changes;
+    - the byte-for-byte staged diff against HEAD (``git diff --cached
+      --binary HEAD``) as well — defense-in-depth for the rare case index
+      and worktree content diverge from HEAD in a way the worktree-vs-HEAD
+      diff alone would not fully surface;
+    - for every currently untracked-but-visible file (``git ls-files
+      --others --exclude-standard``, in deterministic sorted-path order),
+      that path together with a hash of its actual current bytes. Git
+      diff output never covers untracked files at all, so without this a
+      command that rewrites an untracked file's content in place (e.g. a
+      checkpoint's own freshly-written ``work_output.txt``, still
+      untracked before and after) would leave a porcelain-status-only
+      fingerprint falsely claiming nothing changed.
+    """
+
+    hasher = hashlib.sha256()
+    hasher.update(b"STATUS\x00")
+    hasher.update(_git(repo, ["status", "--porcelain=v1"]).encode("utf-8"))
+    hasher.update(b"\x00WORKTREE_DIFF\x00")
+    hasher.update(_git(repo, ["diff", "--binary", "HEAD"]).encode("utf-8"))
+    hasher.update(b"\x00STAGED_DIFF\x00")
+    hasher.update(_git(repo, ["diff", "--cached", "--binary", "HEAD"]).encode("utf-8"))
+    hasher.update(b"\x00UNTRACKED\x00")
+    untracked_output = _git(repo, ["ls-files", "--others", "--exclude-standard", "-z"])
+    untracked_paths = sorted(path for path in untracked_output.split("\x00") if path)
+    for path in untracked_paths:
+        hasher.update(path.encode("utf-8"))
+        hasher.update(b"\x00")
+        try:
+            content = (repo / path).read_bytes()
+        except OSError:
+            # A path git just reported as untracked but that can no
+            # longer be read as a plain file (deleted, or replaced by a
+            # directory, in the instant between the two commands) is
+            # itself a worktree change -- fold a fixed sentinel into the
+            # digest rather than silently treating it as empty content.
+            content = b"\x00UNREADABLE\x00"
+        hasher.update(hashlib.sha256(content).digest())
+        hasher.update(b"\x00")
     return RepositoryFingerprint(
         branch=current_branch(repo),
         head_sha=head_sha(repo),
-        status_digest=hashlib.sha256(status.encode("utf-8")).hexdigest(),
+        content_digest=hasher.hexdigest(),
     )
 
 
@@ -773,9 +871,357 @@ def pr_checks(
 ) -> str:
     """Raw ``gh pr checks <number>`` output.
 
-    Deliberately unparsed: structured CI-driven repair/replay logic is out
-    of scope for this checkpoint. This is only the narrow ``gh``-invocation
-    hook a later orchestrator builds on when it needs it.
+    Deliberately unparsed. This is only the narrow ``gh``-invocation hook;
+    :func:`pr_checks_json` is what an orchestrator uses for CI-driven
+    repair/replay decisions.
     """
 
     return _gh(repo, ["pr", "checks", pr_number], gh_command=gh_command)
+
+
+_PR_CHECKS_JSON_FIELDS = "name,state,bucket"
+
+# gh pr checks's own documented exit codes: 0 all required checks passed,
+# 8 checks are still pending, 1 checks failed/incomplete (or, narrowly,
+# "no required checks configured" -- see _looks_like_no_required_checks_stderr).
+# Any other exit code is a genuine tool error, never a checks result.
+_PR_CHECKS_KNOWN_EXIT_CODES = frozenset({0, 1, 8})
+
+# The fields --json name,state,bucket is expected to produce for every
+# check object. A check object missing any of these, or carrying a
+# non-string/empty value for one, is malformed and can never satisfy the
+# required-CI gate -- see _validate_check_item.
+_REQUIRED_CHECK_FIELDS = ("name", "state", "bucket")
+
+# gh's own documented summary buckets for a PR check. A bucket value
+# outside this set is malformed/unrecognized output, never silently
+# treated as any particular outcome.
+_KNOWN_CHECK_BUCKETS = frozenset({"pass", "fail", "pending", "skipping", "cancel"})
+
+# Buckets GitHub itself treats as a successful status-check conclusion --
+# a plain pass, and a skipped/neutral check GitHub does not block merges
+# on. Only "fail"/"pending"/"cancel" are non-successful. This is what
+# lets `_required_ci` accept `gh pr checks`'s own exit 0 (every required
+# check already succeeded) even when one or more of those successful
+# checks happens to carry bucket "skipping" rather than "pass" --
+# reinterpreting a genuinely successful gh outcome as failing/pending
+# would itself be a fail-*open* bug in the opposite direction.
+_SUCCESSFUL_CHECK_BUCKETS = frozenset({"pass", "skipping"})
+
+# The specific, narrow phrase gh's own "no required checks" result is
+# recognized by (case-insensitive substring match against stderr only --
+# never stdout/the parsed checks JSON, so a real check whose own name
+# happens to contain this phrase, e.g. "No Required Checks Policy", can
+# never be misclassified this way). Deliberately narrow: this module does
+# not attempt to recognize every possible phrasing, only this positively-
+# known one -- anything else at exit 1 falls through to the existing
+# ambiguous/inconsistent-result handling below, which fails closed.
+_NO_REQUIRED_CHECKS_MARKER = "no required checks"
+
+# A small defensive guard against misclassifying a genuine tool/auth/
+# network error that happens to also mention "no required checks" in
+# passing -- gh's own message for this condition is never also an
+# authentication/HTTP/connectivity failure in practice.
+_ERROR_MARKERS_THAT_OVERRIDE_NO_REQUIRED_CHECKS = (
+    "authentic",
+    "http ",
+    "could not resolve",
+    "connection",
+    "rate limit",
+)
+
+
+@dataclass(frozen=True)
+class RequiredChecksResult:
+    """The outcome of querying ``gh``'s ``--required`` PR checks.
+
+    ``no_required_checks=True`` is a narrow, explicit, positively
+    recognized result: ``gh`` reported that this PR/repository has no
+    required status checks configured at all — the required set is empty,
+    which satisfies (not blocks) a required-CI gate. This is never
+    conflated with an ordinary (possibly incidentally empty-looking)
+    checks list, a failing/pending state, or a genuine tool/auth/network/
+    malformed-output error — each of those still raises
+    :class:`RepositoryError` or returns ``no_required_checks=False`` with
+    the actual parsed checks, exactly as before this distinction existed.
+    When ``no_required_checks`` is ``True``, ``checks`` is always empty.
+
+    ``returncode`` retains ``gh``'s own validated exit code (``0``, ``1``,
+    or ``8``) so the caller can key its accept/reject decision off gh's
+    own already-computed, already-consistency-checked outcome rather than
+    re-deriving it from ``checks`` — in particular, exit ``0`` ("every
+    required check succeeded") is always the gate-satisfied outcome
+    regardless of *which* successful bucket (``pass`` or ``skipping``)
+    each individual check happens to carry.
+    """
+
+    checks: list[dict[str, Any]]
+    no_required_checks: bool
+    returncode: int
+
+
+def _run_gh_pr_checks_required(
+    repo: Path, pr_number: str, *, gh_command: Sequence[str]
+) -> subprocess.CompletedProcess[str]:
+    return _run(
+        [
+            *gh_command,
+            "pr",
+            "checks",
+            pr_number,
+            "--required",
+            "--json",
+            _PR_CHECKS_JSON_FIELDS,
+        ],
+        cwd=repo,
+    )
+
+
+def _validate_check_item(item: dict[str, Any]) -> bool:
+    """A well-formed check object has a non-empty string for each of
+    ``name``/``state``/``bucket`` — a malformed entry (e.g. ``{"bucket":
+    "pass"}`` alone) can never satisfy the required-CI gate — and
+    ``bucket`` must additionally be one of gh's own known summary buckets
+    (:data:`_KNOWN_CHECK_BUCKETS`); an unrecognized bucket value is
+    malformed output too, never silently treated as any particular
+    outcome."""
+
+    for field_name in _REQUIRED_CHECK_FIELDS:
+        value = item.get(field_name)
+        if not isinstance(value, str) or not value:
+            return False
+    if item["bucket"] not in _KNOWN_CHECK_BUCKETS:
+        return False
+    return True
+
+
+def _try_parse_checks_json(stdout: str) -> list[dict[str, Any]] | None:
+    """The parsed checks list, or ``None`` if ``stdout`` is not valid,
+    well-formed, **non-empty** checks JSON.
+
+    Returns ``None`` for: invalid JSON; the wrong shape; an entry missing
+    a required non-empty ``name``/``state``/``bucket`` field; and — this
+    is load-bearing, not incidental — an empty JSON array ``[]``. An empty
+    array is ambiguous evidence (zero checks reported is never
+    distinguishable here from a tool that printed nothing meaningful) and
+    must never be treated as an ordinary, decidable checks result; callers
+    (:func:`pr_required_checks`) only ever reach the positively recognized
+    "no required checks configured" diagnostic, or fail closed, for it —
+    never the ordinary bucket-consistency path.
+    """
+
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, dict) and _validate_check_item(item) for item in parsed
+    ):
+        return None
+    if not parsed:
+        return None
+    return parsed
+
+
+def _looks_like_no_required_checks_stderr(stderr: str) -> bool:
+    lowered = stderr.lower()
+    if _NO_REQUIRED_CHECKS_MARKER not in lowered:
+        return False
+    return not any(
+        marker in lowered for marker in _ERROR_MARKERS_THAT_OVERRIDE_NO_REQUIRED_CHECKS
+    )
+
+
+def pr_required_checks(
+    repo: Path, pr_number: str, *, gh_command: Sequence[str] = _DEFAULT_GH_COMMAND
+) -> RequiredChecksResult:
+    """``gh pr checks <number> --required --json name,state,bucket``,
+    distinguishing "no required checks configured" from every other
+    outcome.
+
+    Used for the required-CI gate and CI-driven repair/replay decisions
+    (``docs/AUTONOMOUS_PR_HARNESS.md`` §16): each returned entry's
+    ``bucket`` is expected to be one of ``gh``'s own summary buckets (e.g.
+    ``pass``, ``fail``, ``pending``, ``skipping``, ``cancel``) — this
+    module does not interpret those values itself, only parses and returns
+    them. ``--required`` restricts the query to checks GitHub actually
+    marks required: an unrelated optional check must never be able to
+    block (or silently satisfy) this harness's required-CI gate.
+
+    Deliberately does **not** call the generic strict :func:`_gh` — ``gh
+    pr checks`` documents a non-zero exit for its own pending (``8``) and
+    failing/incomplete (``1``) outcomes, which :func:`_gh` would otherwise
+    treat identically to a genuine tool error and raise before this
+    function ever sees the JSON body. This is a narrow, local exception for
+    this one call site only; :func:`_gh` itself is not weakened, so ``gh
+    pr create`` and every other ``gh`` side effect in this module keep
+    their strict non-zero-is-an-error behavior.
+
+    Decision order (load-bearing — never reversed): stdout is checked for
+    being valid, well-formed checks JSON *first*. A valid, non-empty
+    checks array is always treated as a real checks result and can
+    **never** be reclassified as "no required checks" because of text
+    inside it — a check literally named ``"No Required Checks Policy"``
+    with ``bucket: "fail"`` still counts as a real, failing required
+    check. Only when stdout is *not* valid, well-formed, non-empty checks
+    JSON does this function even look at ``stderr`` for the positively
+    recognized "no required checks configured" diagnostic
+    (:func:`_looks_like_no_required_checks_stderr`) — never at stdout for
+    that purpose.
+
+    Exit-code handling:
+
+    - ``0``/``8``/``1`` with valid, well-formed checks JSON: parsed and
+      returned (``no_required_checks=False``, ``returncode`` retained),
+      subject to bucket-aware consistency checks that never quietly
+      resolve an ambiguous result in either direction: exit ``0`` ("every
+      required check succeeded") is inconsistent if any check carries a
+      non-successful bucket (``fail``/``pending``/``cancel`` —
+      ``pass``/``skipping`` both count as successful, since GitHub itself
+      treats a skipped/neutral check as a successful conclusion); exit
+      ``1`` (failed/incomplete) or exit ``8`` (pending) are each
+      inconsistent if *no* check carries a non-successful bucket (i.e.
+      the JSON claims everything already succeeded).
+    - ``1`` with stdout that is *not* valid, well-formed, non-empty checks
+      JSON, and ``stderr`` positively matches gh's known "no required
+      checks configured/reported" phrasing: a real repository/PR with no
+      required status checks at all — returns
+      ``RequiredChecksResult(checks=[], no_required_checks=True,
+      returncode=1)``.
+    - anything else (an unrecognized exit code, a missing ``gh``, a
+      timeout, malformed/empty output with no recognized "no required
+      checks" diagnostic, or a malformed individual check object —
+      including an unrecognized ``bucket`` value) always raises
+      :class:`RepositoryError`. An unparseable or ambiguous CI status is
+      never silently treated as passing or as an empty required set.
+    """
+
+    result = _run_gh_pr_checks_required(repo, pr_number, gh_command=gh_command)
+    parsed = _try_parse_checks_json(result.stdout)
+
+    if parsed is not None:
+        # Valid, well-formed, NON-EMPTY checks JSON (_try_parse_checks_json
+        # itself rejects an empty array as ambiguous evidence) -- a real
+        # checks result, decided entirely by exit code/bucket consistency,
+        # never reclassified as "no required checks" based on anything
+        # inside it.
+        if result.returncode not in _PR_CHECKS_KNOWN_EXIT_CODES:
+            raise RepositoryError(
+                f"gh pr checks --required --json exited {result.returncode}, "
+                f"not one of gh's documented outcomes "
+                f"{sorted(_PR_CHECKS_KNOWN_EXIT_CODES)!r}: {result.stderr.strip()}"
+            )
+        non_successful_present = any(
+            item["bucket"] not in _SUCCESSFUL_CHECK_BUCKETS for item in parsed
+        )
+        if result.returncode == 0 and non_successful_present:
+            raise RepositoryError(
+                "gh pr checks --required --json exited 0 (required checks "
+                "succeeded) but its own JSON output shows a check whose "
+                "bucket is not itself a successful outcome (pass/"
+                "skipping); an inconsistent/ambiguous checks result is "
+                f"never silently resolved in either direction: "
+                f"{result.stdout!r}"
+            )
+        if result.returncode == 1 and not non_successful_present:
+            raise RepositoryError(
+                "gh pr checks --required --json exited 1 (checks not all "
+                "successful) but its own JSON output does not show any "
+                "non-successful check; an inconsistent/ambiguous checks "
+                f"result is never silently resolved in either direction: "
+                f"{result.stdout!r}"
+            )
+        if result.returncode == 8 and not non_successful_present:
+            raise RepositoryError(
+                "gh pr checks --required --json exited 8 (checks pending) "
+                "but its own JSON output does not show any pending/"
+                "non-successful check; an inconsistent/ambiguous checks "
+                f"result is never silently resolved in either direction: "
+                f"{result.stdout!r}"
+            )
+        return RequiredChecksResult(
+            checks=parsed, no_required_checks=False, returncode=result.returncode
+        )
+
+    # stdout was not valid, well-formed, non-empty checks JSON (invalid
+    # JSON, the wrong shape, an empty array, or a malformed entry). Only
+    # now consider the positively recognized "no required checks
+    # configured" diagnostic -- and only from stderr, a genuine
+    # non-check-result channel, never from stdout/parsed check content.
+    if result.returncode == 1 and _looks_like_no_required_checks_stderr(result.stderr):
+        return RequiredChecksResult(
+            checks=[], no_required_checks=True, returncode=result.returncode
+        )
+
+    raise RepositoryError(
+        f"gh pr checks --required --json output (exit {result.returncode}) "
+        "was not valid, well-formed, non-empty checks JSON, and no "
+        "recognized 'no required checks' diagnostic was present either: "
+        f"stdout={result.stdout!r} stderr={result.stderr.strip()!r}"
+    )
+
+
+def pr_checks_json(
+    repo: Path, pr_number: str, *, gh_command: Sequence[str] = _DEFAULT_GH_COMMAND
+) -> list[dict[str, Any]]:
+    """Structured ``gh pr checks <number> --required --json
+    name,state,bucket`` output, as a plain list.
+
+    A thin, backward-compatible wrapper over :func:`pr_required_checks`
+    for callers that only ever want a definite checks list or a raised
+    error — it has no way to represent "no required checks configured"
+    distinctly from an ambiguous result, so it raises
+    :class:`RepositoryError` for that case too (a caller that needs to
+    tell the two apart must call :func:`pr_required_checks` directly,
+    which is what the required-CI gate does).
+    """
+
+    result = pr_required_checks(repo, pr_number, gh_command=gh_command)
+    if result.no_required_checks:
+        raise RepositoryError(
+            "gh reported no required checks configured for this PR; "
+            "pr_checks_json has no way to represent that distinctly from "
+            "an ambiguous/empty result -- call pr_required_checks directly "
+            "to observe RequiredChecksResult.no_required_checks"
+        )
+    return result.checks
+
+
+def pr_head_sha(
+    repo: Path, pr_number: str, *, gh_command: Sequence[str] = _DEFAULT_GH_COMMAND
+) -> str:
+    """The draft PR's exact current head commit SHA, via ``gh pr view
+    <number> --json headRefOid``.
+
+    Used to positively bind required-CI evidence to the exact pushed
+    delivery-branch commit this run's closure actually reviewed and
+    committed (``docs/AUTONOMOUS_PR_HARNESS.md`` §16): checks reported
+    against an older or newer PR head must never be accepted as evidence
+    for a different commit than the one this run is actually closing on.
+    No REST API fallback — uses the generic strict :func:`_gh`, since ``gh
+    pr view`` has no documented non-zero "successful" exit the way ``gh pr
+    checks`` does.
+    """
+
+    output = _gh(
+        repo,
+        ["pr", "view", pr_number, "--json", "headRefOid"],
+        gh_command=gh_command,
+    )
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RepositoryError(
+            f"gh pr view --json headRefOid output was not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise RepositoryError(
+            "gh pr view --json headRefOid output was not a JSON object"
+        )
+    head_ref_oid = parsed.get("headRefOid")
+    if not isinstance(head_ref_oid, str) or not head_ref_oid:
+        raise RepositoryError(
+            "gh pr view --json headRefOid output did not contain a "
+            "non-empty string 'headRefOid'"
+        )
+    return head_ref_oid
