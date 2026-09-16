@@ -7442,3 +7442,46 @@ Verification: `python -m pytest tests/architecture/` — 21 passed (run with a
 disposable `--basetemp` to avoid a pre-existing, unrelated Windows temp-
 directory permission issue); `git diff --check` clean. No production,
 dependency, CI, repository-setting, or gameplay Architecture changes.
+
+## 2026-09-16 — TSK-0026: Implement minimal local `AUTONOMOUS_PR` execution harness (delivery summary)
+
+Delivered the minimal local Python `AUTONOMOUS_PR` execution harness defined
+by `docs/AUTONOMOUS_PR_HARNESS.md` (`TSK-0025`), under `tools/autonomous_pr/`:
+`task_context.py` (a narrow, deterministic `docs/TASK.md` parser/revalidator
+that never treats a task ID or `Status: Current` as authorization, and fails
+closed on any ambiguous or missing execution fact); `repository.py` (the
+deterministic Git/GitHub repository boundary — fetch/ref/SHA reads,
+clean-worktree/branch/HEAD checks, delivery-branch creation from an exact
+validated `origin/main` SHA, the existing `review.patch` A/B/C diff-range
+semantics, commit, push, and draft-PR/required-CI operations exclusively
+through `gh`, with no REST API fallback and never a write/push to
+`main`/`master`); `agents.py` (a minimal external-process boundary for the
+implementer/reviewer roles — one generic subprocess invocation primitive,
+explicit role isolation, and the strict three-token reviewer verdict
+contract, where a missing, malformed, or ambiguous verdict, or a
+reviewer-process crash/timeout, is always terminal `BLOCKED`, never routed
+into repair); `orchestrator.py` (deterministic phase/gate orchestration
+driving preflight through planning, delivery-branch creation, bounded
+implementation checkpoints, full verification, pre-closure cumulative
+implementation review, draft PR, prospective Task Closure, the post-closure
+mode C final cumulative audit, and required CI, to
+`READY_FOR_HUMAN_MERGE`/mandatory `STOP`, or fail-closed `BLOCKED`); and
+`__main__.py` (a local CLI entrypoint). Every load-bearing artifact — task
+context, accepted plan, review.patch, verification evidence, closure
+baseline — is handed to the implementer/reviewer roles as explicit literal
+text, never hidden conversational state. Run state (`_RunState`,
+`RunArtifacts`) is in-memory only for the lifetime of one `run()` call, with
+a bounded finite repair limit per phase and no implicit cross-process resume
+from an existing branch/PR. No autonomous merge or auto-merge exists under
+any condition, no persisted `run.json`/database/orchestration schema was
+introduced, and no new production dependency was added
+(`[project].dependencies` remains empty).
+
+Verification: focused harness suite (`tests/tools/autonomous_pr/`, disposable
+local Git fixtures and fake/stub implementer and reviewer subprocesses, no
+real LLM/network required) — 219 passed; full `python -m pytest` — 2519
+passed; `python -m mypy src/dnd_engine tools/autonomous_pr` clean; `git diff
+--check` clean. `docs/AUTONOMOUS_PR_HARNESS.md` received a narrow factual
+sync noting the v1 harness now exists at `tools/autonomous_pr/`; no contract
+semantics changed. No gameplay Architecture change (`Contract impact:
+none`), and `TSK-0023` was not refined or promoted.
