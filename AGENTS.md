@@ -423,6 +423,36 @@ authority, review, test, closure, or merge gate defined here, this section
 wins on any conflict, and that document is never itself a valid
 `AUTONOMOUS_PR` invocation.
 
+#### Contract versions
+
+**Operational `AUTONOMOUS_PR` contract: v1.**
+
+The `AUTONOMOUS_PR` rules in this section, Part I of
+`docs/AUTONOMOUS_PR_HARNESS.md`, and the `tools/autonomous_pr/`
+implementation are the only operational contract. Part II of that document
+describes a prospective, spec-driven v2 (Task Execution Specs under
+`docs/tasks/`). It is approved as a design target and is **inactive**:
+
+- it is not authorisation, not a valid invocation, and not part of the
+  "Autonomous flow" above;
+- neither merging the change that introduced it nor the presence of any
+  `docs/tasks/TSK-XXXX.md` file activates it;
+- v2 is activated only by a later task that implements it in
+  `tools/autonomous_pr/` and flips this declaration in the same change;
+  there is no partial activation and no per-task choice of version.
+
+One rule in this subsection is operational now, not prospective: the tasks
+that define and implement the v1→v2 transition — `TSK-0027` and the later task
+that implements and activates v2 — run under `MANUAL` only, and an
+`AUTONOMOUS_PR` invocation naming either is not valid. This is an explicit
+v1→v2 transition invariant defined by `TSK-0027`. It is separate from the
+"Bounded authority" prohibition, which is limited to changing
+`AUTONOMOUS_PR`'s own authority or permissions, and does not follow from it.
+
+Once v2 is active, a Task Execution Spec is an execution target only. It
+never grants commit, push, pull-request, or merge authorisation; those
+remain governed by this section.
+
 #### Fail-closed
 
 `AUTONOMOUS_PR` stops and requires a human decision the moment any of the

@@ -15,6 +15,13 @@ conform to — it yields to `AGENTS.md` on any conflict (§1), and the
 implementation existing does not itself change or supersede anything this
 document specifies.
 
+> **Contract version.** The operational `AUTONOMOUS_PR` contract is **v1**,
+> as declared in `AGENTS.md` ("Contract versions"). Sections 1–19 (Part I)
+> are that v1 execution-mechanics contract, and `tools/autonomous_pr/`
+> implements it. Part II (sections 20 onward) records a prospective,
+> spec-driven **v2** contract: approved as a design target, **inactive**, not
+> authorization, and without effect on how any run executes today.
+
 ---
 
 ## 1. Purpose and authority boundary
@@ -589,3 +596,712 @@ Beyond that, this document, and any v1 implementation built from it
 - new production dependencies;
 - any change to gameplay Architecture or gameplay code;
 - exact numeric retry-count tuning.
+
+---
+
+# Part II — Prospective v2 contract (approved, inactive)
+
+Sections 20 onward describe a prospective, spec-driven `AUTONOMOUS_PR` v2.
+They are a design target defined by `TSK-0027`, not operational text. Read
+§20 before any other section of this Part.
+
+---
+
+## 20. Status and transition boundary (prospective v2)
+
+Part II is approved as the target design for a later contract version. Until
+the activation described below lands, exactly the following holds:
+
+- the operational contract is **v1**: `AGENTS.md` ("Autonomous flow" and the
+  sections around it), Part I of this document, and the current
+  `tools/autonomous_pr/` implementation. There is no mixed mode and no
+  per-task choice of version;
+- Part II grants no authority and is never itself a valid `AUTONOMOUS_PR`
+  invocation; the v1 harness neither reads nor depends on it;
+- the full-detail `docs/TASK.md` format (`TASK.md` §15) remains the
+  operational execution input, and the v1 task-context parser keeps reading
+  it unchanged;
+- no Task Execution Spec is required, created, or consulted by v1. Merging
+  the change that introduced Part II, or the presence of any
+  `docs/tasks/TSK-XXXX.md` file, does not activate v2;
+- every Part I mechanic remains in force exactly as written, including
+  v1's planning and plan-review phases and its numeric repair bound.
+
+Activation is one separate, later step. A single task implements v2 in
+`tools/autonomous_pr/` **and** activates it atomically: in that same change
+it flips the operational-version declaration in `AGENTS.md`, promotes Part II
+into operational text (replacing the Part I mechanics it supersedes, and the
+`AGENTS.md` flow and Mode C text it changes, §32), and adopts the
+`docs/TASK.md` format v2 requires. That task is expected to be
+allocated as `TSK-0028` after its own refinement. Because it changes the
+implementation and activation semantics of `AUTONOMOUS_PR` itself, it runs
+under the `MANUAL` workflow only. That is an explicit v1→v2 transition
+invariant defined by `TSK-0027` and recorded in `AGENTS.md` ("Contract
+versions"); it is not a consequence of the existing "Bounded authority"
+prohibition, which is limited to changing `AUTONOMOUS_PR`'s own authority or
+permissions. The first real v2 run happens only after that activation has
+merged.
+
+Activating only some elements of Part II, or implementing v2 behavior
+without flipping the declaration in the same change, is a contract
+violation.
+
+---
+
+## 21. Document ownership (prospective v2)
+
+| Document | Owns |
+| --- | --- |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | canonical system behavior and contracts |
+| [`ROADMAP.md`](ROADMAP.md) | capability and phase scope and ordering |
+| [`TASK.md`](TASK.md) | task lifecycle: Status, Priority, Size, dependencies, `Current`/`Next`, queue order, task allocation |
+| `docs/tasks/TSK-XXXX.md` | the approved execution target of one task |
+| [`../AGENTS.md`](../AGENTS.md) | authority, Git, review, and merge governance |
+| this document | subordinate execution mechanics |
+| [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md) | factual delivery history |
+
+A Task Execution Spec cannot:
+
+- redefine or override `ARCHITECTURE.md`;
+- expand `ROADMAP.md` scope;
+- itself grant commit, push, pull-request, or merge authorization;
+- introduce an architectural decision that is not already recorded through
+  the normal change procedure — a spec may cite an approved decision, never
+  make one;
+- replace or reinterpret `AGENTS.md`.
+
+A conflict between a spec and any higher-level source is `BLOCKED / human
+decision`. Neither the orchestrator nor an agent resolves it by silently
+choosing a source, and none edits either side within the invocation to make
+them agree.
+
+---
+
+## 22. Task Execution Spec: identity, storage, and lifecycle (prospective v2)
+
+- **Path.** Exactly `docs/tasks/TSK-XXXX.md`, a function of the immutable
+  task ID alone. One spec per task; the ID in the file must match its
+  filename. There are no status-based directories (`current/`, `done/`,
+  `backlog/`): a file that moved when the task's status changed would break
+  stable references and turn the directory layout into a second lifecycle
+  record.
+- **Responsibility split.** The spec is the approved execution contract of
+  one task. `docs/TASK.md` keeps every mutable fact about that task. The
+  spec never carries a Status, Priority, Size, dependency, or queue-position
+  field; a second authoritative copy of any of them is a defect.
+- **Progressive elaboration.** Applies to activated v2 only:
+
+  | Task status | Spec |
+  | --- | --- |
+  | `Backlog` | optional |
+  | `Ready` | required |
+  | `Current` | required and execution-ready |
+
+  A spec is execution-ready when every required section is present and
+  concrete, its checkpoints declare every required field (§23), no
+  unresolved placeholder or open decision blocks execution, nothing in it
+  conflicts with a higher-level source (§21), and no requirement that
+  constrains execution appears only in an informational section (§24). Specs
+  are not written
+  mechanically for distant backlog, and none is written retroactively for
+  completed tasks (`TSK-0001`–`TSK-0026`).
+- **Completed specs.** After a task is `Done` its spec stays in place as the
+  historical record of what was approved for implementation. It is not
+  current canonical Architecture. Task Closure does not edit it, and the
+  task's `Done` status is recorded only through `docs/TASK.md`.
+- **Provider neutrality.** A spec is never stored as a provider-specific
+  prompt or prompt sequence (for example "Prompt 1 for provider X"). The
+  orchestrator derives any runtime handoff from the provider-neutral spec.
+
+---
+
+## 23. Task Execution Spec: structure (prospective v2)
+
+A spec has these sections, in this order:
+
+1. Goal
+2. Context / References
+3. Scope
+4. Out of scope
+5. Approved implementation approach
+6. Acceptance criteria
+7. Execution checkpoints
+8. Full verification
+9. Known constraints / edge cases
+
+Every checkpoint in *Execution checkpoints* is identified `CP-1`, `CP-2`, ...
+in execution order and declares:
+
+- **Objective** — what the checkpoint is for;
+- **Required result** — the observable state it must leave behind;
+- **Constraints** — what it must not do or change;
+- **Verification** — the deterministic checks that must pass for it;
+- **Review focus** — where the reviewer is asked to look first.
+
+Checkpoints are steps inside one mergeable task. They have no `TSK-*` ID and
+no status of their own. As `AGENTS.md` ("Working method") requires, they are
+drawn along independent review-risk boundaries rather than mechanically by
+file set.
+
+Skeleton:
+
+```markdown
+# TSK-XXXX — <title>
+
+## Goal
+## Context / References
+## Scope
+## Out of scope
+## Approved implementation approach
+## Acceptance criteria
+## Execution checkpoints
+### CP-1 — <name>
+- Objective:
+- Required result:
+- Constraints:
+- Verification:
+- Review focus:
+## Full verification
+## Known constraints / edge cases
+```
+
+---
+
+## 24. Binding and advisory content (prospective v2)
+
+| Binding | Advisory |
+| --- | --- |
+| Goal | Expected touchpoints |
+| Scope | Suggested internal decomposition |
+| Out of scope | Naming suggestions |
+| Approved implementation approach, including its approved contractual and architectural decisions and invariants | Implementation notes |
+| Acceptance criteria | Review focus |
+| Declared checkpoints, and each checkpoint's Objective, Required result, Constraints, and Verification | |
+| Full verification | |
+
+Within *Approved implementation approach*, the approach and its decisions and
+invariants are binding. Expected touchpoints, suggested decomposition, naming
+suggestions, and implementation notes belong in a clearly labelled advisory
+sub-block of that section and stay advisory.
+
+*Context / References* and *Known constraints / edge cases* are
+informational. They may refer to binding constraints or decisions, but no
+binding requirement exists only inside them: any requirement that actually
+constrains execution must also appear in the corresponding binding section
+(Scope, Out of scope, Approved implementation approach, Acceptance criteria, a
+checkpoint's Constraints, or Full verification). A requirement stated only in
+an informational section is not binding, and its presence there alone leaves
+the spec not execution-ready (§22).
+
+Advisory content is guidance, never a requirement, and never a limit on
+what a reviewer may report. In particular, **Review focus** tells the
+reviewer where to look first; a reviewer reports any defect it finds,
+inside or outside that focus.
+
+An implementer may take local coding decisions that the spec leaves open,
+provided a decision does not:
+
+- expand scope;
+- change a canonical contract;
+- violate the approved implementation approach;
+- change a checkpoint's required result;
+- require a new architectural decision;
+- add a production dependency without explicit permission.
+
+A decision that would do any of these is not the implementer's to take: it
+ends the run as `BLOCKED` for refinement or a human decision.
+
+---
+
+## 25. Review verdicts and repair flow (prospective v2)
+
+The reviewer returns exactly one of `APPROVED`, `CHANGES_REQUESTED`, or
+`BLOCKED`, as in v1 (§7). The set is unchanged.
+
+- **Terminal `BLOCKED`.** An explicit `BLOCKED` verdict ends the run. So does
+  a missing, malformed, ambiguous, or unrecognized verdict, and a reviewer
+  timeout, crash, or execution error. None of these ever starts a repair
+  episode, and none is upgraded to `APPROVED`.
+- **`APPROVED`.** The current review gate passes and the orchestrator may
+  move to the next deterministic phase. The approval criteria are identical
+  at every iteration: they are never weakened by how many times the gate has
+  already returned `CHANGES_REQUESTED`.
+- **`CHANGES_REQUESTED`.** Not terminal. It starts a repair episode, provided
+  the reviewer's output contains a complete repair packet.
+
+A repair packet holds one or more findings. Each finding has at least these
+required fields, and they are part of the repair handoff contract, not an
+advisory format:
+
+- **Problem** — what is wrong with the candidate;
+- **Evidence** — where and how the problem shows in the candidate;
+- **Required outcome** — the condition the next candidate must satisfy;
+- **Recommended repair** — a suggested way to reach it;
+- **Verification focus** — what the next deterministic verification and
+  review should check.
+
+A `CHANGES_REQUESTED` verdict with no finding, or with a finding that lacks
+any required field, is malformed reviewer output and ends the run as
+`BLOCKED`. Additional provider-neutral structured metadata may accompany a
+finding; it never substitutes for a required field.
+
+The prospective v2 repair flow is:
+
+```text
+review → CHANGES_REQUESTED → implementer repair → deterministic verification → fresh review
+```
+
+A **repair episode** starts with a `CHANGES_REQUESTED` verdict (or, before a
+gate's first review, with the initial implementation) and ends when a
+candidate that passed deterministic verification is actually reviewed.
+
+If the deterministic verification of a candidate fails, that candidate is not
+sent to review until verification succeeds. It counts as a rejected candidate
+for no-progress and cycle detection (§28), and the failure is handed back to
+the implementer for a further repair. That further repair stays in the current
+repair episode, and is governed by:
+
+- the latest repair packet, when the episode began with a
+  `CHANGES_REQUESTED`;
+- the fixed Task Execution Spec and the deterministic verification failure
+  evidence, when the initial candidate failed verification before the gate's
+  first review, since no repair packet exists yet.
+
+No reviewer verdict is recorded or synthesized for it, and it advances neither
+the consecutive `CHANGES_REQUESTED` count nor the review iteration number of
+§26 until a review actually takes place.
+
+The reviewer never edits the working tree. The repair stays inside the fixed
+spec and the approved scope; a repair that would need more than that is a
+fail-closed condition (§27).
+
+---
+
+## 26. Gate counter and non-convergence diagnosis (prospective v2)
+
+A **gate** is one designated review point — for example a checkpoint review
+or a cumulative review — for one fixed Task Execution Spec and one accepted
+base context. The orchestrator keeps, per gate, the count of *consecutive*
+`CHANGES_REQUESTED` verdicts, and the review iteration number: how many
+designated reviews have actually taken place at that gate. The iteration number
+advances with every verdict a designated review returns, and the consecutive
+count advances with every `CHANGES_REQUESTED`. A candidate rejected by
+deterministic verification (§25) advances neither. Both start again after that
+gate returns `APPROVED` and when the run moves on to the next gate.
+
+From the second consecutive `CHANGES_REQUESTED` at the same gate, the
+reviewer must add a non-convergence diagnosis to the repair packet, stating:
+
+- what the previous review required;
+- what the implementer actually changed;
+- why the candidate still does not satisfy the fixed spec;
+- what was misunderstood;
+- which exact required outcome remains;
+- which corrective approach is recommended.
+
+A `CHANGES_REQUESTED` that omits the required diagnosis is malformed and ends
+the run as `BLOCKED` (§25).
+
+The number of `CHANGES_REQUESTED` verdicts is never, by itself, a ground for
+`BLOCKED`. The diagnosis exists to improve the repair guidance. It does not
+oblige the reviewer to approve: a candidate that does not satisfy the approved
+target stays `CHANGES_REQUESTED` however many reviews have passed.
+
+---
+
+## 27. Repair limit and finite safety (prospective v2)
+
+v2 has no numeric repair limit. There is no rule of the form "N repairs
+exceeded → `BLOCKED`", and no canonical value such as "at most 2 repairs" or
+"at most 5 repairs". A repair count may exist as telemetry and audit
+information; it is never an input to a gate decision.
+
+Operational v1 is unchanged by this. It remains a bounded numeric
+implementation: `OrchestratorConfig.max_repairs` and the `--max-repairs` CLI
+flag stay in `tools/autonomous_pr/`, and Part I (§11) and `AGENTS.md` continue
+to describe the bounded repair policy, until the activation described in §20.
+
+Removing the numeric budget does not remove fail-closed safety. Every one of
+these still ends the run as `BLOCKED`:
+
+- an agent or reviewer timeout;
+- malformed reviewer output, including an incomplete repair packet;
+- a reviewer `BLOCKED` verdict;
+- a missing tool or capability;
+- an ambiguous Git or GitHub side effect;
+- lost in-memory run state;
+- a required revalidation that cannot be performed;
+- a required scope expansion;
+- a new architectural decision being needed;
+- a new production dependency being needed;
+- stale evidence that cannot be safely replayed;
+- any other deterministic fail-closed condition in `AGENTS.md` or Part I.
+
+Finite guards that are not a repair budget may be kept — for example, one
+protecting a run from a constantly moving `origin/main`. Otherwise a run ends
+by these fail-closed conditions and by deterministic no-progress detection
+(§28), not by an iteration count.
+
+---
+
+## 28. Deterministic no-progress and cycle detection (prospective v2)
+
+No-progress is decided by an objective candidate identity, never by an LLM
+judgment such as "the agent is not making enough progress".
+
+- **Candidate identity.** A deterministic fingerprint of the
+  *review-relevant candidate state* — the candidate content that is, or would
+  be, submitted for review at that gate. It does not depend on the iteration
+  number, timestamps, reviewer prose, temporary artifact paths, or the
+  formatting of verification logs. This contract does not choose a fingerprint algorithm;
+  that is an implementation detail of the later task.
+- **Rejected candidate.** A candidate that received `CHANGES_REQUESTED`, or
+  failed required deterministic verification, at a gate. Rejection by
+  verification involves no reviewer verdict.
+- **Comparison scope.** Identities are compared only within the same gate,
+  fixed spec, and accepted base context. A candidate seen under a different
+  context is a different candidate.
+- **Rule.** When a repair produces a candidate whose identity equals that of
+  any candidate already rejected at the same gate and context, the run ends
+  as `BLOCKED`: an exact repair cycle, or no progress. This applies equally to
+  a repair made after a verification failure.
+
+| Sequence at one gate | Outcome |
+| --- | --- |
+| `A → repair → A` | `BLOCKED` — no progress |
+| `A → B → C → B`, with `B` already rejected | `BLOCKED` — exact repair cycle |
+| `A → B → C → D → …`, all distinct | not blocked, however many iterations |
+
+Iteration count alone never triggers this rule; only a repeated rejected
+identity does.
+
+---
+
+## 29. Repair history, reviewer handoff, and freshness (prospective v2)
+
+The orchestrator owns the audit history of a gate. For every candidate or
+repair attempt it records the orchestration facts that apply to it:
+
+- the gate or checkpoint;
+- the candidate's fingerprint or identity;
+- the verification evidence;
+- whether the candidate was rejected, and on what basis (a reviewer
+  `CHANGES_REQUESTED` or a verification failure);
+- for an attempt produced by a repair, the repair delta or its fingerprint and
+  the resulting candidate state.
+
+Only when a designated review actually took place for the attempt does the
+record also hold the review iteration, the reviewer verdict, and the findings.
+An attempt rejected by verification has none of the three, and no synthetic
+verdict stands in for them.
+
+The full history serves audit, diagnostics, and cycle detection (§28). It
+lives in the run's in-memory state (§9, §11); this section introduces no
+persisted store.
+
+A fresh reviewer is not handed the whole history. Its ordinary handoff is:
+
+- the Task Execution Spec;
+- the current checkpoint or gate;
+- the current patch;
+- the passing deterministic verification result of the current candidate;
+- the review iteration number of this review;
+- the previous reviewer findings, only if a previous review exists;
+- the repair delta since the last reviewed candidate, spanning any repairs made
+  after verification failures, and the resulting candidate — only if a
+  reviewed candidate exists.
+
+For the gate's first review, none of the last two items exists: the handoff is
+the fixed Task Execution Spec, the current gate or checkpoint, the current
+candidate patch, and the passing deterministic verification result, with
+review iteration number 1. No synthetic previous findings and no synthetic
+delta are created to fill the missing items.
+
+Every designated review stays fresh and independent: `implementer context !=
+designated reviewer context` (§5) holds at every review. Adaptive repair
+never continues an earlier reviewer conversation, and review correctness never
+depends on hidden reviewer state that is absent from this explicit handoff.
+
+---
+
+## 30. Spec-driven lifecycle and preflight (prospective v2)
+
+Where v1 runs `planning → independent plan review → implementation`, v2 runs
+`approved Task Execution Spec → deterministic checkpoint execution`. v2 has no
+runtime generative implementation planning and no plan-review gate: the
+execution target is designed and approved, in the spec (§22–§24), before the
+invocation starts. The orchestrator derives every runtime handoff from that
+spec. The planning and plan-review phases of Part I are v1-only.
+
+The prospective v2 lifecycle is:
+
+```text
+preflight (one captured origin/main SHA: docs/TASK.md and the task spec)
+  → delivery branch
+  → for each declared checkpoint, in order:
+      implement → verify → review/repair* → APPROVED → commit/push
+  → full verification
+  → pre-closure cumulative implementation review (repair* as needed)
+  → draft PR
+  → prospective Task Closure preparation → closure review
+  → unpublished closure candidate
+  → fresh origin/main revalidation
+  → Mode C final cumulative audit
+  → publish exactly the audited candidate
+  → required CI
+  → READY_FOR_HUMAN_MERGE
+  → STOP (or BLOCKED, from any phase)
+```
+
+The orchestrator, not an LLM, owns every transition (§4, §15). The terminal
+outcomes and `READY_FOR_HUMAN_MERGE` keep the meaning given in §10. Mode C must
+remain fresh from the moment it is built through `READY_FOR_HUMAN_MERGE` and the
+mandatory `STOP`; `STOP` does not make it permanently valid (§32).
+
+**Preflight.** The orchestrator fetches, captures one exact `origin/main` SHA,
+and reads both `docs/TASK.md` and `docs/tasks/TSK-XXXX.md` from that SHA — not
+from the working tree, and never from two different SHAs. At minimum it
+checks that:
+
+- the named task is the authoritative `Current` task;
+- every dependency is `Done`;
+- the task's Roadmap target is permitted;
+- the spec exists and belongs to that same task;
+- the spec is execution-ready (§22);
+- no unresolved placeholder or open decision blocks execution;
+- the task metadata and the spec were read from the same captured SHA.
+
+A failed check ends the run as `BLOCKED`. If `origin/main` later moves and the
+named task's `docs/TASK.md` entry, its dependencies, its Roadmap target, or its
+spec changed, the run fails closed; it never continues on a stale execution
+target. A movement that changes none of these is handled by revalidation as in
+§12 and is not by itself `BLOCKED`.
+
+**Spec immutability.** Within one invocation the Task Execution Spec is fixed.
+No implementation or repair may change the task's own
+`docs/tasks/TSK-XXXX.md`; a candidate that does is a scope violation and ends
+the run as `BLOCKED`. If a successful implementation would require changing the
+spec, that is `BLOCKED` for normal refinement or a human decision, never an
+edit made inside the run.
+
+---
+
+## 31. Checkpoints and pre-closure cumulative review (prospective v2)
+
+The checkpoints declared in the spec (§23) are executed exactly as declared and
+in order. A checkpoint is not a separate task and has no status of its own; it
+remains part of one mergeable task. The orchestrator cannot add, drop,
+reorder, or merge declared checkpoints; needing to is `BLOCKED` for refinement.
+
+For each checkpoint:
+
+- the implementer works against the fixed spec and that checkpoint's
+  Objective, Required result, and Constraints;
+- the orchestrator runs the checkpoint's Verification;
+- the designated reviewer reviews the checkpoint under the unchanged A/B/C
+  `review.patch` rules, with its Review focus as advisory guidance (§24);
+- a `CHANGES_REQUESTED` follows the adaptive repair contract (§25–§29);
+- only after `APPROVED` does the orchestrator commit and push, and only to the
+  invocation's own delivery branch (§8).
+
+After every declared checkpoint is approved, the orchestrator runs the spec's
+Full verification and then the pre-closure cumulative implementation review.
+That review keeps its v1 definition (§8): its input is `origin/main...HEAD`
+before Task Closure exists on the branch, it satisfies `docs/TASK.md` §18.1,
+and it is not Mode C.
+
+A `CHANGES_REQUESTED` from the cumulative review follows the adaptive repair
+contract (§25–§29). A repair invalidates evidence built against the old
+candidate (§33). Once such a repair is made, at least the following happens
+before approval can be reached: deterministic verification and review of the
+repair; commit and push of the accepted repair to the delivery branch; the Full
+verification again; a rebuilt cumulative diff over `origin/main...HEAD`; and a
+fresh cumulative review. An earlier cumulative approval is never carried over
+to a new candidate.
+
+---
+
+## 32. Unpublished closure candidate and Mode C ordering (prospective v2)
+
+**v1 limitation.** In operational v1 the prospective Task Closure is committed
+and pushed before Mode C runs. A Mode C `CHANGES_REQUESTED` therefore cannot be
+repaired safely, and the v1 orchestrator fails closed on it (`BLOCKED`). v2 is
+designed to remove this limitation.
+
+**Invariant.** A rejected Mode C candidate must never require a remote history
+rewrite in order to be repaired. Consequently the closure candidate stays
+unpublished until Mode C has approved exactly that candidate. This contract
+fixes the invariant, not a Git command for achieving it.
+
+The prospective v2 order is:
+
+```text
+accepted implementation
+→ draft PR
+→ prepare prospective Task Closure
+→ closure review APPROVED
+→ create the local closure commit (the unpublished closure candidate)
+→ fresh origin/main revalidation
+→ Mode C
+```
+
+**Closure candidate as a local commit.** After closure review returns
+`APPROVED`, the orchestrator creates a local closure commit. That commit
+becomes the new `HEAD`, and it is not pushed before Mode C approves it. Mode C
+is built with `origin/main...HEAD` and therefore includes exactly this closure
+commit. This contract does not fix a Git command for creating, discarding, or
+replacing the commit.
+
+- **Mode C `APPROVED`.** The orchestrator confirms that the candidate is still
+  exactly the one audited and that the `origin/main` SHA is still exactly the
+  one the audit was built against. Only then does it push exactly this audited
+  `HEAD`, and then run required CI (§34). If the `origin/main` SHA already
+  differs, it does not publish (see the staleness rule below).
+- **Mode C `CHANGES_REQUESTED`.** The unpublished local closure commit is
+  discarded or replaced, without any remote history rewrite. What follows
+  depends on the repair, decided by the deterministic criterion of §33 (a repair
+  that cannot be established as closure-only is treated as implementation-
+  affecting):
+  - *Implementation-affecting repair.* Repair, then deterministic verification
+    and designated review, then `APPROVED`; the accepted implementation repair
+    is committed and pushed to the delivery branch; the affected implementation
+    and downstream gates are replayed (§33); Task Closure is rebuilt; then a
+    new unpublished closure candidate, fresh `origin/main` revalidation, and a
+    fresh Mode C.
+  - *Closure-only repair.* Only Task Closure is corrected, locally, then closure
+    review, a new unpublished closure candidate, fresh `origin/main`
+    revalidation, and a fresh Mode C. The closure is not pushed before Mode C
+    approves it.
+
+The reviewer only reports the semantic defect. It does not choose the workflow
+transition; the orchestrator does (§15).
+
+**Exact audited-candidate rule.** After Mode C approves a candidate, any change
+to the candidate's `HEAD` or content before publication makes that audit stale.
+An audit of X is never used to publish Y.
+
+**Mode C staleness.** The `AGENTS.md` rule is preserved unchanged: once Mode C
+has been built, any movement of `origin/main` makes that audit stale, with no
+materiality exception. A movement is not by itself `BLOCKED`. The orchestrator
+fetches, revalidates the facts the run depends on (§12), and rebuilds and
+re-reviews Mode C against the new `origin/main` SHA. The run is `BLOCKED` only
+where §12 says so: a material fact changed, or safe continuation cannot be
+established.
+
+- **Before publication.** A stale audit is rebuilt and re-reviewed first. The
+  candidate is never published on an audit built against a different
+  `origin/main` SHA.
+- **After publication.** Mode C must stay fresh through required CI and up to
+  `READY_FOR_HUMAN_MERGE` and the mandatory `STOP`. If `origin/main` moves after
+  publication, the orchestrator fetches, revalidates, rebuilds and re-reviews
+  Mode C against the same published candidate, and replays the downstream
+  required gates that depend on it, including required CI where applicable. If
+  that new Mode C requires a candidate-changing repair, §34 applies.
+- **After `STOP`.** `STOP` ends only the autonomous invocation; it does not make
+  the Mode C audit valid indefinitely. If `origin/main` moves after `STOP` and
+  before the human merge, the completed audit is stale again under `AGENTS.md`.
+  The stopped harness does not resume, and does not detect or act on this. A
+  reached `READY_FOR_HUMAN_MERGE` never permits merging on a stale Mode C audit.
+  Before the merge, the audit must be rebuilt and re-reviewed through a new
+  explicit autonomous invocation or through the `MANUAL` workflow, as
+  governance permits.
+
+Mode C keeps its definition of a final cumulative branch audit built with
+`origin/main...HEAD`; in v2 that `HEAD` is the unpublished local closure
+commit. Moving
+Task Closure to before publication changes the v1 order stated in `AGENTS.md`,
+so the activation task (§20) must update that text together with the
+implementation.
+
+---
+
+## 33. Evidence invalidation and replay (prospective v2)
+
+The rule is conservative and deterministic. The orchestrator does not judge
+which evidence a repair "probably" leaves valid.
+
+- A candidate-changing repair makes stale the evidence of the gate at which it
+  was made, and of every downstream gate built on the replaced candidate:
+  verification results, review approvals, closure review, revalidation, and
+  any Mode C audit.
+- Upstream checkpoints that were already completed are not invalidated
+  automatically. If the repair changes the result of a previously approved
+  upstream checkpoint, however, that checkpoint's approval is stale too, and it
+  and every checkpoint and gate after it are replayed.
+- When the orchestrator cannot establish deterministically the earliest
+  checkpoint a repair affects, it chooses the broader conservative replay, up to
+  all relevant checkpoints.
+- No approval is carried over merely because it was `APPROVED` earlier.
+- The orchestrator may replay more gates than the minimum. It may never replay
+  fewer than needed to exclude stale evidence.
+- If safe replay is impossible, the run ends as `BLOCKED` (§27).
+
+For an implementation-affecting repair made from a late gate — the
+pre-closure cumulative review, the closure review, or Mode C — that does not
+change the result of an earlier approved checkpoint, the conservative replay
+sequence is:
+
+```text
+repair
+→ deterministic verification and review of the repair (§25–§29)
+→ APPROVED
+→ commit and push the accepted repair to the delivery branch
+→ full verification
+→ pre-closure cumulative implementation review (origin/main...HEAD)
+→ closure preparation
+→ closure review
+→ new unpublished closure candidate
+→ fresh origin/main revalidation
+→ Mode C
+```
+
+Only the accepted implementation repair is committed and pushed. Task Closure
+keeps its separate semantics: the reviewed closure forms a local, unpublished
+closure candidate that is not pushed before Mode C approves it (§32). The
+`review.patch` diff ranges of each step remain the unchanged A/B/C rules.
+
+Where the repair does change the result of an earlier approved checkpoint, that
+checkpoint and every later one are replayed (§25–§29) before the rest of this
+sequence.
+
+A repair that changed only closure content may replay from closure preparation
+onward, but only when the orchestrator can establish deterministically that it
+changed no implementation content; otherwise the full sequence above applies.
+Such a closure-only repair replaces the unpublished local closure commit and is
+never pushed before Mode C approves it.
+
+---
+
+## 34. Post-publication repair boundary and required CI (prospective v2)
+
+`AGENTS.md` already allows bounded repair in response to CI feedback, and
+neither this Part nor `TSK-0027` forbids any repair after publication. There is
+no blanket rule that a post-publication failure is always `BLOCKED`, and none
+that forbids future post-publication repair.
+
+The initial v2 implementation is not required to make any candidate-changing
+repair after publication. That covers a required CI failure and a Mode C
+`CHANGES_REQUESTED` obtained by rebuilding Mode C after `origin/main` moved
+post-publication (§32). If it cannot yet perform a safe post-publication
+replay, it ends the run as `BLOCKED`. This is an implementation limitation, not
+a governance rule. Safe post-push replay and persisted resume are a separate
+future task.
+
+A rebuilt Mode C that approves the same published candidate needs no repair and
+does not by itself stop the run.
+
+A post-publication repair, once implemented, follows the evidence-invalidation
+and replay rule of §33 and never weakens a gate to make a check pass.
+
+---
+
+## 35. First v2 trial (prospective v2)
+
+The first real v2 run happens only after the activation described in §20 has
+merged. No task is designated by this contract as that first trial, and
+`TSK-0023` is not implied. A good first trial is a small or medium task with:
+
+- a clear, execution-ready spec;
+- no unresolved architectural question;
+- objective, deterministic tests;
+- limited cross-layer risk.

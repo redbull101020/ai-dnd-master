@@ -7485,3 +7485,37 @@ passed; `python -m mypy src/dnd_engine tools/autonomous_pr` clean; `git diff
 sync noting the v1 harness now exists at `tools/autonomous_pr/`; no contract
 semantics changed. No gameplay Architecture change (`Contract impact:
 none`), and `TSK-0023` was not refined or promoted.
+
+## 2026-09-20 — TSK-0027: Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract (delivery summary)
+
+Delivered a documentation-only, **prospective and inactive** `AUTONOMOUS_PR`
+v2 contract: `docs/AUTONOMOUS_PR_HARNESS.md` Part II (§§20–35) plus a short
+`AGENTS.md` "Contract versions" subsection. Operational v1 is unchanged and
+remains the only operational contract: `AGENTS.md` now declares it explicitly,
+the v1 harness, CLI (including `--max-repairs`), and `docs/TASK.md` format and
+parser are untouched, and v2 is activated only by a later task that implements
+and activates it atomically (expected `TSK-0028`, not yet allocated). That
+task and `TSK-0027` itself are `MANUAL`-only under an explicit v1→v2 transition
+invariant recorded in `AGENTS.md`. Part II defines: the provider-neutral Task
+Execution Spec at `docs/tasks/TSK-XXXX.md` (stable-ID path, no lifecycle status
+duplicated from `docs/TASK.md`, progressive elaboration, binding vs advisory
+content, per-checkpoint fields, historical once `Done`); document ownership and
+the limits of a spec's authority; an adaptive `CHANGES_REQUESTED` repair
+contract with a structured repair packet, non-convergence diagnosis, and no
+numeric repair-exhaustion rule; deterministic no-progress/cycle detection over
+review-relevant candidate identity; a spec-driven lifecycle with no runtime
+planning, preflight of `docs/TASK.md` and the spec from one captured
+`origin/main` SHA, an immutable spec, and first-class sequential checkpoints;
+an unpublished local closure commit so a rejected Mode C candidate never needs
+remote history rewrite, an exact audited-candidate rule, and Mode C staleness
+through publication and after `STOP`; conservative deterministic evidence
+replay; and a post-publication repair boundary that allows future CI repair
+while letting the initial v2 implementation fail closed. No spec files were
+created and no v2 Python was written; `TSK-0023` was not touched.
+
+Verification: `python -m pytest tests/architecture/` — 21 passed (run with a
+disposable `--basetemp` to avoid the known Windows temp-directory permission
+issue); the live `docs/TASK.md` was confirmed still accepted by the v1
+task-context parser; `git diff --check` clean. Documentation/process-only, so
+the full gameplay `pytest` suite was not run. No production dependency,
+gameplay Architecture, or `src/dnd_engine/**` change (`Contract impact: none`).

@@ -1309,8 +1309,8 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 - **Current:** —
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0027
-- **Last reviewed:** 2026-09-16
+- **Next free ID:** TSK-0028
+- **Last reviewed:** 2026-09-20
 
 ---
 
@@ -1330,7 +1330,6 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0016` | Define minimal Character zero-HP turn and Death Save contract | PR #91 |
 | `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
 | `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
 | `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
@@ -1340,6 +1339,7 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 | `TSK-0024` | Define bounded `AUTONOMOUS_PR` development-governance contract | PR #101 |
 | `TSK-0025` | Define minimal `AUTONOMOUS_PR` execution-harness contract | PR #102 |
 | `TSK-0026` | Implement minimal local `AUTONOMOUS_PR` execution harness | PR #103 |
+| `TSK-0027` | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract | PR #104 |
 
 ---
 
