@@ -144,6 +144,139 @@ class VerificationEvidence:
     head_sha: str
 
 
+VerificationArgv = tuple[str, ...]
+"""One shell-free verification command: a non-empty ``argv`` tuple.
+
+The approved Task Execution Spec representation is a JSON argv array
+(``["python", "-m", "pytest", "tests/foo.py"]``), decoded by
+:mod:`.task_spec` into this tuple. It is never a shell string: nothing in
+this harness runs it through a shell, expands variables in it, or applies
+``shlex`` semantics to it.
+"""
+
+
+@dataclass(frozen=True)
+class ExecutionCheckpoint:
+    """One declared ``CP-N`` checkpoint of a Task Execution Spec (Harness §23).
+
+    ``number`` is the sequential integer in ``checkpoint_id`` (``CP-3`` ->
+    ``3``). A checkpoint has no ``TSK-*`` ID and no status of its own.
+    """
+
+    number: int
+    checkpoint_id: str
+    name: str
+    objective: str
+    required_result: str
+    constraints: str
+    verification: tuple[VerificationArgv, ...]
+    review_focus: str
+
+
+@dataclass(frozen=True)
+class TaskExecutionSpec:
+    """A parsed, structurally valid, execution-ready Task Execution Spec.
+
+    Provider-neutral and lifecycle-free (Harness §22): it carries no Status,
+    Priority, Size, dependency, or queue position — those live only in
+    ``docs/TASK.md``.
+
+    ``text`` is the exact spec text as read, and ``digest`` its
+    deterministic sha256. Together they are the spec's identity in the live
+    run input, so a later step can prove the spec is unchanged
+    (:func:`.task_spec.spec_is_unchanged`; Harness §30 "Spec immutability").
+    ``digest`` is not a signing framework.
+    """
+
+    task_id: str
+    path: str
+    title: str
+    goal: str
+    context_references: str
+    scope: str
+    out_of_scope: str
+    approved_implementation_approach: str
+    acceptance_criteria: str
+    checkpoints: tuple[ExecutionCheckpoint, ...]
+    full_verification: tuple[VerificationArgv, ...]
+    known_constraints: str
+    text: str
+    digest: str
+
+
+@dataclass(frozen=True)
+class TrackerTask:
+    """One row of the prospective v2 ``# Open task index``.
+
+    The v2 index owns every mutable lifecycle fact of an open task,
+    including ``depends_on`` (Harness §22): the Task Execution Spec never
+    carries any of them.
+    """
+
+    task_id: str
+    status: TaskStatus
+    priority: str
+    size: str
+    group: str
+    roadmap_target: str
+    depends_on: tuple[str, ...]
+    title: str
+
+
+@dataclass(frozen=True)
+class TerminalTask:
+    """One row of the prospective v2 durable ``# Terminal task index``.
+
+    ``status`` is only ever :attr:`TaskStatus.DONE` or
+    :attr:`TaskStatus.SUPERSEDED`. Unlike ``# Recently completed`` this index
+    is not a bounded window, so a dependency's ``Done`` status stays
+    positively confirmable after the task leaves the recent view.
+    """
+
+    task_id: str
+    status: TaskStatus
+    evidence: str
+    title: str
+
+
+@dataclass(frozen=True)
+class ThinTracker:
+    """The lifecycle facts parsed from a v2-format ``docs/TASK.md``."""
+
+    current_task_id: str | None
+    open_tasks: tuple[TrackerTask, ...]
+    terminal_tasks: tuple[TerminalTask, ...]
+
+
+@dataclass(frozen=True)
+class ExactBaseInput:
+    """``docs/TASK.md`` and the task spec, both read from one exact SHA.
+
+    ``base_sha`` is the caller-captured exact ``origin/main`` SHA, and the one
+    SHA both texts belong to (Harness §30): the only producer,
+    :func:`.task_context.load_exact_base_input`, reads both at exactly that
+    SHA, without fetching. ``spec_text`` is ``None`` when the spec file does
+    not exist at ``base_sha``.
+    """
+
+    base_sha: str
+    task_md_text: str
+    spec_text: str | None
+
+
+@dataclass(frozen=True)
+class ExecutionTarget:
+    """The validated execution target produced by v2 preflight.
+
+    Descriptive execution input only, never proof that the user gave a
+    separate explicit ``AUTONOMOUS_PR`` invocation (Harness §3).
+    """
+
+    base_sha: str
+    task: TrackerTask
+    spec: TaskExecutionSpec
+
+
 @dataclass(frozen=True)
 class RunResult:
     """The outcome of one orchestrator run, returned to the CLI caller.

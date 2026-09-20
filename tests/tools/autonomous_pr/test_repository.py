@@ -1494,3 +1494,16 @@ def test_forbidden_merge_commands_never_emitted(
     for call in calls:
         joined = " ".join(call).lower()
         assert "merge" not in joined
+
+
+def test_file_exists_at_ref_distinguishes_missing_from_present(git_env: GitEnv) -> None:
+    work = git_env.work
+    sha = repo_module.origin_main_sha(work)
+
+    assert repo_module.file_exists_at_ref(work, sha, "README.md") is True
+    assert repo_module.file_exists_at_ref(work, sha, "docs/tasks/TSK-0028.md") is False
+
+
+def test_file_exists_at_ref_fails_closed_on_an_unknown_ref(git_env: GitEnv) -> None:
+    with pytest.raises(RepositoryError):
+        repo_module.file_exists_at_ref(git_env.work, "d" * 40, "README.md")

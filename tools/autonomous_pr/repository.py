@@ -269,6 +269,20 @@ def read_file_at_ref(repo: Path, ref: str, path: str) -> str:
     return _git(repo, ["show", f"{ref}:{path}"])
 
 
+def file_exists_at_ref(repo: Path, ref: str, path: str) -> bool:
+    """Whether ``path`` exists as a file at ``ref`` (``git ls-tree``).
+
+    Lets a caller tell "this file does not exist at that commit" apart from
+    a genuine Git failure: a missing path is ``False``, while a bad ref or a
+    failed ``git`` invocation still raises :class:`RepositoryError` and is
+    never read as "missing". Like :func:`read_file_at_ref` it reads Git's
+    object store only and never touches the working tree.
+    """
+
+    listing = _git(repo, ["ls-tree", "--name-only", ref, "--", path])
+    return path in listing.splitlines()
+
+
 def resolve_sha(repo: Path, ref: str) -> str:
     """Resolve any ref/expression to its exact commit SHA."""
 
