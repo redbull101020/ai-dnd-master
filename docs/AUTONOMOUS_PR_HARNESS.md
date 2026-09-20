@@ -15,6 +15,13 @@ conform to — it yields to `AGENTS.md` on any conflict (§1), and the
 implementation existing does not itself change or supersede anything this
 document specifies.
 
+> **Contract version.** The operational `AUTONOMOUS_PR` contract is **v1**,
+> as declared in `AGENTS.md` ("Contract versions"). Sections 1–19 (Part I)
+> are that v1 execution-mechanics contract, and `tools/autonomous_pr/`
+> implements it. Part II (sections 20 onward) records a prospective,
+> spec-driven **v2** contract: approved as a design target, **inactive**, not
+> authorization, and without effect on how any run executes today.
+
 ---
 
 ## 1. Purpose and authority boundary
@@ -589,3 +596,216 @@ Beyond that, this document, and any v1 implementation built from it
 - new production dependencies;
 - any change to gameplay Architecture or gameplay code;
 - exact numeric retry-count tuning.
+
+---
+
+# Part II — Prospective v2 contract (approved, inactive)
+
+Sections 20 onward describe a prospective, spec-driven `AUTONOMOUS_PR` v2.
+They are a design target defined by `TSK-0027`, not operational text. Read
+§20 before any other section of this Part.
+
+---
+
+## 20. Status and transition boundary (prospective v2)
+
+Part II is approved as the target design for a later contract version. Until
+the activation described below lands, exactly the following holds:
+
+- the operational contract is **v1**: `AGENTS.md` ("Autonomous flow" and the
+  sections around it), Part I of this document, and the current
+  `tools/autonomous_pr/` implementation. There is no mixed mode and no
+  per-task choice of version;
+- Part II grants no authority and is never itself a valid `AUTONOMOUS_PR`
+  invocation; the v1 harness neither reads nor depends on it;
+- the full-detail `docs/TASK.md` format (`TASK.md` §15) remains the
+  operational execution input, and the v1 task-context parser keeps reading
+  it unchanged;
+- no Task Execution Spec is required, created, or consulted by v1. Merging
+  the change that introduced Part II, or the presence of any
+  `docs/tasks/TSK-XXXX.md` file, does not activate v2;
+- every Part I mechanic remains in force exactly as written, including
+  v1's planning and plan-review phases and its numeric repair bound.
+
+Activation is one separate, later step. A single task implements v2 in
+`tools/autonomous_pr/` **and** activates it atomically: in that same change
+it flips the operational-version declaration in `AGENTS.md`, promotes Part II
+into operational text (replacing the Part I mechanics it supersedes), and
+adopts the `docs/TASK.md` format v2 requires. That task is expected to be
+allocated as `TSK-0028` after its own refinement. Because it changes the
+implementation and activation semantics of `AUTONOMOUS_PR` itself, it runs
+under the `MANUAL` workflow only. That is an explicit v1→v2 transition
+invariant defined by `TSK-0027` and recorded in `AGENTS.md` ("Contract
+versions"); it is not a consequence of the existing "Bounded authority"
+prohibition, which is limited to changing `AUTONOMOUS_PR`'s own authority or
+permissions. The first real v2 run happens only after that activation has
+merged.
+
+Activating only some elements of Part II, or implementing v2 behavior
+without flipping the declaration in the same change, is a contract
+violation.
+
+---
+
+## 21. Document ownership (prospective v2)
+
+| Document | Owns |
+| --- | --- |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | canonical system behavior and contracts |
+| [`ROADMAP.md`](ROADMAP.md) | capability and phase scope and ordering |
+| [`TASK.md`](TASK.md) | task lifecycle: Status, Priority, Size, dependencies, `Current`/`Next`, queue order, task allocation |
+| `docs/tasks/TSK-XXXX.md` | the approved execution target of one task |
+| [`../AGENTS.md`](../AGENTS.md) | authority, Git, review, and merge governance |
+| this document | subordinate execution mechanics |
+| [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md) | factual delivery history |
+
+A Task Execution Spec cannot:
+
+- redefine or override `ARCHITECTURE.md`;
+- expand `ROADMAP.md` scope;
+- itself grant commit, push, pull-request, or merge authorization;
+- introduce an architectural decision that is not already recorded through
+  the normal change procedure — a spec may cite an approved decision, never
+  make one;
+- replace or reinterpret `AGENTS.md`.
+
+A conflict between a spec and any higher-level source is `BLOCKED / human
+decision`. Neither the orchestrator nor an agent resolves it by silently
+choosing a source, and none edits either side within the invocation to make
+them agree.
+
+---
+
+## 22. Task Execution Spec: identity, storage, and lifecycle (prospective v2)
+
+- **Path.** Exactly `docs/tasks/TSK-XXXX.md`, a function of the immutable
+  task ID alone. One spec per task; the ID in the file must match its
+  filename. There are no status-based directories (`current/`, `done/`,
+  `backlog/`): a file that moved when the task's status changed would break
+  stable references and turn the directory layout into a second lifecycle
+  record.
+- **Responsibility split.** The spec is the approved execution contract of
+  one task. `docs/TASK.md` keeps every mutable fact about that task. The
+  spec never carries a Status, Priority, Size, dependency, or queue-position
+  field; a second authoritative copy of any of them is a defect.
+- **Progressive elaboration.** Applies to activated v2 only:
+
+  | Task status | Spec |
+  | --- | --- |
+  | `Backlog` | optional |
+  | `Ready` | required |
+  | `Current` | required and execution-ready |
+
+  A spec is execution-ready when every required section is present and
+  concrete, its checkpoints declare every required field (§23), no
+  unresolved placeholder or open decision blocks execution, nothing in it
+  conflicts with a higher-level source (§21), and no requirement that
+  constrains execution appears only in an informational section (§24). Specs
+  are not written
+  mechanically for distant backlog, and none is written retroactively for
+  completed tasks (`TSK-0001`–`TSK-0026`).
+- **Completed specs.** After a task is `Done` its spec stays in place as the
+  historical record of what was approved for implementation. It is not
+  current canonical Architecture. Task Closure does not edit it, and the
+  task's `Done` status is recorded only through `docs/TASK.md`.
+- **Provider neutrality.** A spec is never stored as a provider-specific
+  prompt or prompt sequence (for example "Prompt 1 for provider X"). The
+  orchestrator derives any runtime handoff from the provider-neutral spec.
+
+---
+
+## 23. Task Execution Spec: structure (prospective v2)
+
+A spec has these sections, in this order:
+
+1. Goal
+2. Context / References
+3. Scope
+4. Out of scope
+5. Approved implementation approach
+6. Acceptance criteria
+7. Execution checkpoints
+8. Full verification
+9. Known constraints / edge cases
+
+Every checkpoint in *Execution checkpoints* is identified `CP-1`, `CP-2`, ...
+in execution order and declares:
+
+- **Objective** — what the checkpoint is for;
+- **Required result** — the observable state it must leave behind;
+- **Constraints** — what it must not do or change;
+- **Verification** — the deterministic checks that must pass for it;
+- **Review focus** — where the reviewer is asked to look first.
+
+Checkpoints are steps inside one mergeable task. They have no `TSK-*` ID and
+no status of their own. As `AGENTS.md` ("Working method") requires, they are
+drawn along independent review-risk boundaries rather than mechanically by
+file set.
+
+Skeleton:
+
+```markdown
+# TSK-XXXX — <title>
+
+## Goal
+## Context / References
+## Scope
+## Out of scope
+## Approved implementation approach
+## Acceptance criteria
+## Execution checkpoints
+### CP-1 — <name>
+- Objective:
+- Required result:
+- Constraints:
+- Verification:
+- Review focus:
+## Full verification
+## Known constraints / edge cases
+```
+
+---
+
+## 24. Binding and advisory content (prospective v2)
+
+| Binding | Advisory |
+| --- | --- |
+| Goal | Expected touchpoints |
+| Scope | Suggested internal decomposition |
+| Out of scope | Naming suggestions |
+| Approved implementation approach, including its approved contractual and architectural decisions and invariants | Implementation notes |
+| Acceptance criteria | Review focus |
+| Declared checkpoints, and each checkpoint's Objective, Required result, Constraints, and Verification | |
+| Full verification | |
+
+Within *Approved implementation approach*, the approach and its decisions and
+invariants are binding. Expected touchpoints, suggested decomposition, naming
+suggestions, and implementation notes belong in a clearly labelled advisory
+sub-block of that section and stay advisory.
+
+*Context / References* and *Known constraints / edge cases* are
+informational. They may refer to binding constraints or decisions, but no
+binding requirement exists only inside them: any requirement that actually
+constrains execution must also appear in the corresponding binding section
+(Scope, Out of scope, Approved implementation approach, Acceptance criteria, a
+checkpoint's Constraints, or Full verification). A requirement stated only in
+an informational section is not binding, and its presence there alone leaves
+the spec not execution-ready (§22).
+
+Advisory content is guidance, never a requirement, and never a limit on
+what a reviewer may report. In particular, **Review focus** tells the
+reviewer where to look first; a reviewer reports any defect it finds,
+inside or outside that focus.
+
+An implementer may take local coding decisions that the spec leaves open,
+provided a decision does not:
+
+- expand scope;
+- change a canonical contract;
+- violate the approved implementation approach;
+- change a checkpoint's required result;
+- require a new architectural decision;
+- add a production dependency without explicit permission.
+
+A decision that would do any of these is not the implementer's to take: it
+ends the run as `BLOCKED` for refinement or a human decision.

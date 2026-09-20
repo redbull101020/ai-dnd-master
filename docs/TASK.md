@@ -1306,11 +1306,11 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0027
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0027
-- **Last reviewed:** 2026-09-16
+- **Next free ID:** TSK-0028
+- **Last reviewed:** 2026-09-20
 
 ---
 
@@ -1318,11 +1318,173 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0027` | `Current` | `P2` | `M` | `engineering` | Cross-cutting engineering refinement of the `AUTONOMOUS_PR` workflow before a production pilot on current Phase 3 development | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
 
 ---
 
 # Open task details
+
+## TSK-0027 — Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract
+
+**Status:** `Current`
+
+**Priority:** `P2`
+
+**Size:** `M`
+
+**Group:** `engineering`
+
+**Roadmap target:** Cross-cutting engineering refinement of the `AUTONOMOUS_PR` workflow before a production pilot on current Phase 3 development
+
+**References:**
+
+- `AGENTS.md` — "Change authorisation and diff review", `AUTONOMOUS_PR` (bounded exception)
+- `docs/AUTONOMOUS_PR_HARNESS.md` — Part I (v1, operational), Part II (prospective v2)
+- `docs/TASK.md` §§4.5, 5, 12, 15, 18
+- `TSK-0024` — bounded `AUTONOMOUS_PR` governance contract
+- `TSK-0025` — minimal execution-harness contract
+- `TSK-0026` — minimal local v1 execution harness
+
+**Depends on:** `TSK-0026`
+
+**Contract impact:** `none`
+
+### Goal
+
+Define, as an approved-but-inactive contract, a spec-driven `AUTONOMOUS_PR`
+v2: a provider-neutral Task Execution Spec model, an adaptive
+`CHANGES_REQUESTED` review/repair contract with deterministic
+non-convergence safety, and a spec-driven lifecycle with first-class
+checkpoints, an unpublished closure candidate, and safe Mode C repair/replay
+— while the v1 contract and the `TSK-0026` harness stay the only operational
+`AUTONOMOUS_PR` contract.
+
+### Why now
+
+`TSK-0026` delivered the v1 harness. Before a production pilot, three
+structural v1 limits need a target contract: runtime generative planning
+replaces an already-approved execution target, bounded numeric repair
+exhaustion turns a productive review/repair loop into `BLOCKED`, and the Task
+Closure commit/push happens before Mode C, so a Mode C `CHANGES_REQUESTED`
+cannot be repaired safely. Defining the contract first keeps the later
+implementation a mechanical translation of an approved design. `TSK-0023`
+remains `Backlog / P2 / L` and is not refined or otherwise touched.
+
+This task defines the v1→v2 transition of `AUTONOMOUS_PR` itself. It, and
+the later task that implements and activates v2, run under `MANUAL` only, as
+an explicit transition invariant this task adds to `AGENTS.md` ("Contract
+versions"). That invariant is new: the existing "Bounded authority"
+prohibition covers only changes to `AUTONOMOUS_PR`'s own authority or
+permissions, and is not what requires `MANUAL` here.
+
+### Scope
+
+- Task Execution Spec model: stable path `docs/tasks/TSK-XXXX.md` depending
+  only on the immutable task ID (no status-based directories); a strict
+  split between the spec (approved execution contract) and `docs/TASK.md`
+  (lifecycle, Status/Priority/Size/dependencies, `Current`/`Next`, queue,
+  allocation), with no mutable lifecycle status duplicated in the spec;
+  explicit document ownership; the limits of a spec's authority; progressive
+  elaboration (Backlog optional, Ready required, Current execution-ready);
+  provider-neutral structure; binding vs advisory content; per-checkpoint
+  Objective / Required result / Constraints / Verification / Review focus;
+  completed specs kept as historical execution specifications.
+- Explicit v1/v2 transition boundary: v1 remains the only operational
+  contract after merge; v2 is approved but inactive; the current
+  full-detail `docs/TASK.md` format and the v1 parser stay operational; a
+  later task implements and activates v2 atomically; both that task and this
+  one are `MANUAL`-only under an explicit transition invariant recorded in
+  `AGENTS.md`.
+- Adaptive review/repair (prospective v2): the unchanged three-verdict set;
+  a structured repair packet on `CHANGES_REQUESTED`; non-convergence
+  diagnosis from the second consecutive `CHANGES_REQUESTED` at the same gate;
+  no numeric repair-exhaustion rule (`repair_count` is telemetry only);
+  preserved finite fail-closed conditions; deterministic no-progress/cycle
+  detection over review-relevant candidate identity; orchestrator-owned
+  repair history; reviewer freshness.
+- Spec-driven lifecycle (prospective v2): no runtime planning or plan
+  review; preflight from one captured `origin/main` SHA covering both
+  `docs/TASK.md` and the spec; spec immutable within an invocation;
+  first-class sequential checkpoints; pre-closure cumulative review with
+  evidence invalidation after repair; an unpublished closure candidate so a
+  rejected Mode C candidate never needs remote history rewrite; the exact
+  audited-candidate rule; conservative deterministic evidence replay; a
+  Required CI boundary that neither forbids future CI repair nor requires
+  post-push repair in the initial v2 implementation; first-trial selection
+  criteria.
+- Documentation directly caused by the change: `AGENTS.md` (operational
+  version marker, Task Execution Spec authority limits, and the `MANUAL`-only
+  transition invariant — additive text only),
+  `docs/AUTONOMOUS_PR_HARNESS.md` (prospective Part II), this tracker, and
+  the `DEVELOPMENT_LOG.md` entry at Task Closure. `CLAUDE.md` changes only if
+  guidance it deliberately duplicates becomes stale.
+
+### Out of scope
+
+- any change to `tools/autonomous_pr/**`, its tests, or the CLI, including
+  removing or altering `--max-repairs`;
+- implementing or activating v2, and allocating, refining, or specifying
+  the implementation/activation task;
+- a thin runtime `docs/TASK.md` format or any change to the v1 parser;
+- creating any `docs/tasks/*.md` file, including a spec for this task and
+  retroactive specs for `TSK-0001`–`TSK-0026`;
+- persisted run state, post-push resume, or post-push CI repair
+  implementation;
+- a first v2 trial run, its task selection or allocation, and any
+  refinement of `TSK-0023`;
+- changes to the existing `AGENTS.md` bounded-authority, review-authority,
+  and merge rules — only the additive version marker, authority limits, and
+  `MANUAL`-only transition invariant listed in Scope are in scope;
+- production dependencies, CI changes, gameplay Architecture, and gameplay
+  code.
+
+### Acceptance criteria
+
+- v1 is unambiguously the only operational contract after merge; v2 is
+  described as approved, inactive, and not authorization; exactly one
+  authoritative statement of the operational version exists;
+- the Task Execution Spec model, document ownership, progressive
+  elaboration, binding/advisory split, checkpoint structure, and
+  completed-spec rule are defined without duplicating lifecycle status and
+  without provider-specific content;
+- a spec cannot override Architecture, expand Roadmap scope, grant
+  commit/push/PR/merge authority, or hide an architectural decision; a
+  conflict with a higher-level source is `BLOCKED / human decision`;
+- the adaptive review/repair contract has no numeric repair-exhaustion
+  gate, keeps every finite fail-closed safety condition, and defines
+  deterministic non-convergence detection independent of iteration count;
+- the spec-driven lifecycle, unpublished closure candidate, exact
+  audited-candidate rule, conservative replay rule, and Required CI boundary
+  are defined without a governance regression and without canonizing a
+  specific Git command;
+- the `MANUAL`-only status of this task and of the later v2
+  implementation/activation task is recorded once, as an explicit transition
+  invariant in `AGENTS.md`, without claiming that the existing "Bounded
+  authority" prohibition already forbids it;
+- the live `docs/TASK.md` remains readable by the v1 parser;
+- `tools/autonomous_pr/**`, `src/dnd_engine/**`, production dependencies,
+  and `TSK-0023` are unchanged.
+
+### Verification
+
+- `python -m pytest tests/architecture/`
+- manual check that `tools.autonomous_pr.task_context.revalidate_current_task`
+  still accepts the live `docs/TASK.md` for this task
+- `git diff --check`
+
+Documentation/process-only change; the full gameplay `pytest` suite is not
+required because no executable, test, or tooling behavior changes.
+
+### Execution checkpoints
+
+1. Task Execution Spec model and explicit v1/v2 transition boundary.
+2. Adaptive `CHANGES_REQUESTED` review/repair contract and deterministic
+   non-convergence safety.
+3. Spec-driven lifecycle, closure candidate, and Mode C safe repair/replay.
+
+Task Closure follows the normal prepared-closure path (§18.1), not a
+checkpoint.
 
 ---
 
