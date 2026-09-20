@@ -1306,10 +1306,10 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 # Current position
 
 - **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
+- **Current:** TSK-0028
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0028
+- **Next free ID:** TSK-0029
 - **Last reviewed:** 2026-09-20
 
 ---
@@ -1318,11 +1318,289 @@ DEVELOPMENT_LOG and Git tell us what actually happened.
 
 | ID | Status | P | Size | Group | Roadmap target | Title |
 | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0028` | `Current` | `P2` | `M` | `engineering` | Cross-cutting engineering prerequisite for continued Phase 3 delivery: activate the approved `AUTONOMOUS_PR` v2 workflow | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
 
 ---
 
 # Open task details
+
+## TSK-0028 — Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2
+
+**Status:** `Current`
+
+**Priority:** `P2`
+
+**Size:** `M`
+
+**Group:** `engineering`
+
+**Roadmap target:** Cross-cutting engineering prerequisite for continued Phase 3 delivery: activate the approved `AUTONOMOUS_PR` v2 workflow
+
+**References:**
+
+- `ROADMAP.md` — Phase 3 — Combat (active phase); an engineering prerequisite for continued Phase 3 delivery, not a Phase 3 capability row
+- `AGENTS.md` — "Change authorisation and diff review", `AUTONOMOUS_PR` (bounded exception), "Contract versions"
+- `docs/AUTONOMOUS_PR_HARNESS.md` — Part I (v1, operational until this task merges), Part II §§20–35 (approved v2 contract)
+- `docs/TASK.md` §§4.5, 5, 12, 15, 18, 19
+- `CLAUDE.md` — project rules digest
+- `TSK-0024` — bounded `AUTONOMOUS_PR` governance contract
+- `TSK-0025` — minimal execution-harness contract
+- `TSK-0026` — minimal local v1 execution harness
+- `TSK-0027` — Task Execution Spec and adaptive v2 contract
+
+**Depends on:** `TSK-0027`
+
+**Contract impact:** `none`
+
+### Goal
+
+Implement the approved `TSK-0027` spec-driven adaptive `AUTONOMOUS_PR` v2 in
+`tools/autonomous_pr/` and, in the same change, atomically make it the only
+operational `AUTONOMOUS_PR` contract. After merge no operational mixed v1/v2
+mode and no per-task version selection exists.
+
+### Why now
+
+`TSK-0027` merged the v2 contract as approved but inactive. Operational v1
+still has the three structural limits that motivated it: runtime generative
+planning stands in for an already-approved execution target, bounded numeric
+repair exhaustion ends a productive review/repair loop as `BLOCKED`, and Task
+Closure is committed and pushed before Mode C, so a Mode C
+`CHANGES_REQUESTED` cannot be repaired safely. Harness §20 requires exactly one
+later task to implement v2 and activate it atomically: activating only some
+elements of Part II, or implementing v2 behavior without flipping the
+operational-version declaration in the same change, is a contract violation.
+
+A second, independent reason for doing this now: `# Recently completed`
+retains only the last ten completions (§19), and the v1 task-context parser
+fails closed on a dependency it cannot positively confirm there. That window
+is already full, so the next Task Closure drops the oldest row. The v2
+preflight therefore needs a durable terminal-task lifecycle index.
+
+No pilot task is designated by this task, and `TSK-0023` is neither refined
+nor promoted: it stays `Backlog / P2 / L`.
+
+This task defines the implementation and activation of `AUTONOMOUS_PR`
+itself, so it runs under `MANUAL` only (`AGENTS.md` "Contract versions";
+Harness §20). The operational v1 harness must not be invoked for it. It has
+no Task Execution Spec: it was refined, and began execution, under operational
+v1, so this detail is its execution input. Creating `docs/tasks/TSK-0028.md`
+is out of scope.
+
+### Scope
+
+- Task Execution Specs at the stable path `docs/tasks/TSK-XXXX.md` as the
+  execution input: the nine required sections of Harness Part II in order;
+  ordered `CP-1`…`CP-N` checkpoints, each with Objective, Required result,
+  Constraints, Verification, and Review focus; the spec's ID matching its
+  filename; no lifecycle field (Status, Priority, Size, dependency, queue
+  position) in a spec; spec required for `Ready`, required and
+  execution-ready for `Current`, optional for `Backlog`.
+- Deterministic, shell-free verification representation: machine-executed
+  verification commands in checkpoint Verification and in Full verification
+  are JSON argv arrays, never shell strings. The Full verification the
+  orchestrator runs comes from the Task Execution Spec.
+- A thin `docs/TASK.md` as the lifecycle and queue metadata source, plus a
+  durable terminal-task lifecycle index for `Done`/`Superseded` tasks, so a
+  dependency's `Done` status stays positively confirmable after the task
+  leaves `# Recently completed`. The index is complete for every terminal
+  task ID allocated so far, seeded from authoritative history.
+- Preflight from one captured `origin/main` SHA covering `docs/TASK.md` and the
+  spec, with the checks of Harness §30, including a mechanical Roadmap-target
+  check that uses no LLM semantic judgment and adds no generic Roadmap
+  parser or framework. The authoritative `Current` state and readiness gate
+  remain the primary governance proof; the harness only verifies, mechanically,
+  the facts it can verify.
+- No runtime generative planning and no plan-review gate: every runtime
+  handoff is derived from the fixed spec.
+- Adaptive review/repair: the unchanged three-verdict set; a structured,
+  machine-validated repair packet whose every finding carries Problem,
+  Evidence, Required outcome, Recommended repair, and Verification focus; a
+  mandatory non-convergence diagnosis from the second consecutive
+  `CHANGES_REQUESTED` at the same gate (§26); no numeric repair-exhaustion
+  rule (repair count is telemetry only); every finite fail-closed condition of
+  §27 preserved.
+- Deterministic candidate identity with no-progress and cycle detection;
+  orchestrator-owned in-memory repair history; bounded reviewer handoff that
+  creates no synthetic items for a gate's first review; reviewer freshness at
+  every review.
+- Deterministic evidence invalidation and replay, conservative whenever the
+  earliest affected scope or a closure-only repair cannot be established
+  deterministically; repairable pre-closure cumulative review.
+- An unpublished local Task Closure candidate; Mode C before publication;
+  publication of exactly the audited candidate; Mode C staleness handling
+  through publication. Per Harness §34, the initial v2 implementation is not
+  required to perform any candidate-changing repair after publication (for
+  example one that a required-CI failure, or a Mode C `CHANGES_REQUESTED` from
+  a Mode C rebuilt after post-publication `origin/main` movement, would
+  require). Where such a failure needs a repair or replay the harness cannot
+  yet perform safely, the run ends as `BLOCKED`. This is an implementation
+  limitation, not a blanket rule that every post-publication failure is
+  `BLOCKED`, and no general rule forbids same-candidate revalidation or
+  recovery.
+- No persisted resume; provider neutrality; no new production dependency.
+- Atomic synchronization, in this one change, of `AGENTS.md`,
+  `docs/AUTONOMOUS_PR_HARNESS.md` (Part II promoted to operational text,
+  superseded Part I mechanics replaced), `docs/TASK.md` (the format v2
+  requires), `CLAUDE.md` (only where guidance it deliberately duplicates
+  changes), and the `tools/autonomous_pr/` implementation, CLI, and tests,
+  including the `docs/TASK.md` tracker tests the format change requires. The
+  `DEVELOPMENT_LOG.md` entry is written at Task Closure.
+
+### Out of scope
+
+- any change to `src/dnd_engine/**`, gameplay behavior, or `ARCHITECTURE.md`;
+- `TSK-0023` refinement, decomposition, or implementation;
+- a first real v2 pilot task, its selection, or its allocation;
+- autonomous merge or auto-merge;
+- a provider SDK or framework;
+- persisted run state and persisted or cross-process resume;
+- a database, broker, dashboard, cloud, or container orchestration;
+- a GitHub Actions autonomous runner;
+- multi-task or parallel execution;
+- a generic workflow, gate, or Roadmap-parsing framework;
+- post-publication candidate-changing repair;
+- new production dependencies (`[project].dependencies` stays empty);
+- historical Task Execution Specs for completed tasks, and a Task Execution
+  Spec for `TSK-0028` itself;
+- unrelated refactors.
+
+### Acceptance criteria
+
+- Exactly one operational `AUTONOMOUS_PR` contract exists after merge, v2,
+  declared in one authoritative place in `AGENTS.md`; no mixed v1/v2 mode, no
+  per-task version selection, no version flag, and no retained v1 code path.
+- Part II is promoted to operational text and the Part I mechanics it
+  supersedes (planning, plan review, bounded numeric repair) are replaced;
+  the `AGENTS.md` autonomous flow and Mode C text describe the unpublished
+  closure candidate and Mode C before publication; no current
+  normative/governance document (`AGENTS.md`, the operational text of
+  `docs/AUTONOMOUS_PR_HARNESS.md`, the `docs/TASK.md` process sections,
+  `CLAUDE.md`) describes v1 as the current operational `AUTONOMOUS_PR`
+  contract. Historical records (`DEVELOPMENT_LOG.md`, historical context) may
+  correctly state that v1 was operational in the past.
+- The v2 preflight reads `docs/TASK.md` and the spec from one captured
+  `origin/main` SHA and ends the run as `BLOCKED` when the named task is not
+  the authoritative `Current`, a dependency is not confirmed `Done` through the
+  durable lifecycle index, the Roadmap target is missing, the spec is missing,
+  mismatched, or not execution-ready, or the run cannot be tied to one SHA.
+  A later `origin/main` movement that changes the task entry, its
+  dependencies, its Roadmap target, or its spec fails closed.
+- A candidate that edits the task's own `docs/tasks/TSK-XXXX.md` is a scope
+  violation and ends the run as `BLOCKED`.
+- Declared checkpoints run exactly as declared and in order; verification
+  commands run as argv without a shell; Full verification comes from the spec.
+- A `CHANGES_REQUESTED` without a complete repair packet, or without the
+  required diagnosis from the second consecutive one at a gate, ends the run
+  as `BLOCKED`. No repair count is a gate input. A candidate rejected by
+  deterministic verification is never sent to review, and advances neither
+  the consecutive `CHANGES_REQUESTED` count nor the review iteration number.
+- A repair that reproduces an already-rejected candidate identity at the same
+  gate and context ends the run as `BLOCKED`; a run of distinct candidates
+  is never blocked by iteration count.
+- A reviewer's ordinary handoff is the bounded set of Harness §29 and never
+  the full repair history; the first review of a gate gets no synthetic
+  previous findings or delta; implementer and reviewer contexts stay distinct.
+- A candidate-changing repair makes stale every downstream evidence item; no
+  earlier approval is carried over; when the earliest affected scope cannot
+  be established deterministically, the broader replay runs; when safe replay
+  is impossible the run ends as `BLOCKED`.
+- The pre-closure cumulative review is repairable, and a repair reruns
+  verification and review of the repair, commit and push, Full verification,
+  a rebuilt cumulative diff, and a fresh cumulative review.
+- Task Closure exists as an unpublished local commit until Mode C approves
+  exactly that candidate; a rejected Mode C candidate never requires a remote
+  history rewrite; publication pushes exactly the audited `HEAD`, and only if
+  `origin/main` is still the SHA the audit was built against.
+- The initial implementation is not required to perform a candidate-changing
+  repair after publication. When a post-publication failure (a required-CI
+  failure, or a Mode C `CHANGES_REQUESTED` from a rebuilt Mode C) requires such
+  a repair or replay and the harness cannot perform it safely, the run ends as
+  `BLOCKED`. There is no blanket rule that any post-publication failure is
+  `BLOCKED`, and same-candidate revalidation or recovery is not forbidden: a
+  rebuilt Mode C that approves the same published candidate does not stop the
+  run.
+- No persisted run state, no autonomous merge, no provider-specific
+  behavior in the contract or the orchestrator, and no new production
+  dependency.
+- `TSK-0023`, `src/dnd_engine/**`, and `ARCHITECTURE.md` are unchanged, and no
+  `docs/tasks/*.md` file is created.
+
+### Verification
+
+- `python -m pytest tests/tools/autonomous_pr/` — deterministic, with
+  fake/stub implementer and reviewer processes and disposable local Git
+  fixtures; no network and no real LLM.
+- Explicit regression coverage: the `A → repair → A`, `A → B → C → B`, and
+  `A → B → C → D` candidate sequences; verification-failure rejection without
+  a synthetic verdict; the second-consecutive-`CHANGES_REQUESTED` diagnosis;
+  the late-repair replay sequence; publication of exactly the audited
+  candidate; and Mode C staleness before publication.
+- `python -m pytest tests/architecture/`
+- `python -m pytest` (full suite)
+- `python -m mypy src/dnd_engine tools/autonomous_pr`
+- the v2 tracker parser accepts the final post-activation `docs/TASK.md`
+  format;
+- the v2 preflight passes on a valid test/repository state that has an
+  authoritative `Current` task and a matching execution-ready Task Execution
+  Spec;
+- an invocation against `Current: —` (as the live `docs/TASK.md` reads after
+  this task's closure) is correctly blocked
+- `git diff --check`
+
+If Windows `pytest` temp cleanup raises the known unrelated
+`PermissionError`, a disposable `--basetemp` may be used and must be
+reported.
+
+### Expected touchpoints
+
+Optional planning aid, not a contract.
+
+- `tools/autonomous_pr/**`
+- `tests/tools/autonomous_pr/**`
+- `tests/architecture/test_task_tracker.py`
+- `AGENTS.md`
+- `docs/AUTONOMOUS_PR_HARNESS.md`
+- `docs/TASK.md`
+- `CLAUDE.md`
+- `docs/DEVELOPMENT_LOG.md` (at Task Closure)
+
+### Execution checkpoints
+
+Checkpoints are branch-internal steps of one mergeable task. Nothing in them
+is operational until the single merge, and the merge must not leave a mixed
+operational state.
+
+1. `CP-1` — Task Execution Spec input and exact-base preflight: spec model
+   and deterministic validation, the JSON-argv verification representation,
+   the v2 `docs/TASK.md` reader with the durable terminal-task lifecycle
+   index, single-SHA preflight including the mechanical Roadmap-target
+   check, and fail-closed handling of later `origin/main` movement and of
+   spec edits.
+2. `CP-2` — Spec-driven checkpoint execution and adaptive repair: removal of
+   runtime planning and plan review, the spec-driven checkpoint loop with
+   verification from the spec, the structured repair packet and
+   non-convergence diagnosis, gate counters, candidate identity with
+   no-progress and cycle detection, in-memory repair history, the bounded
+   reviewer handoff, and removal of numeric repair exhaustion.
+3. `CP-3` — Late repair and deterministic evidence replay: repairable
+   pre-closure cumulative review, evidence invalidation, the conservative
+   replay rule, and the late-repair replay sequence.
+4. `CP-4` — Unpublished Task Closure candidate and Mode C: closure
+   preparation and review, the local unpublished closure commit, fresh
+   `origin/main` revalidation, Mode C before publication, exact
+   audited-candidate publication, Mode C staleness, and the
+   post-publication boundary of Harness §34 through
+   `READY_FOR_HUMAN_MERGE`.
+5. `CP-5` — Atomic v2 activation and regression: the `AGENTS.md`
+   operational-version flip, Part II promoted to operational text, the
+   `docs/TASK.md` format v2 adoption and its tracker tests, the `CLAUDE.md`
+   sync, removal of every superseded v1 path and flag, and the full
+   regression pass.
+
+Task Closure follows the normal prepared-closure path (§18.1), not a
+checkpoint.
 
 ---
 
