@@ -809,3 +809,214 @@ provided a decision does not:
 
 A decision that would do any of these is not the implementer's to take: it
 ends the run as `BLOCKED` for refinement or a human decision.
+
+---
+
+## 25. Review verdicts and repair flow (prospective v2)
+
+The reviewer returns exactly one of `APPROVED`, `CHANGES_REQUESTED`, or
+`BLOCKED`, as in v1 (§7). The set is unchanged.
+
+- **Terminal `BLOCKED`.** An explicit `BLOCKED` verdict ends the run. So does
+  a missing, malformed, ambiguous, or unrecognized verdict, and a reviewer
+  timeout, crash, or execution error. None of these ever starts a repair
+  episode, and none is upgraded to `APPROVED`.
+- **`APPROVED`.** The current review gate passes and the orchestrator may
+  move to the next deterministic phase. The approval criteria are identical
+  at every iteration: they are never weakened by how many times the gate has
+  already returned `CHANGES_REQUESTED`.
+- **`CHANGES_REQUESTED`.** Not terminal. It starts a repair episode, provided
+  the reviewer's output contains a complete repair packet.
+
+A repair packet holds one or more findings. Each finding has at least these
+required fields, and they are part of the repair handoff contract, not an
+advisory format:
+
+- **Problem** — what is wrong with the candidate;
+- **Evidence** — where and how the problem shows in the candidate;
+- **Required outcome** — the condition the next candidate must satisfy;
+- **Recommended repair** — a suggested way to reach it;
+- **Verification focus** — what the next deterministic verification and
+  review should check.
+
+A `CHANGES_REQUESTED` verdict with no finding, or with a finding that lacks
+any required field, is malformed reviewer output and ends the run as
+`BLOCKED`. Additional provider-neutral structured metadata may accompany a
+finding; it never substitutes for a required field.
+
+The prospective v2 repair flow is:
+
+```text
+review → CHANGES_REQUESTED → implementer repair → deterministic verification → fresh review
+```
+
+A **repair episode** starts with a `CHANGES_REQUESTED` verdict (or, before a
+gate's first review, with the initial implementation) and ends when a
+candidate that passed deterministic verification is actually reviewed.
+
+If the deterministic verification of a candidate fails, that candidate is not
+sent to review until verification succeeds. It counts as a rejected candidate
+for no-progress and cycle detection (§28), and the failure is handed back to
+the implementer for a further repair. That further repair stays in the current
+repair episode, and is governed by:
+
+- the latest repair packet, when the episode began with a
+  `CHANGES_REQUESTED`;
+- the fixed Task Execution Spec and the deterministic verification failure
+  evidence, when the initial candidate failed verification before the gate's
+  first review, since no repair packet exists yet.
+
+No reviewer verdict is recorded or synthesized for it, and it advances neither
+the consecutive `CHANGES_REQUESTED` count nor the review iteration number of
+§26 until a review actually takes place.
+
+The reviewer never edits the working tree. The repair stays inside the fixed
+spec and the approved scope; a repair that would need more than that is a
+fail-closed condition (§27).
+
+---
+
+## 26. Gate counter and non-convergence diagnosis (prospective v2)
+
+A **gate** is one designated review point — for example a checkpoint review
+or a cumulative review — for one fixed Task Execution Spec and one accepted
+base context. The orchestrator keeps, per gate, the count of *consecutive*
+`CHANGES_REQUESTED` verdicts, and the review iteration number: how many
+designated reviews have actually taken place at that gate. The iteration number
+advances with every verdict a designated review returns, and the consecutive
+count advances with every `CHANGES_REQUESTED`. A candidate rejected by
+deterministic verification (§25) advances neither. Both start again after that
+gate returns `APPROVED` and when the run moves on to the next gate.
+
+From the second consecutive `CHANGES_REQUESTED` at the same gate, the
+reviewer must add a non-convergence diagnosis to the repair packet, stating:
+
+- what the previous review required;
+- what the implementer actually changed;
+- why the candidate still does not satisfy the fixed spec;
+- what was misunderstood;
+- which exact required outcome remains;
+- which corrective approach is recommended.
+
+A `CHANGES_REQUESTED` that omits the required diagnosis is malformed and ends
+the run as `BLOCKED` (§25).
+
+The number of `CHANGES_REQUESTED` verdicts is never, by itself, a ground for
+`BLOCKED`. The diagnosis exists to improve the repair guidance. It does not
+oblige the reviewer to approve: a candidate that does not satisfy the approved
+target stays `CHANGES_REQUESTED` however many reviews have passed.
+
+---
+
+## 27. Repair limit and finite safety (prospective v2)
+
+v2 has no numeric repair limit. There is no rule of the form "N repairs
+exceeded → `BLOCKED`", and no canonical value such as "at most 2 repairs" or
+"at most 5 repairs". A repair count may exist as telemetry and audit
+information; it is never an input to a gate decision.
+
+Operational v1 is unchanged by this. It remains a bounded numeric
+implementation: `OrchestratorConfig.max_repairs` and the `--max-repairs` CLI
+flag stay in `tools/autonomous_pr/`, and Part I (§11) and `AGENTS.md` continue
+to describe the bounded repair policy, until the activation described in §20.
+
+Removing the numeric budget does not remove fail-closed safety. Every one of
+these still ends the run as `BLOCKED`:
+
+- an agent or reviewer timeout;
+- malformed reviewer output, including an incomplete repair packet;
+- a reviewer `BLOCKED` verdict;
+- a missing tool or capability;
+- an ambiguous Git or GitHub side effect;
+- lost in-memory run state;
+- a required revalidation that cannot be performed;
+- a required scope expansion;
+- a new architectural decision being needed;
+- a new production dependency being needed;
+- stale evidence that cannot be safely replayed;
+- any other deterministic fail-closed condition in `AGENTS.md` or Part I.
+
+Finite guards that are not a repair budget may be kept — for example, one
+protecting a run from a constantly moving `origin/main`. Otherwise a run ends
+by these fail-closed conditions and by deterministic no-progress detection
+(§28), not by an iteration count.
+
+---
+
+## 28. Deterministic no-progress and cycle detection (prospective v2)
+
+No-progress is decided by an objective candidate identity, never by an LLM
+judgment such as "the agent is not making enough progress".
+
+- **Candidate identity.** A deterministic fingerprint of the
+  *review-relevant candidate state* — the candidate content that is, or would
+  be, submitted for review at that gate. It does not depend on the iteration
+  number, timestamps, reviewer prose, temporary artifact paths, or the
+  formatting of verification logs. This contract does not choose a fingerprint algorithm;
+  that is an implementation detail of the later task.
+- **Rejected candidate.** A candidate that received `CHANGES_REQUESTED`, or
+  failed required deterministic verification, at a gate. Rejection by
+  verification involves no reviewer verdict.
+- **Comparison scope.** Identities are compared only within the same gate,
+  fixed spec, and accepted base context. A candidate seen under a different
+  context is a different candidate.
+- **Rule.** When a repair produces a candidate whose identity equals that of
+  any candidate already rejected at the same gate and context, the run ends
+  as `BLOCKED`: an exact repair cycle, or no progress. This applies equally to
+  a repair made after a verification failure.
+
+| Sequence at one gate | Outcome |
+| --- | --- |
+| `A → repair → A` | `BLOCKED` — no progress |
+| `A → B → C → B`, with `B` already rejected | `BLOCKED` — exact repair cycle |
+| `A → B → C → D → …`, all distinct | not blocked, however many iterations |
+
+Iteration count alone never triggers this rule; only a repeated rejected
+identity does.
+
+---
+
+## 29. Repair history, reviewer handoff, and freshness (prospective v2)
+
+The orchestrator owns the audit history of a gate. For every candidate or
+repair attempt it records the orchestration facts that apply to it:
+
+- the gate or checkpoint;
+- the candidate's fingerprint or identity;
+- the verification evidence;
+- whether the candidate was rejected, and on what basis (a reviewer
+  `CHANGES_REQUESTED` or a verification failure);
+- for an attempt produced by a repair, the repair delta or its fingerprint and
+  the resulting candidate state.
+
+Only when a designated review actually took place for the attempt does the
+record also hold the review iteration, the reviewer verdict, and the findings.
+An attempt rejected by verification has none of the three, and no synthetic
+verdict stands in for them.
+
+The full history serves audit, diagnostics, and cycle detection (§28). It
+lives in the run's in-memory state (§9, §11); this section introduces no
+persisted store.
+
+A fresh reviewer is not handed the whole history. Its ordinary handoff is:
+
+- the Task Execution Spec;
+- the current checkpoint or gate;
+- the current patch;
+- the passing deterministic verification result of the current candidate;
+- the review iteration number of this review;
+- the previous reviewer findings, only if a previous review exists;
+- the repair delta since the last reviewed candidate, spanning any repairs made
+  after verification failures, and the resulting candidate — only if a
+  reviewed candidate exists.
+
+For the gate's first review, none of the last two items exists: the handoff is
+the fixed Task Execution Spec, the current gate or checkpoint, the current
+candidate patch, and the passing deterministic verification result, with
+review iteration number 1. No synthetic previous findings and no synthetic
+delta are created to fill the missing items.
+
+Every designated review stays fresh and independent: `implementer context !=
+designated reviewer context` (§5) holds at every review. Adaptive repair
+never continues an earlier reviewer conversation, and review correctness never
+depends on hidden reviewer state that is absent from this explicit handoff.
