@@ -248,7 +248,7 @@ index is authoritative.
 
 # Current position
 
-- **Current:** TSK-0028
+- **Current:** —
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0029
@@ -260,7 +260,6 @@ index is authoritative.
 
 | ID | Status | P | Size | Group | Roadmap target | Depends on | Title |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0028` | `Current` | `P2` | `M` | `engineering` | Cross-cutting engineering prerequisite for continued Phase 3 delivery: activate the approved `AUTONOMOUS_PR` v2 workflow | `TSK-0027` | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | — | Opportunity Attack / Reaction continuation |
 
 ---
@@ -295,6 +294,7 @@ index is authoritative.
 | `TSK-0025` | `Done` | PR #102 | Define minimal `AUTONOMOUS_PR` execution-harness contract |
 | `TSK-0026` | `Done` | PR #103 | Implement minimal local `AUTONOMOUS_PR` execution harness |
 | `TSK-0027` | `Done` | PR #104 | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract |
+| `TSK-0028` | `Done` | PR #106 | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
 
 ---
 
@@ -302,6 +302,7 @@ index is authoritative.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
+| `TSK-0028` | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 | PR #106 |
 | `TSK-0027` | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract | PR #104 |
 | `TSK-0026` | Implement minimal local `AUTONOMOUS_PR` execution harness | PR #103 |
 | `TSK-0025` | Define minimal `AUTONOMOUS_PR` execution-harness contract | PR #102 |
@@ -311,4 +312,3 @@ index is authoritative.
 | `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
 | `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
 | `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
-| `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |

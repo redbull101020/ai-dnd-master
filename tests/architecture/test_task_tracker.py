@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from tools.autonomous_pr.model import ExactBaseInput
 from tools.autonomous_pr.model import TaskStatus
-from tools.autonomous_pr.task_context import (
-    TaskPreflightError,
-    parse_thin_tracker,
-    preflight_execution_target,
+from tools.autonomous_pr.task_context import parse_thin_tracker
+from tools.autonomous_pr.task_spec import (
+    TaskSpecError,
+    parse_task_execution_spec,
+    spec_path_for,
 )
 
 
@@ -59,11 +59,88 @@ def _assert_dependency_invariants(text: str) -> None:
                 assert terminal_by_id[dependency].status is TaskStatus.DONE
 
 
+def _assert_ready_and_current_specs(text: str, root: Path) -> None:
+    tracker = _tracker(text)
+    for task in tracker.open_tasks:
+        if task.status not in {TaskStatus.READY, TaskStatus.CURRENT}:
+            continue
+        spec_rel_path = spec_path_for(task.task_id)
+        path = root / spec_rel_path
+        assert path.is_file(), f"{task.task_id} has no Task Execution Spec"
+        spec = parse_task_execution_spec(
+            path.read_text(encoding="utf-8"),
+            spec_rel_path,
+        )
+        assert spec.task_id == task.task_id
+
+
+def _synthetic_executable_tracker(status: TaskStatus) -> str:
+    text = TASK_MD.read_text(encoding="utf-8")
+    row = (
+        f"| `TSK-0029` | `{status.value}` | `P2` | `S` | `engineering` | "
+        "Test target | `TSK-0027` | Synthetic executable task |"
+    )
+    text = text.replace(
+        "| `TSK-0023` | `Backlog`",
+        row + "\n| `TSK-0023` | `Backlog`",
+        1,
+    )
+    if status is TaskStatus.CURRENT:
+        text = text.replace("- **Current:** —", "- **Current:** TSK-0029", 1)
+    return text
+
+
+def _synthetic_execution_ready_spec(task_id: str = "TSK-0029") -> str:
+    return f"""# {task_id} — Synthetic executable task
+
+## Goal
+
+Exercise the repository architecture invariant.
+
+## Context / References
+
+Use the approved v2 harness contract.
+
+## Scope
+
+- synthetic architecture-test scope
+
+## Out of scope
+
+- production changes
+
+## Approved implementation approach
+
+Use one deterministic synthetic checkpoint.
+
+## Acceptance criteria
+
+- the synthetic invariant is exercised
+
+## Execution checkpoints
+
+### CP-1 — Synthetic checkpoint
+- Objective: Exercise the invariant.
+- Required result: The fixture is accepted.
+- Constraints: Do not change production files.
+- Verification: ["python", "-m", "pytest", "tests/architecture"]
+- Review focus: Spec identity and execution readiness.
+
+## Full verification
+
+["python", "-m", "pytest", "tests/architecture"]
+
+## Known constraints / edge cases
+
+This fixture is not an allocated repository task.
+"""
+
+
 def test_live_task_tracker_is_valid_v2_thin_tracker() -> None:
     tracker = _tracker()
 
-    assert tracker.current_task_id == "TSK-0028"
-    assert {task.task_id for task in tracker.open_tasks} == {"TSK-0023", "TSK-0028"}
+    assert tracker.current_task_id is None
+    assert {task.task_id for task in tracker.open_tasks} == {"TSK-0023"}
     assert all(
         task.status in {TaskStatus.DONE, TaskStatus.SUPERSEDED}
         for task in tracker.terminal_tasks
@@ -79,15 +156,24 @@ def test_terminal_history_is_durable_and_dependency_complete() -> None:
     assert terminal["TSK-0005"].status is TaskStatus.SUPERSEDED
     assert terminal["TSK-0022"].status is TaskStatus.DONE
     assert terminal["TSK-0027"].status is TaskStatus.DONE
+    assert terminal["TSK-0028"].status is TaskStatus.DONE
     assert all(task.evidence.strip() for task in tracker.terminal_tasks)
     _assert_dependency_invariants(text)
 
 
 def test_backlog_task_may_depend_on_an_existing_open_task() -> None:
     text = TASK_MD.read_text(encoding="utf-8")
+    open_dependency = (
+        "| `TSK-0029` | `Backlog` | `P3` | `S` | `engineering` | "
+        "Test target | — | Synthetic open dependency |\n"
+    )
     synthetic = text.replace(
+        "| `TSK-0023` | `Backlog`",
+        open_dependency + "| `TSK-0023` | `Backlog`",
+        1,
+    ).replace(
         "| — | Opportunity Attack / Reaction continuation |",
-        "| `TSK-0028` | Opportunity Attack / Reaction continuation |",
+        "| `TSK-0029` | Opportunity Attack / Reaction continuation |",
         1,
     )
     assert synthetic != text
@@ -95,7 +181,7 @@ def test_backlog_task_may_depend_on_an_existing_open_task() -> None:
     tracker = _tracker(synthetic)
     backlog = next(task for task in tracker.open_tasks if task.task_id == "TSK-0023")
     assert backlog.status is TaskStatus.BACKLOG
-    assert backlog.depends_on == ("TSK-0028",)
+    assert backlog.depends_on == ("TSK-0029",)
     _assert_dependency_invariants(synthetic)
 
 
@@ -112,25 +198,41 @@ def test_current_position_preserves_thin_tracker_queue_invariants() -> None:
     assert all(task_id in open_by_id for task_id in next_ids)
     assert all(open_by_id[task_id].status is TaskStatus.READY for task_id in next_ids)
 
+    expected_current = (
+        [] if tracker.current_task_id is None else [tracker.current_task_id]
+    )
     assert _queue_order(TASK_MD.read_text(encoding="utf-8")) == [
-        tracker.current_task_id,
+        *expected_current,
         *next_ids,
     ]
 
 
 def test_open_index_row_order_does_not_define_execution_order() -> None:
     text = TASK_MD.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    current_index = next(i for i, line in enumerate(lines) if line.startswith("| `TSK-0028`"))
-    backlog_index = next(i for i, line in enumerate(lines) if line.startswith("| `TSK-0023`"))
-    lines[current_index], lines[backlog_index] = lines[backlog_index], lines[current_index]
+    ready_row = (
+        "| `TSK-0029` | `Ready` | `P2` | `S` | `engineering` | "
+        "Test target | `TSK-0027` | Synthetic ready task |"
+    )
+    synthetic = text.replace("- **Next:** —", "- **Next:** TSK-0029", 1).replace(
+        "| `TSK-0023` | `Backlog`",
+        ready_row + "\n| `TSK-0023` | `Backlog`",
+        1,
+    )
+    lines = synthetic.splitlines()
+    ready_index = next(
+        i for i, line in enumerate(lines) if line.startswith("| `TSK-0029`")
+    )
+    backlog_index = next(
+        i for i, line in enumerate(lines) if line.startswith("| `TSK-0023`")
+    )
+    lines[ready_index], lines[backlog_index] = lines[backlog_index], lines[ready_index]
     reordered = "\n".join(lines) + "\n"
 
     assert [task.task_id for task in _tracker(reordered).open_tasks] == [
         "TSK-0023",
-        "TSK-0028",
+        "TSK-0029",
     ]
-    assert _queue_order(reordered) == _queue_order(text) == ["TSK-0028"]
+    assert _queue_order(reordered) == _queue_order(synthetic) == ["TSK-0029"]
 
 
 def test_next_free_id_exceeds_every_allocated_thin_tracker_id() -> None:
@@ -149,14 +251,36 @@ def test_next_free_id_exceeds_every_allocated_thin_tracker_id() -> None:
     assert int(match.group(1)) > max(allocated_numbers)
 
 
-def test_live_preclosure_tsk_0028_without_spec_blocks_v2_preflight() -> None:
-    base = ExactBaseInput(
-        base_sha="a" * 40,
-        task_md_text=TASK_MD.read_text(encoding="utf-8"),
-        spec_text=None,
-    )
+def test_every_ready_or_current_task_has_execution_ready_spec() -> None:
+    _assert_ready_and_current_specs(TASK_MD.read_text(encoding="utf-8"), ROOT)
 
-    with pytest.raises(
-        TaskPreflightError, match="docs/tasks/TSK-0028.md does not exist"
-    ):
-        preflight_execution_target(base, "TSK-0028")
+
+@pytest.mark.parametrize("status", [TaskStatus.READY, TaskStatus.CURRENT])
+def test_executable_task_with_matching_execution_ready_spec_passes(
+    tmp_path: Path, status: TaskStatus
+) -> None:
+    spec_rel_path = spec_path_for("TSK-0029")
+    path = tmp_path / spec_rel_path
+    path.parent.mkdir(parents=True)
+    path.write_text(_synthetic_execution_ready_spec(), encoding="utf-8")
+
+    _assert_ready_and_current_specs(_synthetic_executable_tracker(status), tmp_path)
+
+
+def test_executable_task_without_spec_fails(tmp_path: Path) -> None:
+    with pytest.raises(AssertionError, match="TSK-0029 has no Task Execution Spec"):
+        _assert_ready_and_current_specs(
+            _synthetic_executable_tracker(TaskStatus.CURRENT), tmp_path
+        )
+
+
+def test_executable_task_with_malformed_spec_fails(tmp_path: Path) -> None:
+    spec_rel_path = spec_path_for("TSK-0029")
+    path = tmp_path / spec_rel_path
+    path.parent.mkdir(parents=True)
+    path.write_text("# TSK-0029 — malformed\n", encoding="utf-8")
+
+    with pytest.raises(TaskSpecError):
+        _assert_ready_and_current_specs(
+            _synthetic_executable_tracker(TaskStatus.READY), tmp_path
+        )
