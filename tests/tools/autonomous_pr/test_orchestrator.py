@@ -187,9 +187,10 @@ def env(tmp_path: Path) -> Env:
     _run_git(["init", "-q", "-b", "main", str(seed)], cwd=tmp_path)
     _configure_user(seed)
     (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    (seed / ".gitignore").write_text("*.patch\n", encoding="utf-8")
     (seed / "docs").mkdir()
     (seed / "docs" / "TASK.md").write_text(_task_md_text(_TASK_ID), encoding="utf-8")
-    _run_git(["add", "README.md", "docs/TASK.md"], cwd=seed)
+    _run_git(["add", ".gitignore", "README.md", "docs/TASK.md"], cwd=seed)
     _run_git(["commit", "-q", "-m", "seed"], cwd=seed)
     _run_git(["remote", "add", "origin", str(origin)], cwd=seed)
     _run_git(["push", "-q", "origin", "main"], cwd=seed)
@@ -414,6 +415,7 @@ def test_public_run_executes_real_v2_pipeline_to_ready_stop(tmp_path: Path) -> N
     seed = tmp_path / "public-seed"
     _run_git(["init", "-q", "-b", "main", str(seed)], cwd=tmp_path)
     _configure_user(seed)
+    (seed / ".gitignore").write_text("*.patch\n", encoding="utf-8")
     (seed / "docs" / "tasks").mkdir(parents=True)
     (seed / "docs" / "TASK.md").write_text(
         _v2_task_md_text(_TASK_ID), encoding="utf-8"
@@ -424,7 +426,7 @@ def test_public_run_executes_real_v2_pipeline_to_ready_stop(tmp_path: Path) -> N
     (seed / "docs" / "tasks" / f"{_TASK_ID}.md").write_text(
         _v2_spec_text(_TASK_ID), encoding="utf-8"
     )
-    _run_git(["add", "docs"], cwd=seed)
+    _run_git(["add", ".gitignore", "docs"], cwd=seed)
     _run_git(["commit", "-q", "-m", "seed v2 execution target"], cwd=seed)
     _run_git(["remote", "add", "origin", str(origin)], cwd=seed)
     _run_git(["push", "-q", "origin", "main"], cwd=seed)
@@ -901,6 +903,7 @@ def _execute_v2_scenario(
         [orch_module.AcceptedCheckpointCandidate], str
     ]
     | None = _default_v2_checkpoint_acceptor,
+    mutate_review_patch: bool = False,
 ) -> _V2Scenario:
     candidate_queue = list(candidates)
     verification_queue = list(verifications)
@@ -942,6 +945,12 @@ def _execute_v2_scenario(
         spec: AgentInvocationSpec, review_input_text: str
     ) -> StructuredReviewResult:
         assert spec.role is AgentRole.REVIEWER
+        artifact = (env.work / "review.patch").read_text(encoding="utf-8")
+        assert f"CURRENT_PATCH:\n{artifact}\n" in review_input_text
+        if mutate_review_patch:
+            (env.work / "review.patch").write_text(
+                "mutated by reviewer\n", encoding="utf-8"
+            )
         reviewer_prompts.append(review_input_text)
         assert review_queue, "test scenario exhausted review results"
         return review_queue.pop(0)
@@ -992,6 +1001,24 @@ def test_v2_checkpoint_first_candidate_approved(env: Env, monkeypatch: pytest.Mo
     assert result.gate_histories[0].consecutive_changes_requested == 0
     assert "PREVIOUS_REVIEWER_FINDINGS:" not in scenario.reviewer_prompts[0]
     assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:" not in scenario.reviewer_prompts[0]
+
+
+def test_v2_checkpoint_review_blocks_if_reviewer_mutates_review_patch(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["candidate-A"],
+        verifications=[_v2_verification(True)],
+        reviews=[_v2_approved()],
+        mutate_review_patch=True,
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert not result.completed
+    assert "no longer byte-identical" in (result.blocked_reason or "")
 
 
 def test_v2_multiple_checkpoints_block_without_acceptance_boundary(env: Env) -> None:
@@ -1363,7 +1390,8 @@ def test_v2_checkpoint_execution_creates_no_persisted_run_state(
     result = scenario.result
     assert isinstance(result, orch_module.V2CheckpointExecutionResult)
     assert result.completed
-    assert after == before
+    assert after == before | {Path("review.patch")}
+    assert (env.work / "review.patch").read_text(encoding="utf-8") == "A"
     assert not any(path.name == "run.json" for path in env.work.rglob("*"))
 
 
@@ -1492,6 +1520,8 @@ def _install_cp3_reviewer_sequence(
     def fake_reviewer(
         spec: AgentInvocationSpec, review_input_text: str
     ) -> StructuredReviewResult:
+        artifact = (env.work / "review.patch").read_text(encoding="utf-8")
+        assert f"CURRENT_PATCH:\n{artifact}\n" in review_input_text
         reviewer_prompts.append(review_input_text)
         assert review_queue, "test exhausted CP-3 reviewer sequence"
         return review_queue.pop(0)
@@ -1547,6 +1577,18 @@ def _commit_late_repair(
 def _advance_cp3_origin_main(env: Env, marker: str) -> str:
     (env.seed / "README.md").write_text(f"seed\n{marker}\n", encoding="utf-8")
     _run_git(["add", "README.md"], cwd=env.seed)
+    _run_git(["commit", "-q", "-m", marker], cwd=env.seed)
+    _run_git(["push", "-q", "origin", "main"], cwd=env.seed)
+    return _run_git(["rev-parse", "HEAD"], cwd=env.seed).strip()
+
+
+def _advance_cp3_origin_main_tracker(env: Env, marker: str, tracker_fact: str) -> str:
+    task_path = env.seed / "docs" / "TASK.md"
+    task_path.write_text(
+        task_path.read_text(encoding="utf-8") + f"\n{tracker_fact}\n",
+        encoding="utf-8",
+    )
+    _run_git(["add", "docs/TASK.md"], cwd=env.seed)
     _run_git(["commit", "-q", "-m", marker], cwd=env.seed)
     _run_git(["push", "-q", "origin", "main"], cwd=env.seed)
     return _run_git(["rev-parse", "HEAD"], cwd=env.seed).strip()
@@ -1623,6 +1665,9 @@ def test_v2_cumulative_repair_replays_checkpoints_full_verification_and_review(
     )
     assert result.evidence.cumulative_review.review_patch.range_description.endswith(
         "...HEAD"
+    )
+    assert (env.work / "review.patch").read_text(encoding="utf-8") == (
+        result.evidence.cumulative_review.review_patch.diff_text
     )
     assert [item.candidate.checkpoint.checkpoint_id for item in result.evidence.accepted_checkpoints] == [
         "CP-1",
@@ -2040,6 +2085,8 @@ def _install_cp4_agents(
     def fake_reviewer(
         spec: AgentInvocationSpec, prompt: str
     ) -> StructuredReviewResult:
+        artifact = (env.work / "review.patch").read_text(encoding="utf-8")
+        assert f"CURRENT_PATCH:\n{artifact}\n" in prompt
         reviewer_prompts.append(prompt)
         assert queue, "CP-4 reviewer sequence exhausted"
         return queue.pop(0)
@@ -2129,11 +2176,109 @@ def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_c
         prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
     )
     assert result.closure_candidate.candidate_head_sha in mode_c_prompt
+    assert (env.work / "review.patch").read_bytes() == (
+        result.mode_c_evidence.review_patch.diff_text.encode("utf-8")
+    )
+    assert "review.patch" not in _run_git(
+        ["show", "--format=", "--name-only", result.closure_candidate.candidate_head_sha],
+        cwd=env.work,
+    ).splitlines()
     assert "prospective Task Closure" in _run_git(
         ["log", "-1", "--format=%s"], cwd=env.work
     )
     assert not any(command[:2] == ["git", "merge"] for command in commands)
     assert not any("--auto" in command for command in commands)
+
+
+@pytest.mark.parametrize(
+    "tracker_fact",
+    [
+        "- **Next free ID:** TSK-9003",
+        "- **Next:** TSK-9010",
+    ],
+    ids=["next-free-id", "other-queue-fact"],
+)
+def test_v2_closure_material_tracker_movement_blocks_stale_closure_publication(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    tracker_fact: str,
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
+    _mock_cp3_revalidated_target(monkeypatch, target)
+    _install_cp4_agents(env, monkeypatch, [_v2_approved()])
+    sequenced_reviewer = orch_module.run_structured_reviewer
+    moved = False
+
+    def move_tracker_after_closure_review(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        nonlocal moved
+        review = sequenced_reviewer(agent_spec, prompt)
+        if "prospective Task Closure review" in prompt and not moved:
+            _advance_cp3_origin_main_tracker(
+                env, "closure-material-move", tracker_fact
+            )
+            moved = True
+        return review
+
+    monkeypatch.setattr(
+        orch_module, "run_structured_reviewer", move_tracker_after_closure_review
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert moved
+    assert not result.completed and not result.published
+    assert "prepared Task Closure is stale" in (result.blocked_reason or "")
+    assert result.terminal_phase is Phase.ORIGIN_MAIN_REVALIDATION
+    repository.fetch_origin(env.work)
+    assert repository.remote_branch_sha(env.work, "delivery") == implementation_head
+
+
+def test_v2_unrelated_origin_movement_revalidates_and_allows_mode_c(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    _mock_cp3_revalidated_target(monkeypatch, target)
+    _install_cp4_agents(env, monkeypatch, [_v2_approved(), _v2_approved()])
+    sequenced_reviewer = orch_module.run_structured_reviewer
+    moved_sha: str | None = None
+
+    def move_readme_after_closure_review(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        nonlocal moved_sha
+        review = sequenced_reviewer(agent_spec, prompt)
+        if "prospective Task Closure review" in prompt and moved_sha is None:
+            moved_sha = _advance_cp3_origin_main(env, "readme-only-before-mode-c")
+        return review
+
+    monkeypatch.setattr(
+        orch_module, "run_structured_reviewer", move_readme_after_closure_review
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed and result.published
+    assert moved_sha is not None
+    assert result.mode_c_evidence is not None
+    assert result.mode_c_evidence.base_sha == moved_sha
 
 
 def test_v2_mode_c_closure_only_repair_replaces_local_candidate_without_rewrite(
@@ -2509,3 +2654,45 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     assert moved_sha is not None
     assert result.mode_c_evidence is not None
     assert result.mode_c_evidence.base_sha == moved_sha
+
+
+def test_v2_post_publication_tracker_movement_blocks_ready_for_human_merge(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    _mock_cp3_revalidated_target(monkeypatch, target)
+    _install_cp4_agents(env, monkeypatch, [_v2_approved(), _v2_approved()])
+    real_checks = repository.pr_required_checks
+    checks_count = 0
+
+    def move_tracker_after_publication_ci(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        nonlocal checks_count
+        checks_count += 1
+        result = real_checks(repo, pr_number, gh_command=gh_command)
+        if checks_count == 1:
+            _advance_cp3_origin_main_tracker(
+                env,
+                "post-publication-tracker-move",
+                "- **Next free ID:** TSK-9003",
+            )
+        return result
+
+    monkeypatch.setattr(
+        repository, "pr_required_checks", move_tracker_after_publication_ci
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert not result.completed and result.published
+    assert checks_count == 1
+    assert "prepared Task Closure is stale" in (result.blocked_reason or "")
+    assert result.terminal_phase is Phase.ORIGIN_MAIN_REVALIDATION

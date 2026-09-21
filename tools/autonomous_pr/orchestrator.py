@@ -67,6 +67,11 @@ _POST_CLOSURE_MAX_ROUNDS = 2
 _CLOSURE_REQUIRED_FILES = frozenset({"docs/TASK.md", "docs/DEVELOPMENT_LOG.md"})
 _CLOSURE_OPTIONAL_FILES = frozenset({"docs/ROADMAP.md", "docs/DEFERRED.md"})
 _CLOSURE_ALLOWED_FILES = _CLOSURE_REQUIRED_FILES | _CLOSURE_OPTIONAL_FILES
+_CLOSURE_BASELINE_FILES = (
+    "docs/TASK.md",
+    "docs/ROADMAP.md",
+    "docs/DEFERRED.md",
+)
 
 
 class _Blocked(Exception):
@@ -319,6 +324,34 @@ class _ImplementationRepairRequired(Exception):
     def __init__(self, packet: RepairPacket) -> None:
         super().__init__("implementation-affecting repair required")
         self.packet = packet
+
+
+@dataclass(frozen=True)
+class _V2ClosureMaterialBaseline:
+    """Exact authoritative texts a prospective closure was prepared against."""
+
+    base_sha: str
+    texts: tuple[tuple[str, str | None], ...]
+    material_paths: frozenset[str]
+
+
+def _run_v2_designated_review(
+    config: OrchestratorConfig,
+    review_input: str,
+    patch: repository.ReviewPatch,
+    *,
+    context: str,
+) -> StructuredReviewResult:
+    """Materialize and protect the exact patch supplied to one reviewer."""
+
+    repository.materialize_review_patch(config.repo, patch)
+    fingerprint = repository.capture_fingerprint(config.repo)
+    review = run_structured_reviewer(config.reviewer_spec, review_input)
+    repository.verify_fingerprint_unchanged(
+        config.repo, fingerprint, context=context
+    )
+    repository.verify_materialized_review_patch(config.repo, patch)
+    return review
 
 
 def run(config: OrchestratorConfig) -> RunResult:
@@ -837,11 +870,12 @@ def execute_v2_checkpoints(
                 repair_delta,
                 history.consecutive_changes_requested >= 1,
             )
-            fingerprint = repository.capture_fingerprint(config.repo)
-            review = run_structured_reviewer(config.reviewer_spec, review_input)
             try:
-                repository.verify_fingerprint_unchanged(
-                    config.repo, fingerprint, context="v2 checkpoint review"
+                review = _run_v2_designated_review(
+                    config,
+                    review_input,
+                    patch,
+                    context="v2 checkpoint review",
                 )
             except RepositoryError as exc:
                 return blocked(str(exc))
@@ -1025,6 +1059,63 @@ def _revalidate_v2_execution_target(
             "(authoritative task entry or fixed spec)"
         )
     return revalidated, True
+
+
+def _capture_v2_closure_material_baseline(
+    repo: Path, base_sha: str
+) -> _V2ClosureMaterialBaseline:
+    """Capture closure-sensitive authoritative texts before closure preparation."""
+
+    texts: list[tuple[str, str | None]] = []
+    for path in _CLOSURE_BASELINE_FILES:
+        if path == "docs/TASK.md" or repository.file_exists_at_ref(
+            repo, base_sha, path
+        ):
+            text: str | None = repository.read_file_at_ref(repo, base_sha, path)
+        else:
+            text = None
+        texts.append((path, text))
+    return _V2ClosureMaterialBaseline(
+        base_sha=base_sha,
+        texts=tuple(texts),
+        material_paths=frozenset({"docs/TASK.md"}),
+    )
+
+
+def _select_v2_closure_material_paths(
+    baseline: _V2ClosureMaterialBaseline, touched: tuple[str, ...]
+) -> _V2ClosureMaterialBaseline:
+    normalized = {path.replace("\\", "/") for path in touched}
+    material_paths = {"docs/TASK.md"}
+    material_paths.update(normalized & _CLOSURE_OPTIONAL_FILES)
+    return _V2ClosureMaterialBaseline(
+        base_sha=baseline.base_sha,
+        texts=baseline.texts,
+        material_paths=frozenset(material_paths),
+    )
+
+
+def _require_v2_closure_material_unchanged(
+    repo: Path,
+    baseline: _V2ClosureMaterialBaseline,
+    revalidated_base_sha: str,
+) -> None:
+    """Reject a prepared closure whose authoritative inputs became stale."""
+
+    expected_by_path = dict(baseline.texts)
+    for path in sorted(baseline.material_paths):
+        exists = repository.file_exists_at_ref(repo, revalidated_base_sha, path)
+        current = (
+            repository.read_file_at_ref(repo, revalidated_base_sha, path)
+            if exists
+            else None
+        )
+        if current != expected_by_path[path]:
+            raise _Blocked(
+                "origin/main moved and changed closure-material authoritative "
+                f"content in {path}; the prepared Task Closure is stale and "
+                "must be reconciled and rebuilt before Mode C or publication"
+            )
 
 
 def _run_v2_full_verification(
@@ -1241,10 +1332,11 @@ def _execute_v2_late_repair(
         review_input = _build_v2_late_repair_review_input(
             spec, gate_id, patch, verification, history
         )
-        fingerprint = repository.capture_fingerprint(config.repo)
-        review = run_structured_reviewer(config.reviewer_spec, review_input)
-        repository.verify_fingerprint_unchanged(
-            config.repo, fingerprint, context=f"{gate_id} review"
+        review = _run_v2_designated_review(
+            config,
+            review_input,
+            patch,
+            context=f"{gate_id} review",
         )
         next_iteration = history.review_iteration + 1
         if review.verdict_is_explicit:
@@ -1365,10 +1457,11 @@ def _review_v2_replayed_checkpoint(
         ),
         history.consecutive_changes_requested >= 1,
     )
-    fingerprint = repository.capture_fingerprint(config.repo)
-    review = run_structured_reviewer(config.reviewer_spec, review_input)
-    repository.verify_fingerprint_unchanged(
-        config.repo, fingerprint, context=f"replayed {checkpoint.checkpoint_id} review"
+    review = _run_v2_designated_review(
+        config,
+        review_input,
+        patch,
+        context=f"replayed {checkpoint.checkpoint_id} review",
     )
     next_iteration = history.review_iteration + 1
     if review.verdict_is_explicit:
@@ -1659,10 +1752,11 @@ def execute_v2_pre_closure_review(
             review_input = _build_v2_cumulative_review_input(
                 spec, patch, full, cumulative_history
             )
-            fingerprint = repository.capture_fingerprint(config.repo)
-            review = run_structured_reviewer(config.reviewer_spec, review_input)
-            repository.verify_fingerprint_unchanged(
-                config.repo, fingerprint, context="pre-closure cumulative review"
+            review = _run_v2_designated_review(
+                config,
+                review_input,
+                patch,
+                context="pre-closure cumulative review",
             )
             terminal_phase = Phase.ORIGIN_MAIN_REVALIDATION
             post_review_target, base_moved = _revalidate_v2_execution_target(
@@ -1852,7 +1946,11 @@ def _prepare_v2_unpublished_closure(
     expected_published_head: str,
     initial_packet: RepairPacket | None = None,
     strict_closure_only_repair: bool = False,
-) -> tuple[repository.UnpublishedCommitCandidate, GateHistory]:
+) -> tuple[
+    repository.UnpublishedCommitCandidate,
+    GateHistory,
+    tuple[str, ...],
+]:
     """Adaptively review Task Closure, then create one local-only commit."""
 
     upstream_packet = initial_packet
@@ -1892,10 +1990,11 @@ def _prepare_v2_unpublished_closure(
         review_input = _build_v2_closure_review_input(
             execution_target, patch.diff_text, history
         )
-        fingerprint = repository.capture_fingerprint(config.repo)
-        review = run_structured_reviewer(config.reviewer_spec, review_input)
-        repository.verify_fingerprint_unchanged(
-            config.repo, fingerprint, context="v2 Task Closure review"
+        review = _run_v2_designated_review(
+            config,
+            review_input,
+            patch,
+            context="v2 Task Closure review",
         )
         next_iteration = history.review_iteration + 1
         if review.verdict_is_explicit:
@@ -1925,7 +2024,7 @@ def _prepare_v2_unpublished_closure(
                 expected_branch=config.delivery_branch,
                 expected_published_head=expected_published_head,
             )
-            return candidate, history
+            return candidate, history, touched
         if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
             if not _v2_repair_is_proven_closure_only(packet):
                 repository.discard_reviewed_uncommitted_candidate(
@@ -2031,10 +2130,11 @@ def _review_v2_mode_c_candidate(
     review_input = _build_v2_mode_c_review_input(
         execution_target, candidate, patch, history
     )
-    fingerprint = repository.capture_fingerprint(config.repo)
-    review = run_structured_reviewer(config.reviewer_spec, review_input)
-    repository.verify_fingerprint_unchanged(
-        config.repo, fingerprint, context="v2 Mode C final cumulative audit"
+    review = _run_v2_designated_review(
+        config,
+        review_input,
+        patch,
+        context="v2 Mode C final cumulative audit",
     )
     return review, patch
 
@@ -2072,6 +2172,7 @@ def _stabilize_v2_published_candidate(
     candidate: repository.UnpublishedCommitCandidate,
     pr_number: str,
     initial_base_sha: str,
+    closure_baseline: _V2ClosureMaterialBaseline,
     set_phase: Callable[[Phase], None],
 ) -> V2ModeCAuditEvidence | None:
     """Keep Mode C fresh through CI without changing the published candidate."""
@@ -2088,6 +2189,9 @@ def _stabilize_v2_published_candidate(
         if not moved:
             return replacement_audit
         base_sha = revalidated.base_sha
+        _require_v2_closure_material_unchanged(
+            config.repo, closure_baseline, base_sha
+        )
         history = GateHistory(
             context=GateContext(
                 gate_id="post-publication-mode-c-replay",
@@ -2111,6 +2215,9 @@ def _stabilize_v2_published_candidate(
             )
             if moved_after_review:
                 base_sha = post_review_target.base_sha
+                _require_v2_closure_material_unchanged(
+                    config.repo, closure_baseline, base_sha
+                )
                 history = GateHistory(
                     context=GateContext(
                         gate_id="post-publication-mode-c-replay",
@@ -2154,6 +2261,7 @@ def execute_v2_unpublished_closure(
     current_checkpoint_result = checkpoint_result
     candidate: repository.UnpublishedCommitCandidate | None = None
     accepted_audit: V2ModeCAuditEvidence | None = None
+    closure_baseline: _V2ClosureMaterialBaseline | None = None
     pr_url: str | None = None
     published = False
     terminal_phase = Phase.CLOSURE_REVIEW
@@ -2206,9 +2314,12 @@ def execute_v2_unpublished_closure(
         mode_history: GateHistory | None = None
         mode_history_context: tuple[str, str] | None = None
         while True:
+            captured_baseline = _capture_v2_closure_material_baseline(
+                config.repo, current_pre_closure.evidence.base_identity
+            )
             try:
                 terminal_phase = Phase.CLOSURE_REVIEW
-                candidate, _ = _prepare_v2_unpublished_closure(
+                candidate, _, closure_touched = _prepare_v2_unpublished_closure(
                     config,
                     execution_target,
                     current_pre_closure,
@@ -2216,6 +2327,9 @@ def execute_v2_unpublished_closure(
                     expected_published_head=implementation_head,
                     initial_packet=pending_closure_packet,
                     strict_closure_only_repair=strict_closure_only,
+                )
+                closure_baseline = _select_v2_closure_material_paths(
+                    captured_baseline, closure_touched
                 )
             except _ImplementationRepairRequired as transition:
                 terminal_phase = Phase.CHECKPOINT_REVIEW
@@ -2256,6 +2370,13 @@ def execute_v2_unpublished_closure(
                     current_pre_closure.evidence.base_identity,
                 )
                 if moved:
+                    if closure_baseline is None:
+                        raise _Blocked(
+                            "prepared Task Closure has no authoritative baseline"
+                        )
+                    _require_v2_closure_material_unchanged(
+                        config.repo, closure_baseline, current_target.base_sha
+                    )
                     current_pre_closure.evidence.base_identity = current_target.base_sha
                 base_sha = current_target.base_sha
                 context_key = (base_sha, implementation_head)
@@ -2288,6 +2409,13 @@ def execute_v2_unpublished_closure(
                     config, execution_target, base_sha
                 )
                 if moved_after_review:
+                    if closure_baseline is None:
+                        raise _Blocked(
+                            "prepared Task Closure has no authoritative baseline"
+                        )
+                    _require_v2_closure_material_unchanged(
+                        config.repo, closure_baseline, post_target.base_sha
+                    )
                     current_pre_closure.evidence.base_identity = post_target.base_sha
                     mode_history = GateHistory(
                         context=GateContext(
@@ -2334,12 +2462,17 @@ def execute_v2_unpublished_closure(
                         expected_origin_main_sha=base_sha,
                     )
                     published = True
+                    if closure_baseline is None:
+                        raise _Blocked(
+                            "published Task Closure has no authoritative baseline"
+                        )
                     replacement_audit = _stabilize_v2_published_candidate(
                         config,
                         execution_target,
                         candidate,
                         pr_number,
                         base_sha,
+                        closure_baseline,
                         set_phase,
                     )
                     if replacement_audit is not None:

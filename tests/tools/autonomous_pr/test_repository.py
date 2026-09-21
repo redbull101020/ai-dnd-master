@@ -508,6 +508,29 @@ def test_review_patch_never_committed(git_env: GitEnv) -> None:
         )
 
 
+def test_materialized_review_patch_is_exact_and_mutation_is_rejected(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    patch = ReviewPatch(
+        purpose=ReviewPurpose.CHECKPOINT,
+        range_description="HEAD (uncommitted)",
+        base_sha=None,
+        head_sha=repo_module.head_sha(work),
+        branch=repo_module.current_branch(work),
+        diff_text="diff --git a/example b/example\n+Unicode: тест\n",
+        digest="test-digest",
+    )
+
+    repo_module.materialize_review_patch(work, patch)
+
+    assert (work / "review.patch").read_bytes() == patch.diff_text.encode("utf-8")
+    repo_module.verify_materialized_review_patch(work, patch)
+    (work / "review.patch").write_bytes(b"mutated\n")
+    with pytest.raises(RepositoryError, match="no longer byte-identical"):
+        repo_module.verify_materialized_review_patch(work, patch)
+
+
 def test_commit_rejects_pre_staged_review_patch_even_when_not_in_paths(
     git_env: GitEnv,
 ) -> None:

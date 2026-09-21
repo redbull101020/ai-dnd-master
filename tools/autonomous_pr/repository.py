@@ -528,6 +528,44 @@ def _build_review_patch(
     )
 
 
+def materialize_review_patch(repo: Path, patch: ReviewPatch) -> None:
+    """Write the exact designated-review input to repository-root review.patch.
+
+    The artifact is deliberately outside Git composition (the path is
+    gitignored and commit helpers reject it explicitly), but it is still a
+    mandatory audit artifact.  Writing bytes instead of text keeps the file
+    byte-identical to the UTF-8 bytes supplied to the reviewer.
+    """
+
+    try:
+        (repo / "review.patch").write_bytes(patch.diff_text.encode("utf-8"))
+    except OSError as exc:
+        raise RepositoryError(
+            "could not materialize repository-root review.patch for "
+            "designated review"
+        ) from exc
+
+
+def verify_materialized_review_patch(repo: Path, patch: ReviewPatch) -> None:
+    """Fail closed if review.patch changed during designated review."""
+
+    path = repo / "review.patch"
+    expected = patch.diff_text.encode("utf-8")
+    try:
+        actual = path.read_bytes()
+    except OSError as exc:
+        raise RepositoryError(
+            "repository-root review.patch disappeared or became unreadable "
+            "during designated review"
+        ) from exc
+    if actual != expected:
+        raise RepositoryError(
+            "repository-root review.patch changed during designated review; "
+            "the reviewed artifact is no longer byte-identical to the patch "
+            "given to the reviewer"
+        )
+
+
 def build_checkpoint_patch_uncommitted(repo: Path) -> ReviewPatch:
     """Mode A (``AGENTS.md``): a fresh, uncommitted checkpoint — ``git diff HEAD``."""
 
