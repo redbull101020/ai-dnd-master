@@ -1,4 +1,9 @@
-"""Deterministic AUTONOMOUS_PR orchestrator (TSK-0026).
+"""Deterministic AUTONOMOUS_PR orchestration primitives.
+
+The public :func:`run` remains the operational v1 lifecycle until TSK-0028's
+atomic CP-5 activation. :func:`execute_v2_checkpoints` is the isolated CP-2
+spec-driven/adaptive primitive and is deliberately not wired into that public
+path yet.
 
 Drives one already-authorized ``AUTONOMOUS_PR`` invocation through the full
 ``docs/AUTONOMOUS_PR_HARNESS.md`` §9 / ``AGENTS.md`` "Autonomous flow"
@@ -250,22 +255,39 @@ Ownership boundaries this module enforces, not merely documents:
 
 from __future__ import annotations
 
+import difflib
+import hashlib
+import json
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 from . import repository, task_context
-from .agents import AgentInvocationSpec, run_implementer, run_reviewer
+from .agents import (
+    AgentInvocationSpec,
+    run_implementer,
+    run_reviewer,
+    run_structured_reviewer,
+)
 from .model import (
     AgentRole,
+    CandidateIdentity,
+    CandidateRejectionBasis,
+    ExecutionCheckpoint,
+    GateAttempt,
+    GateContext,
+    GateHistory,
     Phase,
+    RepairPacket,
     ReviewResult,
     ReviewVerdict,
     RunOutcome,
     RunResult,
     TaskContext,
+    TaskExecutionSpec,
     VerificationCommandResult,
     VerificationEvidence,
 )
@@ -463,6 +485,34 @@ class _RunState:
     # accepted implementation diff docs/AUTONOMOUS_PR_HARNESS.md §6
     # requires prospective Task Closure's handoff to include.
     accepted_implementation_patch: repository.ReviewPatch | None = None
+
+
+@dataclass(frozen=True)
+class AcceptedCheckpointCandidate:
+    """One v2 checkpoint candidate ready for outer commit/push orchestration."""
+
+    checkpoint: ExecutionCheckpoint
+    gate_context: GateContext
+    candidate_identity: CandidateIdentity
+    review_patch: repository.ReviewPatch
+    verification: VerificationEvidence
+    review_iteration: int
+
+
+@dataclass(frozen=True)
+class V2CheckpointExecutionResult:
+    """Result of the CP-only v2 primitive, before full-run integration.
+
+    ``completed`` means every checkpoint declared by the fixed spec reached
+    ``APPROVED`` in order. It deliberately does not mean the complete
+    AUTONOMOUS_PR run reached ``STOP``: commit/push, cumulative review, Task
+    Closure, Mode C, and CI remain later orchestration phases.
+    """
+
+    completed: bool
+    accepted_candidates: tuple[AcceptedCheckpointCandidate, ...]
+    gate_histories: tuple[GateHistory, ...]
+    blocked_reason: str | None = None
 
 
 def run(config: OrchestratorConfig) -> RunResult:
@@ -889,6 +939,430 @@ def _revalidate_closure_relevant_state(
 # --------------------------------------------------------------------------
 
 
+def _candidate_identity(candidate_state: str) -> CandidateIdentity:
+    """Fingerprint only review-relevant candidate content (Harness §28)."""
+
+    return CandidateIdentity(
+        digest=hashlib.sha256(candidate_state.encode("utf-8")).hexdigest()
+    )
+
+
+def _repair_packet_json(packet: RepairPacket | None) -> str:
+    if packet is None:
+        return "(none)"
+    return json.dumps(asdict(packet), ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _repair_findings_json(packet: RepairPacket) -> str:
+    return json.dumps(
+        [asdict(finding) for finding in packet.findings],
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+    )
+
+
+def _repair_delta(previous: str, current: str) -> str:
+    return "\n".join(
+        difflib.unified_diff(
+            previous.splitlines(),
+            current.splitlines(),
+            fromfile="previous-reviewed-candidate",
+            tofile="current-candidate",
+            lineterm="",
+        )
+    )
+
+
+def _build_v2_implementer_prompt(
+    spec: TaskExecutionSpec,
+    checkpoint: ExecutionCheckpoint,
+    repair_packet: RepairPacket | None,
+    verification_failure: str | None,
+    repository_context_text: str,
+) -> str:
+    repair_text = _repair_packet_json(repair_packet)
+    verification_text = verification_failure or "(none)"
+    return (
+        f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
+        "CURRENT_CHECKPOINT:\n"
+        f"id: {checkpoint.checkpoint_id}\n"
+        f"name: {checkpoint.name}\n"
+        f"objective: {checkpoint.objective}\n"
+        f"required_result: {checkpoint.required_result}\n"
+        f"constraints: {checkpoint.constraints}\n"
+        "ROLE: Implement only this declared checkpoint in the current working "
+        "tree. Do not add, drop, reorder, or merge checkpoints. Do not edit "
+        f"the fixed task spec at {spec.path}. Do not commit, push, or perform "
+        "Git/GitHub writes.\n"
+        f"CURRENT_REPAIR_PACKET:\n{repair_text}\n"
+        f"CURRENT_VERIFICATION_FAILURE:\n{verification_text}\n"
+        f"REPOSITORY_CONTEXT:\n{repository_context_text}"
+    )
+
+
+def _build_v2_reviewer_input(
+    spec: TaskExecutionSpec,
+    checkpoint: ExecutionCheckpoint,
+    patch_text: str,
+    verification: VerificationEvidence,
+    review_iteration: int,
+    previous_packet: RepairPacket | None,
+    repair_delta: str | None,
+    require_non_convergence: bool,
+) -> str:
+    non_convergence_requirement = (
+        "true — this review can produce the second or later consecutive "
+        "CHANGES_REQUESTED at this gate"
+        if require_non_convergence
+        else "false — this is the first possible consecutive "
+        "CHANGES_REQUESTED at this gate"
+    )
+    text = (
+        f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
+        "CURRENT_GATE:\n"
+        f"checkpoint_id: {checkpoint.checkpoint_id}\n"
+        f"name: {checkpoint.name}\n"
+        f"review_focus: {checkpoint.review_focus}\n"
+        f"REVIEW_ITERATION: {review_iteration}\n"
+        "ROLE: Review this checkpoint in a fresh, independent context. Return "
+        "exactly APPROVED, CHANGES_REQUESTED, or BLOCKED on the first non-empty "
+        "line. CHANGES_REQUESTED must be followed by one machine-readable JSON "
+        "repair object with a non-empty findings array. Every finding must "
+        "contain these non-empty string fields: problem, evidence, "
+        "required_outcome, recommended_repair, verification_focus. "
+        "affected_paths is optional metadata and never replaces a required "
+        "field.\n"
+        "MACHINE_READABLE_OUTPUT_CONTRACT:\n"
+        "finding_required_fields: problem, evidence, required_outcome, "
+        "recommended_repair, verification_focus\n"
+        f"non_convergence_required: {non_convergence_requirement}\n"
+        "non_convergence_required_fields: previous_requirement, actual_change, "
+        "why_unsatisfied, misunderstanding, remaining_required_outcome, "
+        "recommended_corrective_approach\n"
+        "When non_convergence_required is true, CHANGES_REQUESTED must include "
+        "a complete non_convergence object with every field listed above.\n"
+        f"CURRENT_PATCH:\n{patch_text}\n"
+        f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
+    )
+    if previous_packet is not None:
+        text += (
+            "PREVIOUS_REVIEWER_FINDINGS:\n"
+            f"{_repair_findings_json(previous_packet)}\n"
+        )
+    if repair_delta is not None:
+        text += f"REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n{repair_delta}\n"
+    return text
+
+
+def _require_v2_checkpoint_scope(
+    touched: tuple[str, ...], spec: TaskExecutionSpec
+) -> None:
+    _require_no_task_md_in_ordinary_checkpoint(touched)
+    normalized = {path.replace("\\", "/") for path in touched}
+    if spec.path.replace("\\", "/") in normalized:
+        raise _Blocked(
+            f"checkpoint candidate edits its fixed Task Execution Spec {spec.path}; "
+            "spec mutation during an invocation is a terminal scope violation"
+        )
+
+
+def _format_v2_repository_context(
+    branch_head: repository.BranchHead,
+    accepted_base_context_identity: str,
+) -> str:
+    """Current repository facts for one v2 implementer invocation.
+
+    ``branch_head`` is captured immediately before the invocation and reused
+    by the post-invocation mutation guard. This keeps the explicit handoff and
+    the enforced repository boundary tied to the same actual state, including
+    repairs and the first checkpoint after an accepted commit/push transition.
+    """
+
+    return (
+        f"delivery_branch: {branch_head.branch}\n"
+        f"accepted_base_context_identity: {accepted_base_context_identity}\n"
+        f"head_sha: {branch_head.head_sha}\n"
+    )
+
+
+def execute_v2_checkpoints(
+    config: OrchestratorConfig,
+    spec: TaskExecutionSpec,
+    *,
+    accepted_base_context_identity: str,
+    checkpoint_acceptor: Callable[[AcceptedCheckpointCandidate], str] | None,
+) -> V2CheckpointExecutionResult:
+    """Execute the fixed spec's checkpoint gates in declared order.
+
+    This is the CP-2 primitive, intentionally separate from legacy :func:`run`.
+    It has no numeric repair budget and never reads ``config.max_repairs``.
+    Accepted candidates are returned with their exact reviewed patches. The
+    caller must supply the orchestrator-owned ``checkpoint_acceptor`` boundary,
+    which commits and pushes immediately after approval and returns the new
+    accepted-base identity. Missing or unsuccessful acceptance is terminal;
+    the helper can never enter the next checkpoint while the approved one is
+    still only an uncommitted candidate. Gate history is never persisted.
+    """
+
+    accepted: list[AcceptedCheckpointCandidate] = []
+    histories: list[GateHistory] = []
+
+    def blocked(reason: str) -> V2CheckpointExecutionResult:
+        return V2CheckpointExecutionResult(
+            completed=False,
+            accepted_candidates=tuple(accepted),
+            gate_histories=tuple(histories),
+            blocked_reason=reason,
+        )
+
+    if spec.task_id != config.task_id:
+        return blocked(
+            f"fixed spec task {spec.task_id} does not match invocation task "
+            f"{config.task_id}"
+        )
+    if not accepted_base_context_identity.strip():
+        return blocked("accepted base context identity must be non-empty")
+    if checkpoint_acceptor is None:
+        return blocked(
+            "v2 checkpoint execution requires an orchestrator-owned "
+            "checkpoint acceptor; APPROVED checkpoints must be committed and "
+            "pushed before execution can continue"
+        )
+
+    expected_numbers = tuple(range(1, len(spec.checkpoints) + 1))
+    if tuple(checkpoint.number for checkpoint in spec.checkpoints) != expected_numbers:
+        return blocked("fixed spec checkpoints are not CP-1..CP-N in strict order")
+
+    base_context_identity = accepted_base_context_identity
+    for checkpoint in spec.checkpoints:
+        context = GateContext(
+            gate_id=checkpoint.checkpoint_id,
+            spec_identity=spec.digest,
+            accepted_base_context_identity=base_context_identity,
+        )
+        history = GateHistory(context=context)
+        histories.append(history)
+        verification_failure: str | None = None
+
+        while True:
+            before = repository.capture_branch_head(config.repo)
+            repository_context_text = _format_v2_repository_context(
+                before, context.accepted_base_context_identity
+            )
+            prompt = _build_v2_implementer_prompt(
+                spec,
+                checkpoint,
+                history.latest_valid_repair_packet,
+                verification_failure,
+                repository_context_text,
+            )
+            impl_result = run_implementer(config.implementer_spec, prompt)
+            try:
+                repository.verify_branch_head_unchanged(
+                    config.repo, before, context="v2 checkpoint implementer invocation"
+                )
+            except RepositoryError as exc:
+                return blocked(str(exc))
+            if impl_result.timed_out or impl_result.returncode != 0:
+                return blocked(
+                    "implementer failed during v2 checkpoint "
+                    f"{checkpoint.checkpoint_id}: "
+                    f"returncode={impl_result.returncode!r} "
+                    f"timed_out={impl_result.timed_out!r}"
+                )
+
+            try:
+                patch = repository.build_checkpoint_patch_uncommitted(config.repo)
+                touched = repository.changed_paths(config.repo)
+                _require_v2_checkpoint_scope(touched, spec)
+            except (RepositoryError, _Blocked) as exc:
+                return blocked(str(exc))
+
+            identity = _candidate_identity(patch.diff_text)
+            repair_delta = (
+                _repair_delta(
+                    history.previous_reviewed_candidate_state, patch.diff_text
+                )
+                if history.previous_reviewed_candidate_state is not None
+                else None
+            )
+            delta_digest = (
+                hashlib.sha256(repair_delta.encode("utf-8")).hexdigest()
+                if repair_delta is not None
+                else None
+            )
+
+            if identity in history.rejected_candidate_identities:
+                history.attempts.append(
+                    GateAttempt(
+                        candidate_identity=identity,
+                        candidate_state=patch.diff_text,
+                        verification=None,
+                        rejected=True,
+                        rejection_basis=CandidateRejectionBasis.REPEATED_IDENTITY,
+                        review_iteration=None,
+                        reviewer_verdict=None,
+                        repair_delta_digest=delta_digest,
+                    )
+                )
+                return blocked(
+                    f"candidate {identity.digest} repeats a previously rejected "
+                    f"identity in gate {checkpoint.checkpoint_id} for the same "
+                    "fixed spec and accepted base context"
+                )
+
+            try:
+                verification = _run_verification_commands(
+                    config,
+                    checkpoint.verification,
+                )
+            except RepositoryError as exc:
+                return blocked(str(exc))
+            if not verification.passed:
+                history.rejected_candidate_identities.add(identity)
+                history.attempts.append(
+                    GateAttempt(
+                        candidate_identity=identity,
+                        candidate_state=patch.diff_text,
+                        verification=verification,
+                        rejected=True,
+                        rejection_basis=CandidateRejectionBasis.VERIFICATION_FAILURE,
+                        review_iteration=None,
+                        reviewer_verdict=None,
+                        repair_delta_digest=delta_digest,
+                    )
+                )
+                verification_failure = _format_verification(verification)
+                continue
+
+            verification_failure = None
+            next_review_iteration = history.review_iteration + 1
+            review_input = _build_v2_reviewer_input(
+                spec,
+                checkpoint,
+                patch.diff_text,
+                verification,
+                next_review_iteration,
+                history.latest_valid_repair_packet,
+                repair_delta,
+                history.consecutive_changes_requested >= 1,
+            )
+            fingerprint = repository.capture_fingerprint(config.repo)
+            review = run_structured_reviewer(config.reviewer_spec, review_input)
+            try:
+                repository.verify_fingerprint_unchanged(
+                    config.repo, fingerprint, context="v2 checkpoint review"
+                )
+            except RepositoryError as exc:
+                return blocked(str(exc))
+
+            if review.verdict_is_explicit:
+                history.review_iteration = next_review_iteration
+
+            packet = review.repair_packet
+            findings = packet.findings if packet is not None else ()
+            if review.verdict is ReviewVerdict.APPROVED:
+                history.attempts.append(
+                    GateAttempt(
+                        candidate_identity=identity,
+                        candidate_state=patch.diff_text,
+                        verification=verification,
+                        rejected=False,
+                        rejection_basis=None,
+                        review_iteration=next_review_iteration,
+                        reviewer_verdict=ReviewVerdict.APPROVED,
+                        repair_delta_digest=delta_digest,
+                    )
+                )
+                history.previous_reviewed_candidate_identity = identity
+                history.previous_reviewed_candidate_state = patch.diff_text
+                history.consecutive_changes_requested = 0
+                accepted_candidate = AcceptedCheckpointCandidate(
+                    checkpoint=checkpoint,
+                    gate_context=context,
+                    candidate_identity=identity,
+                    review_patch=patch,
+                    verification=verification,
+                    review_iteration=next_review_iteration,
+                )
+                try:
+                    next_base = checkpoint_acceptor(accepted_candidate)
+                except RepositoryError as exc:
+                    return blocked(str(exc))
+                if not next_base.strip():
+                    return blocked(
+                        "checkpoint acceptor returned an empty accepted-base "
+                        "context identity after the required commit/push transition"
+                    )
+                if next_base == context.accepted_base_context_identity:
+                    return blocked(
+                        "checkpoint acceptor did not advance the accepted-base "
+                        "context identity after the required commit/push transition"
+                    )
+                accepted.append(accepted_candidate)
+                base_context_identity = next_base
+                break
+
+            if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+                history.consecutive_changes_requested += 1
+                history.rejected_candidate_identities.add(identity)
+                history.attempts.append(
+                    GateAttempt(
+                        candidate_identity=identity,
+                        candidate_state=patch.diff_text,
+                        verification=verification,
+                        rejected=True,
+                        rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
+                        review_iteration=next_review_iteration,
+                        reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
+                        findings=findings,
+                        repair_packet=packet,
+                        repair_delta_digest=delta_digest,
+                    )
+                )
+                history.previous_reviewed_candidate_identity = identity
+                history.previous_reviewed_candidate_state = patch.diff_text
+                if (
+                    history.consecutive_changes_requested >= 2
+                    and packet.non_convergence is None
+                ):
+                    return blocked(
+                        "second or later consecutive CHANGES_REQUESTED at gate "
+                        f"{checkpoint.checkpoint_id} is missing a complete "
+                        "non_convergence diagnosis"
+                    )
+                history.latest_valid_repair_packet = packet
+                continue
+
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=verification,
+                    rejected=False,
+                    rejection_basis=None,
+                    review_iteration=(
+                        next_review_iteration if review.verdict_is_explicit else None
+                    ),
+                    reviewer_verdict=(
+                        ReviewVerdict.BLOCKED if review.verdict_is_explicit else None
+                    ),
+                    repair_delta_digest=delta_digest,
+                )
+            )
+            return blocked(
+                review.blocked_reason
+                or f"designated reviewer returned BLOCKED for {checkpoint.checkpoint_id}"
+            )
+
+    return V2CheckpointExecutionResult(
+        completed=True,
+        accepted_candidates=tuple(accepted),
+        gate_histories=tuple(histories),
+    )
+
+
 def _checkpoint_cycle(
     config: OrchestratorConfig,
     artifacts: RunArtifacts,
@@ -1141,10 +1615,26 @@ def _run_verification(config: OrchestratorConfig) -> VerificationEvidence:
     actually describes, never an assumption.
     """
 
+    return _run_verification_commands(config, config.verification_commands)
+
+
+def _run_verification_commands(
+    config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
+) -> VerificationEvidence:
+    """Run exactly the supplied shell-free argv commands.
+
+    The v2 checkpoint primitive supplies ``ExecutionCheckpoint.verification``;
+    legacy :func:`_run_verification` delegates with its configured v1 commands.
+    """
+
+    if not commands or any(not command for command in commands):
+        raise RepositoryError(
+            "deterministic verification requires at least one non-empty argv command"
+        )
     fingerprint = repository.capture_fingerprint(config.repo)
     results: list[VerificationCommandResult] = []
     overall_passed = True
-    for command in config.verification_commands:
+    for command in commands:
         result = _run_one_verification_command(config, command)
         repository.verify_fingerprint_unchanged(
             config.repo,

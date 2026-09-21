@@ -1,7 +1,8 @@
 """Typed values for one live AUTONOMOUS_PR harness run.
 
-Deliberately minimal: only the values needed by ``task_context.py`` and
-``agents.py`` to describe one in-memory run live here. No persisted state
+Deliberately minimal: only the values needed by ``task_context.py``,
+``agents.py``, and the orchestrator's v2 checkpoint primitive to describe one
+in-memory run live here. No persisted state
 schema, no ``run.json``, no workflow-engine abstraction, no generic Gate
 hierarchy, and no provider class/registry/factory — those are explicitly
 out of scope per ``docs/AUTONOMOUS_PR_HARNESS.md`` §§2, 9, 11, 13.
@@ -13,7 +14,7 @@ Neither introduces or implies a new ``docs/TASK.md`` ``Status`` value
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -66,6 +67,14 @@ class ReviewVerdict(Enum):
     BLOCKED = "BLOCKED"
 
 
+class CandidateRejectionBasis(Enum):
+    """Why one v2 gate candidate became ineligible for another review."""
+
+    VERIFICATION_FAILURE = "verification_failure"
+    CHANGES_REQUESTED = "changes_requested"
+    REPEATED_IDENTITY = "repeated_identity"
+
+
 class AgentRole(Enum):
     """Distinct implementer/reviewer invocation roles (§5)."""
 
@@ -111,6 +120,49 @@ class ReviewResult:
 
 
 @dataclass(frozen=True)
+class RepairFinding:
+    """One complete, provider-neutral v2 repair finding (Harness §25)."""
+
+    problem: str
+    evidence: str
+    required_outcome: str
+    recommended_repair: str
+    verification_focus: str
+    affected_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class NonConvergenceDiagnosis:
+    """Mandatory diagnosis from the second consecutive v2 rejection (§26)."""
+
+    previous_requirement: str
+    actual_change: str
+    why_unsatisfied: str
+    misunderstanding: str
+    remaining_required_outcome: str
+    recommended_corrective_approach: str
+
+
+@dataclass(frozen=True)
+class RepairPacket:
+    """Machine-validated repair data returned with ``CHANGES_REQUESTED``."""
+
+    findings: tuple[RepairFinding, ...]
+    non_convergence: NonConvergenceDiagnosis | None = None
+
+
+@dataclass(frozen=True)
+class StructuredReviewResult:
+    """One v2 reviewer result after verdict and repair-packet validation."""
+
+    verdict: ReviewVerdict
+    repair_packet: RepairPacket | None
+    raw_output: str
+    blocked_reason: str | None = None
+    verdict_is_explicit: bool = False
+
+
+@dataclass(frozen=True)
 class VerificationCommandResult:
     """The outcome of one orchestrator-owned deterministic verification subprocess.
 
@@ -142,6 +194,59 @@ class VerificationEvidence:
     commands: tuple[VerificationCommandResult, ...]
     passed: bool
     head_sha: str
+
+
+@dataclass(frozen=True)
+class GateContext:
+    """The comparison scope for candidate identities at one v2 gate.
+
+    A candidate digest alone never identifies this context: the gate, fixed
+    spec, and accepted base are explicit, separate values (Harness §28).
+    """
+
+    gate_id: str
+    spec_identity: str
+    accepted_base_context_identity: str
+
+
+@dataclass(frozen=True)
+class CandidateIdentity:
+    """A deterministic fingerprint of review-relevant candidate content."""
+
+    digest: str
+
+
+@dataclass(frozen=True)
+class GateAttempt:
+    """Audit record for one candidate produced at a v2 gate (Harness §29)."""
+
+    candidate_identity: CandidateIdentity
+    candidate_state: str
+    verification: VerificationEvidence | None
+    rejected: bool
+    rejection_basis: CandidateRejectionBasis | None
+    review_iteration: int | None
+    reviewer_verdict: ReviewVerdict | None
+    findings: tuple[RepairFinding, ...] = ()
+    repair_packet: RepairPacket | None = None
+    repair_delta_digest: str | None = None
+
+
+@dataclass
+class GateHistory:
+    """Minimal mutable, in-memory-only state for one v2 review gate.
+
+    This type is never serialized and is never used as resumable run state.
+    """
+
+    context: GateContext
+    review_iteration: int = 0
+    consecutive_changes_requested: int = 0
+    rejected_candidate_identities: set[CandidateIdentity] = field(default_factory=set)
+    attempts: list[GateAttempt] = field(default_factory=list)
+    latest_valid_repair_packet: RepairPacket | None = None
+    previous_reviewed_candidate_identity: CandidateIdentity | None = None
+    previous_reviewed_candidate_state: str | None = None
 
 
 VerificationArgv = tuple[str, ...]

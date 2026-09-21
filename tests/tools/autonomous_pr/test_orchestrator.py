@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,8 +12,27 @@ import pytest
 from tools.autonomous_pr import orchestrator as orch_module
 from tools.autonomous_pr import repository
 from tools.autonomous_pr.agents import AgentInvocationResult, AgentInvocationSpec
-from tools.autonomous_pr.model import Phase, ReviewResult, RunOutcome, AgentRole
-from tools.autonomous_pr.orchestrator import OrchestratorConfig, run
+from tools.autonomous_pr.model import (
+    AgentRole,
+    CandidateRejectionBasis,
+    ExecutionCheckpoint,
+    NonConvergenceDiagnosis,
+    Phase,
+    RepairFinding,
+    RepairPacket,
+    ReviewResult,
+    ReviewVerdict,
+    RunOutcome,
+    StructuredReviewResult,
+    TaskExecutionSpec,
+    VerificationCommandResult,
+    VerificationEvidence,
+)
+from tools.autonomous_pr.orchestrator import (
+    OrchestratorConfig,
+    execute_v2_checkpoints,
+    run,
+)
 
 _TASK_ID = "TSK-9001"
 
@@ -3744,3 +3764,592 @@ def test_lifecycle_reaches_stop_when_required_check_is_skipping(env: Env) -> Non
 
     assert result.outcome is RunOutcome.STOP
     assert result.phase is Phase.READY_FOR_HUMAN_MERGE
+
+
+# --- TSK-0028 CP-2: spec-driven adaptive checkpoint primitives ---------------
+
+
+def _v2_spec(checkpoint_count: int = 1) -> TaskExecutionSpec:
+    checkpoints = tuple(
+        ExecutionCheckpoint(
+            number=number,
+            checkpoint_id=f"CP-{number}",
+            name=f"Checkpoint {number}",
+            objective=f"Objective {number}",
+            required_result=f"Required result {number}",
+            constraints=f"Constraints {number}",
+            verification=(_verify_true(),),
+            review_focus=f"Review focus {number}",
+        )
+        for number in range(1, checkpoint_count + 1)
+    )
+    return TaskExecutionSpec(
+        task_id=_TASK_ID,
+        path=f"docs/tasks/{_TASK_ID}.md",
+        title="V2 test task",
+        goal="Goal",
+        context_references="Context",
+        scope="Scope",
+        out_of_scope="Out of scope",
+        approved_implementation_approach="Approach",
+        acceptance_criteria="Acceptance",
+        checkpoints=checkpoints,
+        full_verification=(_verify_true(),),
+        known_constraints="Constraints",
+        text="# fixed spec\n",
+        digest="fixed-spec-digest",
+    )
+
+
+def _v2_verification(passed: bool) -> VerificationEvidence:
+    command = VerificationCommandResult(
+        command=_verify_true(),
+        returncode=0 if passed else 1,
+        stdout="ok" if passed else "failed",
+        stderr="",
+        passed=passed,
+    )
+    return VerificationEvidence(commands=(command,), passed=passed, head_sha="head-sha")
+
+
+def _finding(problem: str) -> RepairFinding:
+    return RepairFinding(
+        problem=problem,
+        evidence=f"evidence for {problem}",
+        required_outcome=f"required outcome for {problem}",
+        recommended_repair=f"repair for {problem}",
+        verification_focus=f"verify {problem}",
+    )
+
+
+def _diagnosis() -> NonConvergenceDiagnosis:
+    return NonConvergenceDiagnosis(
+        previous_requirement="previous requirement",
+        actual_change="actual change",
+        why_unsatisfied="why unsatisfied",
+        misunderstanding="misunderstanding",
+        remaining_required_outcome="remaining outcome",
+        recommended_corrective_approach="corrective approach",
+    )
+
+
+def _v2_approved() -> StructuredReviewResult:
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.APPROVED,
+        repair_packet=None,
+        raw_output="APPROVED\n",
+        verdict_is_explicit=True,
+    )
+
+
+def _v2_changes(problem: str, *, diagnosis: bool = False) -> StructuredReviewResult:
+    packet = RepairPacket(
+        findings=(_finding(problem),),
+        non_convergence=_diagnosis() if diagnosis else None,
+    )
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.CHANGES_REQUESTED,
+        repair_packet=packet,
+        raw_output="CHANGES_REQUESTED\n{}\n",
+        verdict_is_explicit=True,
+    )
+
+
+def _v2_blocked(reason: str) -> StructuredReviewResult:
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.BLOCKED,
+        repair_packet=None,
+        raw_output="",
+        blocked_reason=reason,
+    )
+
+
+@dataclass
+class _V2Scenario:
+    result: object
+    implementer_prompts: list[str]
+    reviewer_prompts: list[str]
+
+
+def _default_v2_checkpoint_acceptor(
+    candidate: orch_module.AcceptedCheckpointCandidate,
+) -> str:
+    return f"accepted-{candidate.checkpoint.checkpoint_id}-{candidate.candidate_identity.digest}"
+
+
+def _execute_v2_scenario(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    candidates: list[str],
+    verifications: list[VerificationEvidence],
+    reviews: list[StructuredReviewResult],
+    checkpoint_count: int = 1,
+    checkpoint_acceptor: Callable[
+        [orch_module.AcceptedCheckpointCandidate], str
+    ]
+    | None = _default_v2_checkpoint_acceptor,
+) -> _V2Scenario:
+    candidate_queue = list(candidates)
+    verification_queue = list(verifications)
+    review_queue = list(reviews)
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+
+    def fake_implementer(
+        spec: AgentInvocationSpec, prompt_text: str
+    ) -> AgentInvocationResult:
+        assert spec.role is AgentRole.IMPLEMENTER
+        implementer_prompts.append(prompt_text)
+        return AgentInvocationResult(
+            stdout="implemented", stderr="", returncode=0, timed_out=False
+        )
+
+    def fake_patch(repo_path: Path) -> repository.ReviewPatch:
+        assert repo_path == env.work
+        assert candidate_queue, "test scenario exhausted candidate states"
+        diff = candidate_queue.pop(0)
+        return repository.ReviewPatch(
+            purpose=repository.ReviewPurpose.CHECKPOINT,
+            range_description="HEAD",
+            base_sha=None,
+            head_sha=_run_git(["rev-parse", "HEAD"], cwd=env.work).strip(),
+            branch=_run_git(["branch", "--show-current"], cwd=env.work).strip(),
+            diff_text=diff,
+            digest=f"patch-{len(implementer_prompts)}",
+        )
+
+    def fake_verification(
+        config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
+    ) -> VerificationEvidence:
+        assert commands == (_verify_true(),)
+        assert verification_queue, "test scenario exhausted verification results"
+        return verification_queue.pop(0)
+
+    def fake_reviewer(
+        spec: AgentInvocationSpec, review_input_text: str
+    ) -> StructuredReviewResult:
+        assert spec.role is AgentRole.REVIEWER
+        reviewer_prompts.append(review_input_text)
+        assert review_queue, "test scenario exhausted review results"
+        return review_queue.pop(0)
+
+    monkeypatch.setattr(orch_module, "run_implementer", fake_implementer)
+    monkeypatch.setattr(
+        orch_module.repository, "build_checkpoint_patch_uncommitted", fake_patch
+    )
+    monkeypatch.setattr(orch_module.repository, "changed_paths", lambda repo: ())
+    monkeypatch.setattr(orch_module, "_run_verification_commands", fake_verification)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", fake_reviewer)
+
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, "print('unused')"),
+        reviewer_spec=_reviewer_spec(env.work, "print('unused')"),
+        # Proves the v2 helper does not treat the retained v1 numeric setting
+        # as a gate input: scenarios below exceed this value freely.
+        max_repairs=0,
+    )
+    result = execute_v2_checkpoints(
+        config,
+        _v2_spec(checkpoint_count),
+        accepted_base_context_identity="accepted-base",
+        checkpoint_acceptor=checkpoint_acceptor,
+    )
+    assert not candidate_queue
+    assert not verification_queue
+    assert not review_queue
+    return _V2Scenario(result, implementer_prompts, reviewer_prompts)
+
+
+def test_v2_checkpoint_first_candidate_approved(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["candidate-A"],
+        verifications=[_v2_verification(True)],
+        reviews=[_v2_approved()],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    assert result.blocked_reason is None
+    assert len(result.accepted_candidates) == 1
+    assert result.gate_histories[0].review_iteration == 1
+    assert result.gate_histories[0].consecutive_changes_requested == 0
+    assert "PREVIOUS_REVIEWER_FINDINGS:" not in scenario.reviewer_prompts[0]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:" not in scenario.reviewer_prompts[0]
+
+
+def test_v2_multiple_checkpoints_block_without_acceptance_boundary(env: Env) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, "raise AssertionError('unused')"),
+        reviewer_spec=_reviewer_spec(env.work, "raise AssertionError('unused')"),
+        max_repairs=0,
+    )
+
+    result = execute_v2_checkpoints(
+        config,
+        _v2_spec(checkpoint_count=2),
+        accepted_base_context_identity="accepted-base",
+        checkpoint_acceptor=None,
+    )
+
+    assert not result.completed
+    assert result.accepted_candidates == ()
+    assert result.gate_histories == ()
+    assert "checkpoint acceptor" in (result.blocked_reason or "")
+    assert "committed and pushed" in (result.blocked_reason or "")
+
+
+def test_v2_checkpoint_one_change_then_approved_has_bounded_fresh_handoff(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["candidate-A", "candidate-B"],
+        verifications=[_v2_verification(True), _v2_verification(True)],
+        reviews=[_v2_changes("problem-1"), _v2_approved()],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    assert len(scenario.reviewer_prompts) == 2
+    assert "PREVIOUS_REVIEWER_FINDINGS:" not in scenario.reviewer_prompts[0]
+    assert "problem-1" in scenario.reviewer_prompts[1]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:" in scenario.reviewer_prompts[1]
+    assert "CURRENT_REPAIR_PACKET:" in scenario.implementer_prompts[1]
+    assert "problem-1" in scenario.implementer_prompts[1]
+
+
+def test_v2_reviewer_handoff_declares_complete_structured_output_contract(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B"],
+        verifications=[_v2_verification(True), _v2_verification(True)],
+        reviews=[_v2_changes("first"), _v2_approved()],
+    )
+
+    first, second = scenario.reviewer_prompts
+    assert "non_convergence_required: false" in first
+    assert "non_convergence_required: true" in second
+    for field in (
+        "problem",
+        "evidence",
+        "required_outcome",
+        "recommended_repair",
+        "verification_focus",
+    ):
+        assert field in first
+    for field in (
+        "previous_requirement",
+        "actual_change",
+        "why_unsatisfied",
+        "misunderstanding",
+        "remaining_required_outcome",
+        "recommended_corrective_approach",
+    ):
+        assert field in second
+
+
+def test_v2_checkpoint_distinct_candidates_continue_without_numeric_limit(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B", "C", "D", "E"],
+        verifications=[_v2_verification(True)] * 5,
+        reviews=[
+            _v2_changes("problem-1"),
+            _v2_changes("problem-2", diagnosis=True),
+            _v2_changes("problem-3", diagnosis=True),
+            _v2_changes("problem-4", diagnosis=True),
+            _v2_approved(),
+        ],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    assert result.gate_histories[0].review_iteration == 5
+    assert len(result.gate_histories[0].attempts) == 5
+    # The third fresh reviewer gets only the latest previous findings, not
+    # the gate's full first+second review history.
+    assert "problem-2" in scenario.reviewer_prompts[2]
+    assert "problem-1" not in scenario.reviewer_prompts[2]
+    previous_findings = scenario.reviewer_prompts[2].split(
+        "PREVIOUS_REVIEWER_FINDINGS:\n", 1
+    )[1].split("REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n", 1)[0]
+    assert "non_convergence" not in previous_findings
+    assert "previous requirement" not in previous_findings
+    assert (
+        result.gate_histories[0].attempts[1].repair_packet is not None
+    )
+    assert (
+        result.gate_histories[0].attempts[1].repair_packet.non_convergence
+        is not None
+    )
+
+
+def test_v2_checkpoint_malformed_repair_output_is_terminal_blocked(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A"],
+        verifications=[_v2_verification(True)],
+        reviews=[_v2_blocked("malformed CHANGES_REQUESTED repair packet")],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert not result.completed
+    assert "malformed" in (result.blocked_reason or "")
+    assert result.gate_histories[0].review_iteration == 0
+    assert result.gate_histories[0].attempts[0].review_iteration is None
+    assert result.gate_histories[0].attempts[0].reviewer_verdict is None
+
+
+def test_v2_checkpoint_second_change_requires_non_convergence_diagnosis(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B"],
+        verifications=[_v2_verification(True), _v2_verification(True)],
+        reviews=[_v2_changes("first"), _v2_changes("second")],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert not result.completed
+    assert "non_convergence" in (result.blocked_reason or "")
+    assert result.gate_histories[0].review_iteration == 2
+    assert result.gate_histories[0].consecutive_changes_requested == 2
+
+
+def test_v2_checkpoint_second_change_with_diagnosis_continues(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B", "C"],
+        verifications=[_v2_verification(True)] * 3,
+        reviews=[
+            _v2_changes("first"),
+            _v2_changes("second", diagnosis=True),
+            _v2_approved(),
+        ],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    assert result.gate_histories[0].review_iteration == 3
+
+
+def test_v2_verification_failure_is_not_reviewed_and_does_not_advance_counters(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B"],
+        verifications=[_v2_verification(False), _v2_verification(True)],
+        reviews=[_v2_approved()],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    history = result.gate_histories[0]
+    assert len(scenario.reviewer_prompts) == 1
+    assert history.review_iteration == 1
+    assert history.consecutive_changes_requested == 0
+    assert history.attempts[0].review_iteration is None
+    assert history.attempts[0].reviewer_verdict is None
+    assert (
+        history.attempts[0].rejection_basis
+        is CandidateRejectionBasis.VERIFICATION_FAILURE
+    )
+    assert "CURRENT_VERIFICATION_FAILURE:" in scenario.implementer_prompts[1]
+    assert "passed: False" in scenario.implementer_prompts[1]
+
+
+def test_v2_verification_rejected_identity_repeated_by_repair_is_blocked(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "A"],
+        verifications=[_v2_verification(False)],
+        reviews=[],
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert not result.completed
+    assert len(scenario.reviewer_prompts) == 0
+    assert result.gate_histories[0].review_iteration == 0
+    assert "repeats a previously rejected identity" in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("candidates", "verifications", "reviews"),
+    [
+        (
+            ["A", "A"],
+            [_v2_verification(True)],
+            [_v2_changes("first")],
+        ),
+        (
+            ["A", "B", "C", "B"],
+            [_v2_verification(True)] * 3,
+            [
+                _v2_changes("first"),
+                _v2_changes("second", diagnosis=True),
+                _v2_changes("third", diagnosis=True),
+            ],
+        ),
+    ],
+)
+def test_v2_repeated_rejected_identity_blocks_no_progress_or_cycle(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    candidates: list[str],
+    verifications: list[VerificationEvidence],
+    reviews: list[StructuredReviewResult],
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=candidates,
+        verifications=verifications,
+        reviews=reviews,
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert not result.completed
+    assert "repeats a previously rejected identity" in (result.blocked_reason or "")
+    history = result.gate_histories[0]
+    assert history.attempts[-1].verification is None
+    assert (
+        history.attempts[-1].rejection_basis
+        is CandidateRejectionBasis.REPEATED_IDENTITY
+    )
+
+
+def test_v2_checkpoints_execute_exactly_in_declared_order_and_reset_gate_state(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accepted_in_order: list[str] = []
+
+    def accept_checkpoint(candidate: orch_module.AcceptedCheckpointCandidate) -> str:
+        accepted_in_order.append(candidate.checkpoint.checkpoint_id)
+        return f"accepted-base-{candidate.checkpoint.checkpoint_id}"
+
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["CP1-A", "CP1-B", "CP2-A"],
+        verifications=[_v2_verification(True)] * 3,
+        reviews=[_v2_changes("cp1 repair"), _v2_approved(), _v2_approved()],
+        checkpoint_count=2,
+        checkpoint_acceptor=accept_checkpoint,
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    assert [item.checkpoint.checkpoint_id for item in result.accepted_candidates] == [
+        "CP-1",
+        "CP-2",
+    ]
+    assert accepted_in_order == ["CP-1", "CP-2"]
+    assert [history.review_iteration for history in result.gate_histories] == [2, 1]
+    assert result.gate_histories[1].consecutive_changes_requested == 0
+    assert (
+        result.accepted_candidates[1].gate_context.accepted_base_context_identity
+        == "accepted-base-CP-1"
+    )
+
+
+def test_v2_next_checkpoint_handoff_uses_head_created_by_previous_acceptance(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initial_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+    accepted_heads: list[str] = []
+
+    def commit_checkpoint(candidate: orch_module.AcceptedCheckpointCandidate) -> str:
+        _run_git(
+            [
+                "commit",
+                "--allow-empty",
+                "-m",
+                f"accept {candidate.checkpoint.checkpoint_id}",
+            ],
+            cwd=env.work,
+        )
+        accepted_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+        accepted_heads.append(accepted_head)
+        return accepted_head
+
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["CP1", "CP2"],
+        verifications=[_v2_verification(True), _v2_verification(True)],
+        reviews=[_v2_approved(), _v2_approved()],
+        checkpoint_count=2,
+        checkpoint_acceptor=commit_checkpoint,
+    )
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    assert len(accepted_heads) == 2
+    first_context = scenario.implementer_prompts[0].split(
+        "REPOSITORY_CONTEXT:\n", 1
+    )[1]
+    second_context = scenario.implementer_prompts[1].split(
+        "REPOSITORY_CONTEXT:\n", 1
+    )[1]
+    assert f"head_sha: {initial_head}" in first_context
+    assert f"head_sha: {accepted_heads[0]}" in second_context
+    assert f"head_sha: {initial_head}" not in second_context
+    assert (
+        f"accepted_base_context_identity: {accepted_heads[0]}" in second_context
+    )
+
+
+def test_v2_checkpoint_execution_creates_no_persisted_run_state(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = {path.relative_to(env.work) for path in env.work.rglob("*")}
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A"],
+        verifications=[_v2_verification(True)],
+        reviews=[_v2_approved()],
+    )
+    after = {path.relative_to(env.work) for path in env.work.rglob("*")}
+
+    result = scenario.result
+    assert isinstance(result, orch_module.V2CheckpointExecutionResult)
+    assert result.completed
+    assert after == before
+    assert not any(path.name == "run.json" for path in env.work.rglob("*"))
