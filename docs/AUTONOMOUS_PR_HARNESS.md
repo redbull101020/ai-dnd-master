@@ -5,24 +5,32 @@ provider-neutral **execution mechanics** a harness/orchestrator uses to
 carry out an already-authorized `AUTONOMOUS_PR` invocation. It is a design
 contract, not an operator manual: it does not itself implement a runner.
 
-The v1 orchestrator/CLI this contract describes was implemented by
-`TSK-0026` and lives at `tools/autonomous_pr/` (local entrypoint: `python -m
-tools.autonomous_pr <task_id> --implementer ... --reviewer ... --verify
-...`; run `python -m tools.autonomous_pr --help` for the full flag list).
-Its tests live at `tests/tools/autonomous_pr/`. This document remains the
+The operational v2 orchestrator/CLI lives at `tools/autonomous_pr/` (local
+entrypoint: `python -m tools.autonomous_pr <task_id> --implementer ...
+--reviewer ...`; run `python -m tools.autonomous_pr --help` for the full flag
+list). Verification commands come exclusively from the accepted Task
+Execution Spec. Its tests live at `tests/tools/autonomous_pr/`. This document remains the
 authoritative execution-mechanics contract that implementation must
 conform to — it yields to `AGENTS.md` on any conflict (§1), and the
 implementation existing does not itself change or supersede anything this
 document specifies.
 
-> **Contract version.** The operational `AUTONOMOUS_PR` contract is **v1**,
-> as declared in `AGENTS.md` ("Contract versions"). Sections 1–19 (Part I)
-> are that v1 execution-mechanics contract, and `tools/autonomous_pr/`
-> implements it. Part II (sections 20 onward) records a prospective,
-> spec-driven **v2** contract: approved as a design target, **inactive**, not
-> authorization, and without effect on how any run executes today.
+> **Contract version.** The operational `AUTONOMOUS_PR` contract is **v2**,
+> as declared in `AGENTS.md` ("Contract versions"). Part II (sections 20
+> onward) is the operational spec-driven contract implemented by
+> `tools/autonomous_pr/`. Part I's v1 runtime flow/mechanics are historical
+> and inactive, not an executable fallback. Its common definitions and
+> invariants remain applicable only where operational Part II explicitly
+> incorporates them by reference.
 
 ---
+
+# Part I — Historical v1 runtime mechanics and shared definitions
+
+Sections 1–19 preserve the former v1 runtime flow/mechanics for audit/history;
+that flow is inactive and cannot select a runtime path or weaken Part II.
+Common definitions and invariants in Part I apply to v2 only where Part II
+explicitly incorporates the relevant section by reference.
 
 ## 1. Purpose and authority boundary
 
@@ -599,56 +607,35 @@ Beyond that, this document, and any v1 implementation built from it
 
 ---
 
-# Part II — Prospective v2 contract (approved, inactive)
+# Part II — Operational v2 contract
 
-Sections 20 onward describe a prospective, spec-driven `AUTONOMOUS_PR` v2.
-They are a design target defined by `TSK-0027`, not operational text. Read
-§20 before any other section of this Part.
-
----
-
-## 20. Status and transition boundary (prospective v2)
-
-Part II is approved as the target design for a later contract version. Until
-the activation described below lands, exactly the following holds:
-
-- the operational contract is **v1**: `AGENTS.md` ("Autonomous flow" and the
-  sections around it), Part I of this document, and the current
-  `tools/autonomous_pr/` implementation. There is no mixed mode and no
-  per-task choice of version;
-- Part II grants no authority and is never itself a valid `AUTONOMOUS_PR`
-  invocation; the v1 harness neither reads nor depends on it;
-- the full-detail `docs/TASK.md` format (`TASK.md` §15) remains the
-  operational execution input, and the v1 task-context parser keeps reading
-  it unchanged;
-- no Task Execution Spec is required, created, or consulted by v1. Merging
-  the change that introduced Part II, or the presence of any
-  `docs/tasks/TSK-XXXX.md` file, does not activate v2;
-- every Part I mechanic remains in force exactly as written, including
-  v1's planning and plan-review phases and its numeric repair bound.
-
-Activation is one separate, later step. A single task implements v2 in
-`tools/autonomous_pr/` **and** activates it atomically: in that same change
-it flips the operational-version declaration in `AGENTS.md`, promotes Part II
-into operational text (replacing the Part I mechanics it supersedes, and the
-`AGENTS.md` flow and Mode C text it changes, §32), and adopts the
-`docs/TASK.md` format v2 requires. That task is expected to be
-allocated as `TSK-0028` after its own refinement. Because it changes the
-implementation and activation semantics of `AUTONOMOUS_PR` itself, it runs
-under the `MANUAL` workflow only. That is an explicit v1→v2 transition
-invariant defined by `TSK-0027` and recorded in `AGENTS.md` ("Contract
-versions"); it is not a consequence of the existing "Bounded authority"
-prohibition, which is limited to changing `AUTONOMOUS_PR`'s own authority or
-permissions. The first real v2 run happens only after that activation has
-merged.
-
-Activating only some elements of Part II, or implementing v2 behavior
-without flipping the declaration in the same change, is a contract
-violation.
+Sections 20 onward define the operational, spec-driven `AUTONOMOUS_PR` v2.
+Read §20 before any other section of this Part.
 
 ---
 
-## 21. Document ownership (prospective v2)
+## 20. Status and completed transition boundary (operational v2)
+
+`TSK-0028` atomically activated Part II, the v2 public entrypoint, the thin
+tracker, and the `AGENTS.md` declaration. Therefore:
+
+- v2 is the only operational version; there is no mixed mode, version flag,
+  per-task version selection, v1 fallback, runtime planning/plan-review, or
+  numeric repair budget;
+- the thin `docs/TASK.md` tracker and the exact-base Task Execution Spec are
+  the only execution inputs;
+- Part I records how v1 operated before activation and supplies no v1 runtime
+  path; its common definitions/invariants apply only where Part II explicitly
+  incorporates them by reference;
+- `TSK-0027` and `TSK-0028` ran under `MANUAL` as transition work. That fact
+  is historical, not a permanent runtime exception.
+
+This document never grants invocation authority; `AGENTS.md` remains the
+authoritative boundary.
+
+---
+
+## 21. Document ownership (operational v2)
 
 | Document | Owns |
 | --- | --- |
@@ -677,7 +664,7 @@ them agree.
 
 ---
 
-## 22. Task Execution Spec: identity, storage, and lifecycle (prospective v2)
+## 22. Task Execution Spec: identity, storage, and lifecycle (operational v2)
 
 - **Path.** Exactly `docs/tasks/TSK-XXXX.md`, a function of the immutable
   task ID alone. One spec per task; the ID in the file must match its
@@ -715,7 +702,7 @@ them agree.
 
 ---
 
-## 23. Task Execution Spec: structure (prospective v2)
+## 23. Task Execution Spec: structure (operational v2)
 
 A spec has these sections, in this order:
 
@@ -767,7 +754,7 @@ Skeleton:
 
 ---
 
-## 24. Binding and advisory content (prospective v2)
+## 24. Binding and advisory content (operational v2)
 
 | Binding | Advisory |
 | --- | --- |
@@ -813,7 +800,7 @@ ends the run as `BLOCKED` for refinement or a human decision.
 
 ---
 
-## 25. Review verdicts and repair flow (prospective v2)
+## 25. Review verdicts and repair flow (operational v2)
 
 The reviewer returns exactly one of `APPROVED`, `CHANGES_REQUESTED`, or
 `BLOCKED`, as in v1 (§7). The set is unchanged.
@@ -845,7 +832,7 @@ any required field, is malformed reviewer output and ends the run as
 `BLOCKED`. Additional provider-neutral structured metadata may accompany a
 finding; it never substitutes for a required field.
 
-The prospective v2 repair flow is:
+The operational v2 repair flow is:
 
 ```text
 review → CHANGES_REQUESTED → implementer repair → deterministic verification → fresh review
@@ -877,7 +864,7 @@ fail-closed condition (§27).
 
 ---
 
-## 26. Gate counter and non-convergence diagnosis (prospective v2)
+## 26. Gate counter and non-convergence diagnosis (operational v2)
 
 A **gate** is one designated review point — for example a checkpoint review
 or a cumulative review — for one fixed Task Execution Spec and one accepted
@@ -909,17 +896,15 @@ target stays `CHANGES_REQUESTED` however many reviews have passed.
 
 ---
 
-## 27. Repair limit and finite safety (prospective v2)
+## 27. Repair limit and finite safety (operational v2)
 
 v2 has no numeric repair limit. There is no rule of the form "N repairs
 exceeded → `BLOCKED`", and no canonical value such as "at most 2 repairs" or
 "at most 5 repairs". A repair count may exist as telemetry and audit
 information; it is never an input to a gate decision.
 
-Operational v1 is unchanged by this. It remains a bounded numeric
-implementation: `OrchestratorConfig.max_repairs` and the `--max-repairs` CLI
-flag stay in `tools/autonomous_pr/`, and Part I (§11) and `AGENTS.md` continue
-to describe the bounded repair policy, until the activation described in §20.
+The production configuration and CLI expose no repair-limit field or flag.
+Historical v1's bounded behavior in Part I is inactive.
 
 Removing the numeric budget does not remove fail-closed safety. Every one of
 these still ends the run as `BLOCKED`:
@@ -944,7 +929,7 @@ by these fail-closed conditions and by deterministic no-progress detection
 
 ---
 
-## 28. Deterministic no-progress and cycle detection (prospective v2)
+## 28. Deterministic no-progress and cycle detection (operational v2)
 
 No-progress is decided by an objective candidate identity, never by an LLM
 judgment such as "the agent is not making enough progress".
@@ -977,7 +962,7 @@ identity does.
 
 ---
 
-## 29. Repair history, reviewer handoff, and freshness (prospective v2)
+## 29. Repair history, reviewer handoff, and freshness (operational v2)
 
 The orchestrator owns the audit history of a gate. For every candidate or
 repair attempt it records the orchestration facts that apply to it:
@@ -1024,7 +1009,7 @@ depends on hidden reviewer state that is absent from this explicit handoff.
 
 ---
 
-## 30. Spec-driven lifecycle and preflight (prospective v2)
+## 30. Spec-driven lifecycle and preflight (operational v2)
 
 Where v1 runs `planning → independent plan review → implementation`, v2 runs
 `approved Task Execution Spec → deterministic checkpoint execution`. v2 has no
@@ -1033,7 +1018,7 @@ execution target is designed and approved, in the spec (§22–§24), before the
 invocation starts. The orchestrator derives every runtime handoff from that
 spec. The planning and plan-review phases of Part I are v1-only.
 
-The prospective v2 lifecycle is:
+The operational v2 lifecycle is:
 
 ```text
 preflight (one captured origin/main SHA: docs/TASK.md and the task spec)
@@ -1086,7 +1071,7 @@ edit made inside the run.
 
 ---
 
-## 31. Checkpoints and pre-closure cumulative review (prospective v2)
+## 31. Checkpoints and pre-closure cumulative review (operational v2)
 
 The checkpoints declared in the spec (§23) are executed exactly as declared and
 in order. A checkpoint is not a separate task and has no status of its own; it
@@ -1121,9 +1106,9 @@ to a new candidate.
 
 ---
 
-## 32. Unpublished closure candidate and Mode C ordering (prospective v2)
+## 32. Unpublished closure candidate and Mode C ordering (operational v2)
 
-**v1 limitation.** In operational v1 the prospective Task Closure is committed
+**Historical v1 limitation.** Under v1 the prospective Task Closure was committed
 and pushed before Mode C runs. A Mode C `CHANGES_REQUESTED` therefore cannot be
 repaired safely, and the v1 orchestrator fails closed on it (`BLOCKED`). v2 is
 designed to remove this limitation.
@@ -1133,7 +1118,7 @@ rewrite in order to be repaired. Consequently the closure candidate stays
 unpublished until Mode C has approved exactly that candidate. This contract
 fixes the invariant, not a Git command for achieving it.
 
-The prospective v2 order is:
+The operational v2 order is:
 
 ```text
 accepted implementation
@@ -1215,7 +1200,7 @@ implementation.
 
 ---
 
-## 33. Evidence invalidation and replay (prospective v2)
+## 33. Evidence invalidation and replay (operational v2)
 
 The rule is conservative and deterministic. The orchestrator does not judge
 which evidence a repair "probably" leaves valid.
@@ -1272,12 +1257,13 @@ never pushed before Mode C approves it.
 
 ---
 
-## 34. Post-publication repair boundary and required CI (prospective v2)
+## 34. Post-publication repair boundary and required CI (operational v2)
 
-`AGENTS.md` already allows bounded repair in response to CI feedback, and
-neither this Part nor `TSK-0027` forbids any repair after publication. There is
-no blanket rule that a post-publication failure is always `BLOCKED`, and none
-that forbids future post-publication repair.
+`AGENTS.md` allows adaptive repair in response to review or CI feedback, with
+no numeric repair limit, and neither this Part nor `TSK-0027` forbids any
+repair after publication. There is no blanket rule that a post-publication
+failure is always `BLOCKED`, and none that forbids future post-publication
+repair.
 
 The initial v2 implementation is not required to make any candidate-changing
 repair after publication. That covers a required CI failure and a Mode C
@@ -1295,10 +1281,9 @@ and replay rule of §33 and never weakens a gate to make a check pass.
 
 ---
 
-## 35. First v2 trial (prospective v2)
+## 35. First v2 trial (operational v2)
 
-The first real v2 run happens only after the activation described in §20 has
-merged. No task is designated by this contract as that first trial, and
+No task is designated by this contract as the first real v2 trial, and
 `TSK-0023` is not implied. A good first trial is a small or medium task with:
 
 - a clear, execution-ready spec;

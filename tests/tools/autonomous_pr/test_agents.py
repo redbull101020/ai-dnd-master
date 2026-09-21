@@ -9,7 +9,6 @@ from tools.autonomous_pr.agents import (
     parse_reviewer_verdict,
     parse_structured_reviewer_output,
     run_implementer,
-    run_reviewer,
     run_structured_reviewer,
 )
 from tools.autonomous_pr.model import AgentRole, ReviewVerdict
@@ -58,74 +57,18 @@ def test_parse_reviewer_verdict_unknown_token_is_blocked() -> None:
     assert parse_reviewer_verdict("MAYBE\n") is ReviewVerdict.BLOCKED
 
 
-def test_run_reviewer_approved() -> None:
-    spec = _python_reviewer("print('APPROVED')")
-
-    result = run_reviewer(spec, review_patch_text="diff --git a b\n")
-
-    assert result.verdict is ReviewVerdict.APPROVED
 
 
-def test_run_reviewer_changes_requested() -> None:
-    spec = _python_reviewer(
-        "print('needs work'); print('CHANGES_REQUESTED')"
-    )
-
-    result = run_reviewer(spec, review_patch_text="diff --git a b\n")
-
-    assert result.verdict is ReviewVerdict.CHANGES_REQUESTED
-    assert "needs work" in result.findings
 
 
-def test_run_reviewer_blocked() -> None:
-    spec = _python_reviewer("print('BLOCKED')")
-
-    result = run_reviewer(spec, review_patch_text="diff --git a b\n")
-
-    assert result.verdict is ReviewVerdict.BLOCKED
 
 
-def test_run_reviewer_non_zero_exit_is_blocked() -> None:
-    spec = _python_reviewer("print('APPROVED'); raise SystemExit(1)")
-
-    result = run_reviewer(spec, review_patch_text="diff --git a b\n")
-
-    assert result.verdict is ReviewVerdict.BLOCKED
 
 
-def test_run_reviewer_timeout_is_blocked() -> None:
-    spec = _python_reviewer(
-        "import time; time.sleep(5); print('APPROVED')", timeout_seconds=0.2
-    )
-
-    result = run_reviewer(spec, review_patch_text="diff --git a b\n")
-
-    assert result.verdict is ReviewVerdict.BLOCKED
-    assert "timed out" in result.findings
 
 
-def test_run_reviewer_process_launch_failure_is_blocked() -> None:
-    spec = AgentInvocationSpec(
-        role=AgentRole.REVIEWER,
-        executable="this-executable-does-not-exist-anywhere",
-        args=(),
-        timeout_seconds=5.0,
-    )
-
-    result = run_reviewer(spec, review_patch_text="diff --git a b\n")
-
-    assert result.verdict is ReviewVerdict.BLOCKED
 
 
-def test_run_reviewer_rejects_implementer_spec() -> None:
-    spec = AgentInvocationSpec(
-        role=AgentRole.IMPLEMENTER,
-        executable=sys.executable,
-        args=("-c", "print('APPROVED')"),
-    )
-
-    with pytest.raises(AgentRoleError):
-        run_reviewer(spec, review_patch_text="diff --git a b\n")
 
 
 def test_run_implementer_rejects_reviewer_spec() -> None:

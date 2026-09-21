@@ -33,6 +33,6 @@ testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src/dnd_engine"]
+files = ["src/dnd_engine", "tools/autonomous_pr"]
 show_error_codes = true
 warn_unused_configs = true

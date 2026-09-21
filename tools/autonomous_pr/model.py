@@ -1,4 +1,4 @@
-"""Typed values for one live AUTONOMOUS_PR harness run.
+"""Typed values for one live AUTONOMOUS_PR v2 harness run.
 
 Deliberately minimal: only the values needed by ``task_context.py``,
 ``agents.py``, and the orchestrator's v2 checkpoint primitive to describe one
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 
 
 class TaskStatus(Enum):
@@ -35,8 +34,6 @@ class Phase(Enum):
     ``docs/AUTONOMOUS_PR_HARNESS.md`` §9. Not a ``docs/TASK.md`` Status."""
 
     PREFLIGHT = "preflight"
-    PLANNING = "planning"
-    PLAN_REVIEW = "plan_review"
     DELIVERY_BRANCH_READY = "delivery_branch_ready"
     IMPLEMENTATION_CHECKPOINT = "implementation_checkpoint"
     DETERMINISTIC_VERIFICATION = "deterministic_verification"
@@ -44,7 +41,7 @@ class Phase(Enum):
     FULL_VERIFICATION = "full_verification"
     PRE_CLOSURE_CUMULATIVE_REVIEW = "pre_closure_cumulative_review"
     DRAFT_PR = "draft_pr"
-    PROSPECTIVE_TASK_CLOSURE = "prospective_task_closure"
+    UNPUBLISHED_TASK_CLOSURE = "unpublished_task_closure"
     CLOSURE_REVIEW = "closure_review"
     ORIGIN_MAIN_REVALIDATION = "origin_main_revalidation"
     MODE_C_FINAL_AUDIT = "mode_c_final_audit"
@@ -80,43 +77,6 @@ class AgentRole(Enum):
 
     IMPLEMENTER = "implementer"
     REVIEWER = "reviewer"
-
-
-@dataclass(frozen=True)
-class TaskContext:
-    """Revalidated facts about the named authoritative ``Current`` task.
-
-    Returned only once every readiness fact this harness can mechanically
-    check has already passed (``task_context.revalidate_current_task``);
-    this is descriptive execution input, never proof of user authorization
-    for ``AUTONOMOUS_PR`` (``docs/AUTONOMOUS_PR_HARNESS.md`` §3).
-
-    ``detail_text`` is the exact, unparsed authoritative ``## <task_id> —
-    ...`` section text (heading and full body — Goal, Scope, Out of scope,
-    Acceptance criteria, Verification, and anything else the section
-    happens to contain) as it stood at revalidation time. It exists so the
-    full task detail can be handed to the implementer/reviewer roles and
-    recorded as an explicit artifact verbatim (§6), without this module
-    growing a Markdown AST or a field for every possible task-detail
-    subsection. It is also compared for exact equality when detecting
-    whether ``origin/main`` moving between preflight and delivery-branch
-    creation changed anything the already-accepted plan depended on.
-    """
-
-    task_id: str
-    status: TaskStatus
-    roadmap_target: str
-    depends_on: tuple[str, ...]
-    detail_text: str
-
-
-@dataclass(frozen=True)
-class ReviewResult:
-    """One designated-reviewer checkpoint outcome, as explicit handoff data."""
-
-    verdict: ReviewVerdict
-    findings: str
-    raw_output: str
 
 
 @dataclass(frozen=True)
@@ -311,7 +271,7 @@ class TaskExecutionSpec:
 
 @dataclass(frozen=True)
 class TrackerTask:
-    """One row of the prospective v2 ``# Open task index``.
+    """One row of the operational v2 ``# Open task index``.
 
     The v2 index owns every mutable lifecycle fact of an open task,
     including ``depends_on`` (Harness §22): the Task Execution Spec never
@@ -330,7 +290,7 @@ class TrackerTask:
 
 @dataclass(frozen=True)
 class TerminalTask:
-    """One row of the prospective v2 durable ``# Terminal task index``.
+    """One row of the operational v2 durable ``# Terminal task index``.
 
     ``status`` is only ever :attr:`TaskStatus.DONE` or
     :attr:`TaskStatus.SUPERSEDED`. Unlike ``# Recently completed`` this index
@@ -407,7 +367,5 @@ class RunResult:
     outcome: RunOutcome | None
     delivery_branch: str | None
     head_sha: str | None
-    repair_count: int
     blocked_reason: str | None
-    artifacts_dir: Path | None
     pr_url: str | None = None

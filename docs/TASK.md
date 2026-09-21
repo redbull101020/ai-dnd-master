@@ -1,1606 +1,300 @@
 # Task Queue
 
-Operational task tracker for AI D&D Engine development.
+Thin operational lifecycle tracker for AI D&D Engine development.
 
-`TASK.md` answers three practical questions:
-
-```text
-What are we doing now?
-What should we do next?
-Why is that the right next slice?
-```
-
-It is deliberately a thin planning layer. It must not become a second Roadmap,
-Architecture document, Deferred register, Development Log, or issue tracker.
+`docs/TASK.md` owns task lifecycle and queue facts. Execution requirements for
+an executable task live only in its stable Task Execution Spec at
+`docs/tasks/TSK-NNNN.md`.
 
 ---
 
-## 1. Document role and authority
+## 1. Authority
 
-Project documentation has the following responsibilities:
+Sources of truth, in order:
 
-| Document | Responsibility |
+1. `docs/ARCHITECTURE.md` — canonical product architecture.
+2. `docs/ROADMAP.md` — phase and capability scope.
+3. `docs/TASK.md` — task lifecycle, dependencies, and ordering.
+4. `docs/tasks/TSK-NNNN.md` — fixed execution contract for one task.
+5. `docs/DECISIONS.md` and `docs/DEFERRED.md` — rationale and deferred scope.
+
+The tracker never grants commit, push, PR, merge, or `AUTONOMOUS_PR`
+authority. Those permissions remain exclusively in `AGENTS.md`.
+
+## 2. Task identity and lifecycle
+
+Task IDs are immutable `TSK-NNNN` identifiers. The closed status set is:
+
+- `Backlog`
+- `Ready`
+- `Current`
+- `Blocked`
+- `Done`
+- `Superseded`
+
+The Open task index contains only `Backlog`, `Ready`, `Current`, and
+`Blocked`. The Terminal task index contains only `Done` and `Superseded` and
+is never truncated. A task ID appears in exactly one index.
+
+- `Backlog` records recognized work that is not yet execution-ready.
+- `Ready` means the readiness gate is satisfied, but does not authorize work.
+- `Current` is the one selected execution target.
+- `Blocked` records work that cannot proceed until its stated dependency,
+  decision, or external condition is resolved.
+- `Done` is authoritative only after the implementation and Task Closure are
+  accepted on `main` (or the fallback reconciliation of §18.2 lands).
+- `Superseded` permanently reserves work that was replaced, absorbed,
+  invalidated, or deliberately dropped; its durable reason belongs in
+  terminal evidence and `docs/DEVELOPMENT_LOG.md`.
+
+Task IDs are never reused. `Next free ID` must be greater than every allocated
+Open or Terminal ID; gaps do not become reusable IDs.
+
+## 3. Task Execution Spec
+
+The stable spec path is a pure function of task identity:
+
+```text
+docs/tasks/TSK-NNNN.md
+```
+
+Spec lifecycle:
+
+| Tracker status | Task Execution Spec |
 | --- | --- |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Canonical architecture and behavior contracts |
-| [`ROADMAP.md`](ROADMAP.md) | Phase/capability scope, phase ordering, and completion status |
-| `TASK.md` | Current executable slice and short-term task ordering inside allowed Roadmap scope |
-| [`DEFERRED.md`](DEFERRED.md) | Deferred concerns and continuation context |
-| [`DECISIONS.md`](DECISIONS.md) | Append-only architectural rationale/history |
-| [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md) | Append-only factual history of completed development iterations |
-| [`../AGENTS.md`](../AGENTS.md) | Agent workflow, authorization, testing, branches, commits, PRs, and Definition of Done |
-
-Authority for implementation planning:
-
-```text
-ARCHITECTURE
-    ↓
-ROADMAP
-    ↓
-TASK
-    ↓
-implementation
-```
-
-`ROADMAP.md` decides what belongs to the active phase and any ordering or
-dependencies that are explicitly fixed there.
-
-`TASK.md` decides which concrete reviewable slice is `Current` and the short
-order of executable work inside that permitted scope.
-
-`TASK.md` must never:
-
-- change canonical behavior;
-- contradict `ARCHITECTURE.md`;
-- move work across Roadmap phase boundaries without an explicit project decision;
-- treat a deferred proposal as an approved contract;
-- turn an audit finding into canonical behavior by itself;
-- authorize editing, committing, pushing, opening a pull request, or merging.
-
-Authorization remains governed exclusively by `AGENTS.md`.
-
-If `TASK.md`, `ROADMAP.md`, `ARCHITECTURE.md`, code, or the requested task
-conflict, report the conflict instead of resolving it silently.
-
----
-
-## 2. Task model
-
-A task is one coherent, independently reviewable delivery slice.
-
-Normally:
-
-```text
-one TSK
-→ one coherent implementation/documentation result
-→ one review
-→ one pull request
-→ merge to main
-```
-
-A task is not:
-
-- every prompt sent to an agent;
-- every commit;
-- every review checkpoint;
-- every temporary implementation step;
-- every Roadmap checkbox;
-- every `DEF-*` concern.
-
-Several sequential implementation checkpoints may remain inside one task when
-they must land together as one coherent change.
-
-If work is too large to be reviewed coherently as one result, split it before
-execution.
-
-A task should normally describe the smallest slice that:
-
-1. advances the current Roadmap frontier;
-2. can be reviewed as one coherent change;
-3. can be verified independently;
-4. does not require unrelated speculative architecture.
-
----
-
-## 3. Task IDs
-
-Task IDs use:
-
-```text
-TSK-0001
-TSK-0002
-TSK-0003
-...
-```
-
-Rules:
-
-1. IDs are allocated sequentially repository-wide.
-2. IDs are never reused.
-3. IDs do not encode phase, group, priority, status, or implementation type.
-4. A task keeps the same ID if its priority or queue position changes.
-5. Completed or superseded IDs remain permanently reserved.
-6. Renaming or clarifying a task title does not change its ID.
-7. `Next free ID` in `Current position` is the allocation source.
-
-Do not use IDs such as:
-
-```text
-P3-COMBAT-01
-WEAPON-P1-07
-DOCS-004
-```
-
-Mutable planning attributes belong in fields, not identity.
-
----
-
-## 4. Statuses
-
-Allowed statuses:
-
-```text
-Backlog
-Ready
-Current
-Blocked
-Done
-Superseded
-```
-
-### 4.1 Backlog
-
-Known work that is not yet ready for execution.
-
-Typical reasons:
-
-- the task is too far from the current execution frontier;
-- exact scope is not yet worth refining;
-- a future consumer is still missing;
-- the task is intentionally broad and needs later decomposition;
-- canonical prerequisites are not yet settled.
-
-Backlog tasks should remain compact until they approach execution.
-
-### 4.2 Ready
-
-A sufficiently specified, unblocked, reviewable task that may enter `Next`.
-
-A task becomes `Ready` only after passing the readiness gate in §12.
-
-### 4.3 Current
-
-The single task selected as the project's current execution target.
-
-Repository invariant:
-
-```text
-count(Status == Current) <= 1
-```
-
-When executable work exists in the current Roadmap scope, the normal state is:
-
-```text
-count(Status == Current) == 1
-```
-
-`Current` is a planning state only.
-
-It does **not** mean:
-
-- implementation has been authorized;
-- a branch currently exists;
-- an agent is currently modifying files;
-- commit/push/PR/merge has been authorized.
-
-Those controls remain in `AGENTS.md`.
-
-### 4.4 Blocked
-
-A task that would otherwise be relevant but cannot currently proceed.
-
-Valid blockers include:
-
-- unresolved canonical conflict;
-- required architectural decision;
-- unfinished task dependency;
-- missing concrete evidence/consumer where the architecture explicitly requires it;
-- a genuine external prerequisite.
-
-Low priority is not a blocker.
-
-Every blocked task must state:
-
-```text
-Blocker:
-Unblock condition:
-```
-
-### 4.5 Done
-
-A task is authoritatively `Done` only when **both** its accepted result
-**and** the corresponding Task Closure (§18) exist on `main`. `main` is the
-authoritative operational state of the Task Queue; nothing on a delivery
-branch is a fact of the project until it lands there.
-
-The following are not sufficient on their own to make a task authoritatively
-`Done`:
-
-- code was written;
-- local tests passed;
-- `review.patch` was reviewed;
-- a commit exists;
-- the branch was pushed;
-- a pull request exists;
-- review approved the pull request;
-- a delivery branch/PR already writes `Done` for its own task;
-- the accepted result exists on `main` but the corresponding Task Closure
-  has not yet landed there (the §18.2 fallback is in progress but not yet
-  merged).
-
-Once implementation has been accepted (tests/checks passed, diff reviewed),
-a delivery branch/PR may prepare its own Task Closure (§18.1) — including
-writing `Done` for its task, in that same branch/PR — before merge. This
-prepared state is **prospective**: it describes what `TASK.md` will become
-true if and when that exact PR merges. It carries no operational authority
-before merge: the task is not yet actually finished, implementation of the
-task the branch shows as the next `Current` must not begin, and no new
-delivery branch may be based on that prospective `Current`. If the PR is
-never merged, the prospective `Done` never becomes a fact of the project.
-
-Once the delivery PR lands on `main`, its prepared `Done`/closure becomes
-authoritative as part of that same merge — no separate action is required,
-because both halves of the condition (accepted result and Task Closure)
-land together. If a task's accepted result instead lands on `main` without
-a prepared closure, the task is **not yet** authoritatively `Done`: Task
-Closure (§18.2) is mandatory as a fallback, and the tracker must be
-reconciled — landing the closure on `main` — before implementation of the
-next `Current` task begins.
-
-Authoritative `main`-state invariant (§12 item 2, §17 item 10): on `main`,
-a task's Status reads `Ready` or `Current` only once every task in its
-`Depends on` is itself authoritative `Done` on `main`. This invariant is
-unconditional; prospective closure never weakens it, because nothing on a
-delivery branch is authoritative before merge.
-
-Prepared closure branch (§18.1): before merge, that branch's own diff may
-prospectively represent — not authoritatively grant — its single immediate
-dependent task's post-merge Status as `Ready`/`Current`, bounded by the
-conditions in §18.1.1. That representation becomes the authoritative
-`main`-state invariant above only once the branch's PR actually merges; if
-it never merges, it never was.
-
-### 4.6 Superseded
-
-The task is no longer intended to be executed because its scope was:
-
-- replaced by another task;
-- absorbed into a different coherent slice;
-- invalidated by a later design;
-- deliberately dropped.
-
-The ID remains reserved.
-
-The durable reason belongs in `DEVELOPMENT_LOG.md`.
-
----
-
-## 5. Task lifecycle
-
-Normal lifecycle:
-
-```text
-Backlog
-   ↓ refinement
-Ready
-   ↓ selection
-Current
-   ↓ implementation + review + merge
-Done
-```
-
-Alternative transitions:
-
-```text
-Backlog → Blocked
-Ready   → Blocked
-Current → Blocked
-
-Backlog → Superseded
-Ready   → Superseded
-Current → Superseded
-```
-
-A dependency boundary is normally also a merge boundary. §18.1.1 does not
-create an exception to that boundary: implementation of a prospectively
-represented dependent task remains blocked until the closure branch's PR
-actually merges. §18.1.1 only allows the prepared closure branch's own
-diff to prospectively represent, before that merge, what the dependent
-task's tracker Status will become once the merge lands — the dependency
-and implementation boundary itself stays exactly at the merge.
-
-If:
-
-```text
-TSK-0043 depends on TSK-0042
-```
-
-then `TSK-0043` normally cannot become `Ready` until `TSK-0042` is `Done`
-on `main`.
-
-If multiple implementation steps must be completed sequentially before one
-merge, they should normally remain checkpoints inside a single task rather than
-becoming artificial dependent tasks.
-
-Task Closure is an operational reconciliation step, not a new task
-lifecycle status and not a separate delivery task. The normal path prepares
-it before merge, in the same delivery branch/PR as the implementation:
-
-```text
-Current
-→ implementation/review
-→ prepared Task Closure (§18.1) in the same delivery branch/PR
-→ review closure diff + revalidate current origin/main
-→ one merge lands implementation + closure together
-→ authoritative Done on main
-→ next Current may begin implementation
-```
-
-Fallback, used only when implementation lands on `main` without a prepared
-closure — by mistake or for an exceptional reason (§18.2):
-
-```text
-implementation lands on main without prepared closure
-→ mandatory post-merge reconciliation
-→ next task remains blocked from implementation until the tracker is
-  reconciled
-```
-
-Task Closure never gets its own `TSK-*`, whether prepared before merge or
-performed after. Do not create administrative recursion such as
-`TSK-0011 — Close TSK-0010` whose only deliverable is updating the tracker;
-that reconciliation is Task Closure itself, performed per §18.
-
----
-
-## 6. Priority
-
-Allowed priorities:
-
-```text
-P0
-P1
-P2
-P3
-```
-
-### P0 — correctness or hard current-path blocker
-
-Use only when the task:
-
-- fixes a correctness problem in implemented/canonical behavior;
-- resolves a contradiction between authoritative project sources;
-- blocks the current Roadmap critical path;
-- is a mandatory prerequisite for the nearest concrete vertical slice.
-
-`P0` does not mean "important feature".
-
-### P1 — current critical-path work
-
-Normal active-phase work that directly advances the current Roadmap frontier.
-
-Most executable feature work should be `P1`.
-
-### P2 — useful adjacent work
-
-Relevant and worthwhile, but not required for the nearest critical-path slice.
-
-### P3 — future / optional / cleanup
-
-Examples:
-
-- optional tooling;
-- non-blocking cleanup;
-- speculative future capability;
-- optimization without current evidence;
-- distant maintenance.
-
-Priority is not execution order.
-
-A `P1` prerequisite may correctly execute before an unrelated `P0`, and a
-future-phase task must not jump ahead of current Roadmap scope merely because it
-was labelled `P0`.
-
-Authoritative short-term sequencing is `Current` followed by `Next`.
-
----
-
-## 7. Size
-
-Size represents review complexity, not time.
-
-Allowed values:
-
-```text
-S
-M
-L
-```
-
-### S
-
-One narrow, coherent, reviewable delivery slice.
-
-### M
-
-A larger slice touching several tightly related modules/contracts while still
-remaining independently reviewable and mergeable.
-
-### L
-
-Too broad or insufficiently understood to execute as one task.
-
-A task with size `L` must be decomposed before becoming `Ready` or `Current`.
-
-No hour/day estimates are tracked in this file.
-
-Executable invariant:
-
-```text
-Ready or Current
-    ⇒ Size ∈ {S, M}
-```
-
----
-
-## 8. Groups
-
-Use exactly one group:
-
-```text
-mechanics
-cross-cutting
-engineering
-documentation
-architecture
-```
-
-### mechanics
-
-Gameplay mechanics that directly advance Roadmap capability scope.
-
-### cross-cutting
-
-Continuation work that spans mechanics or phases and is pulled forward by a
-concrete current consumer.
-
-Examples:
-
-- Equipment & Inventory;
-- Character Progression;
-- Event History & Replay;
-- other Roadmap-defined cross-cutting tracks.
-
-### engineering
-
-Tooling, packaging, CI, test infrastructure, repository quality, typing, or
-other engineering work that does not define gameplay behavior.
-
-### documentation
-
-Documentation work whose primary deliverable is documentation consistency,
-navigation, status, or process guidance.
-
-### architecture
-
-A focused unresolved contract/design question whose deliverable is a decision
-or canonical clarification rather than implementation.
-
-Groups are navigation labels only.
-
-They do not determine:
-
-- priority;
-- dependencies;
-- readiness;
-- execution order;
-- canonical authority.
-
-Exact project placement belongs in `Roadmap target`.
-
----
-
-## 9. Roadmap target
-
-Every `Ready` or `Current` task must identify the Roadmap scope it advances.
-
-Examples:
-
-```text
-Roadmap target: Phase 3 / Weapon attacks
-```
-
-```text
-Roadmap target:
-Cross-cutting prerequisite for Phase 3 / Weapon attacks
-```
-
-A `Current` task must never have:
-
-```text
-Roadmap target: —
-```
-
-This is the primary guard against accidental scope creep.
-
-A task may originate from `DEFERRED.md`, an audit, or a planning discussion, but
-it must still identify why it is allowed to execute now under the Roadmap.
-
----
+| `Backlog` | optional |
+| `Ready` | required and execution-ready |
+| `Current` | required and execution-ready |
+| `Blocked` | retained if it exists |
+| `Done` / `Superseded` | retained if it exists |
+
+The spec carries execution facts only. It must not duplicate mutable tracker
+fields such as Status, Priority, Size, dependencies, or queue position.
+The nine mandatory spec sections and their binding semantics are defined in
+`docs/AUTONOMOUS_PR_HARNESS.md` §§22–24.
+
+Goal, Scope, Out of scope, Approved implementation approach, Acceptance
+criteria, execution checkpoints, and verification live in the Task Execution
+Spec, not in this thin lifecycle tracker.
+
+`TSK-0028` is the one transition task that began under operational v1 and is
+completed manually by the activation change itself. It deliberately has no
+`docs/tasks/TSK-0028.md`; this historical fact is not a runtime exception.
+
+## 4. Open task index schema
+
+The table has exactly these columns:
+
+| ID | Status | P | Size | Group | Roadmap target | Depends on | Title |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+- `P0` is correctness or a hard current-path blocker; `P1` is current
+  critical-path work; `P2` is useful adjacent work; `P3` is future, optional,
+  or cleanup work. Priority is not queue order and never overrides Roadmap
+  scope, dependencies, or the explicit Current/Next selection.
+- Size measures review complexity, not elapsed time: `S` is one narrow
+  coherent slice, `M` is a larger but still cohesive reviewable slice, and
+  `L` is too broad or insufficiently understood for execution as one task.
+  Size `L` must be decomposed before `Ready` or `Current`.
+- `Group` is one of `mechanics`, `cross-cutting`, `engineering`,
+  `documentation`, `architecture`.
+- `Depends on` is `—` or a comma-separated list of backtick-wrapped task IDs.
+- every dependency of a `Ready` or `Current` task is a `Done` row in the
+  Terminal task index.
+- there is at most one `Current` row, and it must match Current position.
+
+Full task detail is not stored in this file for `Ready` or `Current` tasks;
+the Task Execution Spec is their complete execution target. A compact backlog
+row is sufficient until refinement produces its spec.
+
+## 5. Terminal task index schema
+
+The durable table has exactly these columns:
+
+| ID | Status | Evidence | Title |
+| --- | --- | --- | --- |
+
+`Evidence` identifies the accepted PR or the historical decomposition/closure
+commit that proves the terminal state. Unlike the human-oriented recent view,
+this index is authoritative and unbounded.
+
+## 6. Readiness and selection
+
+A task may become `Ready` only when its dependencies are terminal `Done`, its
+Roadmap target is still active, its size is `S` or `M`, and its Task Execution
+Spec exists and is execution-ready. The task must be one coherent,
+independently reviewable and mergeable delivery slice. `Current` is selected
+from eligible work in deliberate order; it is an execution target, not
+authorization to start.
+
+If no eligible task exists, Current is `—`. A task is never promoted merely to
+avoid an empty Current position.
+
+## 7. Progressive elaboration
+
+Backlog tasks may remain compact. Refinement creates or completes the stable
+Task Execution Spec before promotion to `Ready`. Once an autonomous invocation
+starts, the accepted spec is fixed for that run; changing it is a fail-closed
+condition, never an in-run repair technique.
+
+## 8. Dependencies
+
+Dependencies are lifecycle facts in the Open task index. They are not inferred
+from prose or from the bounded Recently completed view. A missing terminal row
+cannot be interpreted as `Done`. Every dependency names an existing Open or
+Terminal task, self-dependencies and dependency cycles are forbidden, and only
+`Ready`/`Current` require every dependency to be Terminal `Done`.
+`Backlog`/`Blocked` may depend on unfinished Open tasks.
+
+## 9. Review triggers
+
+Revalidate the queue after task closure, dependency changes, Roadmap changes,
+new blockers, task decomposition, or any change to Current/Next selection.
 
 ## 10. Current position
 
-- **Active Roadmap phase:** Phase 3 — Combat
-- **Current:** —
-- **Next:** —
-- **Hard blockers:** —
-- **Next free ID:** TSK-0001
-- **Last reviewed:** —
-
-`Active Roadmap phase` mirrors `ROADMAP.md`.
-
-If they disagree, `ROADMAP.md` wins and the tracker must be reconciled.
-
-`Current` contains zero or one task.
-
-`Next` contains at most five `Ready` tasks in deliberate execution order.
-
-Example:
-
-```text
-Current: TSK-0042
-Next: TSK-0043 → TSK-0046 → TSK-0048
-```
-
-`Hard blockers` contains only blockers that affect the current execution
-frontier. It is not a copy of every blocked task.
-
----
+The authoritative live values are in the unnumbered section below. `Next`
+lists at most five `Ready` tasks in deliberate order. `Next free ID` is the
+allocation source and does not imply that every lower number is an active task.
+Current followed by Next is the only authoritative queue order; Open index row
+order has no scheduling meaning.
 
 ## 11. Open task index
 
-The index owns compact metadata for live tasks.
-
-| ID | Status | P | Size | Group | Roadmap target | Title |
-| --- | --- | --- | --- | --- | --- | --- |
-| `TSK-XXXX` | `Current` | `P1` | `S` | `mechanics` | Phase 3 / ... | ... |
-| `TSK-XXXX` | `Ready` | `P1` | `M` | `mechanics` | Phase 3 / ... | ... |
-| `TSK-XXXX` | `Blocked` | `P1` | `S` | `cross-cutting` | Phase 3 / ... | ... |
-| `TSK-XXXX` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / ... | ... |
-
-The table is an index, not a second queue.
-
-Execution order is defined only by:
-
-```text
-Current
-Next
-```
-
-Do not infer execution order from table position.
-
----
+The authoritative live table is in the unnumbered section below. It is the
+only source for mutable facts about open tasks.
 
 ## 12. Readiness gate
 
-A task may become `Ready` only when all relevant conditions below are true:
+Promotion to `Ready` or `Current` requires all mechanical conditions in §§3,
+4, 6, and 8 plus an approved, internally consistent execution spec. A task
+requiring a new architectural decision or production dependency remains
+ineligible until that decision or dependency is separately approved.
 
-1. It belongs to current Roadmap scope or is an explicit prerequisite for it.
-2. All tasks in `Depends on` are authoritative `Done` on `main`.
-3. No unresolved blocker or canonical conflict prevents execution.
-4. `Goal`, `Scope`, `Out of scope`, `Acceptance criteria`, and `Verification`
-   are concrete enough for implementation and review.
-5. Size is `S` or `M`.
-6. The result is independently mergeable as one coherent slice.
+## 13. Task references
 
-Condition 2 is unconditional on `main`. A prepared closure branch's own
-diff may prospectively represent condition 2 as met for its single
-immediate dependent task before merge, under the bounded conditions in
-§18.1.1; that representation is not authoritative, and does not make the
-dependent task actually `Ready` on `main`, until the branch's PR merges.
-
-If implementation would require an unapproved architectural decision, the
-implementation task is not `Ready`.
-
-A task whose actual deliverable is to resolve that decision may itself become
-`Ready` as an `architecture` task.
-
-Do not use readiness as an excuse to fully design distant backlog work.
-
----
-
-## 13. Dependencies and references
-
-`Depends on` is the only task-to-task dependency relation.
-
-It contains only `TSK-*` IDs.
-
-Example:
-
-```text
-Depends on:
-- TSK-0041
-- TSK-0042
-```
-
-Do not manually maintain reverse fields such as:
-
-```text
-Blocks
-Unlocks
-Required by
-```
-
-They are derived from `Depends on`.
-
-Rules:
-
-1. Task dependencies reference only `TSK-*`.
-2. A task never depends on a group.
-3. A task never depends directly on a `DEF-*`.
-4. An Architecture section is not a task dependency.
-5. A Decision ID is not a task dependency.
-6. Dependency cycles are forbidden.
-7. A `Ready` or `Current` task must have all hard task dependencies `Done`.
-
-`DEF-*`, Architecture sections, Decisions, audits, and Roadmap entries belong
-under `References`.
-
-Example:
-
-```text
-References:
-- ROADMAP Phase 3 / Weapon attacks
-- ARCHITECTURE §...
-- DEF-0011
-
-Depends on:
-- TSK-0041
-```
-
-This preserves the distinction:
-
-```text
-DEF = concern / continuation context
-TSK = executable delivery work
-```
-
-A `DEF-*` concern may lead to one task, several tasks, or no task until a real
-consumer reaches it.
-
----
+Architecture and Roadmap references belong in the Task Execution Spec. The
+tracker keeps only the Roadmap target needed for lifecycle validation.
 
 ## 14. Contract impact
 
-Use one compact field:
-
-```text
-Contract impact: none
-```
-
-or:
-
-```text
-Contract impact: Architecture §X.Y update
-```
-
-or:
-
-```text
-Contract impact: decision required before implementation
-```
-
-Do not reproduce the proposed canonical contract in this field.
-
-Canonical behavior belongs in `ARCHITECTURE.md`.
-
-If a task changes an accepted architectural contract, the repository rules in
-`AGENTS.md` still apply, including the required documentation and Decision
-updates.
-
-If a task is itself intended to resolve an architectural question, state that
-question in its `Goal` and keep the task in the `architecture` group.
-
----
+Contract-impact analysis belongs in the Task Execution Spec and its review,
+not in duplicated tracker detail.
 
 ## 15. Task details
 
-Full detail is required for:
-
-```text
-Current
-Ready
-Blocked
-```
-
-Distant `Backlog` tasks normally need only their row in the open-task index.
-
-Do not fully design future Commands, Events, abstractions, schemas, storage
-contracts, or APIs merely to make backlog records appear complete.
-
-Use this structure:
-
-## TSK-XXXX — <title>
-
-**Status:** `Ready`
-
-**Priority:** `P1`
-
-**Size:** `S`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase 3 / ...
-
-**References:**
-
-- `ROADMAP.md` — Phase ... / ...
-- `ARCHITECTURE.md` §..., when relevant
-- `DEF-XXXX`, when relevant
-- `DEC-XXXX`, when relevant
-- reviewed audit/finding, when relevant
-
-**Depends on:** `TSK-XXXX` or `—`
-
-**Contract impact:** `none`
-
-### Goal
-
-State one concrete delivery result.
-
-The Goal should answer:
-
-> What must exist after this task is delivered?
-
-Do not write an architectural essay.
-
-### Why now
-
-Explain why this task is correctly positioned relative to other eligible work.
-
-Typical reasons:
-
-- closes a current Roadmap frontier;
-- unblocks the next vertical slice;
-- provides a concrete consumer for an existing foundation;
-- resolves a correctness/canonical blocker;
-- closes already-known partial scope;
-- avoids premature abstraction by following the next real consumer.
-
-Keep this short.
-
-### Scope
-
-Explicitly include:
-
-- behavior/change delivered by this task;
-- affected modules/contracts;
-- required tests;
-- required documentation directly caused by the change;
-- compatibility/migration work if the current contract requires it.
-
-Do not restate whole Architecture sections.
-
-### Out of scope
-
-Name nearby work that must not be pulled into the slice.
-
-This is especially important for:
-
-- future Roadmap mechanics;
-- broader `DEF-*` concerns;
-- generic frameworks;
-- speculative abstractions;
-- unrelated refactoring;
-- unrelated documentation cleanup;
-- production infrastructure not required by the current phase.
-
-### Acceptance criteria
-
-Use objective, reviewable completion conditions.
-
-Good criteria describe observable results such as:
-
-- a specific Command/Result/Event path exists;
-- a defined state transition is persisted;
-- a concrete error is returned for a named invalid case;
-- the real adapter round-trip succeeds;
-- a canonical invariant remains true;
-- relevant deterministic tests pass.
-
-Acceptance criteria must describe already-approved behavior.
-
-They must not silently create new canonical rules.
-
-If a criterion requires a new architecture contract, change `Contract impact`
-and resolve the contract first.
-
-### Verification
-
-List only task-specific verification beyond the global `AGENTS.md` Definition
-of Done.
-
-Examples:
-
-- narrow deterministic resolver tests;
-- handler/application tests;
-- real filesystem round-trip;
-- serializer backward-compatibility test;
-- packaged Definition lookup;
-- explicit regression for an architecture invariant.
-
-Do not copy the full global test/DoD checklist into every task.
-
-### Expected touchpoints
-
-Optional planning aid.
-
-Examples:
-
-```text
-src/dnd_engine/domain/...
-src/dnd_engine/application/...
-src/dnd_engine/infrastructure/...
-tests/...
-docs/...
-```
-
-This is not a contract. The actual file list may change when current repository
-structure requires it.
-
-### Execution checkpoints
-
-Optional.
-
-Use only when one mergeable task benefits from staged review.
-
-Example:
-
-1. Domain contract / pure resolver
-2. Application orchestration
-3. real-adapter integration
-4. documentation and regression pass
-
-Checkpoints are not independent task statuses and do not receive separate
-`TSK-*` IDs unless they become independently mergeable slices.
-
-### Evidence / trigger
-
-Optional.
-
-Use only when execution legitimately depends on concrete consumer evidence or a
-known trigger.
-
-Examples:
-
-```text
-Evidence / trigger:
-Second real production consumer required before extracting a shared abstraction.
-```
-
-```text
-Evidence / trigger:
-Durable Event reader becomes a current production requirement.
-```
-
-Do not add this field mechanically to ordinary tasks.
-
-### Blocker
-
-Include only while `Status: Blocked`.
-
-```text
-Blocker: <exact blocker>
-Unblock condition: <observable condition>
-```
-
----
+Operational v2 has no Open task details section. `Ready` and `Current` details
+live in `docs/tasks/TSK-NNNN.md`; Backlog uses its compact index row.
 
 ## 16. Queue selection
 
-When selecting `Current` and recalculating `Next`, use these principles in
-order:
-
-1. Stay inside current Roadmap scope and obey explicit Roadmap dependencies.
-2. Exclude blocked tasks and tasks with unfinished dependencies.
-3. Exclude implementation work that requires an unresolved architectural decision.
-4. Resolve correctness or canonical blockers before building on them.
-5. Prefer work that unblocks the nearest concrete vertical slice.
-6. Prefer completing an existing concrete consumer over starting unrelated scope.
-7. Prefer work that gives a real consumer to an existing foundation.
-8. Prefer existing narrow contracts over speculative shared abstractions.
-9. Prefer closing known partial scope over inventing unrelated new scope.
-10. Prefer the smallest coherent reviewable slice when several options are
-    otherwise equivalent.
-
-Do not mechanically sort the queue by priority alone.
-
-`Why now` records any sequencing choice that is not obvious from Roadmap scope
-or dependencies.
-
-`Next` should be curated, not generated as a full project backlog.
-
----
+Selection follows Roadmap scope, dependencies, priority, review risk, and
+smallest coherent delivery slices. It never silently changes architecture.
 
 ## 17. Current and Next invariants
 
-1. At most one task may have status `Current`.
-2. When executable current-phase work exists, normally exactly one task should
-   be `Current`.
-3. `Current position.Current` must reference the single `Current` task.
-4. `Next` contains at most five tasks.
-5. Every task in `Next` must have status `Ready`.
-6. `Next` order is the authoritative short-term execution order.
-7. Priority is an input to sequencing, not sequencing itself.
-8. `Depends on` is the only task-to-task dependency relation.
-9. Dependency cycles are forbidden.
-10. A task with unfinished dependencies cannot be `Ready` or `Current` on
-    `main`.
-11. A size `L` task cannot be `Ready` or `Current`.
-12. Every `Ready` or `Current` task must identify a current Roadmap target or
-    explicit prerequisite for it.
-13. `Done` means both the accepted result and the corresponding Task
-    Closure exist on `main` (§4.5).
-14. `TASK.md` must not introduce or silently change canonical behavior.
-
-See §18 for the mandatory Task Closure reconciliation step — normally
-prepared before merge in the same delivery branch/PR, with post-merge
-reconciliation as a fallback. §18.1.1 defines the single bounded case in
-which a prepared closure branch's own diff may prospectively represent
-item 10 as satisfied, before merge, for its own immediate dependent task;
-that representation is not authoritative on `main`, and item 10 remains
-unconditional there, until the branch's PR merges.
-
----
+1. At most one task is `Current`.
+2. Current position matches the single Current row.
+3. Every task in Next is `Ready`.
+4. Every `Ready`/`Current` task has an execution-ready spec and all
+   dependencies terminal `Done`.
+5. Size `L` is never `Ready` or `Current`.
+6. Open and terminal IDs are unique and disjoint.
 
 ## 18. Task closure and history
 
-Task Closure is mandatory delivery reconciliation, not optional bookkeeping.
-It is normally prepared after implementation acceptance and before merge,
-becoming authoritative once the delivery PR lands on `main`; post-merge
-reconciliation remains a mandatory fallback for the exceptional case where
-closure was not prepared in time. Closure does not receive its own `TSK-*`
-either way.
-
-The closure procedure itself, performed either pre-merge (§18.1, normal) or
-post-merge (§18.2, fallback):
-
-1. mark the completed task `Done`;
-2. add it to `Recently completed`;
-3. remove its full detail from `Open task details`;
-4. append the required factual development entry with its `TSK-*` ID to
-   `DEVELOPMENT_LOG.md`;
-5. reconcile Roadmap/Deferred status if the delivered work changes them;
-6. select the next `Current`;
-7. recalculate `Next` and `Hard blockers`;
-8. update `Next free ID` and `Last reviewed` — `Next free ID` changes only
-   when allocation state actually changed, not on every closure.
+Closure atomically moves the completed task from the Open task index to the
+Terminal task index as `Done`, records evidence, updates the recent view,
+reconciles Current/Next/blockers, and appends one concise factual entry to
+`docs/DEVELOPMENT_LOG.md`. The accepted spec remains at its stable path.
+Prepared closure is prospective: neither `Done` nor a represented next
+`Current` becomes authoritative until the delivery PR merges to `main`.
 
 ### 18.1 Normal path — closure prepared before merge
 
-Preparing Task Closure in the same delivery branch/PR as the implementation
-is allowed once all of the following hold:
-
-- the task's implementation is complete;
-- relevant tests/checks have passed;
-- the implementation diff has been reviewed/accepted;
-- the delivery PR already exists, so its PR number is already known and
-  usable as `Recently completed` evidence (§19) — do not invent a
-  placeholder merge SHA to fill that field early;
-- the closure edit lives in that same delivery branch/PR;
-- implementation and closure are intended for one atomic merge.
-
-```text
-Current
-→ implementation/review
-→ prepared Task Closure in the same delivery branch/PR
-→ review closure diff + revalidate current origin/main
-→ one merge lands implementation + closure together
-→ authoritative Done on main
-→ next Current may begin implementation
-```
-
-Prepared closure is **prospective** until merge (§4.5): the `Done` status,
-`Recently completed` row, next-`Current` selection, and updated `Current
-position` written on the branch describe what `TASK.md` will become true if
-and when that exact PR merges. Before merge, `main` remains authoritative,
-the task is not actually finished, and no implementation may begin against
-the branch's prospective next `Current`.
-
-The closure diff itself must be reviewed before merge, exactly like the
-implementation diff — it is not exempt from review merely because it is
-tracker bookkeeping. As part of that review, before the final merge,
-re-check that `origin/main` has not materially changed Current/Next
-ordering, Roadmap scope, blockers, or any other fact the prepared closure
-depends on. If it has, the prepared closure is stale and must be
-reconciled against current `origin/main` before merging.
+Before prospective closure, deterministic Full verification is green and the
+complete implementation diff has been reviewed and accepted. In v2 the closure
+candidate stays unpublished while Closure Review and Mode C audit it. Only the
+exact audited candidate is then pushed. Its tracker changes are prospective
+until the delivery PR merges.
 
 ### 18.1.1 Prospective immediate-dependent representation
 
-Authoritative `main`-state invariant (§12 item 2, §17 item 10): a task's
-Status reads `Ready` or `Current` only once every task in its `Depends on`
-is itself authoritative `Done` on `main`. This invariant is unconditional
-on `main`; nothing in this section weakens it.
-
-Prepared closure branch: before merge, a prepared §18.1 Task Closure
-branch/PR may prospectively represent, in its own diff, exactly **one**
-immediate dependent task's post-merge Status as `Ready`/`Current` — the
-task whose only outstanding dependency is the task being closed by that
-same branch/PR — when **all** of the following hold:
-
-1. the dependent task's only not-yet-authoritative-`Done` dependency is the
-   task this branch/PR closes;
-2. that dependency task becomes prospectively `Done` in this same closure
-   (§4.5) and lands as part of the same atomic merge;
-3. every other readiness condition in §12 is already satisfied for the
-   dependent task;
-4. the dependent task has no other unfinished dependency of any kind;
-5. no implementation may begin against the prospectively represented
-   dependent task, and no delivery branch may be created for it, until
-   this closure PR has actually merged and the representation becomes the
-   authoritative `main`-state invariant above;
-6. if this closure PR is never merged, the prospective representation
-   never becomes a fact of the project — the dependent task remains
-   exactly as ineligible for `Ready`/`Current` as it was before this
-   branch existed.
-
-If the dependent task also depends on any other task that is not `Done` by
-this same merge, this prospective representation is not permitted: the
-dependent task must remain ineligible for `Ready`/`Current` until every one
-of its dependencies is independently authoritative `Done` on `main`.
-
-This is a property of the prepared closure branch's own diff, not a new
-task status and not a weakening of the authoritative invariant above — the
-field still reads plain `Ready`/`Current`, never `Prospective Current` or
-`Prospective Ready`. It applies only to the branch's own single immediate
-dependent task and grants no license to prospectively represent any other
-task. It does not create an exception to the dependency/merge boundary in
-§5: implementation of the represented dependent task remains blocked until
-this branch's PR actually merges.
+The same closure may represent one immediate dependent as the prospective next
+`Current` only when its sole unfinished dependency is the task becoming `Done`
+in that closure and every other readiness condition already holds. No work on
+that next task starts before merge and a fresh authoritative preflight.
 
 ### 18.2 Fallback path — post-merge reconciliation
 
-If a task's accepted result lands on `main` without a prepared closure — by
-mistake, or for an exceptional reason — reconciliation remains mandatory:
-perform the same closure procedure above, starting from current
-`origin/main`, through the normal `MANUAL` branch/review/authorization
-workflow `AGENTS.md` establishes for any other change — this fallback
-reconciliation is not an `AUTONOMOUS_PR` prospective Task Closure path. This
-section does not authorize a direct commit or other substantive work on
-`main`; the reconciliation itself is prepared on a dedicated branch and
-reviewed/merged like any other change. Implementation of the next `Current`
-task must not begin until the tracker is reconciled.
-
-```text
-accepted result on main without prepared closure
-→ branch from current origin/main (normal MANUAL workflow)
-→ close/reconcile that task in TASK.md
-→ select/reconcile Current + Next + blockers
-→ review + merge the reconciliation
-→ only then begin implementation of the next task
-```
-
-An implementation PR must not assert its task as authoritatively `Done`
-before its accepted result exists on `main` (§4.5); a prepared pre-merge
-closure is prospective, not an assertion of present fact. Task Closure —
-prepared pre-merge or performed post-merge as fallback — is part of the
-project workflow, not a new gameplay delivery task.
-
-Only the ten most recent completed tasks stay in this file.
-
-Durable history belongs to:
-
-```text
-Git history
-pull requests
-DEVELOPMENT_LOG.md
-ARCHITECTURE.md / DECISIONS.md where contracts changed
-```
-
-Do not preserve full completed task records indefinitely.
-
----
+If closure was not prepared in the delivery PR, a separate reviewed
+reconciliation change records the terminal state before another task begins.
 
 ## 19. Recently completed
 
-Last ten completions only.
+This is a bounded human-readable view, not dependency truth. The Terminal task
+index is authoritative.
 
-| ID | Title | Evidence |
-| --- | --- | --- |
-| `TSK-XXXX` | ... | PR #... |
+## 20. Operational principles
 
-`PR #123` alone is sufficient durable evidence. Task Closure is normally
-prepared after the delivery PR already exists and its implementation has
-been accepted (§18.1), so the PR number is already known at that point; a
-merge commit SHA is not required and no placeholder merge SHA should be
-written. Once merged, the merge commit SHA may be added as optional
-enrichment, but doing so is not required and never justifies a second
-post-merge edit on its own:
-
-```text
-PR #123 / merge commit abcdef1
-```
-
-If no pull request was used:
-
-```text
-commit abcdef1 on main
-```
-
-`DEVELOPMENT_LOG.md` remains the durable human-readable history of development
-iterations.
-
----
-
-## 20. Review triggers
-
-Review and reconcile `TASK.md`:
-
-- before merging a `Current` task's delivery PR, so Task Closure can be
-  prepared in that same PR (§18.1); or, as fallback, immediately after an
-  already-merged task is found unreconciled, before implementation of the
-  next task begins (§18.2);
-- when Roadmap scope/status materially changes;
-- when a relevant Deferred concern changes state;
-- when a blocker or prerequisite changes;
-- when a new accepted correctness/canonical blocker appears;
-- when the user explicitly changes project priority;
-- when the project moves to another Roadmap phase;
-- on explicit task-review request.
-
-During review:
-
-1. reconcile task statuses with `main`;
-2. re-check dependencies and blockers;
-3. re-check whether `Ready` tasks still satisfy the readiness gate;
-4. select or confirm `Current`;
-5. rebuild `Next`;
-6. update `Hard blockers`;
-7. update `Next free ID`;
-8. update `Last reviewed`.
-
-Task Closure is normally prepared in the same delivery PR that lands the
-implementation (§18.1), so reconciliation normally lands in the very merge
-that delivers the task; that pre-merge preparation is prospective, not
-false, because it only becomes authoritative once the PR actually merges
-(§4.5). When closure was not prepared before merge, reconciliation is still
-mandatory as a fallback (§18.2) before implementation of the next task
-begins. A task merge must never leave `TASK.md` pointing indefinitely at an
-already-completed task as `Current`.
-
-Do not churn the queue after every commit or minor implementation detail.
-
----
-
-## 21. Progressive elaboration
-
-Do not fully specify distant work prematurely.
-
-Expected progression:
-
-```text
-Backlog
-   ↓ approaches current frontier
-refinement / decomposition
-   ↓
-Ready
-   ↓
-Next
-   ↓
-Current
-   ↓
-Done
-```
-
-A distant backlog entry may remain as small as:
-
-```text
-| TSK-0087 | Backlog | P2 | L | mechanics | Phase 3 / Reactions | Opportunity attack continuation |
-```
-
-Do not pre-invent:
-
-- Commands;
-- Events;
-- abstractions;
-- modifier systems;
-- storage contracts;
-- APIs;
-- data-model fields;
-
-until the task approaches a real consumer and the repository provides enough
-evidence to refine it safely.
-
----
-
-## 22. Initial population policy
-
-Do not populate `TASK.md` by mechanically converting every unchecked Roadmap
-item and every open `DEF-*` concern into fully specified tasks.
-
-Initial adoption should:
-
-1. inspect current `ROADMAP.md`;
-2. inspect relevant `DEFERRED.md` concerns;
-3. inspect current Architecture and implementation evidence;
-4. identify the current execution frontier;
-5. create one `Current` task when executable work exists;
-6. create up to five `Ready` tasks in `Next`;
-7. add only a small number of justified near-frontier `Backlog` entries;
-8. leave distant scope in Roadmap/Deferred until it approaches execution.
-
-A good initial state looks like:
-
-```text
-Phase 3 — Combat
-    ↓
-TSK-00XX Current
-    ↓
-TSK-00YY Ready
-    ↓
-TSK-00ZZ Ready
-```
-
-not a speculative task inventory of the entire future D&D ruleset.
-
----
-
-## 23. Operational principles
-
-Keep `TASK.md` a thin planning layer.
-
-Prefer:
-
-- one authoritative field per concept;
-- stable IDs;
-- one current task;
-- short queue horizon;
-- mergeable delivery slices;
-- explicit scope boundaries;
-- repository-backed `Done`;
-- progressive elaboration;
-- concrete consumer evidence before abstraction;
-- explicit reasons for non-obvious sequencing.
-
-Avoid:
-
-- duplicate Roadmap status;
-- duplicate Architecture contracts;
-- duplicate dependency directions;
-- hour estimates;
-- branch-state simulation in `main`;
-- speculative future design;
-- copying global `AGENTS.md` workflow into each task;
-- turning every checkpoint into a separate `TSK-*`;
-- converting every `DEF-*` into executable work prematurely;
-- using priority as a substitute for sequencing judgment;
-- creating generic abstractions only because several files contain similar code.
-
-The intended model is:
-
-```text
-ARCHITECTURE tells us what the system is allowed to mean.
-
-ROADMAP tells us where the project is going
-and what capability scope is currently open.
-
-TASK tells us which concrete reviewable slice goes next.
-
-DEFERRED tells us what known broader concerns remain outside
-the implemented slice.
-
-DEVELOPMENT_LOG and Git tell us what actually happened.
-```
+- one operational `AUTONOMOUS_PR` contract: v2;
+- lifecycle in this tracker, execution in Task Execution Specs;
+- deterministic orchestration owns all transitions;
+- no LLM-selected gate transition;
+- no numeric repair limit;
+- no merge or auto-merge authority.
 
 ---
 
 # Current position
 
-- **Active Roadmap phase:** Phase 3 — Combat
 - **Current:** TSK-0028
 - **Next:** —
 - **Hard blockers:** —
 - **Next free ID:** TSK-0029
-- **Last reviewed:** 2026-09-20
+- **Last reviewed:** 2026-09-21
 
 ---
 
 # Open task index
 
-| ID | Status | P | Size | Group | Roadmap target | Title |
-| --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0028` | `Current` | `P2` | `M` | `engineering` | Cross-cutting engineering prerequisite for continued Phase 3 delivery: activate the approved `AUTONOMOUS_PR` v2 workflow | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
-| `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | Opportunity Attack / Reaction continuation |
+| ID | Status | P | Size | Group | Roadmap target | Depends on | Title |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0028` | `Current` | `P2` | `M` | `engineering` | Cross-cutting engineering prerequisite for continued Phase 3 delivery: activate the approved `AUTONOMOUS_PR` v2 workflow | `TSK-0027` | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
+| `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | — | Opportunity Attack / Reaction continuation |
 
 ---
 
-# Open task details
+# Terminal task index
 
-## TSK-0028 — Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2
-
-**Status:** `Current`
-
-**Priority:** `P2`
-
-**Size:** `M`
-
-**Group:** `engineering`
-
-**Roadmap target:** Cross-cutting engineering prerequisite for continued Phase 3 delivery: activate the approved `AUTONOMOUS_PR` v2 workflow
-
-**References:**
-
-- `ROADMAP.md` — Phase 3 — Combat (active phase); an engineering prerequisite for continued Phase 3 delivery, not a Phase 3 capability row
-- `AGENTS.md` — "Change authorisation and diff review", `AUTONOMOUS_PR` (bounded exception), "Contract versions"
-- `docs/AUTONOMOUS_PR_HARNESS.md` — Part I (v1, operational until this task merges), Part II §§20–35 (approved v2 contract)
-- `docs/TASK.md` §§4.5, 5, 12, 15, 18, 19
-- `CLAUDE.md` — project rules digest
-- `TSK-0024` — bounded `AUTONOMOUS_PR` governance contract
-- `TSK-0025` — minimal execution-harness contract
-- `TSK-0026` — minimal local v1 execution harness
-- `TSK-0027` — Task Execution Spec and adaptive v2 contract
-
-**Depends on:** `TSK-0027`
-
-**Contract impact:** `none`
-
-### Goal
-
-Implement the approved `TSK-0027` spec-driven adaptive `AUTONOMOUS_PR` v2 in
-`tools/autonomous_pr/` and, in the same change, atomically make it the only
-operational `AUTONOMOUS_PR` contract. After merge no operational mixed v1/v2
-mode and no per-task version selection exists.
-
-### Why now
-
-`TSK-0027` merged the v2 contract as approved but inactive. Operational v1
-still has the three structural limits that motivated it: runtime generative
-planning stands in for an already-approved execution target, bounded numeric
-repair exhaustion ends a productive review/repair loop as `BLOCKED`, and Task
-Closure is committed and pushed before Mode C, so a Mode C
-`CHANGES_REQUESTED` cannot be repaired safely. Harness §20 requires exactly one
-later task to implement v2 and activate it atomically: activating only some
-elements of Part II, or implementing v2 behavior without flipping the
-operational-version declaration in the same change, is a contract violation.
-
-A second, independent reason for doing this now: `# Recently completed`
-retains only the last ten completions (§19), and the v1 task-context parser
-fails closed on a dependency it cannot positively confirm there. That window
-is already full, so the next Task Closure drops the oldest row. The v2
-preflight therefore needs a durable terminal-task lifecycle index.
-
-No pilot task is designated by this task, and `TSK-0023` is neither refined
-nor promoted: it stays `Backlog / P2 / L`.
-
-This task defines the implementation and activation of `AUTONOMOUS_PR`
-itself, so it runs under `MANUAL` only (`AGENTS.md` "Contract versions";
-Harness §20). The operational v1 harness must not be invoked for it. It has
-no Task Execution Spec: it was refined, and began execution, under operational
-v1, so this detail is its execution input. Creating `docs/tasks/TSK-0028.md`
-is out of scope.
-
-### Scope
-
-- Task Execution Specs at the stable path `docs/tasks/TSK-XXXX.md` as the
-  execution input: the nine required sections of Harness Part II in order;
-  ordered `CP-1`…`CP-N` checkpoints, each with Objective, Required result,
-  Constraints, Verification, and Review focus; the spec's ID matching its
-  filename; no lifecycle field (Status, Priority, Size, dependency, queue
-  position) in a spec; spec required for `Ready`, required and
-  execution-ready for `Current`, optional for `Backlog`.
-- Deterministic, shell-free verification representation: machine-executed
-  verification commands in checkpoint Verification and in Full verification
-  are JSON argv arrays, never shell strings. The Full verification the
-  orchestrator runs comes from the Task Execution Spec.
-- A thin `docs/TASK.md` as the lifecycle and queue metadata source, plus a
-  durable terminal-task lifecycle index for `Done`/`Superseded` tasks, so a
-  dependency's `Done` status stays positively confirmable after the task
-  leaves `# Recently completed`. The index is complete for every terminal
-  task ID allocated so far, seeded from authoritative history.
-- Preflight from one captured `origin/main` SHA covering `docs/TASK.md` and the
-  spec, with the checks of Harness §30, including a mechanical Roadmap-target
-  check that uses no LLM semantic judgment and adds no generic Roadmap
-  parser or framework. The authoritative `Current` state and readiness gate
-  remain the primary governance proof; the harness only verifies, mechanically,
-  the facts it can verify.
-- No runtime generative planning and no plan-review gate: every runtime
-  handoff is derived from the fixed spec.
-- Adaptive review/repair: the unchanged three-verdict set; a structured,
-  machine-validated repair packet whose every finding carries Problem,
-  Evidence, Required outcome, Recommended repair, and Verification focus; a
-  mandatory non-convergence diagnosis from the second consecutive
-  `CHANGES_REQUESTED` at the same gate (§26); no numeric repair-exhaustion
-  rule (repair count is telemetry only); every finite fail-closed condition of
-  §27 preserved.
-- Deterministic candidate identity with no-progress and cycle detection;
-  orchestrator-owned in-memory repair history; bounded reviewer handoff that
-  creates no synthetic items for a gate's first review; reviewer freshness at
-  every review.
-- Deterministic evidence invalidation and replay, conservative whenever the
-  earliest affected scope or a closure-only repair cannot be established
-  deterministically; repairable pre-closure cumulative review.
-- An unpublished local Task Closure candidate; Mode C before publication;
-  publication of exactly the audited candidate; Mode C staleness handling
-  through publication. Per Harness §34, the initial v2 implementation is not
-  required to perform any candidate-changing repair after publication (for
-  example one that a required-CI failure, or a Mode C `CHANGES_REQUESTED` from
-  a Mode C rebuilt after post-publication `origin/main` movement, would
-  require). Where such a failure needs a repair or replay the harness cannot
-  yet perform safely, the run ends as `BLOCKED`. This is an implementation
-  limitation, not a blanket rule that every post-publication failure is
-  `BLOCKED`, and no general rule forbids same-candidate revalidation or
-  recovery.
-- No persisted resume; provider neutrality; no new production dependency.
-- Atomic synchronization, in this one change, of `AGENTS.md`,
-  `docs/AUTONOMOUS_PR_HARNESS.md` (Part II promoted to operational text,
-  superseded Part I mechanics replaced), `docs/TASK.md` (the format v2
-  requires), `CLAUDE.md` (only where guidance it deliberately duplicates
-  changes), and the `tools/autonomous_pr/` implementation, CLI, and tests,
-  including the `docs/TASK.md` tracker tests the format change requires. The
-  `DEVELOPMENT_LOG.md` entry is written at Task Closure.
-
-### Out of scope
-
-- any change to `src/dnd_engine/**`, gameplay behavior, or `ARCHITECTURE.md`;
-- `TSK-0023` refinement, decomposition, or implementation;
-- a first real v2 pilot task, its selection, or its allocation;
-- autonomous merge or auto-merge;
-- a provider SDK or framework;
-- persisted run state and persisted or cross-process resume;
-- a database, broker, dashboard, cloud, or container orchestration;
-- a GitHub Actions autonomous runner;
-- multi-task or parallel execution;
-- a generic workflow, gate, or Roadmap-parsing framework;
-- post-publication candidate-changing repair;
-- new production dependencies (`[project].dependencies` stays empty);
-- historical Task Execution Specs for completed tasks, and a Task Execution
-  Spec for `TSK-0028` itself;
-- unrelated refactors.
-
-### Acceptance criteria
-
-- Exactly one operational `AUTONOMOUS_PR` contract exists after merge, v2,
-  declared in one authoritative place in `AGENTS.md`; no mixed v1/v2 mode, no
-  per-task version selection, no version flag, and no retained v1 code path.
-- Part II is promoted to operational text and the Part I mechanics it
-  supersedes (planning, plan review, bounded numeric repair) are replaced;
-  the `AGENTS.md` autonomous flow and Mode C text describe the unpublished
-  closure candidate and Mode C before publication; no current
-  normative/governance document (`AGENTS.md`, the operational text of
-  `docs/AUTONOMOUS_PR_HARNESS.md`, the `docs/TASK.md` process sections,
-  `CLAUDE.md`) describes v1 as the current operational `AUTONOMOUS_PR`
-  contract. Historical records (`DEVELOPMENT_LOG.md`, historical context) may
-  correctly state that v1 was operational in the past.
-- The v2 preflight reads `docs/TASK.md` and the spec from one captured
-  `origin/main` SHA and ends the run as `BLOCKED` when the named task is not
-  the authoritative `Current`, a dependency is not confirmed `Done` through the
-  durable lifecycle index, the Roadmap target is missing, the spec is missing,
-  mismatched, or not execution-ready, or the run cannot be tied to one SHA.
-  A later `origin/main` movement that changes the task entry, its
-  dependencies, its Roadmap target, or its spec fails closed.
-- A candidate that edits the task's own `docs/tasks/TSK-XXXX.md` is a scope
-  violation and ends the run as `BLOCKED`.
-- Declared checkpoints run exactly as declared and in order; verification
-  commands run as argv without a shell; Full verification comes from the spec.
-- A `CHANGES_REQUESTED` without a complete repair packet, or without the
-  required diagnosis from the second consecutive one at a gate, ends the run
-  as `BLOCKED`. No repair count is a gate input. A candidate rejected by
-  deterministic verification is never sent to review, and advances neither
-  the consecutive `CHANGES_REQUESTED` count nor the review iteration number.
-- A repair that reproduces an already-rejected candidate identity at the same
-  gate and context ends the run as `BLOCKED`; a run of distinct candidates
-  is never blocked by iteration count.
-- A reviewer's ordinary handoff is the bounded set of Harness §29 and never
-  the full repair history; the first review of a gate gets no synthetic
-  previous findings or delta; implementer and reviewer contexts stay distinct.
-- A candidate-changing repair makes stale every downstream evidence item; no
-  earlier approval is carried over; when the earliest affected scope cannot
-  be established deterministically, the broader replay runs; when safe replay
-  is impossible the run ends as `BLOCKED`.
-- The pre-closure cumulative review is repairable, and a repair reruns
-  verification and review of the repair, commit and push, Full verification,
-  a rebuilt cumulative diff, and a fresh cumulative review.
-- Task Closure exists as an unpublished local commit until Mode C approves
-  exactly that candidate; a rejected Mode C candidate never requires a remote
-  history rewrite; publication pushes exactly the audited `HEAD`, and only if
-  `origin/main` is still the SHA the audit was built against.
-- The initial implementation is not required to perform a candidate-changing
-  repair after publication. When a post-publication failure (a required-CI
-  failure, or a Mode C `CHANGES_REQUESTED` from a rebuilt Mode C) requires such
-  a repair or replay and the harness cannot perform it safely, the run ends as
-  `BLOCKED`. There is no blanket rule that any post-publication failure is
-  `BLOCKED`, and same-candidate revalidation or recovery is not forbidden: a
-  rebuilt Mode C that approves the same published candidate does not stop the
-  run.
-- No persisted run state, no autonomous merge, no provider-specific
-  behavior in the contract or the orchestrator, and no new production
-  dependency.
-- `TSK-0023`, `src/dnd_engine/**`, and `ARCHITECTURE.md` are unchanged, and no
-  `docs/tasks/*.md` file is created.
-
-### Verification
-
-- `python -m pytest tests/tools/autonomous_pr/` — deterministic, with
-  fake/stub implementer and reviewer processes and disposable local Git
-  fixtures; no network and no real LLM.
-- Explicit regression coverage: the `A → repair → A`, `A → B → C → B`, and
-  `A → B → C → D` candidate sequences; verification-failure rejection without
-  a synthetic verdict; the second-consecutive-`CHANGES_REQUESTED` diagnosis;
-  the late-repair replay sequence; publication of exactly the audited
-  candidate; and Mode C staleness before publication.
-- `python -m pytest tests/architecture/`
-- `python -m pytest` (full suite)
-- `python -m mypy src/dnd_engine tools/autonomous_pr`
-- the v2 tracker parser accepts the final post-activation `docs/TASK.md`
-  format;
-- the v2 preflight passes on a valid test/repository state that has an
-  authoritative `Current` task and a matching execution-ready Task Execution
-  Spec;
-- an invocation against `Current: —` (as the live `docs/TASK.md` reads after
-  this task's closure) is correctly blocked
-- `git diff --check`
-
-If Windows `pytest` temp cleanup raises the known unrelated
-`PermissionError`, a disposable `--basetemp` may be used and must be
-reported.
-
-### Expected touchpoints
-
-Optional planning aid, not a contract.
-
-- `tools/autonomous_pr/**`
-- `tests/tools/autonomous_pr/**`
-- `tests/architecture/test_task_tracker.py`
-- `AGENTS.md`
-- `docs/AUTONOMOUS_PR_HARNESS.md`
-- `docs/TASK.md`
-- `CLAUDE.md`
-- `docs/DEVELOPMENT_LOG.md` (at Task Closure)
-
-### Execution checkpoints
-
-Checkpoints are branch-internal steps of one mergeable task. Nothing in them
-is operational until the single merge, and the merge must not leave a mixed
-operational state.
-
-1. `CP-1` — Task Execution Spec input and exact-base preflight: spec model
-   and deterministic validation, the JSON-argv verification representation,
-   the v2 `docs/TASK.md` reader with the durable terminal-task lifecycle
-   index, single-SHA preflight including the mechanical Roadmap-target
-   check, and fail-closed handling of later `origin/main` movement and of
-   spec edits.
-2. `CP-2` — Spec-driven checkpoint execution and adaptive repair: removal of
-   runtime planning and plan review, the spec-driven checkpoint loop with
-   verification from the spec, the structured repair packet and
-   non-convergence diagnosis, gate counters, candidate identity with
-   no-progress and cycle detection, in-memory repair history, the bounded
-   reviewer handoff, and removal of numeric repair exhaustion.
-3. `CP-3` — Late repair and deterministic evidence replay: repairable
-   pre-closure cumulative review, evidence invalidation, the conservative
-   replay rule, and the late-repair replay sequence.
-4. `CP-4` — Unpublished Task Closure candidate and Mode C: closure
-   preparation and review, the local unpublished closure commit, fresh
-   `origin/main` revalidation, Mode C before publication, exact
-   audited-candidate publication, Mode C staleness, and the
-   post-publication boundary of Harness §34 through
-   `READY_FOR_HUMAN_MERGE`.
-5. `CP-5` — Atomic v2 activation and regression: the `AGENTS.md`
-   operational-version flip, Part II promoted to operational text, the
-   `docs/TASK.md` format v2 adoption and its tracker tests, the `CLAUDE.md`
-   sync, removal of every superseded v1 path and flag, and the full
-   regression pass.
-
-Task Closure follows the normal prepared-closure path (§18.1), not a
-checkpoint.
+| ID | Status | Evidence | Title |
+| --- | --- | --- | --- |
+| `TSK-0001` | `Done` | PR #69 / merge commit `f4dbc50` | Define the minimal authoritative Character weapon source |
+| `TSK-0002` | `Done` | PR #68 / merge commit `d8f86ed` | Define active-turn gating for `AttackCommand` |
+| `TSK-0003` | `Done` | PR #72 / merge commit `7ac97f6` | Define zero-HP Attack eligibility by creature category |
+| `TSK-0004` | `Done` | PR #80 / merge commit `d1b23de` | Implement the approved minimal Character weapon source and persistence |
+| `TSK-0005` | `Superseded` | decomposed into TSK-0010..TSK-0013 by commit `c4db43d` | Implement the Character Dagger Attack → Damage → Monster HP continuation |
+| `TSK-0006` | `Done` | PR #75 / merge commit `d590056` | Implement active-turn Attack gating |
+| `TSK-0007` | `Done` | PR #77 / merge commit `7798ed7` | Implement zero-HP Attack eligibility |
+| `TSK-0008` | `Done` | PR #70 / merge commit `24da875` | Define minimal melee targeting and reach for the first Character Dagger attack |
+| `TSK-0009` | `Done` | PR #71 / merge commit `e99d0dc` | Deduplicate README/CLAUDE and remove redundant current data-flow projection |
+| `TSK-0010` | `Done` | PR #83 | Implement Combat-owned positioning and State schema V7 |
+| `TSK-0011` | `Done` | PR #84 | Define exact Character Dagger Attack and Damage contracts |
+| `TSK-0012` | `Done` | PR #85 | Implement Character Dagger weapon Attack resolution |
+| `TSK-0013` | `Done` | PR #86 | Implement Character Dagger Attack → Damage → Monster HP consequence |
+| `TSK-0014` | `Done` | PR #88 | Define the minimal ordinary-Action resource contract for existing `AttackCommand` consumers |
+| `TSK-0015` | `Done` | PR #89 | Implement minimal current-turn Action expenditure for existing `AttackCommand` consumers |
+| `TSK-0016` | `Done` | PR #91 | Define minimal Character zero-HP turn and Death Save contract |
+| `TSK-0017` | `Done` | PR #92 | Implement minimal Character Death Save vertical slice |
+| `TSK-0018` | `Done` | PR #93 | Define minimal Combat end lifecycle contract |
+| `TSK-0019` | `Done` | PR #94 | Implement minimal CombatEnded vertical slice |
+| `TSK-0020` | `Done` | PR #95 | Tighten development workflow and task-governance automation |
+| `TSK-0021` | `Done` | PR #97 | Define minimal Combat Movement and placement-boundary contract |
+| `TSK-0022` | `Done` | PR #98 | Implement initial Combat tactical placement vertical slice |
+| `TSK-0024` | `Done` | PR #101 | Define bounded `AUTONOMOUS_PR` development-governance contract |
+| `TSK-0025` | `Done` | PR #102 | Define minimal `AUTONOMOUS_PR` execution-harness contract |
+| `TSK-0026` | `Done` | PR #103 | Implement minimal local `AUTONOMOUS_PR` execution harness |
+| `TSK-0027` | `Done` | PR #104 | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract |
 
 ---
 
@@ -1608,107 +302,13 @@ checkpoint.
 
 | ID | Title | Evidence |
 | --- | --- | --- |
-| `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |
-| `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
-| `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
-| `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
-| `TSK-0021` | Define minimal Combat Movement and placement-boundary contract | PR #97 |
-| `TSK-0022` | Implement initial Combat tactical placement vertical slice | PR #98 |
-| `TSK-0024` | Define bounded `AUTONOMOUS_PR` development-governance contract | PR #101 |
-| `TSK-0025` | Define minimal `AUTONOMOUS_PR` execution-harness contract | PR #102 |
-| `TSK-0026` | Implement minimal local `AUTONOMOUS_PR` execution harness | PR #103 |
 | `TSK-0027` | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract | PR #104 |
-
----
-
-# Appendix A — detailed task template
-
-```markdown
-## TSK-XXXX — <Title>
-
-**Status:** `Ready`
-
-**Priority:** `P1`
-
-**Size:** `S`
-
-**Group:** `mechanics`
-
-**Roadmap target:** Phase ... / ...
-
-**References:**
-
-- `ROADMAP.md` — Phase ... / ...
-- `ARCHITECTURE.md` §...
-- `DEF-XXXX`
-- `DEC-XXXX`
-
-**Depends on:** —
-
-**Contract impact:** `none`
-
-### Goal
-
-...
-
-### Why now
-
-...
-
-### Scope
-
-- ...
-
-### Out of scope
-
-- ...
-
-### Acceptance criteria
-
-- ...
-
-### Verification
-
-- ...
-
-### Expected touchpoints
-
-Optional.
-
-- `src/dnd_engine/...`
-- `tests/...`
-- `docs/...`
-
-### Execution checkpoints
-
-Optional.
-
-1. ...
-2. ...
-
-### Evidence / trigger
-
-Optional.
-
-...
-
-### Blocker
-
-Only when `Status: Blocked`.
-
-Blocker: ...
-Unblock condition: ...
-```
-
----
-
-# Appendix B — compact backlog example
-
-```markdown
-| ID | Status | P | Size | Group | Roadmap target | Title |
-| --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0087` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions | Opportunity attack continuation |
-```
-
-No detailed section is required until the task approaches the execution
-frontier.
+| `TSK-0026` | Implement minimal local `AUTONOMOUS_PR` execution harness | PR #103 |
+| `TSK-0025` | Define minimal `AUTONOMOUS_PR` execution-harness contract | PR #102 |
+| `TSK-0024` | Define bounded `AUTONOMOUS_PR` development-governance contract | PR #101 |
+| `TSK-0022` | Implement initial Combat tactical placement vertical slice | PR #98 |
+| `TSK-0021` | Define minimal Combat Movement and placement-boundary contract | PR #97 |
+| `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
+| `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
+| `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |
+| `TSK-0017` | Implement minimal Character Death Save vertical slice | PR #92 |

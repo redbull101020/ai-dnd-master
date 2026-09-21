@@ -13,12 +13,8 @@ CLI never merges or auto-merges anything.
 
 Every external command is invoked as an explicit argv list
 (``subprocess.run([...], ...)``, never ``shell=True``); no provider SDK is
-used. ``--verify`` values are split by :func:`_split_verify_command`, a
-narrow hand-written whitespace/double-quote tokenizer — not
-``shlex.split``, whose default POSIX mode treats ``\\`` as an escape
-character and would corrupt a Windows executable path; and not a shell, so
-no variable expansion, single-quote handling, or backslash escaping is
-supported.
+used. Verification commands come only from the accepted Task Execution
+Spec; the CLI has no verification-command override or fallback.
 
 ``--reviewer-fresh-context-capable``, ``--implementer-no-git-github-write-capability``,
 and ``--reviewer-no-git-github-write-capability`` are all required: omitting
@@ -45,47 +41,10 @@ from .model import AgentRole, RunOutcome, RunResult
 from .orchestrator import OrchestratorConfig, run
 
 
-def _split_verify_command(entry: str) -> tuple[str, ...]:
-    """Split one ``--verify`` command string into an argv tuple.
-
-    Splits on whitespace, treating a double-quoted segment as one token
-    (quotes stripped, content taken verbatim). Backslashes are never
-    treated as escape characters, so a Windows path like
-    ``C:\\Users\\me\\python.exe`` survives intact — unlike
-    ``shlex.split()``'s default POSIX mode, which would corrupt it. This is
-    deliberately not a shell-compatible parser (no single-quote handling,
-    no backslash escaping, no variable expansion): it exists only to let
-    one self-contained argv list be written on one command line, not to
-    introduce shell semantics or a command framework.
-    """
-
-    tokens: list[str] = []
-    i = 0
-    n = len(entry)
-    while i < n:
-        while i < n and entry[i].isspace():
-            i += 1
-        if i >= n:
-            break
-        if entry[i] == '"':
-            end = entry.find('"', i + 1)
-            if end == -1:
-                raise ValueError(
-                    f"unterminated double quote in verification command: {entry!r}"
-                )
-            tokens.append(entry[i + 1 : end])
-            i = end + 1
-        else:
-            start = i
-            while i < n and not entry[i].isspace():
-                i += 1
-            tokens.append(entry[start:i])
-    return tuple(tokens)
-
-
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m tools.autonomous_pr",
+        allow_abbrev=False,
         description=(
             "Execute the deterministic AUTONOMOUS_PR orchestrator (preflight "
             "through READY_FOR_HUMAN_MERGE/STOP, or a fail-closed BLOCKED) "
@@ -164,26 +123,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--verify",
-        action="append",
-        default=[],
-        dest="verify_commands",
-        help=(
-            "One deterministic verification command, split into an argv "
-            "list by _split_verify_command (whitespace/double-quote only "
-            "-- not a shell, and safe for Windows paths); may repeat."
-        ),
-    )
-    parser.add_argument(
-        "--max-repairs",
-        type=int,
-        default=2,
-        help=(
-            "Bounded repair attempts per phase. An implementation detail, "
-            "not a canonical governance limit."
-        ),
-    )
-    parser.add_argument(
         "--delivery-branch",
         default=None,
         help="Delivery branch name; defaults to autonomous-pr/<task_id lowercased>.",
@@ -228,9 +167,6 @@ def _build_config(args: argparse.Namespace) -> OrchestratorConfig:
         fresh_context_capable=args.reviewer_fresh_context_capable,
         has_git_or_github_write_access=reviewer_has_write_access,
     )
-    verification_commands = tuple(
-        _split_verify_command(entry) for entry in args.verify_commands
-    )
     delivery_branch = args.delivery_branch or f"autonomous-pr/{args.task_id.lower()}"
 
     return OrchestratorConfig(
@@ -238,9 +174,7 @@ def _build_config(args: argparse.Namespace) -> OrchestratorConfig:
         repo=args.repo,
         implementer_spec=implementer_spec,
         reviewer_spec=reviewer_spec,
-        verification_commands=verification_commands,
         delivery_branch=delivery_branch,
-        max_repairs=args.max_repairs,
         verification_timeout_seconds=args.verify_timeout_seconds,
     )
 
@@ -252,13 +186,10 @@ def _report(result: RunResult) -> None:
     print(f"outcome: {outcome}")
     print(f"delivery_branch: {result.delivery_branch}")
     print(f"head_sha: {result.head_sha}")
-    print(f"repair_count: {result.repair_count}")
     if result.pr_url is not None:
         print(f"pr_url: {result.pr_url}")
     if result.blocked_reason is not None:
         print(f"blocked_reason: {result.blocked_reason}")
-    if result.artifacts_dir is not None:
-        print(f"artifacts_dir: {result.artifacts_dir}")
 
 
 def main(argv: list[str] | None = None) -> int:

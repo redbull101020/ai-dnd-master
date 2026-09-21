@@ -270,7 +270,7 @@ If the branch changes after this audit — a new commit, a rebase, or `origin/ma
 
 These A/B/C semantics are the only diff ranges this contract defines. `AUTONOMOUS_PR` does not add sub-modes such as `C1`/`C2`; it only changes who `review.patch` is produced for (see "review.patch under `AUTONOMOUS_PR`" below).
 
-**Pre-closure cumulative implementation review vs. mode C.** `docs/TASK.md` §18.1 requires, before a prepared Task Closure, that "the implementation diff has been reviewed/accepted." Reviewing that full implementation diff uses `origin/main...HEAD` as input — built the same way as mode C — but this **pre-closure cumulative implementation review is not mode C**. Mode C is specifically the *final* cumulative branch audit, performed only after Task Closure itself has already been reviewed, committed, and pushed, and only after `origin/main` has been re-fetched and revalidated. Mode C's `origin/main...HEAD` therefore includes the closure commit(s); the pre-closure review's `origin/main...HEAD` does not. Any later branch commit, rebase, or movement of `origin/main` makes a completed mode C audit stale immediately, with no materiality exception, and it must be rebuilt and re-reviewed before the task/PR is considered complete.
+**Pre-closure cumulative implementation review vs. mode C.** `docs/TASK.md` §18.1 requires, before a prepared Task Closure, that "the implementation diff has been reviewed/accepted." Reviewing that full implementation diff uses `origin/main...HEAD` as input — built the same way as mode C — but this **pre-closure cumulative implementation review is not mode C**. Mode C is the final cumulative branch audit of the unpublished local Task Closure candidate, performed only after Closure Review and a fresh `origin/main` revalidation. Its `origin/main...HEAD` therefore includes the unpublished closure commit while the remote delivery branch still points to the accepted implementation predecessor. Only the exact Mode-C-approved candidate may then be pushed. Any later local/remote branch commit, rebase, candidate replacement, or movement of `origin/main` makes a completed mode C audit stale immediately, with no materiality exception.
 
 `*.patch` and `*.diff` are gitignored. Never stage or commit the patch file, and never include it in the list of changed files.
 
@@ -311,7 +311,7 @@ never resumed automatically and never inferred from context.
 One valid `AUTONOMOUS_PR` invocation authorises, for the exact `Current` `TSK`
 it names, and only for that task:
 
-- preflight and read-only planning against a freshly fetched, validated
+- spec-driven preflight against a freshly fetched, exact, validated
   `origin/main`;
 - creating one dedicated delivery branch from that `origin/main`;
 - implementing that task;
@@ -321,8 +321,8 @@ it names, and only for that task:
   autonomous reviewer;
 - pushing accepted commits, but only to that same delivery branch;
 - creating and updating a draft pull request;
-- bounded repair iterations in response to review or CI feedback, staying
-  inside the already-approved task scope;
+- adaptive repair iterations in response to review or CI feedback, staying
+  inside the fixed Task Execution Spec and deterministic no-progress rules;
 - preparing, reviewing, committing, and pushing prospective Task Closure in
   that same delivery PR, once `docs/TASK.md` §18.1's conditions are met —
   this prospective Task Closure edit is the **only** `docs/TASK.md` mutation
@@ -378,9 +378,10 @@ The A/B/C diff-range semantics above are unchanged and exhaustive;
 designated autonomous reviewer, and it doubles as the audit artifact. The
 distinction between the pre-closure cumulative implementation review
 (`origin/main...HEAD`, satisfies §18.1, not mode C) and the mode C final
-cumulative branch audit (performed only after Task Closure is
-reviewed/committed/pushed and `origin/main` is revalidated) applies exactly
-as defined above, and is load-bearing for `AUTONOMOUS_PR`'s flow.
+cumulative branch audit (performed against the unpublished local closure
+candidate after Task Closure review and fresh `origin/main` revalidation)
+applies exactly as defined above, and is load-bearing for
+`AUTONOMOUS_PR`'s flow.
 
 #### Autonomous flow
 
@@ -388,9 +389,7 @@ Minimal sequence; this is not a runner or orchestrator design:
 
 ```text
 explicit AUTONOMOUS_PR invocation
-→ preflight against freshly fetched/validated origin/main
-→ read-only planning
-→ independent plan review
+→ exact-base v2 preflight and fixed Task Execution Spec
 → delivery branch
 → implementation checkpoint
 → deterministic verification
@@ -401,11 +400,11 @@ explicit AUTONOMOUS_PR invocation
 → full verification
 → final cumulative implementation review (satisfies §18.1)
 → draft PR
-→ prospective Task Closure
-→ independent closure review
-→ commit/push closure
+→ unpublished prospective Task Closure candidate
+→ independent closure review and repair as needed
 → revalidate current origin/main
-→ final cumulative branch audit (mode C, origin/main...HEAD)
+→ final cumulative branch audit (mode C, origin/main...unpublished HEAD)
+→ publish the exact audited candidate
 → required CI
 → READY_FOR_HUMAN_MERGE
 → STOP
@@ -416,8 +415,8 @@ explicit AUTONOMOUS_PR invocation
 [`docs/AUTONOMOUS_PR_HARNESS.md`](docs/AUTONOMOUS_PR_HARNESS.md) describes
 the minimal execution mechanics (process model, orchestrator
 responsibility, role isolation, handoff artifacts, run-state/phase model,
-retry/resume boundary, provider boundary, and harness test contract) a
-future harness uses to carry out an invocation of the flow above. It is
+retry/resume boundary, provider boundary, and harness test contract) the
+operational harness uses to carry out an invocation of the flow above. It is
 subordinate to this section: it cannot expand, redefine, or weaken any
 authority, review, test, closure, or merge gate defined here, this section
 wins on any conflict, and that document is never itself a valid
@@ -425,31 +424,18 @@ wins on any conflict, and that document is never itself a valid
 
 #### Contract versions
 
-**Operational `AUTONOMOUS_PR` contract: v1.**
+**Operational `AUTONOMOUS_PR` contract: v2.**
 
-The `AUTONOMOUS_PR` rules in this section, Part I of
-`docs/AUTONOMOUS_PR_HARNESS.md`, and the `tools/autonomous_pr/`
-implementation are the only operational contract. Part II of that document
-describes a prospective, spec-driven v2 (Task Execution Specs under
-`docs/tasks/`). It is approved as a design target and is **inactive**:
+The `AUTONOMOUS_PR` rules in this section, Part II of
+`docs/AUTONOMOUS_PR_HARNESS.md`, and `tools/autonomous_pr/` form the one
+operational contract. Part I's v1 runtime flow/mechanics are historical and
+inactive: they supply no runtime path, flag, fallback, or per-task version
+choice. Common Part I definitions and invariants remain applicable only where
+operational Part II explicitly incorporates them by reference.
 
-- it is not authorisation, not a valid invocation, and not part of the
-  "Autonomous flow" above;
-- neither merging the change that introduced it nor the presence of any
-  `docs/tasks/TSK-XXXX.md` file activates it;
-- v2 is activated only by a later task that implements it in
-  `tools/autonomous_pr/` and flips this declaration in the same change;
-  there is no partial activation and no per-task choice of version.
-
-One rule in this subsection is operational now, not prospective: the tasks
-that define and implement the v1→v2 transition — `TSK-0027` and the later task
-that implements and activates v2 — run under `MANUAL` only, and an
-`AUTONOMOUS_PR` invocation naming either is not valid. This is an explicit
-v1→v2 transition invariant defined by `TSK-0027`. It is separate from the
-"Bounded authority" prohibition, which is limited to changing
-`AUTONOMOUS_PR`'s own authority or permissions, and does not follow from it.
-
-Once v2 is active, a Task Execution Spec is an execution target only. It
+`TSK-0027` and `TSK-0028` performed the v1→v2 definition and activation under
+`MANUAL`; that completed transition is historical and is not a permanent
+runtime exception. A Task Execution Spec is execution input only. It
 never grants commit, push, pull-request, or merge authorisation; those
 remain governed by this section.
 
@@ -465,8 +451,9 @@ following is true:
 - the task is no longer a valid authoritative execution target (checked
   before implementation begins, and re-checked whenever a fail-closed
   condition is evaluated);
-- the designated reviewer does not accept changes within the bounded repair
-  policy;
+- adaptive repair repeats a rejected candidate or an exact no-progress cycle,
+  required second-or-later `CHANGES_REQUESTED` output omits a complete
+  non-convergence diagnosis, or the designated reviewer returns `BLOCKED`;
 - mandatory checks cannot be brought to green inside the task's approved
   scope;
 - `origin/main` has materially changed facts that the implementation or the
@@ -476,6 +463,13 @@ following is true:
 
 Any of these ends the invocation exactly like a terminal `STOP`: resuming
 requires a new explicit user invocation.
+
+v2 has no numeric repair limit. Multiple distinct `CHANGES_REQUESTED`
+verdicts are not themselves a fail-closed condition; the non-convergence
+diagnosis is required guidance, not a terminal verdict. The initial v2
+implementation may nevertheless end `BLOCKED` when CI or a post-publication
+re-audit would require a candidate-changing repair/replay that it cannot yet
+perform safely without rewriting published history or reusing stale evidence.
 
 #### Prospective next task
 

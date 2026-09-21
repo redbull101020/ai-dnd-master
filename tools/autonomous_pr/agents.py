@@ -4,15 +4,13 @@ Scope, matching ``docs/AUTONOMOUS_PR_HARNESS.md`` §§5, 7, 13, 14:
 
 - one generic subprocess invocation primitive (:func:`run_agent`), used by
   both roles — not a ``BaseProvider``/adapter hierarchy/registry;
-- a role-checked implementer wrapper (:func:`run_implementer`) and a
-  role-checked reviewer boundary for both legacy prose findings
-  (:func:`run_reviewer`) and v2 structured repair packets
-  (:func:`run_structured_reviewer`);
+- a role-checked implementer wrapper (:func:`run_implementer`) and v2
+  structured reviewer boundary (:func:`run_structured_reviewer`);
 - the unchanged strict three-token reviewer verdict set, plus fail-closed v2
   JSON validation (:func:`parse_structured_reviewer_output`).
 
 Role isolation. ``AgentInvocationSpec`` carries an explicit :class:`.model.AgentRole`,
-and :func:`run_implementer`/:func:`run_reviewer` each refuse a spec of the
+and :func:`run_implementer`/:func:`run_structured_reviewer` each refuse a spec of the
 wrong role. Nothing in this module ever builds a reviewer's
 ``AgentInvocationSpec`` from an implementer's spec or result — there is no
 "resume the implementer's session for review" helper, and there must never
@@ -39,7 +37,6 @@ from .model import (
     NonConvergenceDiagnosis,
     RepairFinding,
     RepairPacket,
-    ReviewResult,
     ReviewVerdict,
     StructuredReviewResult,
 )
@@ -152,7 +149,7 @@ def run_agent(spec: AgentInvocationSpec, input_text: str) -> AgentInvocationResu
     Never raises for an expected failure mode (timeout, non-zero exit,
     failure to launch the executable) — those become part of the returned
     :class:`AgentInvocationResult` instead, so the strict, fail-closed
-    verdict handling in :func:`run_reviewer` never has to guess whether a
+    structured verdict handling never has to guess whether a
     caught exception means "no verdict" or something else.
 
     stdin/stdout/stderr are all encoded/decoded as UTF-8 explicitly —
@@ -221,49 +218,6 @@ def parse_reviewer_verdict(output: str) -> ReviewVerdict:
     if len(matches) == 1:
         return ReviewVerdict(next(iter(matches)))
     return ReviewVerdict.BLOCKED
-
-
-def _extract_findings(output: str, verdict: ReviewVerdict) -> str:
-    remaining = [line for line in output.splitlines() if line.strip() != verdict.value]
-    return "\n".join(remaining).strip()
-
-
-def run_reviewer(spec: AgentInvocationSpec, review_patch_text: str) -> ReviewResult:
-    """Invoke the designated reviewer and resolve its verdict.
-
-    Any process-level failure — timeout, failure to launch, or a non-zero
-    exit status — is always terminal ``BLOCKED``, exactly like a missing or
-    malformed verdict (§7): it is never routed into the bounded repair
-    loop, and reviewer stdout is not trusted for a verdict once the process
-    itself did not succeed cleanly.
-    """
-
-    _require_role(spec, AgentRole.REVIEWER)
-    result = run_agent(spec, review_patch_text)
-    combined_output = result.stdout + result.stderr
-
-    if result.timed_out:
-        return ReviewResult(
-            verdict=ReviewVerdict.BLOCKED,
-            findings="reviewer process timed out",
-            raw_output=combined_output,
-        )
-    if result.returncode is None:
-        return ReviewResult(
-            verdict=ReviewVerdict.BLOCKED,
-            findings=f"reviewer process failed to execute: {result.stderr}".strip(),
-            raw_output=combined_output,
-        )
-    if result.returncode != 0:
-        return ReviewResult(
-            verdict=ReviewVerdict.BLOCKED,
-            findings=f"reviewer process exited with status {result.returncode}",
-            raw_output=combined_output,
-        )
-
-    verdict = parse_reviewer_verdict(result.stdout)
-    findings = _extract_findings(result.stdout, verdict)
-    return ReviewResult(verdict=verdict, findings=findings, raw_output=result.stdout)
 
 
 _FINDING_FIELDS = (

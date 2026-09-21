@@ -1,12 +1,11 @@
-"""Deterministic Task Execution Spec parsing (prospective v2 input model).
+"""Deterministic Task Execution Spec parsing for operational v2.
 
 ``docs/AUTONOMOUS_PR_HARNESS.md`` Part II §§22–24 define the Task Execution
 Spec: the approved, provider-neutral execution target of one task, stored at
 exactly ``docs/tasks/TSK-XXXX.md``. This module turns spec text into a typed
 :class:`.model.TaskExecutionSpec` and fails closed on everything it can
 check mechanically. It is pure — no Git, no filesystem, no LLM judgment —
-and it is **not** wired into the operational v1 orchestrator: v1 stays the
-only operational contract until the atomic activation (§20).
+and is the only execution-spec parser used by the public v2 orchestrator.
 
 What "execution-ready" means here (§22) is limited to what a deterministic
 parser can decide:
