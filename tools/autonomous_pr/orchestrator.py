@@ -2,7 +2,8 @@
 
 The public :func:`run` remains the operational v1 lifecycle until TSK-0028's
 atomic CP-5 activation. :func:`execute_v2_checkpoints` and
-:func:`execute_v2_pre_closure_review` are the isolated CP-2/CP-3
+:func:`execute_v2_pre_closure_review` plus
+:func:`execute_v2_unpublished_closure` are the isolated CP-2/CP-3/CP-4
 spec-driven/adaptive primitives and are deliberately not wired into that
 public path yet.
 
@@ -288,6 +289,7 @@ from .model import (
     ReviewVerdict,
     RunOutcome,
     RunResult,
+    StructuredReviewResult,
     TaskContext,
     TaskExecutionSpec,
     VerificationCommandResult,
@@ -591,6 +593,38 @@ class V2PreClosureExecutionResult:
     cumulative_history: GateHistory
     replay_histories: tuple[GateHistory, ...]
     blocked_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class V2ModeCAuditEvidence:
+    """One accepted Mode C audit bound to an exact candidate and base."""
+
+    base_sha: str
+    candidate_head_sha: str
+    candidate_tree_sha: str
+    review_patch: repository.ReviewPatch
+    review_iteration: int
+
+
+@dataclass(frozen=True)
+class V2ClosureExecutionResult:
+    """Outcome of CP-4 through exact publication and required CI."""
+
+    completed: bool
+    published: bool
+    pre_closure_result: V2PreClosureExecutionResult
+    closure_candidate: repository.UnpublishedCommitCandidate | None = None
+    mode_c_evidence: V2ModeCAuditEvidence | None = None
+    pr_url: str | None = None
+    blocked_reason: str | None = None
+
+
+class _ImplementationRepairRequired(Exception):
+    """Internal transition selected deterministically from a repair packet."""
+
+    def __init__(self, packet: RepairPacket) -> None:
+        super().__init__("implementation-affecting repair required")
+        self.packet = packet
 
 
 def run(config: OrchestratorConfig) -> RunResult:
@@ -2011,6 +2045,8 @@ def execute_v2_pre_closure_review(
     checkpoint_result: V2CheckpointExecutionResult,
     *,
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str] | None,
+    initial_repair_packet: RepairPacket | None = None,
+    initial_repair_gate_id: str = "mode-c-implementation-repair",
 ) -> V2PreClosureExecutionResult:
     """Run CP-3 Full verification, cumulative review, repair, and replay.
 
@@ -2088,6 +2124,30 @@ def execute_v2_pre_closure_review(
             )
 
         originals = tuple(checkpoint_result.checkpoint_evidence)
+
+        if initial_repair_packet is not None:
+            current_target, base_moved = _revalidate_v2_execution_target(
+                config, execution_target, current_target.base_sha
+            )
+            if base_moved:
+                evidence.base_identity = current_target.base_sha
+                cumulative_history = new_cumulative_history(current_target.base_sha)
+            evidence.invalidate_from_checkpoint(0)
+            _, repair_history, _ = _execute_v2_late_repair(
+                config,
+                spec,
+                gate_id=initial_repair_gate_id,
+                accepted_base_context_identity=repository.head_sha(config.repo),
+                initial_packet=initial_repair_packet,
+                verification_commands=_all_checkpoint_verification_commands(spec),
+                repair_acceptor=repair_acceptor,
+            )
+            replay_histories.append(repair_history)
+            replay_histories.extend(
+                _replay_v2_checkpoints_conservatively(
+                    config, spec, originals, evidence, repair_acceptor
+                )
+            )
 
         while True:
             revalidated_target, base_moved = _revalidate_v2_execution_target(
@@ -2229,6 +2289,638 @@ def execute_v2_pre_closure_review(
     except (_Blocked, RepositoryError) as exc:
         evidence.cumulative_review = None
         return result(False, str(exc))
+
+
+def _v2_repair_is_proven_closure_only(packet: RepairPacket) -> bool:
+    """Return true only for explicit, unambiguous canonical closure paths."""
+
+    if not packet.findings:
+        return False
+    for finding in packet.findings:
+        if not finding.affected_paths:
+            return False
+        paths = {path.replace("\\", "/") for path in finding.affected_paths}
+        if not paths or not paths <= _CLOSURE_ALLOWED_FILES:
+            return False
+    return True
+
+
+def _build_v2_closure_prompt(
+    execution_target: ExecutionTarget,
+    pre_closure: V2PreClosureExecutionResult,
+    pr_number: str,
+    upstream_packet: RepairPacket | None,
+    closure_gate_packet: RepairPacket | None,
+) -> str:
+    cumulative = pre_closure.evidence.cumulative_review
+    if cumulative is None:
+        raise _Blocked("accepted cumulative evidence is required for Task Closure")
+    return (
+        f"TASK_EXECUTION_SPEC:\n{execution_target.spec.text}\n"
+        "CURRENT_GATE: prospective Task Closure\n"
+        "ROLE: Prepare or repair only the canonical Task Closure content. "
+        "Edit docs/TASK.md and docs/DEVELOPMENT_LOG.md; edit docs/ROADMAP.md "
+        "or docs/DEFERRED.md only when required by the task. Do not commit, "
+        "push, merge, or change implementation files.\n"
+        f"DRAFT_PR_NUMBER: {pr_number}\n"
+        f"ACCEPTED_IMPLEMENTATION_BASE: {cumulative.base_identity}\n"
+        f"ACCEPTED_IMPLEMENTATION_HEAD: {cumulative.reviewed_head_sha}\n"
+        f"ACCEPTED_IMPLEMENTATION_PATCH:\n{cumulative.review_patch.diff_text}\n"
+        "UPSTREAM_REPAIR_CONTEXT (source only; not a previous Closure Review):\n"
+        f"{_repair_packet_json(upstream_packet)}\n"
+        "CURRENT_CLOSURE_REVIEW_REPAIR_PACKET:\n"
+        f"{_repair_packet_json(closure_gate_packet)}\n"
+    )
+
+
+def _build_v2_closure_review_input(
+    execution_target: ExecutionTarget,
+    diff_text: str,
+    history: GateHistory,
+) -> str:
+    contract = _v2_structured_output_contract(
+        history.consecutive_changes_requested >= 1
+    )
+    text = (
+        f"TASK_EXECUTION_SPEC:\n{execution_target.spec.text}\n"
+        "CURRENT_GATE: prospective Task Closure review\n"
+        "REVIEW_PURPOSE: CHECKPOINT (mode A closure candidate)\n"
+        f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
+        "ROLE: Review only the canonical prospective Task Closure diff. "
+        f"{contract}"
+        f"CURRENT_PATCH:\n{diff_text}\n"
+    )
+    if history.latest_valid_repair_packet is not None:
+        text += (
+            "PREVIOUS_REVIEWER_FINDINGS:\n"
+            f"{_repair_findings_json(history.latest_valid_repair_packet)}\n"
+        )
+    if history.previous_reviewed_candidate_state is not None:
+        text += (
+            "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n"
+            f"{_repair_delta(history.previous_reviewed_candidate_state, diff_text)}\n"
+        )
+    return text
+
+
+def _prepare_v2_unpublished_closure(
+    config: OrchestratorConfig,
+    execution_target: ExecutionTarget,
+    pre_closure: V2PreClosureExecutionResult,
+    *,
+    pr_number: str,
+    expected_published_head: str,
+    initial_packet: RepairPacket | None = None,
+    strict_closure_only_repair: bool = False,
+) -> tuple[repository.UnpublishedCommitCandidate, GateHistory]:
+    """Adaptively review Task Closure, then create one local-only commit."""
+
+    upstream_packet = initial_packet
+    history = GateHistory(
+        context=GateContext(
+            gate_id="prospective-task-closure",
+            spec_identity=execution_target.spec.digest,
+            accepted_base_context_identity=expected_published_head,
+        )
+    )
+    while True:
+        before = repository.capture_branch_head(config.repo)
+        prompt = _build_v2_closure_prompt(
+            execution_target,
+            pre_closure,
+            pr_number,
+            upstream_packet,
+            history.latest_valid_repair_packet,
+        )
+        impl_result = run_implementer(config.implementer_spec, prompt)
+        repository.verify_branch_head_unchanged(
+            config.repo, before, context="v2 Task Closure implementer invocation"
+        )
+        if impl_result.timed_out or impl_result.returncode != 0:
+            raise _Blocked("implementer failed while preparing v2 Task Closure")
+        patch = repository.build_checkpoint_patch_uncommitted(config.repo)
+        touched = repository.changed_paths(config.repo)
+        if strict_closure_only_repair and not set(touched) <= _CLOSURE_ALLOWED_FILES:
+            raise _Blocked(
+                "supposed closure-only repair changed implementation content; "
+                "unsafe narrow continuation is refused"
+            )
+        _require_canonical_closure_files_touched(touched)
+        identity = _candidate_identity(patch.diff_text)
+        if identity in history.rejected_candidate_identities:
+            raise _Blocked("Task Closure repair reproduced a rejected candidate")
+        review_input = _build_v2_closure_review_input(
+            execution_target, patch.diff_text, history
+        )
+        fingerprint = repository.capture_fingerprint(config.repo)
+        review = run_structured_reviewer(config.reviewer_spec, review_input)
+        repository.verify_fingerprint_unchanged(
+            config.repo, fingerprint, context="v2 Task Closure review"
+        )
+        next_iteration = history.review_iteration + 1
+        if review.verdict_is_explicit:
+            history.review_iteration = next_iteration
+        packet = review.repair_packet
+        if review.verdict is ReviewVerdict.APPROVED:
+            history.consecutive_changes_requested = 0
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=None,
+                    rejected=False,
+                    rejection_basis=None,
+                    review_iteration=next_iteration,
+                    reviewer_verdict=ReviewVerdict.APPROVED,
+                )
+            )
+            candidate = repository.create_unpublished_reviewed_commit(
+                config.repo,
+                reviewed_patch=patch,
+                message=(
+                    f"{execution_target.task.task_id}: prospective Task Closure "
+                    f"(PR #{pr_number})"
+                ),
+                paths=touched,
+                expected_branch=config.delivery_branch,
+                expected_published_head=expected_published_head,
+            )
+            return candidate, history
+        if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+            if not _v2_repair_is_proven_closure_only(packet):
+                repository.discard_reviewed_uncommitted_candidate(
+                    config.repo,
+                    reviewed_patch=patch,
+                    paths=touched,
+                    expected_branch=config.delivery_branch,
+                    expected_head=expected_published_head,
+                    expected_remote_head=expected_published_head,
+                )
+                raise _ImplementationRepairRequired(packet)
+            history.consecutive_changes_requested += 1
+            history.rejected_candidate_identities.add(identity)
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=None,
+                    rejected=True,
+                    rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
+                    review_iteration=next_iteration,
+                    reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
+                    findings=packet.findings,
+                    repair_packet=packet,
+                )
+            )
+            history.previous_reviewed_candidate_identity = identity
+            history.previous_reviewed_candidate_state = patch.diff_text
+            if (
+                history.consecutive_changes_requested >= 2
+                and packet.non_convergence is None
+            ):
+                raise _Blocked(
+                    "second consecutive Task Closure CHANGES_REQUESTED omitted "
+                    "non_convergence diagnosis"
+                )
+            history.latest_valid_repair_packet = packet
+            upstream_packet = None
+            continue
+        raise _Blocked(review.blocked_reason or "designated closure reviewer blocked")
+
+
+def _build_v2_mode_c_review_input(
+    execution_target: ExecutionTarget,
+    candidate: repository.UnpublishedCommitCandidate,
+    patch: repository.ReviewPatch,
+    history: GateHistory,
+) -> str:
+    contract = _v2_structured_output_contract(
+        history.consecutive_changes_requested >= 1
+    )
+    text = (
+        f"TASK_EXECUTION_SPEC:\n{execution_target.spec.text}\n"
+        "CURRENT_GATE: Mode C final cumulative branch audit\n"
+        "REVIEW_PURPOSE: FINAL_CUMULATIVE_AUDIT\n"
+        "ROLE: Review the exact local unpublished closure candidate. Report "
+        "semantic findings only; the orchestrator chooses every transition. "
+        f"{contract}"
+        f"BASE_SHA: {patch.base_sha}\n"
+        f"CANDIDATE_HEAD_SHA: {candidate.candidate_head_sha}\n"
+        f"CANDIDATE_TREE_SHA: {candidate.tree_sha}\n"
+        f"CURRENT_PATCH:\n{patch.diff_text}\n"
+    )
+    if history.latest_valid_repair_packet is not None:
+        text += (
+            "PREVIOUS_REVIEWER_FINDINGS:\n"
+            f"{_repair_findings_json(history.latest_valid_repair_packet)}\n"
+        )
+    if history.previous_reviewed_candidate_state is not None:
+        text += (
+            "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n"
+            f"{_repair_delta(history.previous_reviewed_candidate_state, patch.diff_text)}\n"
+        )
+    return text
+
+
+def _review_v2_mode_c_candidate(
+    config: OrchestratorConfig,
+    execution_target: ExecutionTarget,
+    candidate: repository.UnpublishedCommitCandidate,
+    base_sha: str,
+    history: GateHistory,
+    *,
+    published: bool = False,
+) -> tuple[StructuredReviewResult, repository.ReviewPatch]:
+    if published:
+        repository.verify_published_commit_candidate(
+            config.repo,
+            candidate,
+            expected_branch=config.delivery_branch,
+            fetch=False,
+        )
+    else:
+        repository.verify_unpublished_commit_candidate(
+            config.repo,
+            candidate,
+            expected_branch=config.delivery_branch,
+            fetch=False,
+        )
+    patch = repository.build_cumulative_patch_from_base(
+        config.repo, repository.ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
+    )
+    review_input = _build_v2_mode_c_review_input(
+        execution_target, candidate, patch, history
+    )
+    fingerprint = repository.capture_fingerprint(config.repo)
+    review = run_structured_reviewer(config.reviewer_spec, review_input)
+    repository.verify_fingerprint_unchanged(
+        config.repo, fingerprint, context="v2 Mode C final cumulative audit"
+    )
+    return review, patch
+
+
+def _require_v2_published_candidate_ci(
+    config: OrchestratorConfig, pr_number: str, candidate_head_sha: str
+) -> None:
+    before = repository.pr_head_sha(
+        config.repo, pr_number, gh_command=config.gh_command
+    )
+    if before != candidate_head_sha:
+        raise _Blocked("draft PR head does not equal the published audited candidate")
+    result = repository.pr_required_checks(
+        config.repo, pr_number, gh_command=config.gh_command
+    )
+    after = repository.pr_head_sha(
+        config.repo, pr_number, gh_command=config.gh_command
+    )
+    if after != candidate_head_sha:
+        raise _Blocked("draft PR head moved while required CI was read")
+    if result.no_required_checks or result.returncode == 0:
+        return
+    failing = [item.get("name") for item in result.checks if item.get("bucket") == "fail"]
+    if failing:
+        raise _Blocked(
+            f"required CI failed for the published v2 candidate: {failing!r}; "
+            "initial v2 does not perform post-publication candidate repair"
+        )
+    raise _Blocked("required CI is pending or incomplete for the published candidate")
+
+
+def _stabilize_v2_published_candidate(
+    config: OrchestratorConfig,
+    execution_target: ExecutionTarget,
+    candidate: repository.UnpublishedCommitCandidate,
+    pr_number: str,
+    initial_base_sha: str,
+) -> V2ModeCAuditEvidence | None:
+    """Keep Mode C fresh through CI without changing the published candidate."""
+
+    base_sha = initial_base_sha
+    replacement_audit: V2ModeCAuditEvidence | None = None
+    while True:
+        _require_v2_published_candidate_ci(config, pr_number, candidate.candidate_head_sha)
+        revalidated, moved = _revalidate_v2_execution_target(
+            config, execution_target, base_sha
+        )
+        if not moved:
+            return replacement_audit
+        base_sha = revalidated.base_sha
+        history = GateHistory(
+            context=GateContext(
+                gate_id="post-publication-mode-c-replay",
+                spec_identity=execution_target.spec.digest,
+                accepted_base_context_identity=base_sha,
+            )
+        )
+        while True:
+            review, patch = _review_v2_mode_c_candidate(
+                config,
+                execution_target,
+                candidate,
+                base_sha,
+                history,
+                published=True,
+            )
+            post_review_target, moved_after_review = _revalidate_v2_execution_target(
+                config, execution_target, base_sha
+            )
+            if moved_after_review:
+                base_sha = post_review_target.base_sha
+                history = GateHistory(
+                    context=GateContext(
+                        gate_id="post-publication-mode-c-replay",
+                        spec_identity=execution_target.spec.digest,
+                        accepted_base_context_identity=base_sha,
+                    )
+                )
+                continue
+            if review.verdict is ReviewVerdict.APPROVED:
+                replacement_audit = V2ModeCAuditEvidence(
+                    base_sha=base_sha,
+                    candidate_head_sha=candidate.candidate_head_sha,
+                    candidate_tree_sha=candidate.tree_sha,
+                    review_patch=patch,
+                    review_iteration=1,
+                )
+                break
+            if review.verdict is ReviewVerdict.CHANGES_REQUESTED:
+                raise _Blocked(
+                    "rebuilt post-publication Mode C requires candidate-changing "
+                    "repair; initial v2 blocks instead of rewriting remote history"
+                )
+            raise _Blocked(
+                review.blocked_reason
+                or "designated reviewer blocked post-publication Mode C replay"
+            )
+
+
+def execute_v2_unpublished_closure(
+    config: OrchestratorConfig,
+    execution_target: ExecutionTarget,
+    checkpoint_result: V2CheckpointExecutionResult,
+    pre_closure_result: V2PreClosureExecutionResult,
+    *,
+    repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
+) -> V2ClosureExecutionResult:
+    """Run isolated CP-4: local closure, Mode C, exact publish, required CI."""
+
+    current_pre_closure = pre_closure_result
+    current_checkpoint_result = checkpoint_result
+    candidate: repository.UnpublishedCommitCandidate | None = None
+    accepted_audit: V2ModeCAuditEvidence | None = None
+    pr_url: str | None = None
+    published = False
+
+    def outcome(completed: bool, reason: str | None = None) -> V2ClosureExecutionResult:
+        return V2ClosureExecutionResult(
+            completed=completed,
+            published=published,
+            pre_closure_result=current_pre_closure,
+            closure_candidate=candidate,
+            mode_c_evidence=accepted_audit,
+            pr_url=pr_url,
+            blocked_reason=reason,
+        )
+
+    try:
+        if not current_pre_closure.completed:
+            raise _Blocked("accepted CP-3 evidence is required before Task Closure")
+        cumulative = current_pre_closure.evidence.cumulative_review
+        if cumulative is None:
+            raise _Blocked("accepted cumulative implementation review is missing")
+        if cumulative.reviewed_head_sha != repository.head_sha(config.repo):
+            raise _Blocked("accepted implementation evidence is stale before closure")
+        implementation_head = cumulative.reviewed_head_sha
+        remote_head = repository.fetch_and_capture_remote_branch_sha(
+            config.repo, config.delivery_branch
+        )
+        if remote_head != implementation_head:
+            raise _Blocked(
+                "remote delivery branch does not contain the accepted implementation HEAD"
+            )
+        pr_url = repository.create_draft_pull_request(
+            config.repo,
+            title=f"{execution_target.task.task_id}: {execution_target.task.title}",
+            body="AUTONOMOUS_PR v2 draft; unpublished Task Closure follows Mode C.",
+            head=config.delivery_branch,
+            expected_branch=config.delivery_branch,
+            gh_command=config.gh_command,
+        )
+        pr_number = _extract_pr_number(pr_url)
+
+        pending_closure_packet: RepairPacket | None = None
+        strict_closure_only = False
+        mode_history: GateHistory | None = None
+        mode_history_context: tuple[str, str] | None = None
+        while True:
+            try:
+                candidate, _ = _prepare_v2_unpublished_closure(
+                    config,
+                    execution_target,
+                    current_pre_closure,
+                    pr_number=pr_number,
+                    expected_published_head=implementation_head,
+                    initial_packet=pending_closure_packet,
+                    strict_closure_only_repair=strict_closure_only,
+                )
+            except _ImplementationRepairRequired as transition:
+                current_pre_closure = execute_v2_pre_closure_review(
+                    config,
+                    execution_target,
+                    current_checkpoint_result,
+                    repair_acceptor=repair_acceptor,
+                    initial_repair_packet=transition.packet,
+                    initial_repair_gate_id="closure-review-implementation-repair",
+                )
+                if not current_pre_closure.completed:
+                    raise _Blocked(
+                        current_pre_closure.blocked_reason
+                        or "implementation-affecting Closure Review repair failed"
+                    ) from transition
+                cumulative = current_pre_closure.evidence.cumulative_review
+                if cumulative is None:
+                    raise _Blocked("replayed CP-3 cumulative evidence is missing")
+                current_checkpoint_result = V2CheckpointExecutionResult(
+                    completed=True,
+                    accepted_candidates=tuple(
+                        item.candidate
+                        for item in current_pre_closure.evidence.accepted_checkpoints
+                    ),
+                    gate_histories=current_checkpoint_result.gate_histories,
+                    checkpoint_evidence=tuple(
+                        current_pre_closure.evidence.accepted_checkpoints
+                    ),
+                )
+                implementation_head = cumulative.reviewed_head_sha
+                pending_closure_packet = None
+                strict_closure_only = False
+                mode_history = None
+                mode_history_context = None
+                continue
+            pending_closure_packet = None
+            strict_closure_only = False
+
+            while True:
+                current_target, moved = _revalidate_v2_execution_target(
+                    config,
+                    execution_target,
+                    current_pre_closure.evidence.base_identity,
+                )
+                if moved:
+                    current_pre_closure.evidence.base_identity = current_target.base_sha
+                base_sha = current_target.base_sha
+                context_key = (base_sha, implementation_head)
+                if mode_history is None or mode_history_context != context_key:
+                    mode_history = GateHistory(
+                        context=GateContext(
+                            gate_id="mode-c-final-cumulative-audit",
+                            spec_identity=execution_target.spec.digest,
+                            accepted_base_context_identity=implementation_head,
+                        )
+                    )
+                    mode_history_context = context_key
+                identity = _candidate_identity(
+                    repository.build_cumulative_patch_from_base(
+                        config.repo,
+                        repository.ReviewPurpose.FINAL_CUMULATIVE_AUDIT,
+                        base_sha,
+                    ).diff_text
+                )
+                if identity in mode_history.rejected_candidate_identities:
+                    raise _Blocked(
+                        "Mode C repair reproduced a previously rejected candidate"
+                    )
+                review, patch = _review_v2_mode_c_candidate(
+                    config, execution_target, candidate, base_sha, mode_history
+                )
+                post_target, moved_after_review = _revalidate_v2_execution_target(
+                    config, execution_target, base_sha
+                )
+                if moved_after_review:
+                    current_pre_closure.evidence.base_identity = post_target.base_sha
+                    mode_history = GateHistory(
+                        context=GateContext(
+                            gate_id="mode-c-final-cumulative-audit",
+                            spec_identity=execution_target.spec.digest,
+                            accepted_base_context_identity=implementation_head,
+                        )
+                    )
+                    mode_history_context = (
+                        post_target.base_sha,
+                        implementation_head,
+                    )
+                    continue
+                next_iteration = mode_history.review_iteration + 1
+                if review.verdict_is_explicit:
+                    mode_history.review_iteration = next_iteration
+                packet = review.repair_packet
+                if review.verdict is ReviewVerdict.APPROVED:
+                    mode_history.consecutive_changes_requested = 0
+                    mode_history.attempts.append(
+                        GateAttempt(
+                            candidate_identity=identity,
+                            candidate_state=patch.diff_text,
+                            verification=None,
+                            rejected=False,
+                            rejection_basis=None,
+                            review_iteration=next_iteration,
+                            reviewer_verdict=ReviewVerdict.APPROVED,
+                        )
+                    )
+                    accepted_audit = V2ModeCAuditEvidence(
+                        base_sha=base_sha,
+                        candidate_head_sha=candidate.candidate_head_sha,
+                        candidate_tree_sha=candidate.tree_sha,
+                        review_patch=patch,
+                        review_iteration=next_iteration,
+                    )
+                    repository.publish_audited_unpublished_candidate(
+                        config.repo,
+                        candidate,
+                        audited_patch=patch,
+                        expected_branch=config.delivery_branch,
+                        expected_origin_main_sha=base_sha,
+                    )
+                    published = True
+                    replacement_audit = _stabilize_v2_published_candidate(
+                        config,
+                        execution_target,
+                        candidate,
+                        pr_number,
+                        base_sha,
+                    )
+                    if replacement_audit is not None:
+                        accepted_audit = replacement_audit
+                    return outcome(True)
+                if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+                    mode_history.consecutive_changes_requested += 1
+                    mode_history.rejected_candidate_identities.add(identity)
+                    mode_history.attempts.append(
+                        GateAttempt(
+                            candidate_identity=identity,
+                            candidate_state=patch.diff_text,
+                            verification=None,
+                            rejected=True,
+                            rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
+                            review_iteration=next_iteration,
+                            reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
+                            findings=packet.findings,
+                            repair_packet=packet,
+                        )
+                    )
+                    mode_history.previous_reviewed_candidate_identity = identity
+                    mode_history.previous_reviewed_candidate_state = patch.diff_text
+                    if (
+                        mode_history.consecutive_changes_requested >= 2
+                        and packet.non_convergence is None
+                    ):
+                        raise _Blocked(
+                            "second consecutive Mode C CHANGES_REQUESTED omitted "
+                            "non_convergence diagnosis"
+                        )
+                    mode_history.latest_valid_repair_packet = packet
+                    repository.discard_unpublished_commit_candidate(
+                        config.repo, candidate, expected_branch=config.delivery_branch
+                    )
+                    candidate = None
+                    accepted_audit = None
+                    if _v2_repair_is_proven_closure_only(packet):
+                        pending_closure_packet = packet
+                        strict_closure_only = True
+                        break
+                    current_pre_closure = execute_v2_pre_closure_review(
+                        config,
+                        execution_target,
+                        current_checkpoint_result,
+                        repair_acceptor=repair_acceptor,
+                        initial_repair_packet=packet,
+                    )
+                    if not current_pre_closure.completed:
+                        raise _Blocked(
+                            current_pre_closure.blocked_reason
+                            or "implementation-affecting Mode C repair failed"
+                        )
+                    cumulative = current_pre_closure.evidence.cumulative_review
+                    if cumulative is None:
+                        raise _Blocked("replayed CP-3 cumulative evidence is missing")
+                    implementation_head = cumulative.reviewed_head_sha
+                    current_checkpoint_result = V2CheckpointExecutionResult(
+                        completed=True,
+                        accepted_candidates=tuple(
+                            item.candidate
+                            for item in current_pre_closure.evidence.accepted_checkpoints
+                        ),
+                        gate_histories=current_checkpoint_result.gate_histories,
+                        checkpoint_evidence=tuple(
+                            current_pre_closure.evidence.accepted_checkpoints
+                        ),
+                    )
+                    mode_history = None
+                    mode_history_context = None
+                    break
+                raise _Blocked(review.blocked_reason or "designated Mode C reviewer blocked")
+    except (_Blocked, RepositoryError) as exc:
+        return outcome(False, str(exc))
 
 
 def _checkpoint_cycle(

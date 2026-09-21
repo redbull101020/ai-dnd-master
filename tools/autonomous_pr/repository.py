@@ -116,6 +116,22 @@ class BranchHead:
     head_sha: str
 
 
+@dataclass(frozen=True)
+class UnpublishedCommitCandidate:
+    """One reviewed local commit that must remain absent from the remote.
+
+    ``published_predecessor_sha`` is both the implementation HEAD immediately
+    before the local commit and the exact remote delivery-branch HEAD that must
+    remain current until an accepted Mode C audit publishes the candidate.
+    ``tree_sha`` detects any attempt to substitute different committed content.
+    """
+
+    branch: str
+    published_predecessor_sha: str
+    candidate_head_sha: str
+    tree_sha: str
+
+
 def capture_branch_head(repo: Path) -> BranchHead:
     return BranchHead(branch=current_branch(repo), head_sha=head_sha(repo))
 
@@ -299,6 +315,22 @@ def origin_main_sha(repo: Path) -> str:
 
 def current_branch(repo: Path) -> str:
     return _git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
+
+
+def remote_branch_sha(repo: Path, branch: str) -> str:
+    """Return the exact remote-tracking SHA for one already-fetched branch."""
+
+    ref = f"refs/remotes/origin/{branch}"
+    if not _ref_exists(repo, ref):
+        raise RepositoryError(f"remote delivery branch {branch!r} does not exist")
+    return resolve_sha(repo, ref)
+
+
+def fetch_and_capture_remote_branch_sha(repo: Path, branch: str) -> str:
+    """Fetch once, then capture one delivery branch's exact remote SHA."""
+
+    fetch_origin(repo)
+    return remote_branch_sha(repo, branch)
 
 
 def is_worktree_clean(repo: Path) -> bool:
@@ -795,6 +827,199 @@ def commit_reviewed_checkpoint(
 
     _git(repo, ["commit", "-m", message])
     return head_sha(repo)
+
+
+def create_unpublished_reviewed_commit(
+    repo: Path,
+    *,
+    reviewed_patch: ReviewPatch,
+    message: str,
+    paths: Sequence[str],
+    expected_branch: str,
+    expected_published_head: str,
+) -> UnpublishedCommitCandidate:
+    """Commit a reviewed closure locally while proving it is unpublished."""
+
+    if expected_branch in _PROTECTED_BRANCHES:
+        raise RepositoryError(
+            f"refusing unpublished candidate on protected branch {expected_branch!r}"
+        )
+    if current_branch(repo) != expected_branch:
+        raise RepositoryError(
+            f"current branch does not match expected delivery branch {expected_branch!r}"
+        )
+    if head_sha(repo) != expected_published_head:
+        raise RepositoryError(
+            "local HEAD is not the exact expected published implementation HEAD"
+        )
+    remote_head = fetch_and_capture_remote_branch_sha(repo, expected_branch)
+    if remote_head != expected_published_head:
+        raise RepositoryError(
+            "remote delivery branch is not at the exact expected published "
+            "implementation HEAD"
+        )
+    candidate_head = commit_reviewed_checkpoint(
+        repo, reviewed_patch=reviewed_patch, message=message, paths=paths
+    )
+    if not is_worktree_clean(repo):
+        raise RepositoryError("unpublished candidate commit left a dirty repository")
+    if remote_branch_sha(repo, expected_branch) != expected_published_head:
+        raise RepositoryError(
+            "remote delivery branch moved while the unpublished candidate was created"
+        )
+    return UnpublishedCommitCandidate(
+        branch=expected_branch,
+        published_predecessor_sha=expected_published_head,
+        candidate_head_sha=candidate_head,
+        tree_sha=resolve_sha(repo, f"{candidate_head}^{{tree}}"),
+    )
+
+
+def discard_reviewed_uncommitted_candidate(
+    repo: Path,
+    *,
+    reviewed_patch: ReviewPatch,
+    paths: Sequence[str],
+    expected_branch: str,
+    expected_head: str,
+    expected_remote_head: str,
+) -> None:
+    """Discard one exact reviewed-but-rejected worktree candidate safely.
+
+    This is intentionally narrower than a generic cleanup/reset primitive. It
+    accepts only a still-current mode-A patch, proves its complete changed-path
+    set, branch, local HEAD, and freshly fetched remote HEAD, then restores the
+    exact committed predecessor and removes only the explicitly reviewed
+    untracked files. Any unrelated dirty state changes the patch/path set and
+    fails closed before the destructive operation.
+    """
+
+    if expected_branch in _PROTECTED_BRANCHES:
+        raise RepositoryError("refusing discard on a protected branch")
+    if current_branch(repo) != expected_branch:
+        raise RepositoryError("current branch differs from expected delivery branch")
+    if head_sha(repo) != expected_head or reviewed_patch.head_sha != expected_head:
+        raise RepositoryError("local HEAD differs from rejected candidate predecessor")
+    verify_patch_unchanged(repo, reviewed_patch)
+    factual_paths = changed_paths(repo)
+    if set(factual_paths) != set(paths):
+        raise RepositoryError("rejected candidate path set changed before discard")
+    fetch_origin(repo)
+    if remote_branch_sha(repo, expected_branch) != expected_remote_head:
+        raise RepositoryError("remote delivery branch moved before candidate discard")
+    _git(repo, ["reset", "--hard", expected_head])
+    if paths:
+        _git(repo, ["clean", "-f", "--", *paths])
+    if head_sha(repo) != expected_head or not is_worktree_clean(repo):
+        raise RepositoryError("failed to restore clean rejected-candidate predecessor")
+    if remote_branch_sha(repo, expected_branch) != expected_remote_head:
+        raise RepositoryError("remote delivery branch changed during candidate discard")
+
+
+def verify_unpublished_commit_candidate(
+    repo: Path,
+    candidate: UnpublishedCommitCandidate,
+    *,
+    expected_branch: str,
+    fetch: bool = True,
+) -> None:
+    """Prove exact local candidate/content and unchanged remote predecessor."""
+
+    if candidate.branch != expected_branch or expected_branch in _PROTECTED_BRANCHES:
+        raise RepositoryError("unpublished candidate belongs to an unexpected branch")
+    if fetch:
+        fetch_origin(repo)
+    _require_clean_state(repo, context="unpublished closure candidate")
+    if current_branch(repo) != expected_branch:
+        raise RepositoryError("current branch differs from unpublished candidate branch")
+    if head_sha(repo) != candidate.candidate_head_sha:
+        raise RepositoryError("local HEAD differs from unpublished candidate HEAD")
+    if resolve_sha(repo, f"HEAD^{{tree}}") != candidate.tree_sha:
+        raise RepositoryError("unpublished candidate content/tree changed")
+    if remote_branch_sha(repo, expected_branch) != candidate.published_predecessor_sha:
+        raise RepositoryError(
+            "remote delivery branch moved past the expected published predecessor"
+        )
+
+
+def discard_unpublished_commit_candidate(
+    repo: Path,
+    candidate: UnpublishedCommitCandidate,
+    *,
+    expected_branch: str,
+) -> str:
+    """Discard exactly one known-unpublished local commit without remote rewrite."""
+
+    verify_unpublished_commit_candidate(
+        repo, candidate, expected_branch=expected_branch, fetch=True
+    )
+    _git(repo, ["reset", "--hard", candidate.published_predecessor_sha])
+    if head_sha(repo) != candidate.published_predecessor_sha or not is_worktree_clean(repo):
+        raise RepositoryError("failed to restore the exact published predecessor")
+    if remote_branch_sha(repo, expected_branch) != candidate.published_predecessor_sha:
+        raise RepositoryError("remote delivery branch changed during local discard")
+    return candidate.published_predecessor_sha
+
+
+def verify_published_commit_candidate(
+    repo: Path,
+    candidate: UnpublishedCommitCandidate,
+    *,
+    expected_branch: str,
+    fetch: bool = True,
+) -> None:
+    """Prove the same exact local candidate is now the remote branch HEAD."""
+
+    if candidate.branch != expected_branch or expected_branch in _PROTECTED_BRANCHES:
+        raise RepositoryError("published candidate belongs to an unexpected branch")
+    if fetch:
+        fetch_origin(repo)
+    _require_clean_state(repo, context="published closure candidate")
+    if current_branch(repo) != expected_branch:
+        raise RepositoryError("current branch differs from published candidate branch")
+    if head_sha(repo) != candidate.candidate_head_sha:
+        raise RepositoryError("local HEAD differs from published candidate HEAD")
+    if resolve_sha(repo, "HEAD^{tree}") != candidate.tree_sha:
+        raise RepositoryError("published candidate content/tree changed")
+    if remote_branch_sha(repo, expected_branch) != candidate.candidate_head_sha:
+        raise RepositoryError("remote delivery branch differs from published candidate")
+
+
+def publish_audited_unpublished_candidate(
+    repo: Path,
+    candidate: UnpublishedCommitCandidate,
+    *,
+    audited_patch: ReviewPatch,
+    expected_branch: str,
+    expected_origin_main_sha: str,
+) -> None:
+    """Publish exactly the unchanged candidate approved by Mode C."""
+
+    fetch_origin(repo)
+    verify_unpublished_commit_candidate(
+        repo, candidate, expected_branch=expected_branch, fetch=False
+    )
+    if origin_main_sha(repo) != expected_origin_main_sha:
+        raise RepositoryError("origin/main moved after Mode C; refusing publication")
+    if audited_patch.purpose is not ReviewPurpose.FINAL_CUMULATIVE_AUDIT:
+        raise RepositoryError("publication requires a Mode C audit patch")
+    if (
+        audited_patch.branch != expected_branch
+        or audited_patch.base_sha != expected_origin_main_sha
+        or audited_patch.head_sha != candidate.candidate_head_sha
+    ):
+        raise RepositoryError("Mode C audit does not identify this exact candidate/base")
+    current_patch = build_cumulative_patch_from_base(
+        repo, ReviewPurpose.FINAL_CUMULATIVE_AUDIT, expected_origin_main_sha
+    )
+    if current_patch.digest != audited_patch.digest:
+        raise RepositoryError("candidate content differs from the accepted Mode C audit")
+    push_delivery_branch(
+        repo, branch=expected_branch, expected_branch=expected_branch
+    )
+    fetch_origin(repo)
+    if remote_branch_sha(repo, expected_branch) != candidate.candidate_head_sha:
+        raise RepositoryError("published remote HEAD does not equal audited candidate HEAD")
 
 
 def push_delivery_branch(repo: Path, *, branch: str, expected_branch: str) -> None:

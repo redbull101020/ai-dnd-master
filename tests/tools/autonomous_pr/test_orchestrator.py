@@ -19,6 +19,7 @@ from tools.autonomous_pr.model import (
     ExecutionCheckpoint,
     ExecutionTarget,
     GateContext,
+    GateHistory,
     NonConvergenceDiagnosis,
     Phase,
     RepairFinding,
@@ -4922,3 +4923,524 @@ def test_v2_late_repair_has_no_numeric_repair_limit(
     assert history.review_iteration == 4
     assert len(history.attempts) == 4
     assert accepted_base == accepted_heads[0]
+
+
+# --- TSK-0028 CP-4: unpublished Task Closure and Mode C ordering ------------
+
+
+def _prepared_cp4_context(
+    env: Env, spec: TaskExecutionSpec
+) -> tuple[
+    ExecutionTarget,
+    orch_module.V2CheckpointExecutionResult,
+    orch_module.V2PreClosureExecutionResult,
+    str,
+]:
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    _run_git(["push", "-q", "-u", "origin", "delivery"], cwd=env.work)
+    implementation_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+    patch = repository.build_cumulative_patch_from_base(
+        env.work,
+        repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        base_sha,
+    )
+    verification = dataclasses.replace(
+        _v2_verification(True), head_sha=implementation_head
+    )
+    evidence = orch_module.V2ImplementationEvidence(
+        spec_identity=spec.digest,
+        base_identity=base_sha,
+        accepted_checkpoints=list(checkpoint_result.checkpoint_evidence),
+        full_verification=orch_module.V2FullVerificationEvidence(
+            spec_identity=spec.digest,
+            base_identity=base_sha,
+            candidate_identity=orch_module._committed_candidate_identity(
+                implementation_head
+            ),
+            head_sha=implementation_head,
+            verification=verification,
+        ),
+        cumulative_review=orch_module.V2CumulativeReviewEvidence(
+            spec_identity=spec.digest,
+            base_identity=base_sha,
+            candidate_identity=orch_module._candidate_identity(patch.diff_text),
+            reviewed_head_sha=implementation_head,
+            review_patch=patch,
+            review_iteration=1,
+        ),
+    )
+    pre_closure = orch_module.V2PreClosureExecutionResult(
+        completed=True,
+        evidence=evidence,
+        cumulative_history=GateHistory(
+            context=GateContext(
+                gate_id="pre-closure-cumulative-review",
+                spec_identity=spec.digest,
+                accepted_base_context_identity=base_sha,
+            )
+        ),
+        replay_histories=(),
+    )
+    return _cp3_target(base_sha, spec), checkpoint_result, pre_closure, implementation_head
+
+
+def _install_cp4_agents(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    reviews: list[StructuredReviewResult],
+    *,
+    source_during_second_closure: bool = False,
+) -> tuple[list[str], list[str]]:
+    queue = list(reviews)
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    closure_count = 0
+    repair_count = 0
+
+    def fake_implementer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        nonlocal closure_count, repair_count
+        implementer_prompts.append(prompt)
+        if "CURRENT_GATE: prospective Task Closure" in prompt:
+            closure_count += 1
+            task_path = env.work / "docs" / "TASK.md"
+            task_path.write_text(
+                task_path.read_text(encoding="utf-8")
+                + f"\nclosure candidate {closure_count}\n",
+                encoding="utf-8",
+            )
+            (env.work / "docs" / "DEVELOPMENT_LOG.md").write_text(
+                f"closure log {closure_count}\n", encoding="utf-8"
+            )
+            if source_during_second_closure and closure_count == 2:
+                (env.work / "unsafe_source.py").write_text(
+                    "unsafe = True\n", encoding="utf-8"
+                )
+        elif (
+            "CURRENT_REPAIR_GATE: mode-c-implementation-repair" in prompt
+            or "CURRENT_REPAIR_GATE: closure-review-implementation-repair" in prompt
+        ):
+            repair_count += 1
+            (env.work / "late_repair.txt").write_text(
+                f"implementation repair {repair_count}\n", encoding="utf-8"
+            )
+        else:
+            raise AssertionError(f"unexpected CP-4 implementer prompt: {prompt[:100]}")
+        return AgentInvocationResult("done", "", 0, False)
+
+    def fake_reviewer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        assert queue, "CP-4 reviewer sequence exhausted"
+        return queue.pop(0)
+
+    monkeypatch.setattr(orch_module, "run_implementer", fake_implementer)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", fake_reviewer)
+    return implementer_prompts, reviewer_prompts
+
+
+def _cp4_repair_acceptor(
+    env: Env,
+) -> Callable[[orch_module.AcceptedImplementationRepairCandidate], str]:
+    def accept(candidate: orch_module.AcceptedImplementationRepairCandidate) -> str:
+        _run_git(["add", "-A"], cwd=env.work)
+        _run_git(
+            ["commit", "-q", "-m", f"accept {candidate.gate_context.gate_id}"],
+            cwd=env.work,
+        )
+        _run_git(["push", "-q", "origin", "delivery"], cwd=env.work)
+        return _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+
+    return accept
+
+
+def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_ci(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
+    _, reviewer_prompts = _install_cp4_agents(
+        env, monkeypatch, [_v2_approved(), _v2_approved()]
+    )
+    sequenced_reviewer = orch_module.run_structured_reviewer
+    mode_c_remote_heads: list[str] = []
+
+    def observe_unpublished_mode_c(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        if "FINAL_CUMULATIVE_AUDIT" in prompt:
+            mode_c_remote_heads.append(repository.remote_branch_sha(env.work, "delivery"))
+        return sequenced_reviewer(agent_spec, prompt)
+
+    monkeypatch.setattr(
+        orch_module, "run_structured_reviewer", observe_unpublished_mode_c
+    )
+    real_checks = repository.pr_required_checks
+    ci_remote_heads: list[str] = []
+    commands: list[list[str]] = []
+    real_run = repository._run
+
+    def record_commands(
+        args: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return real_run(args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repository, "_run", record_commands)
+
+    def checks_after_publish(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        repository.fetch_origin(repo)
+        ci_remote_heads.append(repository.remote_branch_sha(repo, "delivery"))
+        assert ci_remote_heads[-1] == repository.head_sha(repo)
+        return real_checks(repo, pr_number, gh_command=gh_command)
+
+    monkeypatch.setattr(repository, "pr_required_checks", checks_after_publish)
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed and result.published
+    assert result.closure_candidate is not None
+    assert result.mode_c_evidence is not None
+    assert result.mode_c_evidence.candidate_head_sha == result.closure_candidate.candidate_head_sha
+    assert result.closure_candidate.published_predecessor_sha == implementation_head
+    assert mode_c_remote_heads == [implementation_head]
+    assert ci_remote_heads == [result.closure_candidate.candidate_head_sha]
+    mode_c_prompt = next(
+        prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
+    )
+    assert result.closure_candidate.candidate_head_sha in mode_c_prompt
+    assert "prospective Task Closure" in _run_git(
+        ["log", "-1", "--format=%s"], cwd=env.work
+    )
+    assert not any(command[:2] == ["git", "merge"] for command in commands)
+    assert not any("--auto" in command for command in commands)
+
+
+def test_v2_mode_c_closure_only_repair_replaces_local_candidate_without_rewrite(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _v2_approved(),
+            _changes_with_paths("closure defect", ("docs/TASK.md",)),
+            _v2_approved(),
+            _v2_approved(),
+        ],
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed
+    assert len([p for p in implementer_prompts if "prospective Task Closure" in p]) == 2
+    assert result.closure_candidate is not None
+    assert result.closure_candidate.published_predecessor_sha == implementation_head
+    assert _run_git(["rev-list", "--count", f"{implementation_head}..HEAD"], cwd=env.work).strip() == "1"
+    closure_reviews = [
+        prompt
+        for prompt in reviewer_prompts
+        if "prospective Task Closure review" in prompt
+    ]
+    mode_c_reviews = [
+        prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
+    ]
+    assert "PREVIOUS_REVIEWER_FINDINGS" not in closure_reviews[0]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" not in closure_reviews[0]
+    assert "PREVIOUS_REVIEWER_FINDINGS" not in closure_reviews[1]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" not in closure_reviews[1]
+    assert "PREVIOUS_REVIEWER_FINDINGS" not in mode_c_reviews[0]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" not in mode_c_reviews[0]
+    assert "PREVIOUS_REVIEWER_FINDINGS" in mode_c_reviews[1]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" in mode_c_reviews[1]
+
+
+def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    _, reviewer_prompts = _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _changes_with_paths("closure review defect", ("docs/TASK.md",)),
+            _v2_approved(),
+            _v2_approved(),
+        ],
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed
+    closure_reviews = [
+        prompt
+        for prompt in reviewer_prompts
+        if "prospective Task Closure review" in prompt
+    ]
+    assert len(closure_reviews) == 2
+    assert "PREVIOUS_REVIEWER_FINDINGS" not in closure_reviews[0]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" not in closure_reviews[0]
+    assert "PREVIOUS_REVIEWER_FINDINGS" in closure_reviews[1]
+    assert "closure review defect" in closure_reviews[1]
+    assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" in closure_reviews[1]
+
+
+def test_v2_closure_review_implementation_repair_uses_cp3_replay(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
+    implementer_prompts, _ = _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _v2_changes("closure review found implementation defect"),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+        ],
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed
+    assert any(
+        "closure-review-implementation-repair" in prompt
+        for prompt in implementer_prompts
+    )
+    assert result.pre_closure_result.replay_histories
+    assert result.closure_candidate is not None
+    assert result.closure_candidate.published_predecessor_sha != implementation_head
+
+
+def test_v2_mode_c_missing_paths_uses_implementation_repair_and_cp3_replay(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _v2_approved(),
+            _v2_changes("ambiguous Mode C defect"),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+        ],
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed
+    assert any("mode-c-implementation-repair" in p for p in implementer_prompts)
+    assert result.pre_closure_result.replay_histories
+    assert result.closure_candidate is not None
+    assert result.closure_candidate.published_predecessor_sha != implementation_head
+    assert sum("FINAL_CUMULATIVE_AUDIT" in p for p in reviewer_prompts) == 2
+
+
+def test_v2_two_sequential_mode_c_implementation_repairs_advance_checkpoint_state(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _v2_approved(),
+            _v2_changes("first implementation defect"),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_changes("second distinct implementation defect"),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+            _v2_approved(),
+        ],
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed
+    repair_prompts = [
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_REPAIR_GATE: mode-c-implementation-repair" in prompt
+    ]
+    assert len(repair_prompts) == 2
+    assert sum("FINAL_CUMULATIVE_AUDIT" in p for p in reviewer_prompts) == 3
+    assert result.closure_candidate is not None
+    assert result.closure_candidate.published_predecessor_sha != implementation_head
+    assert len(result.pre_closure_result.evidence.accepted_checkpoints) == 2
+
+
+def test_v2_closure_only_repair_touching_source_blocks_unsafe_narrow_path(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
+    _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _v2_approved(),
+            _changes_with_paths("closure defect", ("docs/TASK.md",)),
+        ],
+        source_during_second_closure=True,
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert not result.completed and not result.published
+    assert "changed implementation content" in (result.blocked_reason or "")
+    repository.fetch_origin(env.work)
+    assert repository.remote_branch_sha(env.work, "delivery") == implementation_head
+
+
+def test_v2_required_ci_failure_blocks_only_after_exact_candidate_publication(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    _install_cp4_agents(env, monkeypatch, [_v2_approved(), _v2_approved()])
+
+    def failing_checks(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        repository.fetch_origin(repo)
+        assert repository.remote_branch_sha(repo, "delivery") == repository.head_sha(repo)
+        return repository.RequiredChecksResult(
+            checks=[{"name": "build", "state": "FAILURE", "bucket": "fail"}],
+            no_required_checks=False,
+            returncode=1,
+        )
+
+    monkeypatch.setattr(repository, "pr_required_checks", failing_checks)
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert not result.completed and result.published
+    assert "required CI failed" in (result.blocked_reason or "")
+    assert result.closure_candidate is not None
+    assert repository.remote_branch_sha(env.work, "delivery") == result.closure_candidate.candidate_head_sha
+
+
+def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    _mock_cp3_revalidated_target(monkeypatch, target)
+    _install_cp4_agents(
+        env, monkeypatch, [_v2_approved(), _v2_approved(), _v2_approved()]
+    )
+    real_checks = repository.pr_required_checks
+    checks_count = 0
+    moved_sha: str | None = None
+
+    def move_base_after_first_ci(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        nonlocal checks_count, moved_sha
+        checks_count += 1
+        result = real_checks(repo, pr_number, gh_command=gh_command)
+        if checks_count == 1:
+            moved_sha = _advance_cp3_origin_main(env, "post-publication-base-move")
+        return result
+
+    monkeypatch.setattr(repository, "pr_required_checks", move_base_after_first_ci)
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed and result.published
+    assert checks_count == 2
+    assert moved_sha is not None
+    assert result.mode_c_evidence is not None
+    assert result.mode_c_evidence.base_sha == moved_sha
