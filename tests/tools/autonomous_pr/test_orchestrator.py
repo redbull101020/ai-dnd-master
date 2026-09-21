@@ -14,8 +14,11 @@ from tools.autonomous_pr import repository
 from tools.autonomous_pr.agents import AgentInvocationResult, AgentInvocationSpec
 from tools.autonomous_pr.model import (
     AgentRole,
+    CandidateIdentity,
     CandidateRejectionBasis,
     ExecutionCheckpoint,
+    ExecutionTarget,
+    GateContext,
     NonConvergenceDiagnosis,
     Phase,
     RepairFinding,
@@ -25,6 +28,8 @@ from tools.autonomous_pr.model import (
     RunOutcome,
     StructuredReviewResult,
     TaskExecutionSpec,
+    TaskStatus,
+    TrackerTask,
     VerificationCommandResult,
     VerificationEvidence,
 )
@@ -4353,3 +4358,567 @@ def test_v2_checkpoint_execution_creates_no_persisted_run_state(
     assert result.completed
     assert after == before
     assert not any(path.name == "run.json" for path in env.work.rglob("*"))
+
+
+# --- TSK-0028 CP-3: late repair invalidation and conservative replay ----------
+
+
+def _prepared_v2_checkpoint_result(
+    env: Env, spec: TaskExecutionSpec
+) -> tuple[str, object]:
+    base_sha = _run_git(["rev-parse", "origin/main"], cwd=env.work).strip()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    evidence: list[orch_module.AcceptedCheckpointEvidence] = []
+    candidates: list[orch_module.AcceptedCheckpointCandidate] = []
+    predecessor = base_sha
+    for checkpoint in spec.checkpoints:
+        path = env.work / f"cp_{checkpoint.number}.txt"
+        path.write_text(f"accepted {checkpoint.checkpoint_id}\n", encoding="utf-8")
+        _run_git(["add", path.name], cwd=env.work)
+        _run_git(["commit", "-q", "-m", f"accept {checkpoint.checkpoint_id}"], cwd=env.work)
+        accepted_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+        diff = _run_git(["diff", f"{predecessor}..{accepted_head}"], cwd=env.work)
+        patch = repository.ReviewPatch(
+            purpose=repository.ReviewPurpose.CHECKPOINT,
+            range_description=f"{predecessor}..{accepted_head}",
+            base_sha=predecessor,
+            head_sha=predecessor,
+            branch="delivery",
+            diff_text=diff,
+            digest=f"accepted-{checkpoint.number}",
+        )
+        candidate = orch_module.AcceptedCheckpointCandidate(
+            checkpoint=checkpoint,
+            gate_context=GateContext(
+                gate_id=checkpoint.checkpoint_id,
+                spec_identity=spec.digest,
+                accepted_base_context_identity=predecessor,
+            ),
+            candidate_identity=orch_module._candidate_identity(diff),
+            review_patch=patch,
+            verification=_v2_verification(True),
+            review_iteration=1,
+        )
+        candidates.append(candidate)
+        evidence.append(
+            orch_module.AcceptedCheckpointEvidence(
+                candidate=candidate,
+                predecessor_review_boundary_sha=predecessor,
+                accepted_head_sha=accepted_head,
+                accepted_base_context_identity=accepted_head,
+            )
+        )
+        predecessor = accepted_head
+    return base_sha, orch_module.V2CheckpointExecutionResult(
+        completed=True,
+        accepted_candidates=tuple(candidates),
+        gate_histories=(),
+        checkpoint_evidence=tuple(evidence),
+    )
+
+
+def _cp3_spec() -> TaskExecutionSpec:
+    spec = _v2_spec(checkpoint_count=2)
+    return dataclasses.replace(
+        spec,
+        full_verification=(
+            (sys.executable, "-c", "print('FULL_VERIFICATION_ONLY')"),
+        ),
+    )
+
+
+def _cp3_target(base_sha: str, spec: TaskExecutionSpec) -> ExecutionTarget:
+    return ExecutionTarget(
+        base_sha=base_sha,
+        task=TrackerTask(
+            task_id=spec.task_id,
+            status=TaskStatus.CURRENT,
+            priority="P2",
+            size="M",
+            group="engineering",
+            roadmap_target="Test roadmap target",
+            depends_on=("TSK-9000",),
+            title="Test task",
+        ),
+        spec=spec,
+    )
+
+
+def _changes_with_paths(
+    problem: str, paths: tuple[str, ...], *, diagnosis: bool = False
+) -> StructuredReviewResult:
+    finding = dataclasses.replace(_finding(problem), affected_paths=paths)
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.CHANGES_REQUESTED,
+        repair_packet=RepairPacket(
+            findings=(finding,),
+            non_convergence=_diagnosis() if diagnosis else None,
+        ),
+        raw_output="CHANGES_REQUESTED\n{}\n",
+        verdict_is_explicit=True,
+    )
+
+
+def _install_cp3_reviewer_sequence(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    reviews: list[StructuredReviewResult],
+) -> tuple[list[str], list[str], list[tuple[tuple[str, ...], ...]], list[str]]:
+    review_queue = list(reviews)
+    reviewer_prompts: list[str] = []
+    implementer_prompts: list[str] = []
+    verification_commands: list[tuple[tuple[str, ...], ...]] = []
+    committed_ranges: list[str] = []
+    repair_number = 0
+
+    def fake_implementer(
+        spec: AgentInvocationSpec, prompt_text: str
+    ) -> AgentInvocationResult:
+        nonlocal repair_number
+        repair_number += 1
+        implementer_prompts.append(prompt_text)
+        (env.work / "late_repair.txt").write_text(
+            f"repair {repair_number}\n", encoding="utf-8"
+        )
+        return AgentInvocationResult("repaired", "", 0, False)
+
+    def fake_reviewer(
+        spec: AgentInvocationSpec, review_input_text: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(review_input_text)
+        assert review_queue, "test exhausted CP-3 reviewer sequence"
+        return review_queue.pop(0)
+
+    real_run_verification = orch_module._run_verification_commands
+    real_build_committed = repository.build_checkpoint_patch_committed
+
+    def spy_verification(
+        config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
+    ) -> VerificationEvidence:
+        verification_commands.append(commands)
+        return real_run_verification(config, commands)
+
+    def spy_committed(repo_path: Path, predecessor: str) -> repository.ReviewPatch:
+        committed_ranges.append(predecessor)
+        return real_build_committed(repo_path, predecessor)
+
+    monkeypatch.setattr(orch_module, "run_implementer", fake_implementer)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", fake_reviewer)
+    monkeypatch.setattr(orch_module, "_run_verification_commands", spy_verification)
+    monkeypatch.setattr(
+        orch_module.repository, "build_checkpoint_patch_committed", spy_committed
+    )
+    assert env.work.exists()
+    return reviewer_prompts, implementer_prompts, verification_commands, committed_ranges
+
+
+def _cp3_config(env: Env) -> OrchestratorConfig:
+    return _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, "print('unused')"),
+        reviewer_spec=_reviewer_spec(env.work, "print('unused')"),
+        max_repairs=0,
+    )
+
+
+def _commit_late_repair(
+    env: Env, accepted_heads: list[str]
+) -> Callable[[orch_module.AcceptedImplementationRepairCandidate], str]:
+    def accept(candidate: orch_module.AcceptedImplementationRepairCandidate) -> str:
+        _run_git(["add", "-A"], cwd=env.work)
+        _run_git(
+            ["commit", "-m", f"accept {candidate.gate_context.gate_id}"],
+            cwd=env.work,
+        )
+        head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+        accepted_heads.append(head)
+        return head
+
+    return accept
+
+
+def _advance_cp3_origin_main(env: Env, marker: str) -> str:
+    (env.seed / "README.md").write_text(f"seed\n{marker}\n", encoding="utf-8")
+    _run_git(["add", "README.md"], cwd=env.seed)
+    _run_git(["commit", "-q", "-m", marker], cwd=env.seed)
+    _run_git(["push", "-q", "origin", "main"], cwd=env.seed)
+    return _run_git(["rev-parse", "HEAD"], cwd=env.seed).strip()
+
+
+def _mock_cp3_revalidated_target(
+    monkeypatch: pytest.MonkeyPatch,
+    target: ExecutionTarget,
+) -> list[str]:
+    loaded_shas: list[str] = []
+
+    def fake_load(repo: Path, task_id: str, base_sha: str) -> object:
+        assert task_id == target.task.task_id
+        loaded_shas.append(base_sha)
+        return object()
+
+    def fake_preflight(base: object, task_id: str) -> ExecutionTarget:
+        assert loaded_shas
+        assert task_id == target.task.task_id
+        return dataclasses.replace(target, base_sha=loaded_shas[-1])
+
+    monkeypatch.setattr(orch_module.task_context, "load_exact_base_input", fake_load)
+    monkeypatch.setattr(
+        orch_module.task_context, "preflight_execution_target", fake_preflight
+    )
+    return loaded_shas
+
+
+def test_v2_cumulative_repair_replays_checkpoints_full_verification_and_review(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    old_full_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+    accepted_heads: list[str] = []
+    prompts, _, commands, ranges = _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [
+            _changes_with_paths("late defect", ("cp_2.txt",)),
+            _v2_approved(),  # mode-A repair
+            _v2_approved(),  # conservative replay CP-1
+            _v2_approved(),  # conservative replay CP-2
+            _v2_approved(),  # rebuilt cumulative review
+        ],
+    )
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        _cp3_target(base_sha, spec),
+        checkpoint_result,
+        repair_acceptor=_commit_late_repair(env, accepted_heads),
+    )
+
+    assert result.completed
+    assert result.blocked_reason is None
+    assert len(accepted_heads) == 1
+    assert result.evidence.full_verification is not None
+    assert result.evidence.full_verification.head_sha == accepted_heads[0]
+    assert result.evidence.full_verification.head_sha != old_full_head
+    assert result.evidence.full_verification.candidate_identity == (
+        orch_module._committed_candidate_identity(accepted_heads[0])
+    )
+    assert tuple(
+        item.command for item in result.evidence.full_verification.verification.commands
+    ) == spec.full_verification
+    assert result.evidence.cumulative_review is not None
+    assert result.evidence.cumulative_review.review_iteration == 2
+    assert result.evidence.cumulative_review.reviewed_head_sha == accepted_heads[0]
+    assert (
+        result.evidence.cumulative_review.review_patch.purpose
+        is repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW
+    )
+    assert result.evidence.cumulative_review.review_patch.range_description.endswith(
+        "...HEAD"
+    )
+    assert [item.candidate.checkpoint.checkpoint_id for item in result.evidence.accepted_checkpoints] == [
+        "CP-1",
+        "CP-2",
+    ]
+    assert result.evidence.accepted_checkpoints[0] is not checkpoint_result.checkpoint_evidence[0]
+    assert ranges == [
+        checkpoint_result.checkpoint_evidence[0].predecessor_review_boundary_sha,
+        checkpoint_result.checkpoint_evidence[1].predecessor_review_boundary_sha,
+    ]
+    assert commands.count(spec.full_verification) == 2
+    assert all(
+        "FINAL_CUMULATIVE_AUDIT" not in prompt for prompt in prompts
+    )
+    assert {
+        purpose.value for purpose in repository.ReviewPurpose
+    } == {
+        "checkpoint",
+        "pre_closure_cumulative_review",
+        "final_cumulative_audit",
+    }
+
+
+def test_v2_replayed_gate_changes_requested_repairs_and_restarts_from_cp1(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    accepted_heads: list[str] = []
+    prompts, implementer_prompts, _, ranges = _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [
+            _v2_changes("cumulative defect"),
+            _v2_approved(),  # cumulative repair
+            _v2_changes("replay CP-1 defect"),
+            _v2_approved(),  # replay repair
+            _v2_approved(),  # restarted replay CP-1
+            _v2_approved(),  # restarted replay CP-2
+            _v2_approved(),  # rebuilt cumulative review
+        ],
+    )
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        _cp3_target(base_sha, spec),
+        checkpoint_result,
+        repair_acceptor=_commit_late_repair(env, accepted_heads),
+    )
+
+    assert result.completed
+    assert len(accepted_heads) == 2
+    cp1_boundary = checkpoint_result.checkpoint_evidence[0].predecessor_review_boundary_sha
+    assert ranges.count(cp1_boundary) == 2
+    assert any(
+        "CURRENT_REPAIR_GATE: replay-repair:CP-1" in prompt
+        for prompt in implementer_prompts
+    )
+    assert all("choose workflow transitions" not in prompt for prompt in prompts)
+    assert len(result.evidence.accepted_checkpoints) == 2
+
+
+def test_v2_origin_main_movement_with_same_target_revalidates_and_rebuilds(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    target = _cp3_target(base_sha, spec)
+    moved_sha = _advance_cp3_origin_main(env, "unrelated-main-movement")
+    loaded_shas = _mock_cp3_revalidated_target(monkeypatch, target)
+    prompts, _, commands, _ = _install_cp3_reviewer_sequence(
+        env, monkeypatch, [_v2_approved()]
+    )
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        target,
+        checkpoint_result,
+        repair_acceptor=lambda candidate: "unused",
+    )
+
+    assert result.completed
+    assert loaded_shas == [moved_sha]
+    assert result.evidence.base_identity == moved_sha
+    assert result.evidence.full_verification is not None
+    assert result.evidence.full_verification.base_identity == moved_sha
+    assert result.evidence.cumulative_review is not None
+    assert result.evidence.cumulative_review.base_identity == moved_sha
+    assert result.evidence.cumulative_review.review_patch.base_sha == moved_sha
+    assert len(prompts) == 1
+    assert commands.count(spec.full_verification) == 1
+
+
+@pytest.mark.parametrize(
+    "changed_fact",
+    ["spec", "dependencies", "priority", "size", "group", "title"],
+)
+def test_v2_origin_main_movement_blocks_changed_execution_target(
+    env: Env, monkeypatch: pytest.MonkeyPatch, changed_fact: str
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    target = _cp3_target(base_sha, spec)
+    moved_sha = _advance_cp3_origin_main(env, f"changed-{changed_fact}")
+    if changed_fact == "spec":
+        changed_spec = dataclasses.replace(
+            spec, text=spec.text + "\nchanged\n", digest="changed-spec-digest"
+        )
+        changed_target = dataclasses.replace(target, spec=changed_spec)
+    elif changed_fact == "dependencies":
+        changed_task = dataclasses.replace(
+            target.task, depends_on=target.task.depends_on + ("TSK-9002",)
+        )
+        changed_target = dataclasses.replace(target, task=changed_task)
+    else:
+        replacements = {
+            "priority": {"priority": "P1"},
+            "size": {"size": "S"},
+            "group": {"group": "documentation"},
+            "title": {"title": "Changed task title"},
+        }
+        changed_task = dataclasses.replace(target.task, **replacements[changed_fact])
+        changed_target = dataclasses.replace(target, task=changed_task)
+    loaded_shas = _mock_cp3_revalidated_target(monkeypatch, changed_target)
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        target,
+        checkpoint_result,
+        repair_acceptor=lambda candidate: "unused",
+    )
+
+    assert not result.completed
+    assert loaded_shas == [moved_sha]
+    assert "changed the accepted v2 execution target" in (result.blocked_reason or "")
+    assert result.evidence.cumulative_review is None
+
+
+def test_v2_origin_main_movement_after_review_discards_stale_approval_and_history(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    target = _cp3_target(base_sha, spec)
+    loaded_shas = _mock_cp3_revalidated_target(monkeypatch, target)
+    prompts, _, commands, _ = _install_cp3_reviewer_sequence(
+        env, monkeypatch, [_v2_approved(), _v2_approved()]
+    )
+    sequenced_reviewer = orch_module.run_structured_reviewer
+    review_count = 0
+    moved_sha: str | None = None
+
+    def move_after_first_review(
+        agent_spec: AgentInvocationSpec, review_input: str
+    ) -> StructuredReviewResult:
+        nonlocal review_count, moved_sha
+        review_count += 1
+        review = sequenced_reviewer(agent_spec, review_input)
+        if review_count == 1:
+            moved_sha = _advance_cp3_origin_main(env, "move-after-review")
+        return review
+
+    monkeypatch.setattr(
+        orch_module, "run_structured_reviewer", move_after_first_review
+    )
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        target,
+        checkpoint_result,
+        repair_acceptor=lambda candidate: "unused",
+    )
+
+    assert result.completed
+    assert moved_sha is not None
+    assert loaded_shas == [moved_sha]
+    assert len(prompts) == 2
+    assert commands.count(spec.full_verification) == 2
+    assert result.evidence.cumulative_review is not None
+    assert result.evidence.cumulative_review.base_identity == moved_sha
+    assert result.evidence.cumulative_review.review_iteration == 1
+    assert result.cumulative_history.context.accepted_base_context_identity == moved_sha
+    assert len(result.cumulative_history.attempts) == 1
+
+
+def test_v2_origin_main_movement_resets_rejected_candidate_cycle_context(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    target = _cp3_target(base_sha, spec)
+    _mock_cp3_revalidated_target(monkeypatch, target)
+    prompts, implementer_prompts, _, _ = _install_cp3_reviewer_sequence(
+        env, monkeypatch, [_v2_changes("stale rejection"), _v2_approved()]
+    )
+    sequenced_reviewer = orch_module.run_structured_reviewer
+    review_count = 0
+
+    def move_after_stale_rejection(
+        agent_spec: AgentInvocationSpec, review_input: str
+    ) -> StructuredReviewResult:
+        nonlocal review_count
+        review_count += 1
+        review = sequenced_reviewer(agent_spec, review_input)
+        if review_count == 1:
+            _advance_cp3_origin_main(env, "move-after-stale-rejection")
+        return review
+
+    monkeypatch.setattr(
+        orch_module, "run_structured_reviewer", move_after_stale_rejection
+    )
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        target,
+        checkpoint_result,
+        repair_acceptor=lambda candidate: "unused",
+    )
+
+    assert result.completed
+    assert len(prompts) == 2
+    assert implementer_prompts == []
+    assert result.cumulative_history.review_iteration == 1
+    assert result.cumulative_history.rejected_candidate_identities == set()
+    assert len(result.cumulative_history.attempts) == 1
+
+
+def test_v2_evidence_invalidation_discards_old_cumulative_approval_and_downstream() -> None:
+    spec = _cp3_spec()
+    evidence = orch_module.V2ImplementationEvidence(
+        spec_identity=spec.digest,
+        base_identity="base",
+        accepted_checkpoints=[],
+    )
+    evidence.full_verification = orch_module.V2FullVerificationEvidence(
+        spec_identity=spec.digest,
+        base_identity="base",
+        candidate_identity=CandidateIdentity("candidate"),
+        head_sha="head",
+        verification=_v2_verification(True),
+    )
+    patch = repository.ReviewPatch(
+        purpose=repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        range_description="origin/main...HEAD",
+        base_sha="base",
+        head_sha="head",
+        branch="delivery",
+        diff_text="diff",
+        digest="digest",
+    )
+    evidence.cumulative_review = orch_module.V2CumulativeReviewEvidence(
+        spec_identity=spec.digest,
+        base_identity="base",
+        candidate_identity=CandidateIdentity("candidate"),
+        reviewed_head_sha="head",
+        review_patch=patch,
+        review_iteration=1,
+    )
+
+    evidence.invalidate_from_checkpoint(0)
+
+    assert evidence.accepted_checkpoints == []
+    assert evidence.full_verification is None
+    assert evidence.cumulative_review is None
+
+
+def test_v2_late_repair_has_no_numeric_repair_limit(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    accepted_heads: list[str] = []
+    _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [
+            _v2_changes("repair-1"),
+            _v2_changes("repair-2", diagnosis=True),
+            _v2_changes("repair-3", diagnosis=True),
+            _v2_approved(),
+        ],
+    )
+    initial = _v2_changes("initial").repair_packet
+    assert initial is not None
+
+    accepted, history, accepted_base = orch_module._execute_v2_late_repair(
+        _cp3_config(env),
+        spec,
+        gate_id="late-repair-no-budget",
+        accepted_base_context_identity=_run_git(
+            ["rev-parse", "HEAD"], cwd=env.work
+        ).strip(),
+        initial_packet=initial,
+        verification_commands=spec.checkpoints[0].verification,
+        repair_acceptor=_commit_late_repair(env, accepted_heads),
+    )
+
+    assert accepted.review_iteration == 4
+    assert history.review_iteration == 4
+    assert len(history.attempts) == 4
+    assert accepted_base == accepted_heads[0]

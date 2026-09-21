@@ -1,9 +1,10 @@
 """Deterministic AUTONOMOUS_PR orchestration primitives.
 
 The public :func:`run` remains the operational v1 lifecycle until TSK-0028's
-atomic CP-5 activation. :func:`execute_v2_checkpoints` is the isolated CP-2
-spec-driven/adaptive primitive and is deliberately not wired into that public
-path yet.
+atomic CP-5 activation. :func:`execute_v2_checkpoints` and
+:func:`execute_v2_pre_closure_review` are the isolated CP-2/CP-3
+spec-driven/adaptive primitives and are deliberately not wired into that
+public path yet.
 
 Drives one already-authorized ``AUTONOMOUS_PR`` invocation through the full
 ``docs/AUTONOMOUS_PR_HARNESS.md`` §9 / ``AGENTS.md`` "Autonomous flow"
@@ -277,6 +278,7 @@ from .model import (
     CandidateIdentity,
     CandidateRejectionBasis,
     ExecutionCheckpoint,
+    ExecutionTarget,
     GateAttempt,
     GateContext,
     GateHistory,
@@ -292,7 +294,7 @@ from .model import (
     VerificationEvidence,
 )
 from .repository import RepositoryError
-from .task_context import TaskRevalidationError
+from .task_context import TaskPreflightError, TaskRevalidationError
 
 # Post-closure origin/main-movement replay is bounded to this many rounds
 # (fetch/revalidate -> mode C -> required CI -> re-fetch to confirm
@@ -500,6 +502,16 @@ class AcceptedCheckpointCandidate:
 
 
 @dataclass(frozen=True)
+class AcceptedCheckpointEvidence:
+    """Accepted evidence and immutable review boundaries for one checkpoint."""
+
+    candidate: AcceptedCheckpointCandidate
+    predecessor_review_boundary_sha: str
+    accepted_head_sha: str
+    accepted_base_context_identity: str
+
+
+@dataclass(frozen=True)
 class V2CheckpointExecutionResult:
     """Result of the CP-only v2 primitive, before full-run integration.
 
@@ -512,6 +524,72 @@ class V2CheckpointExecutionResult:
     completed: bool
     accepted_candidates: tuple[AcceptedCheckpointCandidate, ...]
     gate_histories: tuple[GateHistory, ...]
+    blocked_reason: str | None = None
+    checkpoint_evidence: tuple[AcceptedCheckpointEvidence, ...] = ()
+
+
+@dataclass(frozen=True)
+class V2FullVerificationEvidence:
+    """Full verification bound to one exact committed v2 candidate."""
+
+    spec_identity: str
+    base_identity: str
+    candidate_identity: CandidateIdentity
+    head_sha: str
+    verification: VerificationEvidence
+
+
+@dataclass(frozen=True)
+class V2CumulativeReviewEvidence:
+    """Accepted pre-closure cumulative review; explicitly not Mode C."""
+
+    spec_identity: str
+    base_identity: str
+    candidate_identity: CandidateIdentity
+    reviewed_head_sha: str
+    review_patch: repository.ReviewPatch
+    review_iteration: int
+
+
+@dataclass(frozen=True)
+class AcceptedImplementationRepairCandidate:
+    """A late implementation repair approved under mode A before acceptance."""
+
+    gate_context: GateContext
+    candidate_identity: CandidateIdentity
+    review_patch: repository.ReviewPatch
+    verification: VerificationEvidence
+    review_iteration: int
+
+
+@dataclass
+class V2ImplementationEvidence:
+    """Mutable in-memory evidence ledger for pre-closure v2 execution."""
+
+    spec_identity: str
+    base_identity: str
+    accepted_checkpoints: list[AcceptedCheckpointEvidence]
+    full_verification: V2FullVerificationEvidence | None = None
+    cumulative_review: V2CumulativeReviewEvidence | None = None
+
+    def invalidate_from_checkpoint(self, checkpoint_index: int) -> None:
+        """Discard one affected checkpoint and every downstream evidence item."""
+
+        if checkpoint_index < 0 or checkpoint_index > len(self.accepted_checkpoints):
+            raise ValueError("checkpoint_index is outside accepted checkpoint order")
+        del self.accepted_checkpoints[checkpoint_index:]
+        self.full_verification = None
+        self.cumulative_review = None
+
+
+@dataclass(frozen=True)
+class V2PreClosureExecutionResult:
+    """Outcome of CP-3 through accepted pre-closure cumulative review."""
+
+    completed: bool
+    evidence: V2ImplementationEvidence
+    cumulative_history: GateHistory
+    replay_histories: tuple[GateHistory, ...]
     blocked_reason: str | None = None
 
 
@@ -1011,13 +1089,7 @@ def _build_v2_reviewer_input(
     repair_delta: str | None,
     require_non_convergence: bool,
 ) -> str:
-    non_convergence_requirement = (
-        "true — this review can produce the second or later consecutive "
-        "CHANGES_REQUESTED at this gate"
-        if require_non_convergence
-        else "false — this is the first possible consecutive "
-        "CHANGES_REQUESTED at this gate"
-    )
+    contract = _v2_structured_output_contract(require_non_convergence)
     text = (
         f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
         "CURRENT_GATE:\n"
@@ -1025,7 +1097,31 @@ def _build_v2_reviewer_input(
         f"name: {checkpoint.name}\n"
         f"review_focus: {checkpoint.review_focus}\n"
         f"REVIEW_ITERATION: {review_iteration}\n"
-        "ROLE: Review this checkpoint in a fresh, independent context. Return "
+        "ROLE: Review this checkpoint in a fresh, independent context. "
+        f"{contract}"
+        f"CURRENT_PATCH:\n{patch_text}\n"
+        f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
+    )
+    if previous_packet is not None:
+        text += (
+            "PREVIOUS_REVIEWER_FINDINGS:\n"
+            f"{_repair_findings_json(previous_packet)}\n"
+        )
+    if repair_delta is not None:
+        text += f"REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n{repair_delta}\n"
+    return text
+
+
+def _v2_structured_output_contract(require_non_convergence: bool) -> str:
+    non_convergence_requirement = (
+        "true — this review can produce the second or later consecutive "
+        "CHANGES_REQUESTED at this gate"
+        if require_non_convergence
+        else "false — this is the first possible consecutive "
+        "CHANGES_REQUESTED at this gate"
+    )
+    return (
+        "Return "
         "exactly APPROVED, CHANGES_REQUESTED, or BLOCKED on the first non-empty "
         "line. CHANGES_REQUESTED must be followed by one machine-readable JSON "
         "repair object with a non-empty findings array. Every finding must "
@@ -1042,17 +1138,7 @@ def _build_v2_reviewer_input(
         "recommended_corrective_approach\n"
         "When non_convergence_required is true, CHANGES_REQUESTED must include "
         "a complete non_convergence object with every field listed above.\n"
-        f"CURRENT_PATCH:\n{patch_text}\n"
-        f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
     )
-    if previous_packet is not None:
-        text += (
-            "PREVIOUS_REVIEWER_FINDINGS:\n"
-            f"{_repair_findings_json(previous_packet)}\n"
-        )
-    if repair_delta is not None:
-        text += f"REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n{repair_delta}\n"
-    return text
 
 
 def _require_v2_checkpoint_scope(
@@ -1106,6 +1192,7 @@ def execute_v2_checkpoints(
     """
 
     accepted: list[AcceptedCheckpointCandidate] = []
+    checkpoint_evidence: list[AcceptedCheckpointEvidence] = []
     histories: list[GateHistory] = []
 
     def blocked(reason: str) -> V2CheckpointExecutionResult:
@@ -1114,6 +1201,7 @@ def execute_v2_checkpoints(
             accepted_candidates=tuple(accepted),
             gate_histories=tuple(histories),
             blocked_reason=reason,
+            checkpoint_evidence=tuple(checkpoint_evidence),
         )
 
     if spec.task_id != config.task_id:
@@ -1301,6 +1389,14 @@ def execute_v2_checkpoints(
                         "context identity after the required commit/push transition"
                     )
                 accepted.append(accepted_candidate)
+                checkpoint_evidence.append(
+                    AcceptedCheckpointEvidence(
+                        candidate=accepted_candidate,
+                        predecessor_review_boundary_sha=patch.head_sha,
+                        accepted_head_sha=repository.head_sha(config.repo),
+                        accepted_base_context_identity=next_base,
+                    )
+                )
                 base_context_identity = next_base
                 break
 
@@ -1360,7 +1456,779 @@ def execute_v2_checkpoints(
         completed=True,
         accepted_candidates=tuple(accepted),
         gate_histories=tuple(histories),
+        checkpoint_evidence=tuple(checkpoint_evidence),
     )
+
+
+def _committed_candidate_identity(head_sha: str) -> CandidateIdentity:
+    return _candidate_identity(f"committed-head:{head_sha}")
+
+
+def _all_checkpoint_verification_commands(
+    spec: TaskExecutionSpec,
+) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        command
+        for checkpoint in spec.checkpoints
+        for command in checkpoint.verification
+    )
+
+
+def _same_v2_execution_target(
+    accepted: ExecutionTarget, revalidated: ExecutionTarget
+) -> bool:
+    """Compare every §30 load-bearing execution-target fact."""
+
+    return (
+        revalidated.task == accepted.task
+        and revalidated.spec.digest == accepted.spec.digest
+        and revalidated.spec.text == accepted.spec.text
+    )
+
+
+def _revalidate_v2_execution_target(
+    config: OrchestratorConfig,
+    accepted: ExecutionTarget,
+    current_base_sha: str,
+) -> tuple[ExecutionTarget, bool]:
+    """Freshly capture origin/main and revalidate a moved exact base.
+
+    An unchanged SHA needs no second read. A moved SHA is loaded through the
+    Group-2 exact-base primitives, preflighted again, and accepted only when
+    every §30 load-bearing fact is unchanged. The returned boolean records a
+    base-context transition; callers must invalidate cumulative evidence and
+    gate history before using it.
+    """
+
+    fresh_sha = repository.fetch_and_capture_origin_main_sha(config.repo)
+    if fresh_sha == current_base_sha:
+        return ExecutionTarget(
+            base_sha=fresh_sha, task=accepted.task, spec=accepted.spec
+        ), False
+    try:
+        exact_input = task_context.load_exact_base_input(
+            config.repo, accepted.task.task_id, fresh_sha
+        )
+        revalidated = task_context.preflight_execution_target(
+            exact_input, accepted.task.task_id
+        )
+    except TaskPreflightError as exc:
+        raise _Blocked(
+            "origin/main moved and v2 execution-target revalidation failed: "
+            f"{exc}"
+        ) from exc
+    if not _same_v2_execution_target(accepted, revalidated):
+        raise _Blocked(
+            "origin/main moved and changed the accepted v2 execution target "
+            "(authoritative task entry or fixed spec)"
+        )
+    return revalidated, True
+
+
+def _run_v2_full_verification(
+    config: OrchestratorConfig,
+    spec: TaskExecutionSpec,
+    base_identity: str,
+) -> V2FullVerificationEvidence:
+    """Run only ``TaskExecutionSpec.full_verification`` at the exact HEAD."""
+
+    verification = _run_verification_commands(config, spec.full_verification)
+    if not verification.passed:
+        raise _Blocked("v2 Full verification from the fixed spec failed")
+    current_head = repository.head_sha(config.repo)
+    if verification.head_sha != current_head:
+        raise _Blocked(
+            "v2 Full verification evidence is not bound to the current exact HEAD"
+        )
+    return V2FullVerificationEvidence(
+        spec_identity=spec.digest,
+        base_identity=base_identity,
+        candidate_identity=_committed_candidate_identity(current_head),
+        head_sha=current_head,
+        verification=verification,
+    )
+
+
+def _build_v2_cumulative_review_input(
+    spec: TaskExecutionSpec,
+    patch: repository.ReviewPatch,
+    full_verification: V2FullVerificationEvidence,
+    history: GateHistory,
+) -> str:
+    contract = _v2_structured_output_contract(
+        history.consecutive_changes_requested >= 1
+    )
+    text = (
+        f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
+        "CURRENT_GATE: pre-closure cumulative implementation review\n"
+        "REVIEW_PURPOSE: PRE_CLOSURE_CUMULATIVE_REVIEW\n"
+        "RANGE: origin/main...HEAD before Task Closure; this is not Mode C and "
+        "satisfies docs/TASK.md §18.1's implementation-diff review prerequisite.\n"
+        f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
+        "ROLE: Review the complete implementation diff in a fresh, independent "
+        f"context. {contract}"
+        f"SPEC_IDENTITY: {spec.digest}\n"
+        f"BASE_IDENTITY: {patch.base_sha}\n"
+        f"REVIEWED_HEAD_SHA: {patch.head_sha}\n"
+        f"FULL_VERIFICATION_HEAD_SHA: {full_verification.head_sha}\n"
+        f"FULL_VERIFICATION_CANDIDATE_IDENTITY: "
+        f"{full_verification.candidate_identity.digest}\n"
+        f"FULL_VERIFICATION:\n"
+        f"{_format_verification(full_verification.verification)}"
+        f"CURRENT_PATCH:\n{patch.diff_text}\n"
+    )
+    if history.latest_valid_repair_packet is not None:
+        text += (
+            "PREVIOUS_REVIEWER_FINDINGS:\n"
+            f"{_repair_findings_json(history.latest_valid_repair_packet)}\n"
+        )
+    if history.previous_reviewed_candidate_state is not None:
+        text += (
+            "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n"
+            f"{_repair_delta(history.previous_reviewed_candidate_state, patch.diff_text)}\n"
+        )
+    return text
+
+
+def _build_v2_late_repair_prompt(
+    spec: TaskExecutionSpec,
+    gate_id: str,
+    repair_packet: RepairPacket | None,
+    verification_failure: str | None,
+    repository_context: str,
+) -> str:
+    return (
+        f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
+        f"CURRENT_REPAIR_GATE: {gate_id}\n"
+        "ROLE: Perform only the implementation repair required by the fixed "
+        "spec and structured findings. Do not choose workflow transitions, "
+        "commit, push, edit docs/TASK.md, or edit the fixed task spec.\n"
+        f"CURRENT_REPAIR_PACKET:\n{_repair_packet_json(repair_packet)}\n"
+        f"CURRENT_VERIFICATION_FAILURE:\n"
+        f"{verification_failure or '(none)'}\n"
+        f"REPOSITORY_CONTEXT:\n{repository_context}"
+    )
+
+
+def _build_v2_late_repair_review_input(
+    spec: TaskExecutionSpec,
+    gate_id: str,
+    patch: repository.ReviewPatch,
+    verification: VerificationEvidence,
+    history: GateHistory,
+) -> str:
+    contract = _v2_structured_output_contract(
+        history.consecutive_changes_requested >= 1
+    )
+    text = (
+        f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
+        f"CURRENT_GATE: {gate_id}\n"
+        "REVIEW_PURPOSE: CHECKPOINT (mode A implementation repair)\n"
+        f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
+        "ROLE: Review this implementation repair in a fresh, independent "
+        f"context. {contract}"
+        f"CURRENT_PATCH:\n{patch.diff_text}\n"
+        f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
+    )
+    if history.latest_valid_repair_packet is not None:
+        text += (
+            "PREVIOUS_REVIEWER_FINDINGS:\n"
+            f"{_repair_findings_json(history.latest_valid_repair_packet)}\n"
+        )
+    if history.previous_reviewed_candidate_state is not None:
+        text += (
+            "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n"
+            f"{_repair_delta(history.previous_reviewed_candidate_state, patch.diff_text)}\n"
+        )
+    return text
+
+
+def _execute_v2_late_repair(
+    config: OrchestratorConfig,
+    spec: TaskExecutionSpec,
+    *,
+    gate_id: str,
+    accepted_base_context_identity: str,
+    initial_packet: RepairPacket | None,
+    verification_commands: tuple[tuple[str, ...], ...],
+    repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
+    initial_verification_failure: str | None = None,
+) -> tuple[AcceptedImplementationRepairCandidate, GateHistory, str]:
+    """Adaptive mode-A repair with CP-2 no-progress semantics and no budget."""
+
+    history = GateHistory(
+        context=GateContext(
+            gate_id=gate_id,
+            spec_identity=spec.digest,
+            accepted_base_context_identity=accepted_base_context_identity,
+        ),
+        latest_valid_repair_packet=initial_packet,
+    )
+    verification_failure = initial_verification_failure
+
+    while True:
+        before = repository.capture_branch_head(config.repo)
+        prompt = _build_v2_late_repair_prompt(
+            spec,
+            gate_id,
+            history.latest_valid_repair_packet or initial_packet,
+            verification_failure,
+            _format_v2_repository_context(
+                before, history.context.accepted_base_context_identity
+            ),
+        )
+        result = run_implementer(config.implementer_spec, prompt)
+        repository.verify_branch_head_unchanged(
+            config.repo, before, context=f"{gate_id} implementer repair"
+        )
+        if result.timed_out or result.returncode != 0:
+            raise _Blocked(
+                f"implementer failed during {gate_id}: "
+                f"returncode={result.returncode!r} timed_out={result.timed_out!r}"
+            )
+
+        patch = repository.build_checkpoint_patch_uncommitted(config.repo)
+        _require_v2_checkpoint_scope(repository.changed_paths(config.repo), spec)
+        identity = _candidate_identity(patch.diff_text)
+        repair_delta = (
+            _repair_delta(history.previous_reviewed_candidate_state, patch.diff_text)
+            if history.previous_reviewed_candidate_state is not None
+            else None
+        )
+        delta_digest = (
+            hashlib.sha256(repair_delta.encode("utf-8")).hexdigest()
+            if repair_delta is not None
+            else None
+        )
+        if identity in history.rejected_candidate_identities:
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=None,
+                    rejected=True,
+                    rejection_basis=CandidateRejectionBasis.REPEATED_IDENTITY,
+                    review_iteration=None,
+                    reviewer_verdict=None,
+                    repair_delta_digest=delta_digest,
+                )
+            )
+            raise _Blocked(
+                f"{gate_id} reproduced rejected candidate {identity.digest}"
+            )
+
+        verification = _run_verification_commands(config, verification_commands)
+        if not verification.passed:
+            history.rejected_candidate_identities.add(identity)
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=verification,
+                    rejected=True,
+                    rejection_basis=CandidateRejectionBasis.VERIFICATION_FAILURE,
+                    review_iteration=None,
+                    reviewer_verdict=None,
+                    repair_delta_digest=delta_digest,
+                )
+            )
+            verification_failure = _format_verification(verification)
+            continue
+
+        verification_failure = None
+        review_input = _build_v2_late_repair_review_input(
+            spec, gate_id, patch, verification, history
+        )
+        fingerprint = repository.capture_fingerprint(config.repo)
+        review = run_structured_reviewer(config.reviewer_spec, review_input)
+        repository.verify_fingerprint_unchanged(
+            config.repo, fingerprint, context=f"{gate_id} review"
+        )
+        next_iteration = history.review_iteration + 1
+        if review.verdict_is_explicit:
+            history.review_iteration = next_iteration
+
+        packet = review.repair_packet
+        if review.verdict is ReviewVerdict.APPROVED:
+            history.consecutive_changes_requested = 0
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=verification,
+                    rejected=False,
+                    rejection_basis=None,
+                    review_iteration=next_iteration,
+                    reviewer_verdict=ReviewVerdict.APPROVED,
+                    repair_delta_digest=delta_digest,
+                )
+            )
+            accepted = AcceptedImplementationRepairCandidate(
+                gate_context=history.context,
+                candidate_identity=identity,
+                review_patch=patch,
+                verification=verification,
+                review_iteration=next_iteration,
+            )
+            next_base = repair_acceptor(accepted)
+            if not next_base.strip() or next_base == accepted_base_context_identity:
+                raise _Blocked(
+                    f"{gate_id} repair acceptance did not produce a new "
+                    "committed/pushed base identity"
+                )
+            return accepted, history, next_base
+
+        if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+            history.consecutive_changes_requested += 1
+            history.rejected_candidate_identities.add(identity)
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=verification,
+                    rejected=True,
+                    rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
+                    review_iteration=next_iteration,
+                    reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
+                    findings=packet.findings,
+                    repair_packet=packet,
+                    repair_delta_digest=delta_digest,
+                )
+            )
+            history.previous_reviewed_candidate_identity = identity
+            history.previous_reviewed_candidate_state = patch.diff_text
+            if (
+                history.consecutive_changes_requested >= 2
+                and packet.non_convergence is None
+            ):
+                raise _Blocked(
+                    f"{gate_id} second consecutive CHANGES_REQUESTED omitted "
+                    "non_convergence diagnosis"
+                )
+            history.latest_valid_repair_packet = packet
+            continue
+
+        raise _Blocked(
+            review.blocked_reason or f"designated reviewer blocked {gate_id}"
+        )
+
+
+def _review_v2_replayed_checkpoint(
+    config: OrchestratorConfig,
+    spec: TaskExecutionSpec,
+    original: AcceptedCheckpointEvidence,
+    history: GateHistory,
+) -> tuple[
+    ReviewVerdict | None,
+    RepairPacket | None,
+    AcceptedCheckpointEvidence | None,
+    str | None,
+]:
+    checkpoint = original.candidate.checkpoint
+    patch = repository.build_checkpoint_patch_committed(
+        config.repo, original.predecessor_review_boundary_sha
+    )
+    identity = _candidate_identity(patch.diff_text)
+    if identity in history.rejected_candidate_identities:
+        raise _Blocked(
+            f"replayed {checkpoint.checkpoint_id} repeated rejected candidate "
+            f"{identity.digest}"
+        )
+    verification = _run_verification_commands(config, checkpoint.verification)
+    if not verification.passed:
+        history.rejected_candidate_identities.add(identity)
+        history.attempts.append(
+            GateAttempt(
+                candidate_identity=identity,
+                candidate_state=patch.diff_text,
+                verification=verification,
+                rejected=True,
+                rejection_basis=CandidateRejectionBasis.VERIFICATION_FAILURE,
+                review_iteration=None,
+                reviewer_verdict=None,
+            )
+        )
+        return None, None, None, _format_verification(verification)
+    review_input = _build_v2_reviewer_input(
+        spec,
+        checkpoint,
+        patch.diff_text,
+        verification,
+        history.review_iteration + 1,
+        history.latest_valid_repair_packet,
+        (
+            _repair_delta(history.previous_reviewed_candidate_state, patch.diff_text)
+            if history.previous_reviewed_candidate_state is not None
+            else None
+        ),
+        history.consecutive_changes_requested >= 1,
+    )
+    fingerprint = repository.capture_fingerprint(config.repo)
+    review = run_structured_reviewer(config.reviewer_spec, review_input)
+    repository.verify_fingerprint_unchanged(
+        config.repo, fingerprint, context=f"replayed {checkpoint.checkpoint_id} review"
+    )
+    next_iteration = history.review_iteration + 1
+    if review.verdict_is_explicit:
+        history.review_iteration = next_iteration
+
+    packet = review.repair_packet
+    if review.verdict is ReviewVerdict.APPROVED:
+        history.consecutive_changes_requested = 0
+        history.attempts.append(
+            GateAttempt(
+                candidate_identity=identity,
+                candidate_state=patch.diff_text,
+                verification=verification,
+                rejected=False,
+                rejection_basis=None,
+                review_iteration=next_iteration,
+                reviewer_verdict=ReviewVerdict.APPROVED,
+            )
+        )
+        current_head = repository.head_sha(config.repo)
+        candidate = AcceptedCheckpointCandidate(
+            checkpoint=checkpoint,
+            gate_context=history.context,
+            candidate_identity=identity,
+            review_patch=patch,
+            verification=verification,
+            review_iteration=next_iteration,
+        )
+        return (
+            ReviewVerdict.APPROVED,
+            None,
+            AcceptedCheckpointEvidence(
+                candidate=candidate,
+                predecessor_review_boundary_sha=original.predecessor_review_boundary_sha,
+                accepted_head_sha=current_head,
+                accepted_base_context_identity=current_head,
+            ),
+            None,
+        )
+
+    if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+        history.consecutive_changes_requested += 1
+        history.rejected_candidate_identities.add(identity)
+        history.attempts.append(
+            GateAttempt(
+                candidate_identity=identity,
+                candidate_state=patch.diff_text,
+                verification=verification,
+                rejected=True,
+                rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
+                review_iteration=next_iteration,
+                reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
+                findings=packet.findings,
+                repair_packet=packet,
+            )
+        )
+        history.previous_reviewed_candidate_identity = identity
+        history.previous_reviewed_candidate_state = patch.diff_text
+        if (
+            history.consecutive_changes_requested >= 2
+            and packet.non_convergence is None
+        ):
+            raise _Blocked(
+                f"replayed {checkpoint.checkpoint_id} second consecutive "
+                "CHANGES_REQUESTED omitted non_convergence diagnosis"
+            )
+        history.latest_valid_repair_packet = packet
+        return ReviewVerdict.CHANGES_REQUESTED, packet, None, None
+
+    raise _Blocked(
+        review.blocked_reason
+        or f"designated reviewer blocked replayed {checkpoint.checkpoint_id}"
+    )
+
+
+def _replay_v2_checkpoints_conservatively(
+    config: OrchestratorConfig,
+    spec: TaskExecutionSpec,
+    originals: tuple[AcceptedCheckpointEvidence, ...],
+    evidence: V2ImplementationEvidence,
+    repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
+) -> tuple[GateHistory, ...]:
+    """Replay from CP-1, preserving every original predecessor boundary."""
+
+    histories = {
+        item.candidate.checkpoint.checkpoint_id: GateHistory(
+            context=GateContext(
+                gate_id=f"replay:{item.candidate.checkpoint.checkpoint_id}",
+                spec_identity=spec.digest,
+                accepted_base_context_identity=item.predecessor_review_boundary_sha,
+            )
+        )
+        for item in originals
+    }
+
+    while True:
+        evidence.invalidate_from_checkpoint(0)
+        restart = False
+        for original in originals:
+            checkpoint = original.candidate.checkpoint
+            history = histories[checkpoint.checkpoint_id]
+            verdict, packet, accepted, verification_failure = (
+                _review_v2_replayed_checkpoint(
+                    config, spec, original, history
+                )
+            )
+            if verdict is ReviewVerdict.APPROVED:
+                assert accepted is not None
+                evidence.accepted_checkpoints.append(accepted)
+                continue
+
+            if verdict is ReviewVerdict.CHANGES_REQUESTED:
+                assert packet is not None
+            else:
+                assert verdict is None
+                assert verification_failure is not None
+            _, repair_history, _ = _execute_v2_late_repair(
+                config,
+                spec,
+                gate_id=f"replay-repair:{checkpoint.checkpoint_id}",
+                accepted_base_context_identity=repository.head_sha(config.repo),
+                initial_packet=packet,
+                verification_commands=checkpoint.verification,
+                repair_acceptor=repair_acceptor,
+                initial_verification_failure=verification_failure,
+            )
+            histories[f"repair:{checkpoint.checkpoint_id}:{len(histories)}"] = (
+                repair_history
+            )
+            # Impact cannot be localized deterministically: discard the
+            # repaired gate and every downstream approval, then restart at CP-1.
+            evidence.invalidate_from_checkpoint(0)
+            restart = True
+            break
+        if not restart:
+            return tuple(histories.values())
+
+
+def execute_v2_pre_closure_review(
+    config: OrchestratorConfig,
+    execution_target: ExecutionTarget,
+    checkpoint_result: V2CheckpointExecutionResult,
+    *,
+    repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str] | None,
+) -> V2PreClosureExecutionResult:
+    """Run CP-3 Full verification, cumulative review, repair, and replay.
+
+    This stops at accepted pre-closure cumulative implementation evidence. It
+    deliberately implements no Task Closure or Mode C mechanics.
+    """
+
+    spec = execution_target.spec
+    current_target = execution_target
+    evidence = V2ImplementationEvidence(
+        spec_identity=spec.digest,
+        base_identity=execution_target.base_sha,
+        accepted_checkpoints=list(checkpoint_result.checkpoint_evidence),
+    )
+
+    def new_cumulative_history(base_sha: str) -> GateHistory:
+        return GateHistory(
+            context=GateContext(
+                gate_id="pre-closure-cumulative-review",
+                spec_identity=spec.digest,
+                accepted_base_context_identity=base_sha,
+            )
+        )
+
+    cumulative_history = new_cumulative_history(execution_target.base_sha)
+    replay_histories: list[GateHistory] = []
+
+    def result(completed: bool, reason: str | None = None) -> V2PreClosureExecutionResult:
+        return V2PreClosureExecutionResult(
+            completed=completed,
+            evidence=evidence,
+            cumulative_history=cumulative_history,
+            replay_histories=tuple(replay_histories),
+            blocked_reason=reason,
+        )
+
+    try:
+        if execution_target.task.task_id != config.task_id:
+            raise _Blocked(
+                f"accepted execution target {execution_target.task.task_id} does "
+                f"not match invocation task {config.task_id}"
+            )
+        if spec.task_id != config.task_id:
+            raise _Blocked(
+                f"fixed spec task {spec.task_id} does not match invocation task "
+                f"{config.task_id}"
+            )
+        if not checkpoint_result.completed:
+            raise _Blocked("v2 checkpoints are not all accepted")
+        if not spec.checkpoints:
+            raise _Blocked("fixed v2 spec declares no checkpoints")
+        if len(checkpoint_result.checkpoint_evidence) != len(spec.checkpoints):
+            raise _Blocked("accepted checkpoint evidence is incomplete or out of order")
+        if tuple(
+            item.candidate.checkpoint.checkpoint_id
+            for item in checkpoint_result.checkpoint_evidence
+        ) != tuple(item.checkpoint_id for item in spec.checkpoints):
+            raise _Blocked("accepted checkpoint evidence order differs from fixed spec")
+        if any(
+            item.candidate.gate_context.spec_identity != spec.digest
+            for item in checkpoint_result.checkpoint_evidence
+        ):
+            raise _Blocked("accepted checkpoint evidence belongs to another fixed spec")
+        if (
+            checkpoint_result.checkpoint_evidence[-1].accepted_head_sha
+            != repository.head_sha(config.repo)
+        ):
+            raise _Blocked(
+                "accepted checkpoint evidence is stale for the current exact HEAD"
+            )
+        if repair_acceptor is None:
+            raise _Blocked(
+                "v2 pre-closure repair requires an orchestrator-owned "
+                "commit/push acceptance boundary"
+            )
+
+        originals = tuple(checkpoint_result.checkpoint_evidence)
+
+        while True:
+            revalidated_target, base_moved = _revalidate_v2_execution_target(
+                config, execution_target, current_target.base_sha
+            )
+            current_target = revalidated_target
+            if base_moved:
+                evidence.base_identity = current_target.base_sha
+                evidence.full_verification = None
+                evidence.cumulative_review = None
+                cumulative_history = new_cumulative_history(current_target.base_sha)
+
+            full = evidence.full_verification
+            current_head = repository.head_sha(config.repo)
+            if (
+                full is None
+                or full.head_sha != current_head
+                or full.base_identity != current_target.base_sha
+            ):
+                evidence.full_verification = _run_v2_full_verification(
+                    config, spec, current_target.base_sha
+                )
+                full = evidence.full_verification
+            patch = repository.build_cumulative_patch_from_base(
+                config.repo,
+                repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
+                current_target.base_sha,
+            )
+            identity = _candidate_identity(patch.diff_text)
+            if identity in cumulative_history.rejected_candidate_identities:
+                raise _Blocked(
+                    "pre-closure cumulative repair reproduced a rejected candidate"
+                )
+            review_input = _build_v2_cumulative_review_input(
+                spec, patch, full, cumulative_history
+            )
+            fingerprint = repository.capture_fingerprint(config.repo)
+            review = run_structured_reviewer(config.reviewer_spec, review_input)
+            repository.verify_fingerprint_unchanged(
+                config.repo, fingerprint, context="pre-closure cumulative review"
+            )
+            post_review_target, base_moved = _revalidate_v2_execution_target(
+                config, execution_target, current_target.base_sha
+            )
+            current_target = post_review_target
+            if base_moved:
+                # The review belongs to the old base context. Discard it before
+                # interpreting even APPROVED, rerun Full verification, rebuild
+                # the cumulative range, and invoke a fresh reviewer.
+                evidence.base_identity = current_target.base_sha
+                evidence.full_verification = None
+                evidence.cumulative_review = None
+                cumulative_history = new_cumulative_history(current_target.base_sha)
+                continue
+            next_iteration = cumulative_history.review_iteration + 1
+            if review.verdict_is_explicit:
+                cumulative_history.review_iteration = next_iteration
+
+            packet = review.repair_packet
+            if review.verdict is ReviewVerdict.APPROVED:
+                cumulative_history.consecutive_changes_requested = 0
+                cumulative_history.attempts.append(
+                    GateAttempt(
+                        candidate_identity=identity,
+                        candidate_state=patch.diff_text,
+                        verification=full.verification,
+                        rejected=False,
+                        rejection_basis=None,
+                        review_iteration=next_iteration,
+                        reviewer_verdict=ReviewVerdict.APPROVED,
+                    )
+                )
+                evidence.cumulative_review = V2CumulativeReviewEvidence(
+                    spec_identity=spec.digest,
+                    base_identity=current_target.base_sha,
+                    candidate_identity=identity,
+                    reviewed_head_sha=patch.head_sha,
+                    review_patch=patch,
+                    review_iteration=next_iteration,
+                )
+                return result(True)
+
+            if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+                cumulative_history.consecutive_changes_requested += 1
+                cumulative_history.rejected_candidate_identities.add(identity)
+                cumulative_history.attempts.append(
+                    GateAttempt(
+                        candidate_identity=identity,
+                        candidate_state=patch.diff_text,
+                        verification=full.verification,
+                        rejected=True,
+                        rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
+                        review_iteration=next_iteration,
+                        reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
+                        findings=packet.findings,
+                        repair_packet=packet,
+                    )
+                )
+                cumulative_history.previous_reviewed_candidate_identity = identity
+                cumulative_history.previous_reviewed_candidate_state = patch.diff_text
+                if (
+                    cumulative_history.consecutive_changes_requested >= 2
+                    and packet.non_convergence is None
+                ):
+                    raise _Blocked(
+                        "second consecutive cumulative CHANGES_REQUESTED omitted "
+                        "non_convergence diagnosis"
+                    )
+                cumulative_history.latest_valid_repair_packet = packet
+
+                # A cumulative finding does not prove an earliest affected CP.
+                # Always choose the approved conservative boundary: CP-1.
+                evidence.invalidate_from_checkpoint(0)
+                _, repair_history, _ = _execute_v2_late_repair(
+                    config,
+                    spec,
+                    gate_id="pre-closure-cumulative-repair",
+                    accepted_base_context_identity=patch.head_sha,
+                    initial_packet=packet,
+                    verification_commands=_all_checkpoint_verification_commands(spec),
+                    repair_acceptor=repair_acceptor,
+                )
+                replay_histories.append(repair_history)
+                replay_histories.extend(
+                    _replay_v2_checkpoints_conservatively(
+                        config, spec, originals, evidence, repair_acceptor
+                    )
+                )
+                evidence.full_verification = _run_v2_full_verification(
+                    config, spec, current_target.base_sha
+                )
+                # Loop rebuilds origin/main...HEAD and invokes a fresh reviewer.
+                continue
+
+            raise _Blocked(
+                review.blocked_reason
+                or "designated reviewer blocked pre-closure cumulative review"
+            )
+    except (_Blocked, RepositoryError) as exc:
+        evidence.cumulative_review = None
+        return result(False, str(exc))
 
 
 def _checkpoint_cycle(
