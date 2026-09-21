@@ -7519,3 +7519,15 @@ issue); the live `docs/TASK.md` was confirmed still accepted by the v1
 task-context parser; `git diff --check` clean. Documentation/process-only, so
 the full gameplay `pytest` suite was not run. No production dependency,
 gameplay Architecture, or `src/dnd_engine/**` change (`Contract impact: none`).
+
+## 2026-09-21 — TSK-0028: Activate spec-driven adaptive `AUTONOMOUS_PR` v2 (delivery summary)
+
+Implemented and atomically activated `AUTONOMOUS_PR` v2 in PR #106. Future
+`Ready`/`Current` tasks use an execution-ready Task Execution Spec as their
+fixed execution input; adaptive review repair has no numeric repair-
+exhaustion gate; prospective Task Closure remains unpublished through Closure
+Review and Mode C and is published only after that exact candidate is audited.
+The tracker is now thin and retains a durable terminal lifecycle index. No
+gameplay code or production dependency changed. Verification: tooling tests —
+357 passed; architecture tests — 19 passed; full pytest — 2655 passed; mypy —
+131 files clean; `git diff --check` clean.

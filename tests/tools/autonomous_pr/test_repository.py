@@ -508,6 +508,29 @@ def test_review_patch_never_committed(git_env: GitEnv) -> None:
         )
 
 
+def test_materialized_review_patch_is_exact_and_mutation_is_rejected(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    patch = ReviewPatch(
+        purpose=ReviewPurpose.CHECKPOINT,
+        range_description="HEAD (uncommitted)",
+        base_sha=None,
+        head_sha=repo_module.head_sha(work),
+        branch=repo_module.current_branch(work),
+        diff_text="diff --git a/example b/example\n+Unicode: тест\n",
+        digest="test-digest",
+    )
+
+    repo_module.materialize_review_patch(work, patch)
+
+    assert (work / "review.patch").read_bytes() == patch.diff_text.encode("utf-8")
+    repo_module.verify_materialized_review_patch(work, patch)
+    (work / "review.patch").write_bytes(b"mutated\n")
+    with pytest.raises(RepositoryError, match="no longer byte-identical"):
+        repo_module.verify_materialized_review_patch(work, patch)
+
+
 def test_commit_rejects_pre_staged_review_patch_even_when_not_in_paths(
     git_env: GitEnv,
 ) -> None:
@@ -573,6 +596,162 @@ def test_commit_rejects_stale_head_even_with_identical_diff_text(
         repo_module.commit_reviewed_checkpoint(
             work, reviewed_patch=reviewed_patch, message="stale head", paths=["g.txt"]
         )
+
+
+def _unpublished_candidate_fixture(
+    git_env: GitEnv,
+) -> tuple[str, str, ReviewPatch, repo_module.UnpublishedCommitCandidate]:
+    work = git_env.work
+    base_sha = repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    (work / "implementation.txt").write_text("implementation\n", encoding="utf-8")
+    _run_git(["add", "implementation.txt"], cwd=work)
+    _run_git(["commit", "-q", "-m", "accepted implementation"], cwd=work)
+    _run_git(["push", "-q", "-u", "origin", "delivery"], cwd=work)
+    implementation_head = repo_module.head_sha(work)
+    (work / "closure.txt").write_text("closure\n", encoding="utf-8")
+    closure_patch = repo_module.build_checkpoint_patch_uncommitted(work)
+    candidate = repo_module.create_unpublished_reviewed_commit(
+        work,
+        reviewed_patch=closure_patch,
+        message="prospective closure",
+        paths=["closure.txt"],
+        expected_branch="delivery",
+        expected_published_head=implementation_head,
+    )
+    return base_sha, implementation_head, closure_patch, candidate
+
+
+def test_unpublished_candidate_stays_local_until_exact_mode_c_publish(
+    git_env: GitEnv,
+) -> None:
+    base_sha, implementation_head, _, candidate = _unpublished_candidate_fixture(
+        git_env
+    )
+
+    assert repo_module.head_sha(git_env.work) == candidate.candidate_head_sha
+    assert repo_module.remote_branch_sha(git_env.work, "delivery") == implementation_head
+    audit = repo_module.build_cumulative_patch_from_base(
+        git_env.work, ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
+    )
+    assert audit.head_sha == candidate.candidate_head_sha
+
+    repo_module.publish_audited_unpublished_candidate(
+        git_env.work,
+        candidate,
+        audited_patch=audit,
+        expected_branch="delivery",
+        expected_origin_main_sha=base_sha,
+    )
+
+    assert (
+        repo_module.remote_branch_sha(git_env.work, "delivery")
+        == candidate.candidate_head_sha
+    )
+
+
+def test_unpublished_candidate_can_be_discarded_without_remote_rewrite(
+    git_env: GitEnv,
+) -> None:
+    _, implementation_head, _, candidate = _unpublished_candidate_fixture(git_env)
+
+    restored = repo_module.discard_unpublished_commit_candidate(
+        git_env.work, candidate, expected_branch="delivery"
+    )
+
+    assert restored == implementation_head
+    assert repo_module.head_sha(git_env.work) == implementation_head
+    assert repo_module.remote_branch_sha(git_env.work, "delivery") == implementation_head
+
+
+def test_reviewed_uncommitted_candidate_discard_requires_exact_clean_scope(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    _run_git(["push", "-q", "-u", "origin", "delivery"], cwd=work)
+    predecessor = repo_module.head_sha(work)
+    (work / "closure.txt").write_text("rejected closure\n", encoding="utf-8")
+    patch = repo_module.build_checkpoint_patch_uncommitted(work)
+    (work / "unrelated.txt").write_text("late unrelated state\n", encoding="utf-8")
+
+    with pytest.raises(RepositoryError):
+        repo_module.discard_reviewed_uncommitted_candidate(
+            work,
+            reviewed_patch=patch,
+            paths=["closure.txt"],
+            expected_branch="delivery",
+            expected_head=predecessor,
+            expected_remote_head=predecessor,
+        )
+
+    assert (work / "closure.txt").exists()
+    assert (work / "unrelated.txt").exists()
+
+
+def test_changed_candidate_after_mode_c_is_not_published(git_env: GitEnv) -> None:
+    base_sha, implementation_head, _, candidate = _unpublished_candidate_fixture(git_env)
+    audit = repo_module.build_cumulative_patch_from_base(
+        git_env.work, ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
+    )
+    (git_env.work / "closure.txt").write_text("changed after audit\n", encoding="utf-8")
+
+    with pytest.raises(RepositoryError):
+        repo_module.publish_audited_unpublished_candidate(
+            git_env.work,
+            candidate,
+            audited_patch=audit,
+            expected_branch="delivery",
+            expected_origin_main_sha=base_sha,
+        )
+
+    repo_module.fetch_origin(git_env.work)
+    assert repo_module.remote_branch_sha(git_env.work, "delivery") == implementation_head
+
+
+def test_origin_main_move_before_publish_makes_mode_c_stale(git_env: GitEnv) -> None:
+    base_sha, implementation_head, _, candidate = _unpublished_candidate_fixture(git_env)
+    audit = repo_module.build_cumulative_patch_from_base(
+        git_env.work, ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
+    )
+    _push_new_commit_to_origin_main(git_env.seed, filename="new-base.txt")
+
+    with pytest.raises(RepositoryError, match="origin/main moved"):
+        repo_module.publish_audited_unpublished_candidate(
+            git_env.work,
+            candidate,
+            audited_patch=audit,
+            expected_branch="delivery",
+            expected_origin_main_sha=base_sha,
+        )
+
+    assert repo_module.remote_branch_sha(git_env.work, "delivery") == implementation_head
+
+
+def test_audited_candidate_publication_never_uses_force_push(
+    git_env: GitEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_sha, _, _, candidate = _unpublished_candidate_fixture(git_env)
+    audit = repo_module.build_cumulative_patch_from_base(
+        git_env.work, ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
+    )
+    commands: list[list[str]] = []
+    real_run = repo_module._run
+
+    def recording_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return real_run(args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repo_module, "_run", recording_run)
+
+    repo_module.publish_audited_unpublished_candidate(
+        git_env.work,
+        candidate,
+        audited_patch=audit,
+        expected_branch="delivery",
+        expected_origin_main_sha=base_sha,
+    )
+
+    assert not any(any(part.startswith("--force") for part in command) for command in commands)
 
 
 def test_fingerprint_detects_head_movement(git_env: GitEnv) -> None:
@@ -1494,3 +1673,16 @@ def test_forbidden_merge_commands_never_emitted(
     for call in calls:
         joined = " ".join(call).lower()
         assert "merge" not in joined
+
+
+def test_file_exists_at_ref_distinguishes_missing_from_present(git_env: GitEnv) -> None:
+    work = git_env.work
+    sha = repo_module.origin_main_sha(work)
+
+    assert repo_module.file_exists_at_ref(work, sha, "README.md") is True
+    assert repo_module.file_exists_at_ref(work, sha, "docs/tasks/TSK-0028.md") is False
+
+
+def test_file_exists_at_ref_fails_closed_on_an_unknown_ref(git_env: GitEnv) -> None:
+    with pytest.raises(RepositoryError):
+        repo_module.file_exists_at_ref(git_env.work, "d" * 40, "README.md")

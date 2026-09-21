@@ -4,12 +4,13 @@ Scope, matching ``docs/AUTONOMOUS_PR_HARNESS.md`` §§5, 7, 13, 14:
 
 - one generic subprocess invocation primitive (:func:`run_agent`), used by
   both roles — not a ``BaseProvider``/adapter hierarchy/registry;
-- a role-checked implementer wrapper (:func:`run_implementer`) and a
-  role-checked, verdict-parsing reviewer wrapper (:func:`run_reviewer`);
-- the strict three-token reviewer verdict contract (:func:`parse_reviewer_verdict`).
+- a role-checked implementer wrapper (:func:`run_implementer`) and v2
+  structured reviewer boundary (:func:`run_structured_reviewer`);
+- the unchanged strict three-token reviewer verdict set, plus fail-closed v2
+  JSON validation (:func:`parse_structured_reviewer_output`).
 
 Role isolation. ``AgentInvocationSpec`` carries an explicit :class:`.model.AgentRole`,
-and :func:`run_implementer`/:func:`run_reviewer` each refuse a spec of the
+and :func:`run_implementer`/:func:`run_structured_reviewer` each refuse a spec of the
 wrong role. Nothing in this module ever builds a reviewer's
 ``AgentInvocationSpec`` from an implementer's spec or result — there is no
 "resume the implementer's session for review" helper, and there must never
@@ -25,12 +26,20 @@ external executables and parses their output.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
-from .model import AgentRole, ReviewResult, ReviewVerdict
+from .model import (
+    AgentRole,
+    NonConvergenceDiagnosis,
+    RepairFinding,
+    RepairPacket,
+    ReviewVerdict,
+    StructuredReviewResult,
+)
 
 _VERDICT_TOKENS: frozenset[str] = frozenset(verdict.value for verdict in ReviewVerdict)
 
@@ -140,7 +149,7 @@ def run_agent(spec: AgentInvocationSpec, input_text: str) -> AgentInvocationResu
     Never raises for an expected failure mode (timeout, non-zero exit,
     failure to launch the executable) — those become part of the returned
     :class:`AgentInvocationResult` instead, so the strict, fail-closed
-    verdict handling in :func:`run_reviewer` never has to guess whether a
+    structured verdict handling never has to guess whether a
     caught exception means "no verdict" or something else.
 
     stdin/stdout/stderr are all encoded/decoded as UTF-8 explicitly —
@@ -211,44 +220,167 @@ def parse_reviewer_verdict(output: str) -> ReviewVerdict:
     return ReviewVerdict.BLOCKED
 
 
-def _extract_findings(output: str, verdict: ReviewVerdict) -> str:
-    remaining = [line for line in output.splitlines() if line.strip() != verdict.value]
-    return "\n".join(remaining).strip()
+_FINDING_FIELDS = (
+    "problem",
+    "evidence",
+    "required_outcome",
+    "recommended_repair",
+    "verification_focus",
+)
+_NON_CONVERGENCE_FIELDS = (
+    "previous_requirement",
+    "actual_change",
+    "why_unsatisfied",
+    "misunderstanding",
+    "remaining_required_outcome",
+    "recommended_corrective_approach",
+)
 
 
-def run_reviewer(spec: AgentInvocationSpec, review_patch_text: str) -> ReviewResult:
-    """Invoke the designated reviewer and resolve its verdict.
+def _blocked_structured_review(output: str, reason: str) -> StructuredReviewResult:
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.BLOCKED,
+        repair_packet=None,
+        raw_output=output,
+        blocked_reason=reason,
+    )
 
-    Any process-level failure — timeout, failure to launch, or a non-zero
-    exit status — is always terminal ``BLOCKED``, exactly like a missing or
-    malformed verdict (§7): it is never routed into the bounded repair
-    loop, and reviewer stdout is not trusted for a verdict once the process
-    itself did not succeed cleanly.
+
+def _required_non_empty_string(
+    value: object, *, field_name: str, where: str
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{where}.{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _parse_repair_packet(value: object) -> RepairPacket:
+    if not isinstance(value, dict):
+        raise ValueError("repair packet must be one JSON object")
+
+    raw_findings = value.get("findings")
+    if not isinstance(raw_findings, list) or not raw_findings:
+        raise ValueError("repair packet findings must be a non-empty JSON array")
+
+    findings: list[RepairFinding] = []
+    for index, raw_finding in enumerate(raw_findings):
+        where = f"findings[{index}]"
+        if not isinstance(raw_finding, dict):
+            raise ValueError(f"{where} must be a JSON object")
+        required = {
+            name: _required_non_empty_string(
+                raw_finding.get(name), field_name=name, where=where
+            )
+            for name in _FINDING_FIELDS
+        }
+        raw_paths = raw_finding.get("affected_paths", [])
+        if not isinstance(raw_paths, list) or any(
+            not isinstance(path, str) or not path.strip() for path in raw_paths
+        ):
+            raise ValueError(
+                f"{where}.affected_paths must be an array of non-empty strings"
+            )
+        findings.append(
+            RepairFinding(
+                **required,
+                affected_paths=tuple(path.strip() for path in raw_paths),
+            )
+        )
+
+    diagnosis: NonConvergenceDiagnosis | None = None
+    raw_diagnosis = value.get("non_convergence")
+    if raw_diagnosis is not None:
+        if not isinstance(raw_diagnosis, dict):
+            raise ValueError("non_convergence must be a JSON object")
+        diagnosis_values = {
+            name: _required_non_empty_string(
+                raw_diagnosis.get(name),
+                field_name=name,
+                where="non_convergence",
+            )
+            for name in _NON_CONVERGENCE_FIELDS
+        }
+        diagnosis = NonConvergenceDiagnosis(**diagnosis_values)
+
+    return RepairPacket(findings=tuple(findings), non_convergence=diagnosis)
+
+
+def parse_structured_reviewer_output(output: str) -> StructuredReviewResult:
+    """Parse the v2 verdict-plus-JSON contract fail-closed.
+
+    The first non-empty line is the one verdict token. ``CHANGES_REQUESTED``
+    must be followed by exactly one JSON value representing a complete repair
+    packet. The orchestrator separately enforces when the otherwise-optional
+    non-convergence diagnosis becomes mandatory, because that depends on the
+    in-memory consecutive-verdict count for the current gate.
     """
 
-    _require_role(spec, AgentRole.REVIEWER)
-    result = run_agent(spec, review_patch_text)
-    combined_output = result.stdout + result.stderr
+    lines = output.splitlines()
+    first_index = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if first_index is None:
+        return _blocked_structured_review(output, "reviewer verdict is missing")
 
-    if result.timed_out:
-        return ReviewResult(
-            verdict=ReviewVerdict.BLOCKED,
-            findings="reviewer process timed out",
-            raw_output=combined_output,
+    verdict_token = lines[first_index].strip()
+    if verdict_token not in _VERDICT_TOKENS:
+        return _blocked_structured_review(
+            output, "reviewer verdict is malformed or unrecognized"
         )
+    verdict = ReviewVerdict(verdict_token)
+    remainder = "\n".join(lines[first_index + 1 :]).strip()
+
+    if any(line.strip() in _VERDICT_TOKENS for line in lines[first_index + 1 :]):
+        return _blocked_structured_review(output, "reviewer verdict is ambiguous")
+
+    if verdict is not ReviewVerdict.CHANGES_REQUESTED:
+        return StructuredReviewResult(
+            verdict=verdict,
+            repair_packet=None,
+            raw_output=output,
+            blocked_reason=(
+                "designated reviewer returned BLOCKED"
+                if verdict is ReviewVerdict.BLOCKED
+                else None
+            ),
+            verdict_is_explicit=True,
+        )
+
+    if not remainder:
+        return _blocked_structured_review(
+            output, "CHANGES_REQUESTED is missing its repair packet"
+        )
+    try:
+        decoded = json.loads(remainder)
+        packet = _parse_repair_packet(decoded)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        return _blocked_structured_review(
+            output, f"malformed CHANGES_REQUESTED repair packet: {exc}"
+        )
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.CHANGES_REQUESTED,
+        repair_packet=packet,
+        raw_output=output,
+        verdict_is_explicit=True,
+    )
+
+
+def run_structured_reviewer(
+    spec: AgentInvocationSpec, review_input_text: str
+) -> StructuredReviewResult:
+    """Invoke one fresh v2 reviewer process and validate all returned data."""
+
+    _require_role(spec, AgentRole.REVIEWER)
+    result = run_agent(spec, review_input_text)
+    combined_output = result.stdout + result.stderr
+    if result.timed_out:
+        return _blocked_structured_review(combined_output, "reviewer process timed out")
     if result.returncode is None:
-        return ReviewResult(
-            verdict=ReviewVerdict.BLOCKED,
-            findings=f"reviewer process failed to execute: {result.stderr}".strip(),
-            raw_output=combined_output,
+        return _blocked_structured_review(
+            combined_output,
+            f"reviewer process failed to execute: {result.stderr}".strip(),
         )
     if result.returncode != 0:
-        return ReviewResult(
-            verdict=ReviewVerdict.BLOCKED,
-            findings=f"reviewer process exited with status {result.returncode}",
-            raw_output=combined_output,
+        return _blocked_structured_review(
+            combined_output,
+            f"reviewer process exited with status {result.returncode}",
         )
-
-    verdict = parse_reviewer_verdict(result.stdout)
-    findings = _extract_findings(result.stdout, verdict)
-    return ReviewResult(verdict=verdict, findings=findings, raw_output=result.stdout)
+    return parse_structured_reviewer_output(result.stdout)

@@ -6,13 +6,20 @@ from urllib.parse import unquote, urlsplit
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CURRENT_CONTRACT_DOCUMENTS = (
+    REPOSITORY_ROOT / "AGENTS.md",
     REPOSITORY_ROOT / "README.md",
     REPOSITORY_ROOT / "CLAUDE.md",
+    REPOSITORY_ROOT / "docs" / "TASK.md",
+    REPOSITORY_ROOT / "docs" / "AUTONOMOUS_PR_HARNESS.md",
     REPOSITORY_ROOT / "docs" / "ROADMAP.md",
     REPOSITORY_ROOT / "docs" / "ARCHITECTURE.md",
     REPOSITORY_ROOT / "docs" / "DEFERRED.md",
 )
-ARCHITECTURE_REFERENCE_DOCUMENTS = CURRENT_CONTRACT_DOCUMENTS[:3]
+ARCHITECTURE_REFERENCE_DOCUMENTS = (
+    REPOSITORY_ROOT / "README.md",
+    REPOSITORY_ROOT / "CLAUDE.md",
+    REPOSITORY_ROOT / "docs" / "ROADMAP.md",
+)
 
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
@@ -134,3 +141,19 @@ def test_current_architecture_section_references_exist() -> None:
                 )
 
     assert errors == [], "\n" + "\n".join(errors)
+
+
+def test_autonomous_pr_documents_declare_one_operational_v2_contract() -> None:
+    agents = (REPOSITORY_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    harness = (REPOSITORY_ROOT / "docs" / "AUTONOMOUS_PR_HARNESS.md").read_text(
+        encoding="utf-8"
+    )
+    claude = (REPOSITORY_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert "Operational `AUTONOMOUS_PR` contract: v2" in agents
+    assert "# Part II — Operational v2 contract" in harness
+    assert "v1 runtime flow/mechanics are historical" in harness
+    assert "incorporates them by reference" in harness
+    assert "только v2" in claude
+    assert "Operational `AUTONOMOUS_PR` contract: v1" not in agents
+    assert "approved, inactive" not in harness
