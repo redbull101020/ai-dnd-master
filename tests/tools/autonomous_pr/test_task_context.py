@@ -9,6 +9,7 @@ from tools.autonomous_pr.model import (
     ExactBaseInput,
     ExecutionTarget,
     TaskStatus,
+    TerminalRegistry,
     TerminalTask,
     TrackerTask,
 )
@@ -16,6 +17,7 @@ from tools.autonomous_pr.task_context import (
     TaskPreflightError,
     TaskTrackerError,
     load_exact_base_input,
+    parse_terminal_registry,
     parse_thin_tracker,
     preflight_execution_target,
 )
@@ -187,6 +189,90 @@ def _base(
         task_md_text=_v2_tracker_text() if tracker is None else tracker,
         spec_text=_spec_text() if spec == "default" else spec,
     )
+
+
+def _terminal_registry_text(*rows: str) -> str:
+    return (
+        "# Tracker instructions\n\nNo open queue is required.\n\n"
+        f"# Terminal task index\n\n{_V2_TERMINAL_HEADER}\n"
+        + "\n".join(rows)
+        + "\n"
+    )
+
+
+def test_terminal_registry_parses_without_current_open_index_or_specs() -> None:
+    text = _terminal_registry_text(
+        _terminal_row("TSK-0001", status="Done", evidence="PR #1"),
+        _terminal_row(
+            "TSK-0005",
+            status="Superseded",
+            evidence="decomposed by commit abc123",
+        ),
+    )
+
+    registry = parse_terminal_registry(text)
+
+    assert registry == TerminalRegistry(
+        tasks=(
+            TerminalTask(
+                task_id="TSK-0001",
+                status=TaskStatus.DONE,
+                evidence="PR #1",
+                title="Old task",
+            ),
+            TerminalTask(
+                task_id="TSK-0005",
+                status=TaskStatus.SUPERSEDED,
+                evidence="decomposed by commit abc123",
+                title="Old task",
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("# Tracker instructions\n", "expected exactly one '# Terminal task index'"),
+        (
+            _terminal_registry_text(_terminal_row("TSK-0001"))
+            + "\n# Terminal task index\n",
+            "expected exactly one '# Terminal task index'",
+        ),
+        (
+            "# Terminal task index\n\n| ID | State | Evidence | Title |\n"
+            "| --- | --- | --- | --- |\n",
+            "table header",
+        ),
+        (
+            "# Terminal task index\n\n",
+            "no table header and separator",
+        ),
+        (
+            _terminal_registry_text(_terminal_row("TSK-0001", status="Ready")),
+            "not allowed in this index",
+        ),
+        (
+            _terminal_registry_text(
+                _terminal_row("TSK-0001"), _terminal_row("TSK-0001")
+            ),
+            "more than once in the Terminal task index",
+        ),
+        (
+            _terminal_registry_text("| `TSK-0001` | `Done` |  | Old task |"),
+            "empty Evidence",
+        ),
+        (
+            _terminal_registry_text("| `task-1` | `Done` | PR #1 | Old task |"),
+            "not a TSK-NNNN task ID",
+        ),
+    ],
+)
+def test_terminal_registry_rejects_missing_malformed_or_duplicate_records(
+    text: str, message: str
+) -> None:
+    with pytest.raises(TaskTrackerError, match=message):
+        parse_terminal_registry(text)
 
 
 def test_thin_tracker_parses_open_and_terminal_indexes() -> None:

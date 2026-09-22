@@ -798,6 +798,26 @@ provided a decision does not:
 A decision that would do any of these is not the implementer's to take: it
 ends the run as `BLOCKED` for refinement or a human decision.
 
+### Prospective TSK-0029 CP-1 input model (inactive)
+
+TSK-0029 CP-1 introduces pure, fixture-tested parsing primitives for its
+future standalone task format. A prospective document has the canonical
+`docs/tasks/TSK-NNNN.md` path and matching H1, followed by one `## Task
+metadata` fenced JSON object. That envelope explicitly carries
+`execution_approval`, `priority`, `size`, `roadmap_target`, and `depends_on`;
+`group` is optional. An approved document additionally carries the existing
+nine execution sections. A draft may omit the execution body or carry a
+partial or complete body, but remains non-executable and is not checked for
+approved readiness. The parsed document retains its exact source text and
+digest.
+
+The same slice exposes the durable `ID | Status | Evidence | Title` terminal
+registry independently of `Current` and the Open task index. It does not yet
+list or select task files, filter terminal IDs from a catalog, or connect the
+new input model to public preflight/CLI. The Current-based operational contract
+in §§20–35 remains active until TSK-0029's atomic CP-5 activation; this note is
+prospective documentation, not a selectable partial runtime or fallback.
+
 ---
 
 ## 25. Review verdicts and repair flow (operational v2)

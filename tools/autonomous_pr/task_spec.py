@@ -52,7 +52,16 @@ import hashlib
 import json
 import re
 
-from .model import ExecutionCheckpoint, TaskExecutionSpec, VerificationArgv
+from .model import (
+    ApprovedTaskDocument,
+    DraftTaskDocument,
+    ExecutionApproval,
+    ExecutionCheckpoint,
+    TaskDocument,
+    TaskExecutionSpec,
+    TaskMetadata,
+    VerificationArgv,
+)
 
 SPEC_SECTIONS: tuple[str, ...] = (
     "Goal",
@@ -99,6 +108,23 @@ _UNRESOLVED_MARKER = re.compile(
     r"\b(?:TBD|TODO|FIXME|XXX)\b|\bOPEN DECISION\b|\bOPEN QUESTION\b|<title>|<name>",
     re.IGNORECASE,
 )
+_METADATA_SECTION = "Task metadata"
+_METADATA_REQUIRED_KEYS = frozenset(
+    {"execution_approval", "priority", "size", "roadmap_target", "depends_on"}
+)
+_METADATA_OPTIONAL_KEYS = frozenset({"group"})
+_PRIORITIES = frozenset({"P0", "P1", "P2", "P3"})
+_SIZES = frozenset({"S", "M", "L"})
+_EXECUTABLE_SIZES = frozenset({"S", "M"})
+_GROUPS = frozenset(
+    {"mechanics", "cross-cutting", "engineering", "documentation", "architecture"}
+)
+_STANDALONE_METADATA_LABEL = re.compile(
+    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?"
+    r"(execution[_ ]approval|priority|size|roadmap[_ ]target|depends[_ ]on|group)"
+    r"(?:\*\*|__)?\s*:",
+    re.IGNORECASE,
+)
 
 
 class TaskSpecError(Exception):
@@ -140,6 +166,99 @@ def spec_is_unchanged(spec: TaskExecutionSpec, current_text: str | None) -> bool
     )
 
 
+def parse_task_document(text: str, path: str) -> TaskDocument:
+    """Parse a prospective standalone task document without activating it.
+
+    The document starts with the canonical H1 and exactly one ``Task metadata``
+    fenced JSON object. A draft may omit the execution body or carry a partial
+    or complete body; it remains non-executable and that body is not checked
+    for approved readiness. An approved document must contain the existing
+    nine-section execution body, which is delegated to
+    :func:`parse_task_execution_spec` after the metadata section is removed.
+    The returned document always retains the exact original text and digest.
+
+    This CP-1 primitive is intentionally not wired into public preflight or
+    selection yet; atomic activation belongs to TSK-0029 CP-5.
+    """
+
+    filename_id = _task_id_from_path(path)
+    raw_lines = text.splitlines()
+    lines = _classify_lines(raw_lines, path)
+    title = _read_h1(lines, filename_id, path)
+
+    metadata_headings = [
+        index
+        for index, (line, inside_fence) in enumerate(lines)
+        if not inside_fence
+        and (heading := _HEADING.fullmatch(line)) is not None
+        and heading.group(1) == "##"
+        and heading.group(2) == _METADATA_SECTION
+    ]
+    if len(metadata_headings) != 1:
+        raise TaskSpecError(
+            f"{path}: expected exactly one '## {_METADATA_SECTION}' section, "
+            f"found {len(metadata_headings)}"
+    )
+    metadata_index = metadata_headings[0]
+    h1_index = next(index for index, (line, _) in enumerate(lines) if line.strip())
+    if any(line.strip() for line, _ in lines[h1_index + 1 : metadata_index]):
+        raise TaskSpecError(
+            f"{path}: only blank lines are allowed between the H1 and "
+            f"'## {_METADATA_SECTION}'"
+        )
+
+    next_h2_index = next(
+        (
+            index
+            for index, (line, inside_fence) in enumerate(
+                lines[metadata_index + 1 :], start=metadata_index + 1
+            )
+            if not inside_fence
+            and (heading := _HEADING.fullmatch(line)) is not None
+            and heading.group(1) == "##"
+        ),
+        None,
+    )
+    metadata_end = next_h2_index if next_h2_index is not None else len(lines)
+    metadata = _parse_task_metadata(
+        [line for line, _ in lines[metadata_index + 1 : metadata_end]],
+        filename_id,
+        path,
+    )
+    digest = spec_digest(text)
+    body_text: str | None = None
+    if next_h2_index is not None:
+        body_lines = raw_lines[:metadata_index] + raw_lines[next_h2_index:]
+        body_text = "\n".join(body_lines) + ("\n" if text.endswith("\n") else "")
+        _reject_metadata_duplicates_in_body(body_text, path)
+
+    if metadata.execution_approval is ExecutionApproval.DRAFT:
+        return DraftTaskDocument(
+            task_id=filename_id,
+            path=path,
+            title=title,
+            metadata=metadata,
+            text=text,
+            digest=digest,
+        )
+
+    if next_h2_index is None:
+        raise TaskSpecError(
+            f"{path}: approved task document has no execution sections"
+        )
+    assert body_text is not None
+    execution_spec = parse_task_execution_spec(body_text, path)
+    return ApprovedTaskDocument(
+        task_id=filename_id,
+        path=path,
+        title=title,
+        metadata=metadata,
+        execution_spec=execution_spec,
+        text=text,
+        digest=digest,
+    )
+
+
 def parse_task_execution_spec(text: str, path: str) -> TaskExecutionSpec:
     """Parse and validate ``text``, read from ``path``, as a Task Execution Spec.
 
@@ -148,13 +267,7 @@ def parse_task_execution_spec(text: str, path: str) -> TaskExecutionSpec:
     the module docstring.
     """
 
-    path_match = _SPEC_PATH.fullmatch(path)
-    if path_match is None:
-        raise TaskSpecError(
-            f"{path!r} is not a Task Execution Spec path; expected exactly "
-            "'docs/tasks/TSK-NNNN.md'"
-        )
-    filename_id = path_match.group(1)
+    filename_id = _task_id_from_path(path)
 
     lines = _classify_lines(text.splitlines(), path)
     title = _read_h1(lines, filename_id, path)
@@ -202,6 +315,152 @@ def parse_task_execution_spec(text: str, path: str) -> TaskExecutionSpec:
         text=text,
         digest=spec_digest(text),
     )
+
+
+def _task_id_from_path(path: str) -> str:
+    path_match = _SPEC_PATH.fullmatch(path)
+    if path_match is None:
+        raise TaskSpecError(
+            f"{path!r} is not a Task Execution Spec path; expected exactly "
+            "'docs/tasks/TSK-NNNN.md'"
+        )
+    return path_match.group(1)
+
+
+class _DuplicateJsonKey(ValueError):
+    pass
+
+
+def _json_object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJsonKey(key)
+        result[key] = value
+    return result
+
+
+def _parse_task_metadata(lines: list[str], task_id: str, path: str) -> TaskMetadata:
+    nonblank = [line.strip() for line in lines if line.strip()]
+    if len(nonblank) < 3 or nonblank[0] != "```json" or nonblank[-1] != "```":
+        raise TaskSpecError(
+            f"{path}: '## {_METADATA_SECTION}' must contain exactly one fenced "
+            "JSON object using ```json"
+        )
+    json_text = "\n".join(nonblank[1:-1])
+    try:
+        value = json.loads(
+            json_text,
+            object_pairs_hook=_json_object_without_duplicate_keys,
+        )
+    except _DuplicateJsonKey as exc:
+        raise TaskSpecError(
+            f"{path}: Task metadata contains duplicate JSON key {exc.args[0]!r}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise TaskSpecError(f"{path}: Task metadata is not valid JSON: {exc.msg}") from exc
+    if not isinstance(value, dict):
+        raise TaskSpecError(f"{path}: Task metadata JSON must be an object")
+
+    keys = set(value)
+    missing = sorted(_METADATA_REQUIRED_KEYS - keys)
+    unknown = sorted(keys - _METADATA_REQUIRED_KEYS - _METADATA_OPTIONAL_KEYS)
+    if missing:
+        raise TaskSpecError(
+            f"{path}: Task metadata is missing required field(s): {', '.join(missing)}"
+        )
+    if unknown:
+        raise TaskSpecError(
+            f"{path}: Task metadata has unknown field(s): {', '.join(unknown)}"
+        )
+
+    approval_raw = _metadata_string(value, "execution_approval", path)
+    try:
+        approval = ExecutionApproval(approval_raw)
+    except ValueError as exc:
+        raise TaskSpecError(
+            f"{path}: execution_approval must be 'draft' or 'approved', found "
+            f"{approval_raw!r}"
+        ) from exc
+    priority = _metadata_choice(value, "priority", _PRIORITIES, path)
+    size = _metadata_choice(value, "size", _SIZES, path)
+    roadmap_target = _metadata_string(value, "roadmap_target", path)
+    group = (
+        _metadata_choice(value, "group", _GROUPS, path)
+        if "group" in value
+        else None
+    )
+
+    raw_dependencies = value["depends_on"]
+    if not isinstance(raw_dependencies, list):
+        raise TaskSpecError(f"{path}: depends_on must be a JSON array")
+    dependencies: list[str] = []
+    for dependency in raw_dependencies:
+        if not isinstance(dependency, str) or _TASK_ID.fullmatch(dependency) is None:
+            raise TaskSpecError(
+                f"{path}: every depends_on item must be a TSK-NNNN string"
+            )
+        dependencies.append(dependency)
+    if task_id in dependencies:
+        raise TaskSpecError(f"{path}: {task_id} cannot depend on itself")
+    if len(set(dependencies)) != len(dependencies):
+        raise TaskSpecError(f"{path}: depends_on contains a duplicate task ID")
+
+    if approval is ExecutionApproval.APPROVED:
+        if size not in _EXECUTABLE_SIZES:
+            raise TaskSpecError(
+                f"{path}: approved task size must be S or M, found {size!r}"
+            )
+        if not roadmap_target.strip() or roadmap_target.strip() == "—":
+            raise TaskSpecError(
+                f"{path}: approved task must have a substantive roadmap_target"
+            )
+        unresolved = _UNRESOLVED_MARKER.search(roadmap_target)
+        if unresolved is not None:
+            raise TaskSpecError(
+                f"{path}: approved task roadmap_target contains unresolved marker "
+                f"{unresolved.group(0)!r}"
+            )
+
+    return TaskMetadata(
+        execution_approval=approval,
+        priority=priority,
+        size=size,
+        roadmap_target=roadmap_target,
+        depends_on=tuple(dependencies),
+        group=group,
+    )
+
+
+def _metadata_string(value: dict[str, object], key: str, path: str) -> str:
+    item = value[key]
+    if not isinstance(item, str):
+        raise TaskSpecError(f"{path}: {key} must be a JSON string")
+    return item
+
+
+def _metadata_choice(
+    value: dict[str, object], key: str, allowed: frozenset[str], path: str
+) -> str:
+    item = _metadata_string(value, key, path)
+    if item not in allowed:
+        raise TaskSpecError(
+            f"{path}: {key} has unknown value {item!r}; expected one of "
+            f"{', '.join(sorted(allowed))}"
+        )
+    return item
+
+
+def _reject_metadata_duplicates_in_body(body_text: str, path: str) -> None:
+    for line, inside_fence in _classify_lines(body_text.splitlines(), path):
+        if inside_fence:
+            continue
+        match = _STANDALONE_METADATA_LABEL.match(line)
+        if match is not None:
+            raise TaskSpecError(
+                f"{path}: execution body duplicates Task metadata field "
+                f"{match.group(1)!r}"
+            )
 
 
 _Line = tuple[str, bool]

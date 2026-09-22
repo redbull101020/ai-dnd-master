@@ -24,6 +24,7 @@ from .model import (
     ExactBaseInput,
     ExecutionTarget,
     TaskStatus,
+    TerminalRegistry,
     TerminalTask,
     ThinTracker,
     TrackerTask,
@@ -181,16 +182,7 @@ def parse_thin_tracker(task_queue_text: str) -> ThinTracker:
             "Open task index",
         )
     )
-    terminal_tasks = tuple(
-        _terminal_task_from_cells(cells)
-        for cells in _table_rows(
-            _unique_section(
-                task_queue_text, _TERMINAL_TASK_INDEX_HEADING, "Terminal task index"
-            ),
-            _TERMINAL_TASK_INDEX_HEADER,
-            "Terminal task index",
-        )
-    )
+    terminal_tasks = parse_terminal_registry(task_queue_text).tasks
 
     all_ids = [task.task_id for task in open_tasks] + [
         task.task_id for task in terminal_tasks
@@ -222,6 +214,38 @@ def parse_thin_tracker(task_queue_text: str) -> ThinTracker:
     return ThinTracker(
         current_task_id=pointer, open_tasks=open_tasks, terminal_tasks=terminal_tasks
     )
+
+
+def parse_terminal_registry(task_queue_text: str) -> TerminalRegistry:
+    """Parse the durable terminal table without requiring an open-task queue.
+
+    This pure CP-1 primitive reads only the exact ``# Terminal task index``
+    section and therefore also works with the prospective TSK-0029 tracker,
+    where ``Current`` and the Open task index no longer exist. It deliberately
+    does not inspect task files: catalog-level terminal filtering before body
+    parsing belongs to CP-2.
+    """
+
+    tasks = tuple(
+        _terminal_task_from_cells(cells)
+        for cells in _table_rows(
+            _unique_section(
+                task_queue_text, _TERMINAL_TASK_INDEX_HEADING, "Terminal task index"
+            ),
+            _TERMINAL_TASK_INDEX_HEADER,
+            "Terminal task index",
+        )
+    )
+    task_ids = [task.task_id for task in tasks]
+    duplicated = sorted(
+        {task_id for task_id in task_ids if task_ids.count(task_id) > 1}
+    )
+    if duplicated:
+        raise TaskTrackerError(
+            "task ID(s) appear more than once in the Terminal task index: "
+            f"{', '.join(duplicated)}"
+        )
+    return TerminalRegistry(tasks=tasks)
 
 
 def load_exact_base_input(repo: Path, task_id: str, base_sha: str) -> ExactBaseInput:

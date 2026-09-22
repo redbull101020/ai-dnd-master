@@ -29,6 +29,13 @@ class TaskStatus(Enum):
     SUPERSEDED = "Superseded"
 
 
+class ExecutionApproval(Enum):
+    """Approval state carried by a prospective standalone task document."""
+
+    DRAFT = "draft"
+    APPROVED = "approved"
+
+
 class Phase(Enum):
     """Conceptual run phases matching ``AGENTS.md`` "Autonomous flow" and
     ``docs/AUTONOMOUS_PR_HARNESS.md`` §9. Not a ``docs/TASK.md`` Status."""
@@ -270,6 +277,47 @@ class TaskExecutionSpec:
 
 
 @dataclass(frozen=True)
+class TaskMetadata:
+    """Immutable metadata envelope for one prospective standalone task."""
+
+    execution_approval: ExecutionApproval
+    priority: str
+    size: str
+    roadmap_target: str
+    depends_on: tuple[str, ...]
+    group: str | None = None
+
+
+@dataclass(frozen=True)
+class DraftTaskDocument:
+    """A valid draft envelope, optionally with an unvalidated execution body."""
+
+    task_id: str
+    path: str
+    title: str
+    metadata: TaskMetadata
+    text: str
+    digest: str
+
+
+@dataclass(frozen=True)
+class ApprovedTaskDocument:
+    """An approved standalone task with a complete execution body."""
+
+    task_id: str
+    path: str
+    title: str
+    metadata: TaskMetadata
+    execution_spec: TaskExecutionSpec
+    text: str
+    digest: str
+
+
+TaskDocument = DraftTaskDocument | ApprovedTaskDocument
+"""One parsed prospective standalone task document."""
+
+
+@dataclass(frozen=True)
 class TrackerTask:
     """One row of the operational v2 ``# Open task index``.
 
@@ -302,6 +350,13 @@ class TerminalTask:
     status: TaskStatus
     evidence: str
     title: str
+
+
+@dataclass(frozen=True)
+class TerminalRegistry:
+    """Immutable terminal lifecycle facts parsed independently of an open queue."""
+
+    tasks: tuple[TerminalTask, ...]
 
 
 @dataclass(frozen=True)
