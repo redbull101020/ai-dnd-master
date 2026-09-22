@@ -34,15 +34,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Sequence
 
+from .model import TaskFileRecord
+
 _PROTECTED_BRANCHES = frozenset({"main", "master"})
 _DEFAULT_GH_COMMAND: tuple[str, ...] = ("gh",)
 _DEFAULT_TIMEOUT_SECONDS = 60.0
+_EXACT_COMMIT_SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_TASK_FILE_NAME = re.compile(r"TSK-.*\.md")
+_REGULAR_FILE_MODES = frozenset({"100644", "100755"})
 
 
 class RepositoryError(Exception):
@@ -283,6 +289,103 @@ def read_file_at_ref(repo: Path, ref: str, path: str) -> str:
     """
 
     return _git(repo, ["show", f"{ref}:{path}"])
+
+
+def _read_utf8_blob_exact(
+    repo: Path,
+    *,
+    object_sha: str,
+    path: str,
+    source_sha: str,
+) -> str:
+    """Read one Git blob byte-for-byte, then decode it as strict UTF-8.
+
+    This deliberately bypasses :func:`_run`'s text mode: Python universal
+    newline handling would otherwise normalize CRLF to LF on Windows before
+    the task document's text/digest reached the catalog. ``cat-file blob``
+    addresses the exact object reported by ``ls-tree`` and performs no
+    checkout or working-tree filtering.
+    """
+
+    args = ["git", "cat-file", "blob", object_sha]
+    try:
+        result = subprocess.run(
+            args,
+            cwd=repo,
+            capture_output=True,
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RepositoryError("required tool not found: 'git'") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RepositoryError(
+            f"reading blob for {path} at {source_sha} timed out after "
+            f"{_DEFAULT_TIMEOUT_SECONDS}s"
+        ) from exc
+    if result.returncode != 0:
+        raise RepositoryError(
+            f"git cat-file failed for {path} at {source_sha} "
+            f"(exit {result.returncode}): {result.stderr!r}"
+        )
+    try:
+        return result.stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RepositoryError(
+            f"Git blob for {path} at {source_sha} is not valid UTF-8"
+        ) from exc
+
+
+def list_task_files_at_commit(repo: Path, commit_sha: str) -> tuple[TaskFileRecord, ...]:
+    """Read regular tracked ``docs/tasks/TSK-*.md`` files at one exact commit.
+
+    The commit is validated once and then used literally for both ``ls-tree``
+    and every blob read. Filesystem contents, mtimes, directory order, and the
+    mutable working tree are never consulted. Git symlinks (mode ``120000``),
+    submodules, trees, and other non-regular entries are not task files.
+    A missing ``docs/tasks`` tree therefore yields an empty tuple.
+    """
+
+    if _EXACT_COMMIT_SHA.fullmatch(commit_sha) is None:
+        raise RepositoryError(
+            f"{commit_sha!r} is not an exact lowercase commit SHA"
+        )
+    if resolve_sha(repo, f"{commit_sha}^{{commit}}") != commit_sha:
+        raise RepositoryError(f"{commit_sha!r} is not the exact SHA of a commit")
+
+    listing = _git(repo, ["ls-tree", "-r", "-z", commit_sha, "--", "docs/tasks"])
+    records: list[TaskFileRecord] = []
+    for raw_entry in listing.split("\0"):
+        if not raw_entry:
+            continue
+        metadata, separator, path = raw_entry.partition("\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3:
+            raise RepositoryError(
+                f"git ls-tree returned a malformed task entry: {raw_entry!r}"
+            )
+        mode, object_type, object_sha = fields
+        task_path = Path(path)
+        if (
+            task_path.parent.as_posix() != "docs/tasks"
+            or _TASK_FILE_NAME.fullmatch(task_path.name) is None
+            or object_type != "blob"
+            or mode not in _REGULAR_FILE_MODES
+        ):
+            continue
+        records.append(
+            TaskFileRecord(
+                source_sha=commit_sha,
+                path=task_path.as_posix(),
+                text=_read_utf8_blob_exact(
+                    repo,
+                    object_sha=object_sha,
+                    path=task_path.as_posix(),
+                    source_sha=commit_sha,
+                ),
+            )
+        )
+    return tuple(records)
 
 
 def file_exists_at_ref(repo: Path, ref: str, path: str) -> bool:

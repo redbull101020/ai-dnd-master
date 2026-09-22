@@ -216,7 +216,9 @@ def parse_thin_tracker(task_queue_text: str) -> ThinTracker:
     )
 
 
-def parse_terminal_registry(task_queue_text: str) -> TerminalRegistry:
+def parse_terminal_registry(
+    task_queue_text: str, *, source_sha: str | None = None
+) -> TerminalRegistry:
     """Parse the durable terminal table without requiring an open-task queue.
 
     This pure CP-1 primitive reads only the exact ``# Terminal task index``
@@ -245,7 +247,7 @@ def parse_terminal_registry(task_queue_text: str) -> TerminalRegistry:
             "task ID(s) appear more than once in the Terminal task index: "
             f"{', '.join(duplicated)}"
         )
-    return TerminalRegistry(tasks=tasks)
+    return TerminalRegistry(tasks=tasks, source_sha=source_sha)
 
 
 def load_exact_base_input(repo: Path, task_id: str, base_sha: str) -> ExactBaseInput:

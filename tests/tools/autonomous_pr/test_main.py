@@ -3,8 +3,9 @@ from pathlib import Path
 
 import pytest
 
+from tools.autonomous_pr import __main__ as main_module
 from tools.autonomous_pr.__main__ import _build_config, _parse_args
-from tools.autonomous_pr.model import Phase
+from tools.autonomous_pr.model import Phase, RunOutcome, RunResult
 
 
 def _argv(*extra: str) -> list[str]:
@@ -63,3 +64,26 @@ def test_cli_keeps_capability_assertions_fail_closed() -> None:
 
     with pytest.raises(ValueError):
         _build_config(args)
+
+
+def test_no_eligible_task_is_exit_zero_without_a_synthetic_task_id(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        main_module,
+        "run",
+        lambda config: RunResult(
+            task_id=None,
+            phase=Phase.PREFLIGHT,
+            outcome=RunOutcome.NO_ELIGIBLE_TASK,
+            delivery_branch=None,
+            head_sha=None,
+            blocked_reason=None,
+        ),
+    )
+
+    assert main_module.main(_argv()) == 0
+    output = capsys.readouterr().out
+    assert "task_id: None" in output
+    assert "outcome: NO_ELIGIBLE_TASK" in output

@@ -201,7 +201,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     result = run(config)
     _report(result)
-    return 0 if result.outcome in (RunOutcome.STOP, None) else 1
+    return (
+        0
+        if result.outcome in (RunOutcome.STOP, RunOutcome.NO_ELIGIBLE_TASK, None)
+        else 1
+    )
 
 
 if __name__ == "__main__":

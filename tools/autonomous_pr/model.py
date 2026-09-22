@@ -57,10 +57,11 @@ class Phase(Enum):
 
 
 class RunOutcome(Enum):
-    """The run's only two terminal outcomes (``AUTONOMOUS_PR_HARNESS.md`` §10)."""
+    """Terminal run outcomes, distinct from designated-reviewer verdicts."""
 
     STOP = "STOP"
     BLOCKED = "BLOCKED"
+    NO_ELIGIBLE_TASK = "NO_ELIGIBLE_TASK"
 
 
 class ReviewVerdict(Enum):
@@ -318,6 +319,62 @@ TaskDocument = DraftTaskDocument | ApprovedTaskDocument
 
 
 @dataclass(frozen=True)
+class TaskFileRecord:
+    """One regular, Git-tracked task file read from one exact commit."""
+
+    source_sha: str
+    path: str
+    text: str
+
+
+@dataclass(frozen=True)
+class TaskCatalog:
+    """Validated nonterminal task documents from one immutable Git snapshot."""
+
+    source_sha: str
+    documents: tuple[TaskDocument, ...]
+    terminal_tasks: tuple[TerminalTask, ...]
+    exclusions: tuple[TaskSelectionReason, ...]
+
+
+@dataclass(frozen=True)
+class TaskSelectionReason:
+    """Why one catalog record is excluded or waiting rather than eligible."""
+
+    task_id: str | None
+    reason: str
+
+
+class TaskSelectionMode(Enum):
+    """The two explicit selector forms supported by file-based dispatch."""
+
+    EXPLICIT = "explicit"
+    NEXT = "NEXT"
+
+
+@dataclass(frozen=True)
+class SelectedTask:
+    """One deterministic target resolved from a fixed catalog snapshot."""
+
+    source_sha: str
+    mode: TaskSelectionMode
+    document: ApprovedTaskDocument
+
+
+@dataclass(frozen=True)
+class NoEligibleTask:
+    """Successful no-work result for ``NEXT``; never a reviewer verdict."""
+
+    reasons: tuple[TaskSelectionReason, ...]
+    outcome: RunOutcome = RunOutcome.NO_ELIGIBLE_TASK
+    exit_code: int = 0
+
+
+TaskSelectionResult = SelectedTask | NoEligibleTask
+"""Pure selector result: one target or a successful no-work outcome."""
+
+
+@dataclass(frozen=True)
 class TrackerTask:
     """One row of the operational v2 ``# Open task index``.
 
@@ -357,6 +414,7 @@ class TerminalRegistry:
     """Immutable terminal lifecycle facts parsed independently of an open queue."""
 
     tasks: tuple[TerminalTask, ...]
+    source_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -402,22 +460,25 @@ class RunResult:
     """The outcome of one orchestrator run, returned to the CLI caller.
 
     ``outcome`` is :attr:`RunOutcome.BLOCKED` for any genuine fail-closed
-    terminal condition, :attr:`RunOutcome.STOP` once the run has actually
-    reached ``READY_FOR_HUMAN_MERGE`` (``docs/AUTONOMOUS_PR_HARNESS.md``
-    §10) — the full ``preflight`` through draft-PR / prospective Task
-    Closure / mode C final cumulative audit / required-CI tail — or
-    ``None`` if a caller obtained this value from an internal phase helper
-    before the run reached either terminal state (only :func:`.orchestrator.run`
-    itself should ever observe ``None`` in practice). ``STOP`` is never
-    manufactured before every required gate — closure review, post-closure
-    origin/main revalidation, a fresh mode C audit, and green required CI —
-    has actually passed.
+    terminal condition, :attr:`RunOutcome.NO_ELIGIBLE_TASK` for the successful
+    no-work ``NEXT`` result, :attr:`RunOutcome.STOP` once the run has actually
+    reached ``READY_FOR_HUMAN_MERGE`` (``docs/AUTONOMOUS_PR_HARNESS.md`` §10)
+    — the full ``preflight`` through draft-PR / prospective Task Closure /
+    mode C final cumulative audit / required-CI tail — or ``None`` if a caller
+    obtained this value from an internal phase helper before the run reached a
+    terminal state (only :func:`.orchestrator.run` itself should ever observe
+    ``None`` in practice). ``STOP`` is never manufactured before every required
+    gate — closure review, post-closure origin/main revalidation, a fresh mode C
+    audit, and green required CI — has actually passed.
+
+    ``task_id`` is the resolved concrete identity. It is ``None`` when ``NEXT``
+    found no eligible task; the selector token is never reported as a task ID.
 
     ``pr_url`` is populated once the draft PR exists (``None`` before that
     phase, or on any run that never reaches it).
     """
 
-    task_id: str
+    task_id: str | None
     phase: Phase
     outcome: RunOutcome | None
     delivery_branch: str | None

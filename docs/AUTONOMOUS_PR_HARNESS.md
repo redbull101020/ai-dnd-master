@@ -818,6 +818,17 @@ new input model to public preflight/CLI. The Current-based operational contract
 in §§20–35 remains active until TSK-0029's atomic CP-5 activation; this note is
 prospective documentation, not a selectable partial runtime or fallback.
 
+TSK-0029 CP-2 adds the still-prospective deterministic input boundary for that
+activation. The repository boundary lists regular Git-tracked task blobs at
+one exact commit; the pure catalog excludes terminal identities before body
+parsing, validates every remaining document and dependency graph, and resolves
+one explicit ID or `NEXT`. `NEXT` orders eligible approved documents by
+priority and numeric task ID. An empty or waiting-only catalog produces the
+run-level `NO_ELIGIBLE_TASK` no-work result with exit code 0, not a reviewer
+verdict or a selected task ID. These primitives perform no branch, agent, PR,
+queue, or scheduler action and remain disconnected from the public CLI/run
+until the atomic CP-5 activation.
+
 ---
 
 ## 25. Review verdicts and repair flow (operational v2)
