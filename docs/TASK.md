@@ -248,10 +248,10 @@ index is authoritative.
 
 # Current position
 
-- **Current:** —
+- **Current:** TSK-0029
 - **Next:** —
 - **Hard blockers:** —
-- **Next free ID:** TSK-0029
+- **Next free ID:** TSK-0030
 - **Last reviewed:** 2026-09-21
 
 ---
@@ -260,6 +260,7 @@ index is authoritative.
 
 | ID | Status | P | Size | Group | Roadmap target | Depends on | Title |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `TSK-0029` | `Current` | `P2` | `M` | `engineering` | engineering prerequisite for continued Phase 3 delivery: simplify approved task dispatch | `TSK-0028` | File-based task dispatch, deterministic NEXT and removable completed specs |
 | `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | — | Opportunity Attack / Reaction continuation |
 
 ---
