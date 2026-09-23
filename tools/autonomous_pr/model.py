@@ -359,6 +359,7 @@ class SelectedTask:
     source_sha: str
     mode: TaskSelectionMode
     document: ApprovedTaskDocument
+    basis: str
 
 
 @dataclass(frozen=True)
@@ -453,6 +454,10 @@ class ExecutionTarget:
     base_sha: str
     task: TrackerTask
     spec: TaskExecutionSpec
+    document: ApprovedTaskDocument | None = None
+    spec_source_sha: str | None = None
+    selection_mode: TaskSelectionMode | None = None
+    selection_basis: str | None = None
 
 
 @dataclass(frozen=True)
@@ -485,3 +490,8 @@ class RunResult:
     head_sha: str | None
     blocked_reason: str | None
     pr_url: str | None = None
+    selection_mode: TaskSelectionMode | None = None
+    spec_source_sha: str | None = None
+    spec_path: str | None = None
+    spec_digest: str | None = None
+    no_work_reasons: tuple[TaskSelectionReason, ...] = ()

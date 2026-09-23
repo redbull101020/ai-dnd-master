@@ -829,6 +829,30 @@ verdict or a selected task ID. These primitives perform no branch, agent, PR,
 queue, or scheduler action and remain disconnected from the public CLI/run
 until the atomic CP-5 activation.
 
+TSK-0029 CP-3 prospectively connects that selector to the existing concrete
+v2 lifecycle without adding a second runtime or fallback. The public input is
+one explicit `TSK-NNNN` or literal `NEXT`; selection occurs once against one
+captured `origin/main` commit, and every later gate is bound to the selected
+ID and the original full-document source SHA/path/text digest. The default
+delivery branch is derived only after selection. `NO_ELIGIBLE_TASK` exits
+before branch, agent, or PR writes. Acceptance revalidation rereads that same
+selected ID (never `NEXT`) from a fresh exact base and blocks changed document
+bytes/metadata/approval, lost `Done` dependencies, or a concurrent terminal
+outcome, while unrelated catalog additions cannot switch the run to another
+task. This remains prospective on the TSK-0029 delivery branch until the
+single atomic activation merges. Before branch creation, Git branch-name
+guards and a structured `selected_task_id` provenance check across open PRs
+reject prior same-task work even when it used a custom head branch or targets
+a non-`main` base. The structured block and field must each be unique; exact
+task identity in the conventional PR title is the compatibility fallback,
+while free-form mentions are not identity. An unreadable, malformed, or
+potentially truncated PR listing fails closed. After selection, moved-base
+revalidation is intentionally narrower than initial catalog validation: it
+checks the strict terminal registry, exact selected document/approval, and
+that selected task's `Done` dependencies, without reparsing unrelated task
+bodies. A later invocation still performs the complete strict catalog
+preflight.
+
 ---
 
 ## 25. Review verdicts and repair flow (operational v2)

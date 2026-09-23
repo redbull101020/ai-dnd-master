@@ -217,6 +217,7 @@ def _select_explicit(catalog: TaskCatalog, task_id: str) -> SelectedTask:
         source_sha=catalog.source_sha,
         mode=TaskSelectionMode.EXPLICIT,
         document=document,
+        basis=f"explicit selector {task_id}",
     )
 
 
@@ -258,6 +259,10 @@ def _select_next(catalog: TaskCatalog) -> TaskSelectionResult:
         source_sha=catalog.source_sha,
         mode=TaskSelectionMode.NEXT,
         document=selected,
+        basis=(
+            f"highest eligible priority {selected.metadata.priority}, then numeric "
+            f"task ID {_id_number(selected.task_id)}"
+        ),
     )
 
 

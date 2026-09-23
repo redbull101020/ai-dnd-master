@@ -1,7 +1,8 @@
 """Minimal local CLI entrypoint for the AUTONOMOUS_PR orchestrator.
 
-Executes :func:`tools.autonomous_pr.orchestrator.run` for exactly one named
-task, using configured external implementer/reviewer commands, through the
+Executes :func:`tools.autonomous_pr.orchestrator.run` for one explicit
+``TSK-NNNN`` selector or literal ``NEXT``, using configured external
+implementer/reviewer commands, through the
 full lifecycle to ``READY_FOR_HUMAN_MERGE``/``STOP`` or a fail-closed
 ``BLOCKED``. Per ``docs/AUTONOMOUS_PR_HARNESS.md`` §3, the task ID accepted
 here is execution input only, never proof of authorization — running this
@@ -54,8 +55,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "task_id",
         help=(
-            "The exact authoritative Current TSK id. Execution input only "
-            "-- not authorization."
+            "An explicit TSK-NNNN id or literal NEXT. Execution input only "
+            "-- not authorization; omitting it is a configuration error."
         ),
     )
     parser.add_argument(
@@ -125,7 +126,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--delivery-branch",
         default=None,
-        help="Delivery branch name; defaults to autonomous-pr/<task_id lowercased>.",
+        help=(
+            "Delivery branch name; after selection defaults to "
+            "autonomous-pr/<actual selected task id lowercased>."
+        ),
     )
     parser.add_argument("--agent-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--verify-timeout-seconds", type=float, default=600.0)
@@ -167,14 +171,12 @@ def _build_config(args: argparse.Namespace) -> OrchestratorConfig:
         fresh_context_capable=args.reviewer_fresh_context_capable,
         has_git_or_github_write_access=reviewer_has_write_access,
     )
-    delivery_branch = args.delivery_branch or f"autonomous-pr/{args.task_id.lower()}"
-
     return OrchestratorConfig(
         task_id=args.task_id,
         repo=args.repo,
         implementer_spec=implementer_spec,
         reviewer_spec=reviewer_spec,
-        delivery_branch=delivery_branch,
+        delivery_branch=args.delivery_branch or "",
         verification_timeout_seconds=args.verify_timeout_seconds,
     )
 
@@ -188,6 +190,16 @@ def _report(result: RunResult) -> None:
     print(f"head_sha: {result.head_sha}")
     if result.pr_url is not None:
         print(f"pr_url: {result.pr_url}")
+    if result.selection_mode is not None:
+        print(f"selection_mode: {result.selection_mode.value}")
+    if result.spec_source_sha is not None:
+        print(f"spec_source_sha: {result.spec_source_sha}")
+    if result.spec_path is not None:
+        print(f"spec_path: {result.spec_path}")
+    if result.spec_digest is not None:
+        print(f"spec_digest: {result.spec_digest}")
+    for reason in result.no_work_reasons:
+        print(f"no_work_reason: {reason.task_id or '(catalog)'}: {reason.reason}")
     if result.blocked_reason is not None:
         print(f"blocked_reason: {result.blocked_reason}")
 

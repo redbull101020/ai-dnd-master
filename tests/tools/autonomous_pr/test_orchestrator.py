@@ -14,9 +14,11 @@ from tools.autonomous_pr import repository
 from tools.autonomous_pr.agents import AgentInvocationResult, AgentInvocationSpec
 from tools.autonomous_pr.model import (
     AgentRole,
+    ApprovedTaskDocument,
     CandidateIdentity,
     CandidateRejectionBasis,
     ExecutionCheckpoint,
+    ExecutionApproval,
     ExecutionTarget,
     GateContext,
     GateHistory,
@@ -26,8 +28,12 @@ from tools.autonomous_pr.model import (
     RepairPacket,
     ReviewVerdict,
     RunOutcome,
+    RunResult,
+    SelectedTask,
     StructuredReviewResult,
     TaskExecutionSpec,
+    TaskMetadata,
+    TaskSelectionMode,
     TaskStatus,
     TrackerTask,
     VerificationCommandResult,
@@ -122,7 +128,15 @@ def _task_md_text(task_id: str, roadmap_target: str = "Test roadmap target") -> 
     )
 
 
-def _v2_task_md_text(task_id: str) -> str:
+def _v2_task_md_text(
+    task_id: str,
+    *,
+    terminal_rows: tuple[tuple[str, str], ...] = (),
+) -> str:
+    terminal = "".join(
+        f"| `{terminal_id}` | `{status}` | PR #1 | Terminal task |\n"
+        for terminal_id, status in terminal_rows
+    )
     return (
         "# Task Queue\n\n"
         "# Current position\n\n"
@@ -138,7 +152,8 @@ def _v2_task_md_text(task_id: str) -> str:
         "---\n\n"
         "# Terminal task index\n\n"
         "| ID | Status | Evidence | Title |\n"
-        "| --- | --- | --- | --- |\n\n"
+        "| --- | --- | --- | --- |\n"
+        f"{terminal}\n"
         "---\n\n"
         "# Recently completed\n\n"
         "| ID | Title | Evidence |\n"
@@ -146,10 +161,28 @@ def _v2_task_md_text(task_id: str) -> str:
     )
 
 
-def _v2_spec_text(task_id: str) -> str:
+def _v2_spec_text(
+    task_id: str,
+    *,
+    approval: str = "approved",
+    priority: str = "P2",
+    depends_on: tuple[str, ...] = (),
+) -> str:
     verification = json.dumps([sys.executable, "-c", "raise SystemExit(0)"])
+    metadata = json.dumps(
+        {
+            "execution_approval": approval,
+            "priority": priority,
+            "size": "M",
+            "roadmap_target": "Test roadmap target",
+            "depends_on": list(depends_on),
+            "group": "engineering",
+        },
+        indent=2,
+    )
     return (
         f"# {task_id} — Public run integration\n\n"
+        f"## Task metadata\n\n```json\n{metadata}\n```\n\n"
         "## Goal\n\nDeliver the integration marker.\n\n"
         "## Context / References\n\nUse the approved v2 harness contract.\n\n"
         "## Scope\n\n- add the integration marker\n\n"
@@ -259,7 +292,12 @@ def _verify_true() -> tuple[str, ...]:
 _FAKE_GH_ALWAYS_PASS = (
     "import sys, json, subprocess\n"
     "args = sys.argv[1:]\n"
-    "if args[:2] == ['pr', 'create']:\n"
+    "if args[:2] == ['pr', 'list']:\n"
+    "    assert args[args.index('--state') + 1] == 'open'\n"
+    "    assert '--base' not in args\n"
+    "    assert int(args[args.index('--limit') + 1]) == 100\n"
+    "    print('[]')\n"
+    "elif args[:2] == ['pr', 'create']:\n"
     "    print('https://github.com/example/repo/pull/1')\n"
     "elif args[:2] == ['pr', 'view']:\n"
     "    sha = subprocess.run(\n"
@@ -275,6 +313,58 @@ _FAKE_GH_ALWAYS_PASS = (
 
 def _default_gh_command() -> tuple[str, ...]:
     return (sys.executable, "-c", _FAKE_GH_ALWAYS_PASS)
+
+
+def _public_dispatch_gh_command(
+    task_id: str,
+    *,
+    open_prs: tuple[dict[str, object], ...] = (),
+    fail_list: bool = False,
+    command_log: Path | None = None,
+) -> tuple[str, ...]:
+    open_prs_json = json.dumps(open_prs)
+    log_statement = (
+        ""
+        if command_log is None
+        else (
+            f"pathlib.Path({str(command_log)!r}).open('a', encoding='utf-8').write("
+            "json.dumps(args) + '\\n')\n"
+        )
+    )
+    code = (
+        "import sys, json, pathlib, subprocess\n"
+        "args = sys.argv[1:]\n"
+        + log_statement
+        + "if args[:2] == ['pr', 'list']:\n"
+        "    assert args[args.index('--state') + 1] == 'open'\n"
+        "    assert '--base' not in args\n"
+        "    limit = int(args[args.index('--limit') + 1])\n"
+        + (
+            "    raise SystemExit(7)\n"
+            if fail_list
+            else (
+                f"    records = json.loads({open_prs_json!r})\n"
+                "    print(json.dumps(records[:limit]))\n"
+            )
+        )
+        + "elif args[:2] == ['pr', 'create']:\n"
+        "    body = args[args.index('--body') + 1]\n"
+        f"    assert 'selected_task_id: {task_id}' in body\n"
+        "    assert 'original_source_sha:' in body\n"
+        f"    assert 'canonical_path: docs/tasks/{task_id}.md' in body\n"
+        "    assert 'full_document_digest:' in body\n"
+        "    print('https://github.com/example/repo/pull/1')\n"
+        "elif args[:2] == ['pr', 'view']:\n"
+        "    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], "
+        "text=True).strip()\n"
+        "    print(json.dumps({'headRefOid': head}))\n"
+        "elif args[:2] == ['pr', 'checks']:\n"
+        "    print(json.dumps([{'name': 'required', 'state': 'SUCCESS', "
+        "'bucket': 'pass'}]))\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+    return (sys.executable, "-c", code)
 
 
 def _default_config(
@@ -297,6 +387,114 @@ def _default_config(
     )
 
 
+@dataclass
+class PublicDispatchEnv:
+    origin: Path
+    seed: Path
+    work: Path
+
+
+def _make_public_dispatch_env(
+    tmp_path: Path,
+    *,
+    task_text: str | None = None,
+    task_md_text: str | None = None,
+) -> PublicDispatchEnv:
+    origin = tmp_path / "dispatch-origin.git"
+    _run_git(["init", "-q", "--bare", "-b", "main", str(origin)], cwd=tmp_path)
+    seed = tmp_path / "dispatch-seed"
+    _run_git(["init", "-q", "-b", "main", str(seed)], cwd=tmp_path)
+    _configure_user(seed)
+    _run_git(["config", "core.autocrlf", "false"], cwd=seed)
+    (seed / ".gitignore").write_text("*.patch\n", encoding="utf-8")
+    (seed / "docs" / "tasks").mkdir(parents=True)
+    (seed / "docs" / "TASK.md").write_text(
+        task_md_text or _v2_task_md_text(_TASK_ID), encoding="utf-8"
+    )
+    (seed / "docs" / "DEVELOPMENT_LOG.md").write_text(
+        "# Development log\n", encoding="utf-8"
+    )
+    (seed / "docs" / "tasks" / f"{_TASK_ID}.md").write_text(
+        task_text or _v2_spec_text(_TASK_ID), encoding="utf-8", newline=""
+    )
+    _run_git(["add", ".gitignore", "docs"], cwd=seed)
+    _run_git(["commit", "-q", "-m", "seed file dispatch target"], cwd=seed)
+    _run_git(["remote", "add", "origin", str(origin)], cwd=seed)
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    work = tmp_path / "dispatch-work"
+    _run_git(
+        ["-c", "core.autocrlf=false", "clone", "-q", str(origin), str(work)],
+        cwd=tmp_path,
+    )
+    _configure_user(work)
+    _run_git(["config", "core.autocrlf", "false"], cwd=work)
+    return PublicDispatchEnv(origin=origin, seed=seed, work=work)
+
+
+def _public_dispatch_implementer_code(task_id: str) -> str:
+    return (
+        "import pathlib, sys\n"
+        "prompt = sys.stdin.read()\n"
+        f"assert 'selected_task_id: {task_id}' in prompt\n"
+        "assert 'original_source_sha:' in prompt\n"
+        f"assert 'canonical_path: docs/tasks/{task_id}.md' in prompt\n"
+        "assert 'full_document_digest:' in prompt\n"
+        "if 'CURRENT_GATE: prospective Task Closure\\n' in prompt:\n"
+        "    task = pathlib.Path('docs/TASK.md')\n"
+        "    task.write_text(task.read_text(encoding='utf-8') + "
+        "'\\n<!-- prospective closure -->\\n', encoding='utf-8')\n"
+        "    log = pathlib.Path('docs/DEVELOPMENT_LOG.md')\n"
+        "    log.write_text(log.read_text(encoding='utf-8') + "
+        "'\\n- Public run integration closure.\\n', encoding='utf-8')\n"
+        "elif 'CURRENT_CHECKPOINT:\\nid: CP-1\\n' in prompt:\n"
+        "    pathlib.Path('integration-marker.txt').write_text("
+        "'accepted v2 checkpoint\\n', encoding='utf-8')\n"
+        "else:\n"
+        "    raise SystemExit('unexpected implementer handoff')\n"
+    )
+
+
+def _public_dispatch_config(
+    env: PublicDispatchEnv,
+    *,
+    selector: str,
+) -> OrchestratorConfig:
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
+    return OrchestratorConfig(
+        task_id=selector,
+        repo=env.work,
+        implementer_spec=_implementer_spec(
+            env.work, _public_dispatch_implementer_code(_TASK_ID)
+        ),
+        reviewer_spec=_reviewer_spec(env.work, reviewer_code),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID),
+    )
+
+
+def _commit_and_push_main(seed: Path, message: str, *paths: str) -> None:
+    _run_git(["add", *paths], cwd=seed)
+    _run_git(["commit", "-q", "-m", message], cwd=seed)
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+
+
+def _mutate_main_before_first_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: Callable[[], None],
+) -> None:
+    real_fetch = repository.fetch_and_capture_origin_main_sha
+    calls = 0
+
+    def fetch(repo: Path) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            mutation()
+        return real_fetch(repo)
+
+    monkeypatch.setattr(repository, "fetch_and_capture_origin_main_sha", fetch)
+
+
 
 
 # --- TSK-0028 CP-2: spec-driven adaptive checkpoint primitives ---------------
@@ -314,6 +512,7 @@ def test_public_run_selects_only_v2_spec_driven_pipeline(
     head_sha = "b" * 40
     spec = _v2_spec()
     target = _cp3_target(base_sha, spec)
+    selected = _selected_from_target(target)
     checkpoint_result = orch_module.V2CheckpointExecutionResult(
         completed=True,
         accepted_candidates=(),
@@ -362,14 +561,10 @@ def test_public_run_selects_only_v2_spec_driven_pipeline(
         lambda repo, branch, sha: calls.append(f"branch:{sha}"),
     )
     monkeypatch.setattr(
-        orch_module.task_context,
-        "load_exact_base_input",
-        lambda repo, task_id, sha: calls.append(f"load:{sha}") or object(),
-    )
-    monkeypatch.setattr(
-        orch_module.task_context,
-        "preflight_execution_target",
-        lambda exact, task_id: calls.append("preflight") or target,
+        orch_module,
+        "_resolve_file_based_target",
+        lambda config, selector, sha: calls.append(f"select:{selector}:{sha}")
+        or selected,
     )
     monkeypatch.setattr(
         orch_module,
@@ -397,8 +592,7 @@ def test_public_run_selects_only_v2_spec_driven_pipeline(
     assert result.outcome is RunOutcome.STOP
     assert result.phase is Phase.READY_FOR_HUMAN_MERGE
     assert calls == [
-        f"load:{base_sha}",
-        "preflight",
+        f"select:{_TASK_ID}:{base_sha}",
         f"branch:{base_sha}",
         "checkpoints",
         "pre-closure",
@@ -408,7 +602,18 @@ def test_public_run_selects_only_v2_spec_driven_pipeline(
     assert not hasattr(config, "verification_commands")
 
 
-def test_public_run_executes_real_v2_pipeline_to_ready_stop(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "selector, expected_mode",
+    [
+        (_TASK_ID, TaskSelectionMode.EXPLICIT),
+        ("NEXT", TaskSelectionMode.NEXT),
+    ],
+)
+def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
+    tmp_path: Path,
+    selector: str,
+    expected_mode: TaskSelectionMode,
+) -> None:
     origin = tmp_path / "public-origin.git"
     _run_git(["init", "-q", "--bare", "-b", "main", str(origin)], cwd=tmp_path)
 
@@ -438,6 +643,10 @@ def test_public_run_executes_real_v2_pipeline_to_ready_stop(tmp_path: Path) -> N
     implementer_code = (
         "import pathlib, sys\n"
         "prompt = sys.stdin.read()\n"
+        f"assert 'selected_task_id: {_TASK_ID}' in prompt\n"
+        "assert 'original_source_sha:' in prompt\n"
+        f"assert 'canonical_path: docs/tasks/{_TASK_ID}.md' in prompt\n"
+        "assert 'full_document_digest:' in prompt\n"
         "if 'CURRENT_GATE: prospective Task Closure\\n' in prompt:\n"
         "    task = pathlib.Path('docs/TASK.md')\n"
         "    task.write_text(task.read_text(encoding='utf-8') + "
@@ -453,12 +662,12 @@ def test_public_run_executes_real_v2_pipeline_to_ready_stop(tmp_path: Path) -> N
     )
     reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
     config = OrchestratorConfig(
-        task_id=_TASK_ID,
+        task_id=selector,
         repo=work,
         implementer_spec=_implementer_spec(work, implementer_code),
         reviewer_spec=_reviewer_spec(work, reviewer_code),
-        delivery_branch="codex/public-v2-integration",
-        gh_command=_default_gh_command(),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID),
     )
 
     result = run(config)
@@ -466,10 +675,15 @@ def test_public_run_executes_real_v2_pipeline_to_ready_stop(tmp_path: Path) -> N
     assert result.outcome is RunOutcome.STOP
     assert result.phase is Phase.READY_FOR_HUMAN_MERGE
     assert result.blocked_reason is None
+    assert result.task_id == _TASK_ID
+    assert result.selection_mode is expected_mode
+    assert result.spec_source_sha is not None
+    assert result.spec_path == f"docs/tasks/{_TASK_ID}.md"
+    assert result.spec_digest is not None
     assert result.pr_url == "https://github.com/example/repo/pull/1"
     assert result.head_sha == _run_git(["rev-parse", "HEAD"], cwd=work).strip()
     assert result.head_sha == _run_git(
-        ["rev-parse", "origin/codex/public-v2-integration"], cwd=work
+        ["rev-parse", f"origin/autonomous-pr/{_TASK_ID.lower()}"], cwd=work
     ).strip()
     assert _run_git(["status", "--porcelain"], cwd=work) == ""
     assert (work / "integration-marker.txt").read_text(encoding="utf-8") == (
@@ -477,11 +691,501 @@ def test_public_run_executes_real_v2_pipeline_to_ready_stop(tmp_path: Path) -> N
     )
 
 
+def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) -> None:
+    origin = tmp_path / "no-work-origin.git"
+    _run_git(["init", "-q", "--bare", "-b", "main", str(origin)], cwd=tmp_path)
+    seed = tmp_path / "no-work-seed"
+    _run_git(["init", "-q", "-b", "main", str(seed)], cwd=tmp_path)
+    _configure_user(seed)
+    (seed / "docs" / "tasks").mkdir(parents=True)
+    (seed / "docs" / "TASK.md").write_text(
+        _v2_task_md_text(_TASK_ID), encoding="utf-8"
+    )
+    (seed / "docs" / "tasks" / f"{_TASK_ID}.md").write_text(
+        _v2_spec_text(_TASK_ID, approval="draft"), encoding="utf-8"
+    )
+    _run_git(["add", "docs"], cwd=seed)
+    _run_git(["commit", "-q", "-m", "seed draft catalog"], cwd=seed)
+    _run_git(["remote", "add", "origin", str(origin)], cwd=seed)
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    work = tmp_path / "no-work-work"
+    _run_git(["clone", "-q", str(origin), str(work)], cwd=tmp_path)
+    _configure_user(work)
+    initial_head = _run_git(["rev-parse", "HEAD"], cwd=work).strip()
+
+    fail_if_invoked = "raise SystemExit('agent must not be invoked')"
+    result = run(
+        OrchestratorConfig(
+            task_id="NEXT",
+            repo=work,
+            implementer_spec=_implementer_spec(work, fail_if_invoked),
+            reviewer_spec=_reviewer_spec(work, fail_if_invoked),
+            delivery_branch="",
+            gh_command=(sys.executable, "-c", fail_if_invoked),
+        )
+    )
+
+    assert result.outcome is RunOutcome.NO_ELIGIBLE_TASK
+    assert result.task_id is None
+    assert result.delivery_branch is None
+    assert result.phase is Phase.PREFLIGHT
+    assert result.no_work_reasons[0].task_id == _TASK_ID
+    assert _run_git(["branch", "--show-current"], cwd=work).strip() == "main"
+    assert _run_git(["rev-parse", "HEAD"], cwd=work).strip() == initial_head
+    assert _run_git(["status", "--porcelain"], cwd=work) == ""
+
+
+def test_same_task_branch_collision_cannot_be_bypassed_with_alternate_name(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    canonical = f"autonomous-pr/{_TASK_ID.lower()}"
+    _run_git(["branch", canonical], cwd=env.seed)
+    _run_git(["push", "-q", "origin", canonical], cwd=env.seed)
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        delivery_branch="codex/alternate-name",
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.delivery_branch is None
+    assert "implicit resume/reuse is forbidden" in (result.blocked_reason or "")
+    assert _run_git(["branch", "--list", "codex/alternate-name"], cwd=env.work) == ""
+
+
+def _open_pr_record(
+    task_id: str,
+    head: str = "legacy/custom-head",
+    *,
+    base: str = "main",
+) -> dict[str, object]:
+    return {
+        "number": 77,
+        "url": "https://github.com/example/repo/pull/77",
+        "headRefName": head,
+        "baseRefName": base,
+        "title": f"{task_id}: Existing task delivery",
+        "body": (
+            "AUTONOMOUS_PR v2 draft\n\n"
+            "Selected task provenance:\n"
+            f"selected_task_id: {task_id}\n"
+            "selection_mode: explicit\n"
+        ),
+    }
+
+
+@pytest.mark.parametrize("delivery_branch", ["", "codex/another-custom-name"])
+def test_open_same_task_pr_on_custom_branch_blocks_before_side_effects(
+    tmp_path: Path,
+    delivery_branch: str,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    agent_marker = env.work / "agent-was-called"
+    gh_log = tmp_path / "gh-commands.jsonl"
+    agent_code = (
+        "import pathlib\n"
+        f"pathlib.Path({str(agent_marker)!r}).write_text('called', encoding='utf-8')\n"
+        "raise SystemExit(3)\n"
+    )
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        delivery_branch=delivery_branch,
+        implementer_spec=_implementer_spec(env.work, agent_code),
+        reviewer_spec=_reviewer_spec(env.work, agent_code),
+        gh_command=_public_dispatch_gh_command(
+            _TASK_ID,
+            open_prs=(_open_pr_record(_TASK_ID, base="release"),),
+            command_log=gh_log,
+        ),
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.delivery_branch is None
+    assert "MANUAL reconciliation is required" in (result.blocked_reason or "")
+    assert not agent_marker.exists()
+    assert [json.loads(line)[:2] for line in gh_log.read_text().splitlines()] == [
+        ["pr", "list"]
+    ]
+    assert _run_git(["branch", "--show-current"], cwd=env.work).strip() == "main"
+    assert _run_git(
+        ["branch", "--list", f"autonomous-pr/{_TASK_ID.lower()}"], cwd=env.work
+    ) == ""
+    if delivery_branch:
+        assert _run_git(["branch", "--list", delivery_branch], cwd=env.work) == ""
+
+
+def test_open_pr_for_other_exact_task_does_not_block_selected_task(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    other_pr = _open_pr_record("TSK-9999")
+    other_pr["body"] = f"{other_pr['body']}Unstructured mention: {_TASK_ID}\n"
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        gh_command=_public_dispatch_gh_command(
+            _TASK_ID, open_prs=(other_pr,)
+        ),
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.STOP
+    assert result.phase is Phase.READY_FOR_HUMAN_MERGE
+
+
+def test_open_pr_collision_read_failure_blocks_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    agent_marker = env.work / "agent-was-called"
+    gh_log = tmp_path / "gh-commands.jsonl"
+    agent_code = (
+        "import pathlib\n"
+        f"pathlib.Path({str(agent_marker)!r}).write_text('called', encoding='utf-8')\n"
+    )
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        implementer_spec=_implementer_spec(env.work, agent_code),
+        reviewer_spec=_reviewer_spec(env.work, agent_code),
+        gh_command=_public_dispatch_gh_command(
+            _TASK_ID, fail_list=True, command_log=gh_log
+        ),
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.delivery_branch is None
+    assert "gh pr list" in (result.blocked_reason or "")
+    assert not agent_marker.exists()
+    assert [json.loads(line)[:2] for line in gh_log.read_text().splitlines()] == [
+        ["pr", "list"]
+    ]
+    assert _run_git(["branch", "--show-current"], cwd=env.work).strip() == "main"
+    assert _run_git(
+        ["branch", "--list", f"autonomous-pr/{_TASK_ID.lower()}"], cwd=env.work
+    ) == ""
+
+
+def _assert_open_pr_guard_blocks_without_writes(
+    tmp_path: Path,
+    open_prs: tuple[dict[str, object], ...],
+) -> RunResult:
+    env = _make_public_dispatch_env(tmp_path)
+    agent_marker = env.work / "agent-was-called"
+    gh_log = tmp_path / "gh-commands.jsonl"
+    agent_code = (
+        "import pathlib\n"
+        f"pathlib.Path({str(agent_marker)!r}).write_text('called', encoding='utf-8')\n"
+    )
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        implementer_spec=_implementer_spec(env.work, agent_code),
+        reviewer_spec=_reviewer_spec(env.work, agent_code),
+        gh_command=_public_dispatch_gh_command(
+            _TASK_ID, open_prs=open_prs, command_log=gh_log
+        ),
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.delivery_branch is None
+    assert not agent_marker.exists()
+    assert [json.loads(line)[:2] for line in gh_log.read_text().splitlines()] == [
+        ["pr", "list"]
+    ]
+    assert _run_git(["branch", "--show-current"], cwd=env.work).strip() == "main"
+    assert _run_git(
+        ["branch", "--list", f"autonomous-pr/{_TASK_ID.lower()}"], cwd=env.work
+    ) == ""
+    return result
+
+
+def test_open_pr_scan_blocks_when_limit_may_have_truncated_results(
+    tmp_path: Path,
+) -> None:
+    records = tuple(
+        {
+            **_open_pr_record(f"TSK-{index + 1000}"),
+            "number": index + 1,
+            "url": f"https://github.com/example/repo/pull/{index + 1}",
+            "headRefName": f"other/{index + 1}",
+        }
+        for index in range(100)
+    )
+
+    result = _assert_open_pr_guard_blocks_without_writes(tmp_path, records)
+
+    assert "may be truncated" in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize("identity_source", ["title-only", "body-only"])
+def test_exact_title_or_body_identity_blocks_legacy_or_structured_pr(
+    tmp_path: Path,
+    identity_source: str,
+) -> None:
+    record = _open_pr_record(_TASK_ID, base="release")
+    if identity_source == "title-only":
+        record["body"] = "Legacy PR without structured provenance.\n"
+    else:
+        record["title"] = "File-based task dispatch"
+
+    result = _assert_open_pr_guard_blocks_without_writes(tmp_path, (record,))
+
+    assert "already owns selected task" in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize(
+    "body,title,expected_error",
+    [
+        (
+            "Selected task provenance:\n"
+            f"selected_task_id: {_TASK_ID}\n"
+            "selected_task_id: TSK-9999\n",
+            "Unstructured PR",
+            "exactly one selected_task_id",
+        ),
+        (
+            "Selected task provenance:\n"
+            f"selected_task_id: {_TASK_ID}\n\n"
+            "Selected task provenance:\n"
+            f"selected_task_id: {_TASK_ID}\n",
+            "Unstructured PR",
+            "at most one Selected task provenance block",
+        ),
+        (
+            "Selected task provenance:\nselected_task_id: TSK-9999\n",
+            f"{_TASK_ID}: Conflicting title",
+            "conflicting structured task identities",
+        ),
+    ],
+)
+def test_malformed_or_conflicting_pr_identity_blocks_without_first_value_wins(
+    tmp_path: Path,
+    body: str,
+    title: str,
+    expected_error: str,
+) -> None:
+    record = _open_pr_record(_TASK_ID)
+    record["body"] = body
+    record["title"] = title
+
+    result = _assert_open_pr_guard_blocks_without_writes(tmp_path, (record,))
+
+    assert expected_error in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize("change", ["metadata", "approval", "line-endings"])
+def test_public_run_blocks_selected_document_change_before_checkpoint_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    selected_path = env.seed / "docs" / "tasks" / f"{_TASK_ID}.md"
+    initial_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+
+    def mutate() -> None:
+        blob = selected_path.read_bytes()
+        if change == "metadata":
+            blob = blob.replace(b'"priority": "P2"', b'"priority": "P1"', 1)
+        elif change == "approval":
+            blob = blob.replace(
+                b'"execution_approval": "approved"',
+                b'"execution_approval": "draft"',
+                1,
+            )
+        else:
+            assert b"\r\n" not in blob
+            blob = blob.replace(b"\n", b"\r\n")
+        selected_path.write_bytes(blob)
+        _commit_and_push_main(
+            env.seed,
+            f"change selected document {change}",
+            f"docs/tasks/{_TASK_ID}.md",
+        )
+
+    _mutate_main_before_first_acceptance(monkeypatch, mutate)
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.ORIGIN_MAIN_REVALIDATION
+    expected = (
+        "no longer approved"
+        if change == "approval"
+        else "changed the fixed selected task document"
+    )
+    assert expected in (result.blocked_reason or "")
+    assert _run_git(["rev-parse", "HEAD"], cwd=env.work).strip() == initial_head
+    assert _run_git(
+        ["ls-remote", "--heads", "origin", f"autonomous-pr/{_TASK_ID.lower()}"],
+        cwd=env.work,
+    ) == ""
+
+
+def test_public_run_blocks_lost_done_dependency_before_checkpoint_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dependency = "TSK-0001"
+    env = _make_public_dispatch_env(
+        tmp_path,
+        task_text=_v2_spec_text(_TASK_ID, depends_on=(dependency,)),
+        task_md_text=_v2_task_md_text(
+            _TASK_ID, terminal_rows=((dependency, "Done"),)
+        ),
+    )
+
+    def mutate() -> None:
+        tracker = env.seed / "docs" / "TASK.md"
+        tracker.write_text(
+            tracker.read_text(encoding="utf-8").replace("`Done`", "`Superseded`"),
+            encoding="utf-8",
+        )
+        _commit_and_push_main(env.seed, "supersede dependency", "docs/TASK.md")
+
+    _mutate_main_before_first_acceptance(monkeypatch, mutate)
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.ORIGIN_MAIN_REVALIDATION
+    assert "Superseded, not Done" in (result.blocked_reason or "")
+    assert _run_git(
+        ["ls-remote", "--heads", "origin", f"autonomous-pr/{_TASK_ID.lower()}"],
+        cwd=env.work,
+    ) == ""
+
+
+def test_public_run_blocks_concurrent_terminal_outcome_before_checkpoint_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+
+    def mutate() -> None:
+        tracker = env.seed / "docs" / "TASK.md"
+        text = tracker.read_text(encoding="utf-8")
+        separator = "| --- | --- | --- | --- |\n\n---"
+        terminal_row = f"| `{_TASK_ID}` | `Done` | PR #99 | Concurrent result |"
+        assert separator in text
+        tracker.write_text(
+            text.replace(separator, f"| --- | --- | --- | --- |\n{terminal_row}\n\n---", 1),
+            encoding="utf-8",
+        )
+        _commit_and_push_main(env.seed, "record concurrent terminal", "docs/TASK.md")
+
+    _mutate_main_before_first_acceptance(monkeypatch, mutate)
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.ORIGIN_MAIN_REVALIDATION
+    assert "is terminal (Done)" in (result.blocked_reason or "")
+    assert _run_git(
+        ["ls-remote", "--heads", "origin", f"autonomous-pr/{_TASK_ID.lower()}"],
+        cwd=env.work,
+    ) == ""
+
+
+def test_public_next_does_not_reselect_after_higher_priority_task_appears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    later_id = "TSK-8000"
+
+    def mutate() -> None:
+        later_path = env.seed / "docs" / "tasks" / f"{later_id}.md"
+        later_path.write_text(
+            _v2_spec_text(later_id, priority="P0"), encoding="utf-8"
+        )
+        _commit_and_push_main(
+            env.seed, "add later higher priority task", f"docs/tasks/{later_id}.md"
+        )
+
+    _mutate_main_before_first_acceptance(monkeypatch, mutate)
+
+    result = run(_public_dispatch_config(env, selector="NEXT"))
+
+    assert result.outcome is RunOutcome.STOP
+    assert result.task_id == _TASK_ID
+    assert result.selection_mode is TaskSelectionMode.NEXT
+    assert result.delivery_branch == f"autonomous-pr/{_TASK_ID.lower()}"
+    assert _run_git(
+        ["branch", "--list", f"autonomous-pr/{later_id.lower()}"], cwd=env.work
+    ) == ""
+
+
+def test_fixed_target_revalidation_ignores_new_unrelated_malformed_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    unrelated_id = "TSK-8000"
+
+    def mutate() -> None:
+        unrelated_path = env.seed / "docs" / "tasks" / f"{unrelated_id}.md"
+        unrelated_path.write_text(
+            f"# {unrelated_id} — Malformed unrelated draft\n\nnot metadata\n",
+            encoding="utf-8",
+        )
+        _commit_and_push_main(
+            env.seed,
+            "add malformed unrelated document",
+            f"docs/tasks/{unrelated_id}.md",
+        )
+
+    _mutate_main_before_first_acceptance(monkeypatch, mutate)
+
+    result = run(_public_dispatch_config(env, selector="NEXT"))
+
+    assert result.outcome is RunOutcome.STOP
+    assert result.task_id == _TASK_ID
+    assert result.phase is Phase.READY_FOR_HUMAN_MERGE
+
+
+def test_new_invocation_still_rejects_same_malformed_catalog(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    unrelated_id = "TSK-8000"
+    unrelated_path = env.seed / "docs" / "tasks" / f"{unrelated_id}.md"
+    unrelated_path.write_text(
+        f"# {unrelated_id} — Malformed unrelated draft\n\nnot metadata\n",
+        encoding="utf-8",
+    )
+    _commit_and_push_main(
+        env.seed,
+        "add malformed unrelated document",
+        f"docs/tasks/{unrelated_id}.md",
+    )
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.delivery_branch is None
+    assert "invalid task document" in (result.blocked_reason or "")
+    assert _run_git(["branch", "--show-current"], cwd=env.work).strip() == "main"
+
+
 def test_public_run_reports_no_delivery_branch_when_branch_creation_fails(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     base_sha = "a" * 40
     target = _cp3_target(base_sha, _v2_spec())
+    selected = _selected_from_target(target)
     config = _default_config(
         env,
         implementer_spec=_implementer_spec(env.work, "print('unused')"),
@@ -489,9 +1193,8 @@ def test_public_run_reports_no_delivery_branch_when_branch_creation_fails(
     )
     monkeypatch.setattr(repository, "fetch_and_capture_origin_main_sha", lambda repo: base_sha)
     monkeypatch.setattr(repository, "is_worktree_clean", lambda repo: True)
-    monkeypatch.setattr(orch_module.task_context, "load_exact_base_input", lambda *args: object())
     monkeypatch.setattr(
-        orch_module.task_context, "preflight_execution_target", lambda *args: target
+        orch_module, "_resolve_file_based_target", lambda *args: selected
     )
 
     def fail_branch(*args: object, **kwargs: object) -> None:
@@ -514,6 +1217,7 @@ def test_public_run_reports_local_commit_head_when_push_fails(
     committed_sha = "c" * 40
     spec = _v2_spec()
     target = _cp3_target(base_sha, spec)
+    selected = _selected_from_target(target)
     candidate = _accepted_test_candidate(spec, base_sha)
     config = _default_config(
         env,
@@ -522,9 +1226,8 @@ def test_public_run_reports_local_commit_head_when_push_fails(
     )
     monkeypatch.setattr(repository, "fetch_and_capture_origin_main_sha", lambda repo: base_sha)
     monkeypatch.setattr(repository, "is_worktree_clean", lambda repo: True)
-    monkeypatch.setattr(orch_module.task_context, "load_exact_base_input", lambda *args: object())
     monkeypatch.setattr(
-        orch_module.task_context, "preflight_execution_target", lambda *args: target
+        orch_module, "_resolve_file_based_target", lambda *args: selected
     )
     monkeypatch.setattr(repository, "create_delivery_branch_from_sha", lambda *args: None)
     monkeypatch.setattr(repository, "head_sha", lambda repo: base_sha)
@@ -561,13 +1264,7 @@ def test_checkpoint_acceptance_revalidates_changed_target_before_commit(
     base_sha, moved_sha = "a" * 40, "b" * 40
     spec = _v2_spec()
     target = _cp3_target(base_sha, spec)
-    changed_target = dataclasses.replace(
-        target,
-        base_sha=moved_sha,
-        task=dataclasses.replace(target.task, size="S"),
-    )
     fetches = iter((base_sha, moved_sha))
-    preflights = iter((target, changed_target))
     commits: list[str] = []
     pushes: list[str] = []
     config = _default_config(
@@ -579,11 +1276,19 @@ def test_checkpoint_acceptance_revalidates_changed_target_before_commit(
         repository, "fetch_and_capture_origin_main_sha", lambda repo: next(fetches)
     )
     monkeypatch.setattr(repository, "is_worktree_clean", lambda repo: True)
-    monkeypatch.setattr(orch_module.task_context, "load_exact_base_input", lambda *args: object())
     monkeypatch.setattr(
-        orch_module.task_context,
-        "preflight_execution_target",
-        lambda *args: next(preflights),
+        orch_module,
+        "_resolve_file_based_target",
+        lambda *args: _selected_from_target(target),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_revalidate_file_selected_target_at_sha",
+        lambda *args: (_ for _ in ()).throw(
+            orch_module._Blocked(
+                "origin/main moved and changed the fixed selected task document"
+            )
+        ),
     )
     monkeypatch.setattr(repository, "create_delivery_branch_from_sha", lambda *args: None)
     monkeypatch.setattr(repository, "head_sha", lambda repo: base_sha)
@@ -608,7 +1313,7 @@ def test_checkpoint_acceptance_revalidates_changed_target_before_commit(
 
     assert result.outcome is RunOutcome.BLOCKED
     assert result.phase is Phase.ORIGIN_MAIN_REVALIDATION
-    assert "changed the accepted v2 execution target" in (result.blocked_reason or "")
+    assert "changed the fixed selected task document" in (result.blocked_reason or "")
     assert commits == []
     assert pushes == []
 
@@ -620,7 +1325,6 @@ def test_checkpoint_acceptance_allows_unrelated_origin_movement_after_revalidati
     spec = _v2_spec()
     target = _cp3_target(base_sha, spec)
     fetches = iter((base_sha, moved_sha))
-    preflights = iter((target, dataclasses.replace(target, base_sha=moved_sha)))
     commits: list[str] = []
     pushes: list[str] = []
     config = _default_config(
@@ -632,11 +1336,13 @@ def test_checkpoint_acceptance_allows_unrelated_origin_movement_after_revalidati
         repository, "fetch_and_capture_origin_main_sha", lambda repo: next(fetches)
     )
     monkeypatch.setattr(repository, "is_worktree_clean", lambda repo: True)
-    monkeypatch.setattr(orch_module.task_context, "load_exact_base_input", lambda *args: object())
     monkeypatch.setattr(
-        orch_module.task_context,
-        "preflight_execution_target",
-        lambda *args: next(preflights),
+        orch_module,
+        "_resolve_file_based_target",
+        lambda *args: _selected_from_target(target),
+    )
+    monkeypatch.setattr(
+        orch_module, "_revalidate_file_selected_target_at_sha", lambda *args: None
     )
     monkeypatch.setattr(repository, "create_delivery_branch_from_sha", lambda *args: None)
     monkeypatch.setattr(repository, "head_sha", lambda repo: base_sha)
@@ -677,13 +1383,7 @@ def test_late_repair_acceptance_revalidates_target_before_commit(
     base_sha, moved_sha = "a" * 40, "b" * 40
     spec = _v2_spec()
     target = _cp3_target(base_sha, spec)
-    changed_target = dataclasses.replace(
-        target,
-        base_sha=moved_sha,
-        spec=dataclasses.replace(spec, text=spec.text + "changed\n", digest="changed"),
-    )
     fetches = iter((base_sha, moved_sha))
-    preflights = iter((target, changed_target))
     commits: list[str] = []
     pushes: list[str] = []
     config = _default_config(
@@ -695,11 +1395,19 @@ def test_late_repair_acceptance_revalidates_target_before_commit(
         repository, "fetch_and_capture_origin_main_sha", lambda repo: next(fetches)
     )
     monkeypatch.setattr(repository, "is_worktree_clean", lambda repo: True)
-    monkeypatch.setattr(orch_module.task_context, "load_exact_base_input", lambda *args: object())
     monkeypatch.setattr(
-        orch_module.task_context,
-        "preflight_execution_target",
-        lambda *args: next(preflights),
+        orch_module,
+        "_resolve_file_based_target",
+        lambda *args: _selected_from_target(target),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_revalidate_file_selected_target_at_sha",
+        lambda *args: (_ for _ in ()).throw(
+            orch_module._Blocked(
+                "origin/main moved and changed the fixed selected task document"
+            )
+        ),
     )
     monkeypatch.setattr(repository, "create_delivery_branch_from_sha", lambda *args: None)
     monkeypatch.setattr(repository, "head_sha", lambda repo: base_sha)
@@ -733,7 +1441,7 @@ def test_late_repair_acceptance_revalidates_target_before_commit(
 
     assert result.outcome is RunOutcome.BLOCKED
     assert result.phase is Phase.ORIGIN_MAIN_REVALIDATION
-    assert "changed the accepted v2 execution target" in (result.blocked_reason or "")
+    assert "changed the fixed selected task document" in (result.blocked_reason or "")
     assert commits == []
     assert pushes == []
 
@@ -1476,6 +2184,40 @@ def _cp3_target(base_sha: str, spec: TaskExecutionSpec) -> ExecutionTarget:
             title="Test task",
         ),
         spec=spec,
+    )
+
+
+def _selected_from_target(
+    target: ExecutionTarget,
+    *,
+    mode: TaskSelectionMode = TaskSelectionMode.EXPLICIT,
+) -> SelectedTask:
+    metadata = TaskMetadata(
+        execution_approval=ExecutionApproval.APPROVED,
+        priority=target.task.priority,
+        size=target.task.size,
+        roadmap_target=target.task.roadmap_target,
+        depends_on=target.task.depends_on,
+        group=target.task.group,
+    )
+    document = ApprovedTaskDocument(
+        task_id=target.task.task_id,
+        path=target.spec.path,
+        title=target.task.title,
+        metadata=metadata,
+        execution_spec=target.spec,
+        text=target.spec.text,
+        digest=target.spec.digest,
+    )
+    return SelectedTask(
+        source_sha=target.base_sha,
+        mode=mode,
+        document=document,
+        basis=(
+            f"explicit selector {target.task.task_id}"
+            if mode is TaskSelectionMode.EXPLICIT
+            else "highest eligible priority P2, then numeric task ID 9001"
+        ),
     )
 
 

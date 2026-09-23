@@ -388,6 +388,57 @@ def list_task_files_at_commit(repo: Path, commit_sha: str) -> tuple[TaskFileReco
     return tuple(records)
 
 
+def read_task_file_at_commit(
+    repo: Path, commit_sha: str, task_id: str
+) -> TaskFileRecord:
+    """Read one canonical regular task file from one exact commit.
+
+    Unlike :func:`list_task_files_at_commit`, this fixed-target boundary never
+    reads unrelated task blobs. It retains the selected blob's exact bytes
+    through strict UTF-8 decoding and rejects missing, symlink, or malformed
+    tree entries rather than treating them as an empty catalog.
+    """
+
+    if _EXACT_COMMIT_SHA.fullmatch(commit_sha) is None:
+        raise RepositoryError(
+            f"{commit_sha!r} is not an exact lowercase commit SHA"
+        )
+    if resolve_sha(repo, f"{commit_sha}^{{commit}}") != commit_sha:
+        raise RepositoryError(f"{commit_sha!r} is not the exact SHA of a commit")
+    if re.fullmatch(r"TSK-\d{4,}", task_id) is None:
+        raise RepositoryError(f"{task_id!r} is not a canonical task ID")
+
+    path = f"docs/tasks/{task_id}.md"
+    listing = _git(repo, ["ls-tree", "-z", commit_sha, "--", path])
+    entries = [entry for entry in listing.split("\0") if entry]
+    if len(entries) != 1:
+        raise RepositoryError(
+            f"expected exactly one tracked task file {path} at {commit_sha}, "
+            f"found {len(entries)}"
+        )
+    metadata, separator, actual_path = entries[0].partition("\t")
+    fields = metadata.split()
+    if not separator or len(fields) != 3 or actual_path != path:
+        raise RepositoryError(
+            f"git ls-tree returned a malformed entry for {path} at {commit_sha}"
+        )
+    mode, object_type, object_sha = fields
+    if object_type != "blob" or mode not in _REGULAR_FILE_MODES:
+        raise RepositoryError(
+            f"task file {path} at {commit_sha} is not a regular Git blob"
+        )
+    return TaskFileRecord(
+        source_sha=commit_sha,
+        path=path,
+        text=_read_utf8_blob_exact(
+            repo,
+            object_sha=object_sha,
+            path=path,
+            source_sha=commit_sha,
+        ),
+    )
+
+
 def file_exists_at_ref(repo: Path, ref: str, path: str) -> bool:
     """Whether ``path`` exists as a file at ``ref`` (``git ls-tree``).
 
@@ -492,6 +543,134 @@ def _branch_collision_exists(repo: Path, branch: str) -> bool:
     return _ref_exists(repo, f"refs/heads/{branch}") or _ref_exists(
         repo, f"refs/remotes/origin/{branch}"
     )
+
+
+def require_branch_name_available(repo: Path, branch: str) -> None:
+    """Fail closed when a local or fetched remote branch already owns ``branch``."""
+
+    if _branch_collision_exists(repo, branch):
+        raise RepositoryError(
+            f"branch {branch!r} already exists locally or on origin; implicit "
+            "resume/reuse is forbidden"
+        )
+
+
+def require_no_open_pr_for_task(
+    repo: Path,
+    task_id: str,
+    *,
+    gh_command: Sequence[str] = _DEFAULT_GH_COMMAND,
+) -> None:
+    """Fail closed if an open PR declares the exact selected task identity.
+
+    A branch name is not a task identity: a prior invocation may have used a
+    custom head branch. The orchestrator therefore publishes a structured
+    ``Selected task provenance`` block in every v2 PR body and this guard
+    compares its ``selected_task_id`` field exactly. The conventional exact
+    ``TSK-NNNN: ...`` title prefix is the compatibility fallback for older
+    PRs; free-form title/body substring matches are deliberately ignored.
+    """
+
+    output = _gh(
+        repo,
+        [
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "100",
+            "--json",
+            "number,url,headRefName,baseRefName,title,body",
+        ],
+        gh_command=gh_command,
+    )
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RepositoryError(
+            f"gh pr list output was not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(parsed, list):
+        raise RepositoryError("gh pr list output was not a JSON array")
+    if len(parsed) >= 100:
+        raise RepositoryError(
+            "gh pr list reached its 100-record safety limit; the open-PR "
+            "collision result may be truncated and cannot authorize a new run"
+        )
+
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise RepositoryError("gh pr list returned a malformed PR record")
+        number = item.get("number")
+        url = item.get("url")
+        head = item.get("headRefName")
+        base = item.get("baseRefName")
+        title = item.get("title")
+        body = item.get("body")
+        if (
+            not isinstance(number, int)
+            or not isinstance(url, str)
+            or not url
+            or not isinstance(head, str)
+            or not head
+            or not isinstance(base, str)
+            or not base
+            or not isinstance(title, str)
+            or not isinstance(body, str)
+        ):
+            raise RepositoryError("gh pr list returned a malformed PR record")
+        provenance_task_id = _pr_provenance_task_id(body)
+        title_match = re.match(r"^(TSK-\d{4,}):(?:\s|$)", title)
+        title_task_id = title_match.group(1) if title_match is not None else None
+        if (
+            provenance_task_id is not None
+            and title_task_id is not None
+            and provenance_task_id != title_task_id
+        ):
+            raise RepositoryError(
+                f"open PR #{number} has conflicting structured task identities"
+            )
+        if task_id in (provenance_task_id, title_task_id):
+            raise RepositoryError(
+                f"open PR #{number} ({url}) already owns selected task "
+                f"{task_id} on head branch {head!r}; MANUAL reconciliation "
+                "is required and implicit resume/reuse is forbidden"
+            )
+
+
+def _pr_provenance_task_id(body: str) -> str | None:
+    lines = body.splitlines()
+    marker_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if line == "Selected task provenance:"
+    ]
+    if not marker_indexes:
+        return None
+    if len(marker_indexes) != 1:
+        raise RepositoryError(
+            "open PR must contain at most one Selected task provenance block"
+        )
+
+    selected_ids: list[str] = []
+    for line in lines[marker_indexes[0] + 1 :]:
+        if not line.strip():
+            break
+        key, separator, value = line.partition(":")
+        if separator and key.strip() == "selected_task_id":
+            candidate = value.strip()
+            if re.fullmatch(r"TSK-\d{4,}", candidate) is None:
+                raise RepositoryError(
+                    "open PR has a malformed selected_task_id provenance field"
+                )
+            selected_ids.append(candidate)
+    if len(selected_ids) != 1:
+        raise RepositoryError(
+            "open PR Selected task provenance block must contain exactly one "
+            "selected_task_id field"
+        )
+    return selected_ids[0]
 
 
 def create_delivery_branch_from_origin_main(repo: Path, branch: str) -> str:
