@@ -853,6 +853,32 @@ that selected task's `Done` dependencies, without reparsing unrelated task
 bodies. A later invocation still performs the complete strict catalog
 preflight.
 
+TSK-0029 CP-4 prospectively narrows ordinary Task Closure to terminal-only
+history. Against the exact accepted `docs/TASK.md` baseline, the candidate
+may insert only one row for the selected task: `Done`, the actual draft PR
+number, and the existing title. Every foreign terminal row, order, and
+evidence remains byte-preserved; no next task is created or selected, and no
+task document is edited, archived, or deleted. The closure also appends one
+factual Development Log entry. The established accepted cumulative review →
+draft PR → Closure Review → local unpublished commit → fresh revalidation →
+Mode C → exact publication → required CI sequence is unchanged. Any movement
+of the authoritative tracker makes the prepared closure stale; touched
+Roadmap/Deferred inputs retain their existing materiality checks. Terminal
+facts remain sufficient after a later human removal of a completed task's
+spec, while disappearance of the still-selected active document blocks the
+current run.
+Authoritative tracker blobs and the working closure candidate are decoded as
+strict UTF-8 without newline normalization, so an LF/CRLF-only rewrite is a
+material tracker change rather than an equivalent snapshot. A terminal title
+containing `|` is represented as `\|` in the narrow terminal table and is
+validated against the unchanged selected-task title. Any parser-valid compact
+or aligned form of that one row is accepted; validation removes its actual
+raw line and requires the remaining tracker bytes to equal the baseline.
+The candidate bytes are obtained by address-staging into an isolated copy of
+the current Git index, so tracked-file attributes and EOL safeguards match a
+real commit composition while the user's index, HEAD, and worktree stay
+unchanged.
+
 ---
 
 ## 25. Review verdicts and repair flow (operational v2)

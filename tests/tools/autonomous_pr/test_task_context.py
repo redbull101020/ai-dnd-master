@@ -1,5 +1,6 @@
 import dataclasses
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from tools.autonomous_pr.task_context import (
     parse_terminal_registry,
     parse_thin_tracker,
     preflight_execution_target,
+    validate_terminal_only_closure,
 )
 from tools.autonomous_pr.task_spec import spec_digest, spec_is_unchanged
 
@@ -273,6 +275,117 @@ def test_terminal_registry_rejects_missing_malformed_or_duplicate_records(
 ) -> None:
     with pytest.raises(TaskTrackerError, match=message):
         parse_terminal_registry(text)
+
+
+def test_terminal_only_closure_adds_one_done_row_and_preserves_history() -> None:
+    baseline = _terminal_registry_text(
+        _terminal_row("TSK-0001", evidence="PR #1"),
+        _terminal_row("TSK-0005", status="Superseded", evidence="split by #2"),
+    )
+    candidate = baseline + "| `TSK-0030` | `Done` | PR #77 | Delivered task |\n"
+
+    validate_terminal_only_closure(
+        baseline,
+        candidate,
+        task_id="TSK-0030",
+        pr_number="77",
+        title="Delivered task",
+    )
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("baseline_has_eof_newline", [True, False])
+def test_terminal_only_closure_preserves_exact_bytes_with_or_without_eof_newline(
+    eol: str, baseline_has_eof_newline: bool
+) -> None:
+    baseline = _terminal_registry_text().replace("\n", eol).rstrip("\r\n")
+    if baseline_has_eof_newline:
+        baseline += eol
+        assert baseline.endswith(eol)
+    else:
+        assert not baseline.endswith(("\r", "\n"))
+    row = r"| `TSK-0030` | `Done` | PR #77 | Handle A \| B |"
+    candidate = baseline + ("" if baseline_has_eof_newline else eol) + row
+
+    validate_terminal_only_closure(
+        baseline,
+        candidate,
+        task_id="TSK-0030",
+        pr_number="77",
+        title="Handle A | B",
+    )
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "|  `TSK-0030`  |  `Done`  |  PR #77  |  Delivered task  |",
+        "|`TSK-0030`|`Done`|PR #77|Delivered task|",
+        r"|`TSK-0030`|`Done`|PR #77|Handle A \| B|",
+    ],
+    ids=["aligned", "compact", "escaped-pipe"],
+)
+def test_terminal_only_closure_accepts_parser_valid_row_layout(row: str) -> None:
+    baseline = _terminal_registry_text()
+    title = "Handle A | B" if r"\|" in row else "Delivered task"
+
+    validate_terminal_only_closure(
+        baseline,
+        baseline + row + "\n",
+        task_id="TSK-0030",
+        pr_number="77",
+        title=title,
+    )
+
+
+def test_terminal_only_closure_rejects_rewriting_foreign_line_endings() -> None:
+    baseline = _terminal_registry_text(
+        _terminal_row("TSK-0001", evidence="PR #1")
+    ).replace("\n", "\r\n")
+    candidate = baseline.replace("\r\n", "\n")
+    candidate += "| `TSK-0030` | `Done` | PR #77 | Delivered task |\n"
+
+    with pytest.raises(TaskTrackerError, match="only by inserting"):
+        validate_terminal_only_closure(
+            baseline,
+            candidate,
+            task_id="TSK-0030",
+            pr_number="77",
+            title="Delivered task",
+        )
+@pytest.mark.parametrize(
+    "candidate_mutation, message",
+    [
+        (
+            lambda text: text.replace("PR #1", "PR #999", 1),
+            "changed existing terminal rows",
+        ),
+        (
+            lambda text: text.replace(
+                "# Tracker instructions", "# Rewritten tracker instructions", 1
+            ),
+            "only by inserting",
+        ),
+        (
+            lambda text: text.replace("PR #77", "PR #placeholder", 1),
+            "exactly one selected-task terminal row",
+        ),
+    ],
+)
+def test_terminal_only_closure_rejects_history_or_non_row_changes(
+    candidate_mutation: Callable[[str], str],
+    message: str,
+) -> None:
+    baseline = _terminal_registry_text(_terminal_row("TSK-0001", evidence="PR #1"))
+    candidate = baseline + "| `TSK-0030` | `Done` | PR #77 | Delivered task |\n"
+    with pytest.raises(TaskTrackerError, match=message):
+        validate_terminal_only_closure(
+            baseline,
+            candidate_mutation(candidate),
+            task_id="TSK-0030",
+            pr_number="77",
+            title="Delivered task",
+        )
 
 
 def test_thin_tracker_parses_open_and_terminal_indexes() -> None:

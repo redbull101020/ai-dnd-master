@@ -11,6 +11,7 @@ import pytest
 
 from tools.autonomous_pr import orchestrator as orch_module
 from tools.autonomous_pr import repository
+from tools.autonomous_pr import task_context
 from tools.autonomous_pr.agents import AgentInvocationResult, AgentInvocationSpec
 from tools.autonomous_pr.model import (
     AgentRole,
@@ -35,6 +36,7 @@ from tools.autonomous_pr.model import (
     TaskMetadata,
     TaskSelectionMode,
     TaskStatus,
+    TerminalTask,
     TrackerTask,
     VerificationCommandResult,
     VerificationEvidence,
@@ -121,6 +123,14 @@ def _task_md_text(task_id: str, roadmap_target: str = "Test roadmap target") -> 
         "\n"
         "---\n"
         "\n"
+        "# Terminal task index\n"
+        "\n"
+        "| ID | Status | Evidence | Title |\n"
+        "| --- | --- | --- | --- |\n"
+        "| `TSK-9000` | `Done` | PR #7 | Existing prerequisite |\n"
+        "\n"
+        "---\n"
+        "\n"
         "# Recently completed\n"
         "\n"
         "| ID | Title |\n"
@@ -138,18 +148,8 @@ def _v2_task_md_text(
         for terminal_id, status in terminal_rows
     )
     return (
-        "# Task Queue\n\n"
-        "# Current position\n\n"
-        f"- **Current:** {task_id}\n"
-        "- **Next:** —\n"
-        "- **Next free ID:** TSK-9002\n\n"
-        "---\n\n"
-        "# Open task index\n\n"
-        "| ID | Status | P | Size | Group | Roadmap target | Depends on | Title |\n"
-        "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-        f"| `{task_id}` | `Current` | `P2` | `M` | `engineering` | "
-        "Test roadmap target | — | Public run integration |\n\n"
-        "---\n\n"
+        "# Task tracker\n\n"
+        "Standalone files own open task metadata and selection.\n\n"
         "# Terminal task index\n\n"
         "| ID | Status | Evidence | Title |\n"
         "| --- | --- | --- | --- |\n"
@@ -441,8 +441,13 @@ def _public_dispatch_implementer_code(task_id: str) -> str:
         "assert 'full_document_digest:' in prompt\n"
         "if 'CURRENT_GATE: prospective Task Closure\\n' in prompt:\n"
         "    task = pathlib.Path('docs/TASK.md')\n"
-        "    task.write_text(task.read_text(encoding='utf-8') + "
-        "'\\n<!-- prospective closure -->\\n', encoding='utf-8')\n"
+        "    text = task.read_bytes().decode('utf-8')\n"
+        "    eol = '\\r\\n' if '\\r\\n' in text else '\\n'\n"
+        "    separator = ('| ID | Status | Evidence | Title |' + eol "
+        "+ '| --- | --- | --- | --- |' + eol)\n"
+        f"    row = '| `{task_id}` | `Done` | PR #1 | Public run integration |' + eol\n"
+        "    assert separator in text and row not in text\n"
+        "    task.write_bytes(text.replace(separator, separator + row, 1).encode('utf-8'))\n"
         "    log = pathlib.Path('docs/DEVELOPMENT_LOG.md')\n"
         "    log.write_text(log.read_text(encoding='utf-8') + "
         "'\\n- Public run integration closure.\\n', encoding='utf-8')\n"
@@ -640,26 +645,7 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
     _run_git(["clone", "-q", str(origin), str(work)], cwd=tmp_path)
     _configure_user(work)
 
-    implementer_code = (
-        "import pathlib, sys\n"
-        "prompt = sys.stdin.read()\n"
-        f"assert 'selected_task_id: {_TASK_ID}' in prompt\n"
-        "assert 'original_source_sha:' in prompt\n"
-        f"assert 'canonical_path: docs/tasks/{_TASK_ID}.md' in prompt\n"
-        "assert 'full_document_digest:' in prompt\n"
-        "if 'CURRENT_GATE: prospective Task Closure\\n' in prompt:\n"
-        "    task = pathlib.Path('docs/TASK.md')\n"
-        "    task.write_text(task.read_text(encoding='utf-8') + "
-        "'\\n<!-- prospective closure -->\\n', encoding='utf-8')\n"
-        "    log = pathlib.Path('docs/DEVELOPMENT_LOG.md')\n"
-        "    log.write_text(log.read_text(encoding='utf-8') + "
-        "'\\n- Public run integration closure.\\n', encoding='utf-8')\n"
-        "elif 'CURRENT_CHECKPOINT:\\nid: CP-1\\n' in prompt:\n"
-        "    pathlib.Path('integration-marker.txt').write_text("
-        "'accepted v2 checkpoint\\n', encoding='utf-8')\n"
-        "else:\n"
-        "    raise SystemExit('unexpected implementer handoff')\n"
-    )
+    implementer_code = _public_dispatch_implementer_code(_TASK_ID)
     reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
     config = OrchestratorConfig(
         task_id=selector,
@@ -689,6 +675,23 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
     assert (work / "integration-marker.txt").read_text(encoding="utf-8") == (
         "accepted v2 checkpoint\n"
     )
+    terminal = task_context.parse_terminal_registry(
+        (work / "docs" / "TASK.md").read_text(encoding="utf-8")
+    )
+    assert terminal.tasks[-1] == TerminalTask(
+        task_id=_TASK_ID,
+        status=TaskStatus.DONE,
+        evidence="PR #1",
+        title="Public run integration",
+    )
+    assert (work / "docs" / "tasks" / f"{_TASK_ID}.md").is_file()
+    assert (work / "docs" / "DEVELOPMENT_LOG.md").read_text(
+        encoding="utf-8"
+    ).splitlines() == [
+        "# Development log",
+        "",
+        "- Public run integration closure.",
+    ]
 
 
 def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) -> None:
@@ -984,7 +987,9 @@ def test_malformed_or_conflicting_pr_identity_blocks_without_first_value_wins(
     assert expected_error in (result.blocked_reason or "")
 
 
-@pytest.mark.parametrize("change", ["metadata", "approval", "line-endings"])
+@pytest.mark.parametrize(
+    "change", ["metadata", "approval", "line-endings", "deleted"]
+)
 def test_public_run_blocks_selected_document_change_before_checkpoint_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1004,6 +1009,14 @@ def test_public_run_blocks_selected_document_change_before_checkpoint_commit(
                 b'"execution_approval": "draft"',
                 1,
             )
+        elif change == "deleted":
+            selected_path.unlink()
+            _commit_and_push_main(
+                env.seed,
+                "delete selected active document",
+                f"docs/tasks/{_TASK_ID}.md",
+            )
+            return
         else:
             assert b"\r\n" not in blob
             blob = blob.replace(b"\n", b"\r\n")
@@ -1023,6 +1036,8 @@ def test_public_run_blocks_selected_document_change_before_checkpoint_commit(
     expected = (
         "no longer approved"
         if change == "approval"
+        else "expected exactly one tracked task file"
+        if change == "deleted"
         else "changed the fixed selected task document"
     )
     assert expected in (result.blocked_reason or "")
@@ -1178,6 +1193,53 @@ def test_new_invocation_still_rejects_same_malformed_catalog(
     assert result.delivery_branch is None
     assert "invalid task document" in (result.blocked_reason or "")
     assert _run_git(["branch", "--show-current"], cwd=env.work).strip() == "main"
+
+
+def test_selection_and_done_dependency_survive_terminal_spec_deletion(
+    tmp_path: Path,
+) -> None:
+    dependency = "TSK-8000"
+    env = _make_public_dispatch_env(
+        tmp_path,
+        task_text=_v2_spec_text(_TASK_ID, depends_on=(dependency,)),
+        task_md_text=_v2_task_md_text(
+            _TASK_ID, terminal_rows=((dependency, "Done"),)
+        ),
+    )
+    legacy_path = env.seed / "docs" / "tasks" / f"{dependency}.md"
+    legacy_path.write_text("retained legacy terminal spec\n", encoding="utf-8")
+    _commit_and_push_main(
+        env.seed, "retain legacy terminal spec", f"docs/tasks/{dependency}.md"
+    )
+    before_sha = repository.fetch_and_capture_origin_main_sha(env.work)
+
+    before = orch_module._resolve_file_based_target(
+        _public_dispatch_config(env, selector="NEXT"), "NEXT", before_sha
+    )
+    assert isinstance(before, SelectedTask)
+
+    legacy_path.unlink()
+    _commit_and_push_main(
+        env.seed, "remove terminal spec", f"docs/tasks/{dependency}.md"
+    )
+    after_sha = repository.fetch_and_capture_origin_main_sha(env.work)
+    after = orch_module._resolve_file_based_target(
+        _public_dispatch_config(env, selector="NEXT"), "NEXT", after_sha
+    )
+
+    assert isinstance(after, SelectedTask)
+    assert after.document == before.document
+    assert after.mode is before.mode is TaskSelectionMode.NEXT
+    with pytest.raises(orch_module._Blocked, match=r"is terminal \(Done\)"):
+        orch_module._resolve_file_based_target(
+            _public_dispatch_config(env, selector=dependency), dependency, after_sha
+        )
+    with pytest.raises(orch_module._Blocked, match="does not exist"):
+        orch_module._resolve_file_based_target(
+            _public_dispatch_config(env, selector="TSK-8999"),
+            "TSK-8999",
+            after_sha,
+        )
 
 
 def test_public_run_reports_no_delivery_branch_when_branch_creation_fails(
@@ -2800,11 +2862,18 @@ def _install_cp4_agents(
         if "CURRENT_GATE: prospective Task Closure" in prompt:
             closure_count += 1
             task_path = env.work / "docs" / "TASK.md"
-            task_path.write_text(
-                task_path.read_text(encoding="utf-8")
-                + f"\nclosure candidate {closure_count}\n",
-                encoding="utf-8",
+            task_text = task_path.read_bytes().decode("utf-8")
+            eol = "\r\n" if "\r\n" in task_text else "\n"
+            separator = (
+                f"| ID | Status | Evidence | Title |{eol}"
+                f"| --- | --- | --- | --- |{eol}"
             )
+            row = f"| `{_TASK_ID}` | `Done` | PR #1 | Test task |{eol}"
+            if row not in task_text:
+                assert separator in task_text
+                task_path.write_bytes(
+                    task_text.replace(separator, separator + row, 1).encode("utf-8")
+                )
             (env.work / "docs" / "DEVELOPMENT_LOG.md").write_text(
                 f"closure log {closure_count}\n", encoding="utf-8"
             )
@@ -2928,6 +2997,22 @@ def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_c
     assert "prospective Task Closure" in _run_git(
         ["log", "-1", "--format=%s"], cwd=env.work
     )
+    assert task_context.parse_terminal_registry(
+        (env.work / "docs" / "TASK.md").read_text(encoding="utf-8")
+    ).tasks == (
+        TerminalTask(
+            task_id=_TASK_ID,
+            status=TaskStatus.DONE,
+            evidence="PR #1",
+            title="Test task",
+        ),
+        TerminalTask(
+            task_id="TSK-9000",
+            status=TaskStatus.DONE,
+            evidence="PR #7",
+            title="Existing prerequisite",
+        ),
+    )
     assert not any(command[:2] == ["git", "merge"] for command in commands)
     assert not any("--auto" in command for command in commands)
 
@@ -2984,6 +3069,34 @@ def test_v2_closure_material_tracker_movement_blocks_stale_closure_publication(
     assert result.terminal_phase is Phase.ORIGIN_MAIN_REVALIDATION
     repository.fetch_origin(env.work)
     assert repository.remote_branch_sha(env.work, "delivery") == implementation_head
+
+
+def test_v2_closure_material_newline_only_tracker_movement_is_stale(
+    env: Env,
+) -> None:
+    base_sha = repository.origin_main_sha(env.work)
+    baseline = orch_module._capture_v2_closure_material_baseline(env.work, base_sha)
+    tracker = env.seed / "docs" / "TASK.md"
+    baseline_text = dict(baseline.texts)["docs/TASK.md"]
+    assert baseline_text is not None
+    baseline_bytes = baseline_text.encode("utf-8")
+    _run_git(["config", "core.autocrlf", "false"], cwd=env.seed)
+    if b"\r\n" in baseline_bytes:
+        changed = baseline_bytes.replace(b"\r\n", b"\n")
+    else:
+        changed = baseline_bytes.replace(b"\n", b"\r\n")
+    assert changed != baseline_bytes
+    tracker.write_bytes(changed)
+    _run_git(["add", "docs/TASK.md"], cwd=env.seed)
+    _run_git(["commit", "-q", "-m", "change tracker newlines"], cwd=env.seed)
+    _run_git(["push", "-q", "origin", "main"], cwd=env.seed)
+    repository.fetch_origin(env.work)
+    moved_sha = repository.origin_main_sha(env.work)
+
+    with pytest.raises(orch_module._Blocked, match="prepared Task Closure is stale"):
+        orch_module._require_v2_closure_material_unchanged(
+            env.work, baseline, moved_sha
+        )
 
 
 def test_v2_unrelated_origin_movement_revalidates_and_allows_mode_c(

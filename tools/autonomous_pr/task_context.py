@@ -250,6 +250,91 @@ def parse_terminal_registry(
     return TerminalRegistry(tasks=tasks, source_sha=source_sha)
 
 
+def validate_terminal_only_closure(
+    baseline_text: str,
+    candidate_text: str,
+    *,
+    task_id: str,
+    pr_number: str,
+    title: str,
+) -> None:
+    """Require one prospective closure to add exactly one terminal row.
+
+    The authoritative tracker baseline is immutable input. A normal
+    file-dispatch closure may only insert the selected task's ``Done`` row
+    with real PR evidence; every existing terminal row/evidence and every
+    other byte of ``docs/TASK.md`` must remain unchanged. This deliberately
+    does not remove the selected spec or select/create another task.
+    """
+
+    baseline = parse_terminal_registry(baseline_text)
+    candidate = parse_terminal_registry(candidate_text)
+    if any(task.task_id == task_id for task in baseline.tasks):
+        raise TaskTrackerError(
+            f"{task_id} was already terminal in the authoritative closure baseline"
+        )
+    expected = TerminalTask(
+        task_id=task_id,
+        status=TaskStatus.DONE,
+        evidence=f"PR #{pr_number}",
+        title=title,
+    )
+    own_rows = tuple(task for task in candidate.tasks if task.task_id == task_id)
+    if own_rows != (expected,):
+        raise TaskTrackerError(
+            "prospective closure must add exactly one selected-task terminal "
+            f"row equal to {expected!r}"
+        )
+    preserved = tuple(task for task in candidate.tasks if task.task_id != task_id)
+    if preserved != baseline.tasks:
+        raise TaskTrackerError(
+            "prospective closure changed existing terminal rows, order, or evidence"
+        )
+
+    terminal_section = _unique_section(
+        candidate_text, _TERMINAL_TASK_INDEX_HEADING, "Terminal task index"
+    )
+    matching_lines: list[str] = []
+    for raw_line in terminal_section.splitlines(keepends=True):
+        line = raw_line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            continue
+        cells = _split_cells(line)
+        if len(cells) != len(_TERMINAL_TASK_INDEX_HEADER):
+            continue
+        try:
+            parsed = _terminal_task_from_cells(cells)
+        except TaskTrackerError:
+            continue
+        if parsed == expected:
+            matching_lines.append(raw_line)
+    if len(matching_lines) != 1:
+        raise TaskTrackerError(
+            "prospective closure must contain one identifiable selected-task "
+            "terminal row"
+        )
+
+    actual_line = matching_lines[0]
+    line_body = actual_line.rstrip("\r\n")
+    removable_insertions = [line_body, actual_line]
+    for eol in ("\n", "\r\n"):
+        removable_insertions.extend(
+            (
+                eol + line_body,
+                eol + actual_line,
+            )
+        )
+    if not any(
+        fragment in candidate_text
+        and candidate_text.replace(fragment, "", 1) == baseline_text
+        for fragment in removable_insertions
+    ):
+        raise TaskTrackerError(
+            "prospective closure must change docs/TASK.md only by inserting "
+            "the selected task's terminal row"
+        )
+
+
 def load_exact_base_input(repo: Path, task_id: str, base_sha: str) -> ExactBaseInput:
     """Read ``docs/TASK.md`` and ``docs/tasks/<task_id>.md`` at ONE exact SHA.
 
@@ -270,7 +355,9 @@ def load_exact_base_input(repo: Path, task_id: str, base_sha: str) -> ExactBaseI
         raise TaskPreflightError(str(exc)) from exc
     if repository.resolve_sha(repo, f"{base_sha}^{{commit}}") != base_sha:
         raise TaskPreflightError(f"{base_sha!r} is not the exact SHA of a commit")
-    task_md_text = repository.read_file_at_ref(repo, base_sha, "docs/TASK.md")
+    task_md_text = repository.read_utf8_file_at_ref_exact(
+        repo, base_sha, "docs/TASK.md"
+    )
     spec_text = (
         repository.read_file_at_ref(repo, base_sha, spec_path)
         if repository.file_exists_at_ref(repo, base_sha, spec_path)
@@ -438,7 +525,23 @@ def _table_rows(section: str, header: list[str], name: str) -> list[list[str]]:
 
 
 def _split_cells(line: str) -> list[str]:
-    return [cell.strip() for cell in line[1:-1].split("|")]
+    cells: list[str] = []
+    cell: list[str] = []
+    index = 1
+    while index < len(line) - 1:
+        character = line[index]
+        if character == "\\" and index + 1 < len(line) - 1 and line[index + 1] == "|":
+            cell.append("|")
+            index += 2
+            continue
+        if character == "|":
+            cells.append("".join(cell).strip())
+            cell = []
+        else:
+            cell.append(character)
+        index += 1
+    cells.append("".join(cell).strip())
+    return cells
 
 
 def _backticked_value(cell: str, what: str) -> str:

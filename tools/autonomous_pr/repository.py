@@ -34,8 +34,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
+import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -289,6 +293,106 @@ def read_file_at_ref(repo: Path, ref: str, path: str) -> str:
     """
 
     return _git(repo, ["show", f"{ref}:{path}"])
+
+
+def read_utf8_file_at_ref_exact(repo: Path, ref: str, path: str) -> str:
+    """Read one regular Git blob without newline normalization.
+
+    This is the byte-preserving boundary for authoritative documents whose
+    exact content is part of a gate identity. It deliberately avoids both
+    ``git show`` through the text-mode runner and checkout filters.
+    """
+
+    listing = _git(repo, ["ls-tree", "-z", ref, "--", path])
+    entries = [entry for entry in listing.split("\0") if entry]
+    if len(entries) != 1:
+        raise RepositoryError(
+            f"expected exactly one tracked file {path} at {ref}, found {len(entries)}"
+        )
+    metadata, separator, actual_path = entries[0].partition("\t")
+    fields = metadata.split()
+    if not separator or len(fields) != 3 or actual_path != path:
+        raise RepositoryError(f"git ls-tree returned a malformed entry for {path} at {ref}")
+    mode, object_type, object_sha = fields
+    if object_type != "blob" or mode not in _REGULAR_FILE_MODES:
+        raise RepositoryError(f"{path} at {ref} is not a regular Git blob")
+    return _read_utf8_blob_exact(
+        repo, object_sha=object_sha, path=path, source_sha=ref
+    )
+
+
+def read_worktree_utf8_file_exact(repo: Path, path: str) -> str:
+    """Read exact bytes Git would store for a working-tree candidate.
+
+    A temporary copy of the current index is staged with an address-specific
+    ``git add``. Reading that temporary entry exactly matches real staging,
+    including Git's tracked-file EOL safeguards and attributes, without
+    changing the user's index, HEAD, or working tree.
+    """
+
+    candidate_path = repo / path
+    try:
+        mode = candidate_path.lstat().st_mode
+    except OSError as exc:
+        raise RepositoryError(f"cannot inspect working-tree file {path}: {exc}") from exc
+    if not stat.S_ISREG(mode):
+        raise RepositoryError(
+            f"working-tree candidate {path} is not a regular file"
+        )
+    git_index = Path(_git(repo, ["rev-parse", "--git-path", "index"]).strip())
+    if not git_index.is_absolute():
+        git_index = repo / git_index
+    staged = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix="autonomous-pr-index-") as temp_dir:
+            temporary_index = Path(temp_dir) / "index"
+            shutil.copyfile(git_index, temporary_index)
+            environment = {**os.environ, "GIT_INDEX_FILE": str(temporary_index)}
+            for args in (
+                ["git", "add", "--", path],
+                ["git", "ls-files", "--stage", "-z", "--", path],
+            ):
+                result = subprocess.run(
+                    args,
+                    cwd=repo,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=_DEFAULT_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    raise RepositoryError(
+                        f"temporary-index {' '.join(args[1:])} failed "
+                        f"(exit {result.returncode}): {result.stderr.strip()}"
+                    )
+                if args[1] == "ls-files":
+                    staged = result.stdout
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RepositoryError(
+            f"cannot stage working-tree candidate {path} in an isolated index: {exc}"
+        ) from exc
+
+    entries = [item for item in staged.split("\0") if item]
+    if len(entries) != 1:
+        raise RepositoryError(
+            f"temporary index has {len(entries)} entries for {path}, expected one"
+        )
+    metadata, separator, actual_path = entries[0].partition("\t")
+    fields = metadata.split()
+    if not separator or len(fields) != 3 or actual_path != path:
+        raise RepositoryError(f"git ls-files returned a malformed entry for {path}")
+    index_mode, object_sha, stage = fields
+    if stage != "0":
+        raise RepositoryError(f"working-tree candidate {path} is unmerged")
+    if index_mode not in _REGULAR_FILE_MODES:
+        raise RepositoryError(
+            f"working-tree candidate {path} has unsupported index mode {index_mode}"
+        )
+    return _read_utf8_blob_exact(
+        repo, object_sha=object_sha, path=path, source_sha="working-tree candidate"
+    )
 
 
 def _read_utf8_blob_exact(

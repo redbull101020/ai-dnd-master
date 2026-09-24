@@ -370,7 +370,7 @@ def _resolve_file_based_target(
     """Resolve one selector entirely from a single immutable main snapshot."""
 
     try:
-        task_md_text = repository.read_file_at_ref(
+        task_md_text = repository.read_utf8_file_at_ref_exact(
             config.repo, source_sha, "docs/TASK.md"
         )
         terminal = task_context.parse_terminal_registry(
@@ -1163,7 +1163,7 @@ def _revalidate_file_selected_target_at_sha(
     if document is None:
         raise AssertionError("file-selected revalidation requires a full document")
 
-    tracker_text = repository.read_file_at_ref(
+    tracker_text = repository.read_utf8_file_at_ref_exact(
         config.repo, fresh_sha, "docs/TASK.md"
     )
     terminal = task_context.parse_terminal_registry(
@@ -1262,7 +1262,9 @@ def _capture_v2_closure_material_baseline(
         if path == "docs/TASK.md" or repository.file_exists_at_ref(
             repo, base_sha, path
         ):
-            text: str | None = repository.read_file_at_ref(repo, base_sha, path)
+            text: str | None = repository.read_utf8_file_at_ref_exact(
+                repo, base_sha, path
+            )
         else:
             text = None
         texts.append((path, text))
@@ -1297,7 +1299,9 @@ def _require_v2_closure_material_unchanged(
     for path in sorted(baseline.material_paths):
         exists = repository.file_exists_at_ref(repo, revalidated_base_sha, path)
         current = (
-            repository.read_file_at_ref(repo, revalidated_base_sha, path)
+            repository.read_utf8_file_at_ref_exact(
+                repo, revalidated_base_sha, path
+            )
             if exists
             else None
         )
@@ -2088,9 +2092,14 @@ def _build_v2_closure_prompt(
         f"{_selected_task_context(execution_target)}"
         "CURRENT_GATE: prospective Task Closure\n"
         "ROLE: Prepare or repair only the canonical Task Closure content. "
-        "Edit docs/TASK.md and docs/DEVELOPMENT_LOG.md; edit docs/ROADMAP.md "
-        "or docs/DEFERRED.md only when required by the task. Do not commit, "
-        "push, merge, or change implementation files.\n"
+        "In docs/TASK.md insert exactly one terminal row for the selected task: "
+        "Status Done, the real draft PR evidence below, and its existing title. "
+        "Preserve every other terminal row, order, and evidence; do not create or "
+        "select a next task, change another task, or edit/delete any task spec. "
+        "Append exactly one concise factual delivery entry to "
+        "docs/DEVELOPMENT_LOG.md. Edit docs/ROADMAP.md or docs/DEFERRED.md only "
+        "when required by the delivered task. Do not commit, push, merge, or "
+        "change implementation files.\n"
         f"DRAFT_PR_NUMBER: {pr_number}\n"
         f"ACCEPTED_IMPLEMENTATION_BASE: {cumulative.base_identity}\n"
         f"ACCEPTED_IMPLEMENTATION_HEAD: {cumulative.reviewed_head_sha}\n"
@@ -2139,6 +2148,7 @@ def _prepare_v2_unpublished_closure(
     *,
     pr_number: str,
     expected_published_head: str,
+    task_md_baseline: str,
     initial_packet: RepairPacket | None = None,
     strict_closure_only_repair: bool = False,
 ) -> tuple[
@@ -2179,6 +2189,18 @@ def _prepare_v2_unpublished_closure(
                 "unsafe narrow continuation is refused"
             )
         _require_canonical_closure_files_touched(touched)
+        try:
+            task_context.validate_terminal_only_closure(
+                task_md_baseline,
+                repository.read_worktree_utf8_file_exact(
+                    config.repo, "docs/TASK.md"
+                ),
+                task_id=execution_target.task.task_id,
+                pr_number=pr_number,
+                title=execution_target.task.title,
+            )
+        except (RepositoryError, TaskTrackerError) as exc:
+            raise _Blocked(f"invalid terminal-only Task Closure: {exc}") from exc
         identity = _candidate_identity(patch.diff_text)
         if identity in history.rejected_candidate_identities:
             raise _Blocked("Task Closure repair reproduced a rejected candidate")
@@ -2517,6 +2539,9 @@ def execute_v2_unpublished_closure(
             captured_baseline = _capture_v2_closure_material_baseline(
                 config.repo, current_pre_closure.evidence.base_identity
             )
+            task_md_baseline = dict(captured_baseline.texts)["docs/TASK.md"]
+            if task_md_baseline is None:
+                raise _Blocked("authoritative closure baseline has no docs/TASK.md")
             try:
                 terminal_phase = Phase.CLOSURE_REVIEW
                 candidate, _, closure_touched = _prepare_v2_unpublished_closure(
@@ -2525,6 +2550,7 @@ def execute_v2_unpublished_closure(
                     current_pre_closure,
                     pr_number=pr_number,
                     expected_published_head=implementation_head,
+                    task_md_baseline=task_md_baseline,
                     initial_packet=pending_closure_packet,
                     strict_closure_only_repair=strict_closure_only,
                 )
