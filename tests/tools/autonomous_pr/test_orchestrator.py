@@ -24,6 +24,7 @@ from tools.autonomous_pr.model import (
     GateContext,
     GateHistory,
     NonConvergenceDiagnosis,
+    NoEligibleTask,
     Phase,
     RepairFinding,
     RepairPacket,
@@ -1259,9 +1260,11 @@ def test_selection_and_done_dependency_survive_terminal_spec_deletion(
         ),
     )
     legacy_path = env.seed / "docs" / "tasks" / f"{dependency}.md"
-    legacy_path.write_text("retained legacy terminal spec\n", encoding="utf-8")
+    legacy_path.write_bytes(b"retained terminal prefix\n\xff\xfe\n")
     _commit_and_push_main(
-        env.seed, "retain legacy terminal spec", f"docs/tasks/{dependency}.md"
+        env.seed,
+        "retain invalid utf8 terminal spec",
+        f"docs/tasks/{dependency}.md",
     )
     before_sha = repository.fetch_and_capture_origin_main_sha(env.work)
 
@@ -1269,6 +1272,12 @@ def test_selection_and_done_dependency_survive_terminal_spec_deletion(
         _public_dispatch_config(env, selector="NEXT"), "NEXT", before_sha
     )
     assert isinstance(before, SelectedTask)
+    with pytest.raises(orch_module._Blocked, match=r"is terminal \(Done\)"):
+        orch_module._resolve_file_based_target(
+            _public_dispatch_config(env, selector=dependency),
+            dependency,
+            before_sha,
+        )
 
     legacy_path.unlink()
     _commit_and_push_main(
@@ -1292,6 +1301,97 @@ def test_selection_and_done_dependency_survive_terminal_spec_deletion(
             "TSK-8999",
             after_sha,
         )
+
+
+@pytest.mark.parametrize("status", ["Done", "Superseded"])
+def test_invalid_utf8_terminal_spec_is_filtered_before_decode_and_deletion(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    terminal_id = "TSK-8000"
+    env = _make_public_dispatch_env(tmp_path)
+    selected_path = env.seed / "docs" / "tasks" / f"{_TASK_ID}.md"
+    selected_path.unlink()
+    terminal_path = env.seed / "docs" / "tasks" / f"{terminal_id}.md"
+    terminal_path.write_bytes(b"retained terminal prefix\n\xff\xfe\n")
+    (env.seed / "docs" / "TASK.md").write_text(
+        _v2_task_md_text(_TASK_ID, terminal_rows=((terminal_id, status),)),
+        encoding="utf-8",
+    )
+    _commit_and_push_main(
+        env.seed,
+        f"retain invalid utf8 {status} spec",
+        "docs/TASK.md",
+        f"docs/tasks/{_TASK_ID}.md",
+        f"docs/tasks/{terminal_id}.md",
+    )
+    retained_sha = repository.fetch_and_capture_origin_main_sha(env.work)
+
+    retained = orch_module._resolve_file_based_target(
+        _public_dispatch_config(env, selector="NEXT"), "NEXT", retained_sha
+    )
+    assert isinstance(retained, NoEligibleTask)
+    with pytest.raises(
+        orch_module._Blocked, match=rf"is terminal \({status}\)"
+    ):
+        orch_module._resolve_file_based_target(
+            _public_dispatch_config(env, selector=terminal_id),
+            terminal_id,
+            retained_sha,
+        )
+
+    terminal_path.unlink()
+    _commit_and_push_main(
+        env.seed,
+        f"remove {status} spec",
+        f"docs/tasks/{terminal_id}.md",
+    )
+    removed_sha = repository.fetch_and_capture_origin_main_sha(env.work)
+    removed = orch_module._resolve_file_based_target(
+        _public_dispatch_config(env, selector="NEXT"), "NEXT", removed_sha
+    )
+
+    assert isinstance(removed, NoEligibleTask)
+    assert removed.reasons == retained.reasons
+
+
+def test_public_run_rejects_invalid_utf8_nonterminal_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    selected_path = env.seed / "docs" / "tasks" / f"{_TASK_ID}.md"
+    selected_path.write_bytes(b"nonterminal prefix\n\xff\xfe\n")
+    _commit_and_push_main(
+        env.seed,
+        "make nonterminal task invalid utf8",
+        f"docs/tasks/{_TASK_ID}.md",
+    )
+    agent_marker = env.work / "agent-was-called"
+    gh_log = tmp_path / "gh-commands.jsonl"
+    fail_if_invoked = (
+        "import pathlib\n"
+        f"pathlib.Path({str(agent_marker)!r}).write_text('called', encoding='utf-8')\n"
+        "raise SystemExit(3)\n"
+    )
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        implementer_spec=_implementer_spec(env.work, fail_if_invoked),
+        reviewer_spec=_reviewer_spec(env.work, fail_if_invoked),
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.delivery_branch is None
+    assert "not valid UTF-8" in (result.blocked_reason or "")
+    assert not agent_marker.exists()
+    assert not gh_log.exists()
+    assert _run_git(["branch", "--show-current"], cwd=env.work).strip() == "main"
+    assert _run_git(
+        ["branch", "--list", f"autonomous-pr/{_TASK_ID.lower()}"], cwd=env.work
+    ) == ""
 
 
 def test_public_run_reports_no_delivery_branch_when_branch_creation_fails(

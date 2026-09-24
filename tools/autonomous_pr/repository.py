@@ -440,14 +440,22 @@ def _read_utf8_blob_exact(
         ) from exc
 
 
-def list_task_files_at_commit(repo: Path, commit_sha: str) -> tuple[TaskFileRecord, ...]:
+def list_task_files_at_commit(
+    repo: Path,
+    commit_sha: str,
+    *,
+    excluded_task_ids: frozenset[str] = frozenset(),
+) -> tuple[TaskFileRecord, ...]:
     """Read regular tracked ``docs/tasks/TSK-*.md`` files at one exact commit.
 
     The commit is validated once and then used literally for both ``ls-tree``
     and every blob read. Filesystem contents, mtimes, directory order, and the
     mutable working tree are never consulted. Git symlinks (mode ``120000``),
     submodules, trees, and other non-regular entries are not task files.
-    A missing ``docs/tasks`` tree therefore yields an empty tuple.
+    A missing ``docs/tasks`` tree therefore yields an empty tuple. The caller
+    may identify task IDs whose payload is not needed; those paths are still
+    listed from the same commit but are excluded before their blobs are read
+    or decoded. This boundary does not decide why an ID is excluded.
     """
 
     if _EXACT_COMMIT_SHA.fullmatch(commit_sha) is None:
@@ -476,6 +484,8 @@ def list_task_files_at_commit(repo: Path, commit_sha: str) -> tuple[TaskFileReco
             or object_type != "blob"
             or mode not in _REGULAR_FILE_MODES
         ):
+            continue
+        if task_path.stem in excluded_task_ids:
             continue
         records.append(
             TaskFileRecord(

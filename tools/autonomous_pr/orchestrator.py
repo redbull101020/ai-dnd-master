@@ -376,7 +376,11 @@ def _resolve_file_based_target(
         terminal = task_context.parse_terminal_registry(
             task_md_text, source_sha=source_sha
         )
-        records = repository.list_task_files_at_commit(config.repo, source_sha)
+        records = repository.list_task_files_at_commit(
+            config.repo,
+            source_sha,
+            excluded_task_ids=frozenset(task.task_id for task in terminal.tasks),
+        )
         return catalog.resolve_task_selection(
             source_sha, records, terminal, selector
         )

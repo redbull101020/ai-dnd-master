@@ -228,11 +228,22 @@ def test_task_file_listing_rejects_invalid_utf8_as_typed_repository_error(
     task_dir.mkdir(parents=True)
     invalid_path = task_dir / "TSK-0030.md"
     invalid_path.write_bytes(b"valid prefix\n\xff\xfe\n")
-    _run_git(["add", "docs/tasks/TSK-0030.md"], cwd=seed)
+    valid_path = task_dir / "TSK-0031.md"
+    valid_path.write_text("Обычная задача\n", encoding="utf-8", newline="")
+    _run_git(["add", "docs/tasks/TSK-0030.md", "docs/tasks/TSK-0031.md"], cwd=seed)
     _run_git(["commit", "-q", "-m", "add invalid utf8 task blob"], cwd=seed)
     source_sha = _run_git(["rev-parse", "HEAD"], cwd=seed).strip()
     _run_git(["push", "-q", "origin", "main"], cwd=seed)
     repo_module.fetch_origin(work)
+
+    records = repo_module.list_task_files_at_commit(
+        work,
+        source_sha,
+        excluded_task_ids=frozenset({"TSK-0030"}),
+    )
+    assert [(record.source_sha, record.path, record.text) for record in records] == [
+        (source_sha, "docs/tasks/TSK-0031.md", "Обычная задача\n")
+    ]
 
     with pytest.raises(RepositoryError) as exc_info:
         repo_module.list_task_files_at_commit(work, source_sha)
