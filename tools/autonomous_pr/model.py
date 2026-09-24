@@ -19,18 +19,14 @@ from enum import Enum
 
 
 class TaskStatus(Enum):
-    """The closed set of ``docs/TASK.md`` task statuses (``TASK.md`` §4)."""
+    """The closed terminal lifecycle set stored in ``docs/TASK.md``."""
 
-    BACKLOG = "Backlog"
-    READY = "Ready"
-    CURRENT = "Current"
-    BLOCKED = "Blocked"
     DONE = "Done"
     SUPERSEDED = "Superseded"
 
 
 class ExecutionApproval(Enum):
-    """Approval state carried by a prospective standalone task document."""
+    """Approval state carried by a standalone task document."""
 
     DRAFT = "draft"
     APPROVED = "approved"
@@ -250,9 +246,8 @@ class ExecutionCheckpoint:
 class TaskExecutionSpec:
     """A parsed, structurally valid, execution-ready Task Execution Spec.
 
-    Provider-neutral and lifecycle-free (Harness §22): it carries no Status,
-    Priority, Size, dependency, or queue position — those live only in
-    ``docs/TASK.md``.
+    Provider-neutral execution body. Lifecycle/selection metadata belongs to
+    the enclosing standalone task document and is deliberately absent here.
 
     ``text`` is the exact spec text as read, and ``digest`` its
     deterministic sha256. Together they are the spec's identity in the live
@@ -279,7 +274,7 @@ class TaskExecutionSpec:
 
 @dataclass(frozen=True)
 class TaskMetadata:
-    """Immutable metadata envelope for one prospective standalone task."""
+    """Immutable metadata envelope for one standalone task."""
 
     execution_approval: ExecutionApproval
     priority: str
@@ -315,7 +310,7 @@ class ApprovedTaskDocument:
 
 
 TaskDocument = DraftTaskDocument | ApprovedTaskDocument
-"""One parsed prospective standalone task document."""
+"""One parsed standalone task document."""
 
 
 @dataclass(frozen=True)
@@ -377,15 +372,14 @@ TaskSelectionResult = SelectedTask | NoEligibleTask
 
 @dataclass(frozen=True)
 class TrackerTask:
-    """One row of the operational v2 ``# Open task index``.
+    """Normalized selected-task facts derived from standalone metadata.
 
-    The v2 index owns every mutable lifecycle fact of an open task,
-    including ``depends_on`` (Harness §22): the Task Execution Spec never
-    carries any of them.
+    This compatibility-shaped value is internal execution state, not a row
+    from a central queue. The complete immutable document remains attached to
+    :class:`ExecutionTarget` and is the fixed-target identity.
     """
 
     task_id: str
-    status: TaskStatus
     priority: str
     size: str
     group: str
@@ -416,31 +410,6 @@ class TerminalRegistry:
 
     tasks: tuple[TerminalTask, ...]
     source_sha: str | None = None
-
-
-@dataclass(frozen=True)
-class ThinTracker:
-    """The lifecycle facts parsed from a v2-format ``docs/TASK.md``."""
-
-    current_task_id: str | None
-    open_tasks: tuple[TrackerTask, ...]
-    terminal_tasks: tuple[TerminalTask, ...]
-
-
-@dataclass(frozen=True)
-class ExactBaseInput:
-    """``docs/TASK.md`` and the task spec, both read from one exact SHA.
-
-    ``base_sha`` is the caller-captured exact ``origin/main`` SHA, and the one
-    SHA both texts belong to (Harness §30): the only producer,
-    :func:`.task_context.load_exact_base_input`, reads both at exactly that
-    SHA, without fetching. ``spec_text`` is ``None`` when the spec file does
-    not exist at ``base_sha``.
-    """
-
-    base_sha: str
-    task_md_text: str
-    spec_text: str | None
 
 
 @dataclass(frozen=True)

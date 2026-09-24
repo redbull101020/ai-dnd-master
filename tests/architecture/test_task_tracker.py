@@ -1,153 +1,93 @@
+import hashlib
 import re
 from pathlib import Path
 
 import pytest
 
-from tools.autonomous_pr.model import TaskStatus
-from tools.autonomous_pr.task_context import parse_thin_tracker
-from tools.autonomous_pr.task_spec import (
-    TaskSpecError,
-    parse_task_execution_spec,
-    spec_path_for,
+from tools.autonomous_pr.catalog import (
+    TaskCatalogError,
+    build_task_catalog,
+    select_task,
 )
+from tools.autonomous_pr.model import (
+    ApprovedTaskDocument,
+    DraftTaskDocument,
+    NoEligibleTask,
+    SelectedTask,
+    TaskFileRecord,
+    TaskStatus,
+    TerminalRegistry,
+    TerminalTask,
+)
+from tools.autonomous_pr.task_context import parse_terminal_registry
+from tools.autonomous_pr.task_spec import parse_task_document
 
 
 ROOT = Path(__file__).resolve().parents[2]
 TASK_MD = ROOT / "docs" / "TASK.md"
-POSITION_FIELD = re.compile(r"^- \*\*(Current|Next|Next free ID):\*\*\s*(.+)$")
-TASK_ID = re.compile(r"^TSK-(\d{4,})$")
+TASKS = ROOT / "docs" / "tasks"
+SHA = "a" * 40
 
 
-def _tracker(text: str | None = None):
-    return parse_thin_tracker(
-        TASK_MD.read_text(encoding="utf-8") if text is None else text
-    )
-
-
-def _position_fields(text: str | None = None) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    source = TASK_MD.read_text(encoding="utf-8") if text is None else text
-    for line in source.splitlines():
-        match = POSITION_FIELD.match(line)
-        if match is not None:
-            fields[match.group(1)] = match.group(2).strip()
-    return fields
-
-
-def _next_ids(fields: dict[str, str]) -> list[str]:
-    if fields["Next"] == "—":
-        return []
-    return [item.strip().strip("`") for item in fields["Next"].split("→")]
-
-
-def _queue_order(text: str) -> list[str]:
-    fields = _position_fields(text)
-    current = [] if fields["Current"] == "—" else [fields["Current"]]
-    return [*current, *_next_ids(fields)]
-
-
-def _assert_dependency_invariants(text: str) -> None:
-    tracker = _tracker(text)
-    open_by_id = {task.task_id: task for task in tracker.open_tasks}
-    terminal_by_id = {task.task_id: task for task in tracker.terminal_tasks}
-    known_ids = open_by_id.keys() | terminal_by_id.keys()
-
-    for task in tracker.open_tasks:
-        for dependency in task.depends_on:
-            assert dependency in known_ids
-            if task.status in {TaskStatus.READY, TaskStatus.CURRENT}:
-                assert terminal_by_id[dependency].status is TaskStatus.DONE
-
-
-def _assert_ready_and_current_specs(text: str, root: Path) -> None:
-    tracker = _tracker(text)
-    for task in tracker.open_tasks:
-        if task.status not in {TaskStatus.READY, TaskStatus.CURRENT}:
-            continue
-        spec_rel_path = spec_path_for(task.task_id)
-        path = root / spec_rel_path
-        assert path.is_file(), f"{task.task_id} has no Task Execution Spec"
-        spec = parse_task_execution_spec(
-            path.read_text(encoding="utf-8"),
-            spec_rel_path,
-        )
-        assert spec.task_id == task.task_id
-
-
-def _synthetic_tracker(
-    *open_rows: str,
-    current: str = "—",
-    next_tasks: str = "—",
-    next_free_id: str = "TSK-0100",
+def _metadata(
+    approval: str,
+    *,
+    priority: str = "P2",
+    size: str = "S",
+    depends_on: tuple[str, ...] = (),
 ) -> str:
-    rows = "\n".join(open_rows)
-    return f"""# Current position
+    dependencies = ", ".join(f'"{item}"' for item in depends_on)
+    return f'''## Task metadata
 
-- **Current:** {current}
-- **Next:** {next_tasks}
-- **Hard blockers:** —
-- **Next free ID:** {next_free_id}
-
-# Open task index
-
-| ID | Status | P | Size | Group | Roadmap target | Depends on | Title |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-{rows}
-
-# Terminal task index
-
-| ID | Status | Evidence | Title |
-| --- | --- | --- | --- |
-| `TSK-0027` | `Done` | PR #104 | Synthetic completed dependency |
-"""
+```json
+{{
+  "execution_approval": "{approval}",
+  "priority": "{priority}",
+  "size": "{size}",
+  "roadmap_target": "Synthetic target",
+  "depends_on": [{dependencies}],
+  "group": "engineering"
+}}
+```
+'''
 
 
-def _synthetic_executable_tracker(status: TaskStatus) -> str:
-    row = (
-        f"| `TSK-0030` | `{status.value}` | `P2` | `S` | `engineering` | "
-        "Test target | `TSK-0027` | Synthetic executable task |"
-    )
-    return _synthetic_tracker(
-        row,
-        current="TSK-0030" if status is TaskStatus.CURRENT else "—",
-    )
+def _approved(task_id: str, *, priority: str = "P2", depends_on: tuple[str, ...] = ()) -> str:
+    return f'''# {task_id} — Synthetic task
 
-
-def _synthetic_execution_ready_spec(task_id: str = "TSK-0030") -> str:
-    return f"""# {task_id} — Synthetic executable task
-
+{_metadata("approved", priority=priority, depends_on=depends_on)}
 ## Goal
 
-Exercise the repository architecture invariant.
+Deliver the fixture.
 
 ## Context / References
 
-Use the approved v2 harness contract.
+Use repository contracts.
 
 ## Scope
 
-- synthetic architecture-test scope
+- synthetic scope
 
 ## Out of scope
 
-- production changes
+- production behavior
 
 ## Approved implementation approach
 
-Use one deterministic synthetic checkpoint.
+Use one checkpoint.
 
 ## Acceptance criteria
 
-- the synthetic invariant is exercised
+- fixture passes
 
 ## Execution checkpoints
 
-### CP-1 — Synthetic checkpoint
-- Objective: Exercise the invariant.
-- Required result: The fixture is accepted.
-- Constraints: Do not change production files.
+### CP-1 — Fixture
+- Objective: Exercise selection.
+- Required result: Selection is deterministic.
+- Constraints: No production writes.
 - Verification: ["python", "-m", "pytest", "tests/architecture"]
-- Review focus: Spec identity and execution readiness.
+- Review focus: Catalog identity.
 
 ## Full verification
 
@@ -155,178 +95,163 @@ Use one deterministic synthetic checkpoint.
 
 ## Known constraints / edge cases
 
-This fixture is not an allocated repository task.
-"""
+Synthetic only.
+'''
 
 
-def test_live_task_tracker_is_valid_v2_thin_tracker() -> None:
-    tracker = _tracker()
+def _draft(task_id: str, *, size: str = "L") -> str:
+    return f"# {task_id} — Draft task\n\n{_metadata('draft', size=size)}"
 
-    current_rows = [
-        task for task in tracker.open_tasks if task.status is TaskStatus.CURRENT
-    ]
-    assert len(current_rows) <= 1
-    assert tracker.current_task_id == (
-        current_rows[0].task_id if current_rows else None
-    )
-    assert all(
-        task.status
-        in {
-            TaskStatus.BACKLOG,
-            TaskStatus.READY,
-            TaskStatus.CURRENT,
-            TaskStatus.BLOCKED,
-        }
-        for task in tracker.open_tasks
-    )
+
+def _record(task_id: str, text: str) -> TaskFileRecord:
+    return TaskFileRecord(SHA, f"docs/tasks/{task_id}.md", text)
+
+
+def _terminal(*tasks: TerminalTask) -> TerminalRegistry:
+    return TerminalRegistry(tasks=tasks, source_sha=SHA)
+
+
+def _allocated_identities(
+    standalone_ids: list[str], terminal: TerminalRegistry
+) -> set[str]:
+    return set(standalone_ids) | {task.task_id for task in terminal.tasks}
+
+
+def test_live_tracker_is_only_normative_guidance_and_terminal_registry() -> None:
+    text = TASK_MD.read_text(encoding="utf-8")
+    registry = parse_terminal_registry(text)
+
+    assert "# Current position" not in text
+    assert "# Open task index" not in text
+    assert "# Recently completed" not in text
+    assert "Next free ID" not in text
+    assert len(registry.tasks) == len({task.task_id for task in registry.tasks})
     assert all(
         task.status in {TaskStatus.DONE, TaskStatus.SUPERSEDED}
-        for task in tracker.terminal_tasks
+        and task.evidence
+        and task.title
+        for task in registry.tasks
     )
-    assert "# Open task details" not in TASK_MD.read_text(encoding="utf-8")
+    assert {task.task_id: task.status for task in registry.tasks}["TSK-0005"] is TaskStatus.SUPERSEDED
+    assert {task.task_id: task.status for task in registry.tasks}["TSK-0028"] is TaskStatus.DONE
 
 
-def test_terminal_history_is_durable_and_dependency_complete() -> None:
-    text = TASK_MD.read_text(encoding="utf-8")
-    tracker = _tracker()
-    terminal = {task.task_id: task for task in tracker.terminal_tasks}
+def test_id_allocation_uses_all_standalone_and_terminal_identities() -> None:
+    terminal = parse_terminal_registry(TASK_MD.read_text(encoding="utf-8"))
+    standalone_ids = [path.stem for path in TASKS.glob("TSK-*.md")]
+    allocated = _allocated_identities(standalone_ids, terminal)
+    numbers = [int(task_id.removeprefix("TSK-")) for task_id in allocated]
 
-    assert terminal["TSK-0005"].status is TaskStatus.SUPERSEDED
-    assert terminal["TSK-0022"].status is TaskStatus.DONE
-    assert terminal["TSK-0027"].status is TaskStatus.DONE
-    assert terminal["TSK-0028"].status is TaskStatus.DONE
-    assert all(task.evidence.strip() for task in tracker.terminal_tasks)
-    _assert_dependency_invariants(text)
-
-
-def test_backlog_task_may_depend_on_an_existing_open_task() -> None:
-    synthetic = _synthetic_tracker(
-        (
-            "| `TSK-0030` | `Backlog` | `P3` | `S` | `engineering` | "
-            "Test target | `TSK-0031` | Synthetic dependent task |"
-        ),
-        (
-            "| `TSK-0031` | `Backlog` | `P3` | `S` | `engineering` | "
-            "Test target | — | Synthetic open dependency |"
-        ),
-    )
-
-    tracker = _tracker(synthetic)
-    backlog = next(task for task in tracker.open_tasks if task.task_id == "TSK-0030")
-    assert backlog.status is TaskStatus.BACKLOG
-    assert backlog.depends_on == ("TSK-0031",)
-    _assert_dependency_invariants(synthetic)
+    assert f"TSK-{max(numbers) + 1:04d}" not in allocated
+    guidance = TASK_MD.read_text(encoding="utf-8")
+    assert "Task IDs are never reused" in guidance
+    assert "gaps remain allocated" in guidance
 
 
-def test_current_position_preserves_thin_tracker_queue_invariants() -> None:
-    tracker = _tracker()
-    fields = _position_fields()
-
-    assert {"Current", "Next", "Next free ID"} <= fields.keys()
-    next_ids = _next_ids(fields)
-    assert len(next_ids) <= 5
-    assert len(next_ids) == len(set(next_ids))
-
-    open_by_id = {task.task_id: task for task in tracker.open_tasks}
-    assert all(task_id in open_by_id for task_id in next_ids)
-    assert all(open_by_id[task_id].status is TaskStatus.READY for task_id in next_ids)
-
-    expected_current = (
-        [] if tracker.current_task_id is None else [tracker.current_task_id]
-    )
-    assert _queue_order(TASK_MD.read_text(encoding="utf-8")) == [
-        *expected_current,
-        *next_ids,
-    ]
-
-
-def test_open_index_row_order_does_not_define_execution_order() -> None:
-    current_row = (
-        "| `TSK-0030` | `Current` | `P1` | `S` | `engineering` | "
-        "Test target | `TSK-0027` | Synthetic current task |"
-    )
-    ready_row = (
-        "| `TSK-0031` | `Ready` | `P2` | `S` | `engineering` | "
-        "Test target | `TSK-0027` | Synthetic ready task |"
-    )
-    backlog_row = (
-        "| `TSK-0032` | `Backlog` | `P3` | `S` | `engineering` | "
-        "Test target | — | Synthetic backlog task |"
-    )
-    synthetic = _synthetic_tracker(
-        current_row,
-        ready_row,
-        backlog_row,
-        current="TSK-0030",
-        next_tasks="TSK-0031",
-    )
-    lines = synthetic.splitlines()
-    ready_index = next(
-        i for i, line in enumerate(lines) if line.startswith("| `TSK-0031`")
-    )
-    backlog_index = next(
-        i for i, line in enumerate(lines) if line.startswith("| `TSK-0032`")
-    )
-    lines[ready_index], lines[backlog_index] = lines[backlog_index], lines[ready_index]
-    reordered = "\n".join(lines) + "\n"
-
-    assert [task.task_id for task in _tracker(reordered).open_tasks] == [
-        "TSK-0030",
-        "TSK-0032",
-        "TSK-0031",
-    ]
-    assert _queue_order(reordered) == _queue_order(synthetic) == [
-        "TSK-0030",
-        "TSK-0031",
-    ]
-
-
-def test_next_free_id_exceeds_every_allocated_thin_tracker_id() -> None:
-    tracker = _tracker()
-    next_free = _position_fields()["Next free ID"]
-    match = TASK_ID.fullmatch(next_free)
-    assert match is not None
-
-    allocated = [task.task_id for task in tracker.open_tasks]
-    allocated.extend(task.task_id for task in tracker.terminal_tasks)
-    allocated_numbers = []
-    for task_id in allocated:
-        allocated_match = TASK_ID.fullmatch(task_id)
-        assert allocated_match is not None
-        allocated_numbers.append(int(allocated_match.group(1)))
-    assert int(match.group(1)) > max(allocated_numbers)
-
-
-def test_every_ready_or_current_task_has_execution_ready_spec() -> None:
-    _assert_ready_and_current_specs(TASK_MD.read_text(encoding="utf-8"), ROOT)
-
-
-@pytest.mark.parametrize("status", [TaskStatus.READY, TaskStatus.CURRENT])
-def test_executable_task_with_matching_execution_ready_spec_passes(
-    tmp_path: Path, status: TaskStatus
+@pytest.mark.parametrize("retain_terminal_spec", [False, True])
+def test_allocation_identity_union_allows_retained_or_deleted_terminal_spec(
+    retain_terminal_spec: bool,
 ) -> None:
-    spec_rel_path = spec_path_for("TSK-0030")
-    path = tmp_path / spec_rel_path
-    path.parent.mkdir(parents=True)
-    path.write_text(_synthetic_execution_ready_spec(), encoding="utf-8")
+    done = TerminalTask("TSK-0100", TaskStatus.DONE, "PR #1", "Delivered")
+    standalone = ["TSK-0101"]
+    if retain_terminal_spec:
+        standalone.append("TSK-0100")
 
-    _assert_ready_and_current_specs(_synthetic_executable_tracker(status), tmp_path)
+    allocated = _allocated_identities(standalone, _terminal(done))
 
-
-def test_executable_task_without_spec_fails(tmp_path: Path) -> None:
-    with pytest.raises(AssertionError, match="TSK-0030 has no Task Execution Spec"):
-        _assert_ready_and_current_specs(
-            _synthetic_executable_tracker(TaskStatus.CURRENT), tmp_path
-        )
+    assert allocated == {"TSK-0100", "TSK-0101"}
+    assert max(int(task_id.removeprefix("TSK-")) for task_id in allocated) + 1 == 102
 
 
-def test_executable_task_with_malformed_spec_fails(tmp_path: Path) -> None:
-    spec_rel_path = spec_path_for("TSK-0030")
-    path = tmp_path / spec_rel_path
-    path.parent.mkdir(parents=True)
-    path.write_text("# TSK-0030 — malformed\n", encoding="utf-8")
+def test_generic_metadata_invariant_allows_reviewed_draft_refinement() -> None:
+    draft = parse_task_document(
+        _draft("TSK-0100"), "docs/tasks/TSK-0100.md"
+    )
+    approved = parse_task_document(
+        _approved("TSK-0100", priority="P1"), "docs/tasks/TSK-0100.md"
+    )
 
-    with pytest.raises(TaskSpecError):
-        _assert_ready_and_current_specs(
-            _synthetic_executable_tracker(TaskStatus.READY), tmp_path
-        )
+    assert isinstance(draft, DraftTaskDocument)
+    assert isinstance(approved, ApprovedTaskDocument)
+    assert approved.metadata.priority == "P1"
+
+
+def test_empty_catalog_and_draft_l_produce_no_work() -> None:
+    empty = build_task_catalog(SHA, (), _terminal())
+    assert isinstance(select_task(empty, "NEXT"), NoEligibleTask)
+
+    draft = build_task_catalog(
+        SHA, (_record("TSK-0100", _draft("TSK-0100")),), _terminal()
+    )
+    assert isinstance(select_task(draft, "NEXT"), NoEligibleTask)
+
+
+def test_adding_and_removing_files_changes_next_without_tracker_queue() -> None:
+    lower = _record("TSK-0100", _approved("TSK-0100", priority="P2"))
+    higher = _record("TSK-0101", _approved("TSK-0101", priority="P1"))
+
+    selected = select_task(build_task_catalog(SHA, (lower,), _terminal()), "NEXT")
+    assert isinstance(selected, SelectedTask)
+    assert selected.document.task_id == "TSK-0100"
+
+    selected = select_task(
+        build_task_catalog(SHA, (lower, higher), _terminal()), "NEXT"
+    )
+    assert isinstance(selected, SelectedTask)
+    assert selected.document.task_id == "TSK-0101"
+
+    selected = select_task(build_task_catalog(SHA, (higher,), _terminal()), "NEXT")
+    assert isinstance(selected, SelectedTask)
+    assert selected.document.task_id == "TSK-0101"
+
+
+def test_terminal_identity_is_excluded_with_retained_or_removed_spec() -> None:
+    done = TerminalTask("TSK-0100", TaskStatus.DONE, "PR #1", "Synthetic task")
+    retained = build_task_catalog(
+        SHA,
+        (_record("TSK-0100", "legacy terminal body that is not parseable"),),
+        _terminal(done),
+    )
+    removed = build_task_catalog(SHA, (), _terminal(done))
+
+    assert isinstance(select_task(retained, "NEXT"), NoEligibleTask)
+    assert isinstance(select_task(removed, "NEXT"), NoEligibleTask)
+
+
+def test_done_dependency_works_without_spec_but_open_and_superseded_do_not() -> None:
+    dependent = _record(
+        "TSK-0101", _approved("TSK-0101", depends_on=("TSK-0100",))
+    )
+    done = TerminalTask("TSK-0100", TaskStatus.DONE, "PR #1", "Dependency")
+    selected = select_task(
+        build_task_catalog(SHA, (dependent,), _terminal(done)), "NEXT"
+    )
+    assert isinstance(selected, SelectedTask)
+
+    open_dependency = _record("TSK-0100", _draft("TSK-0100"))
+    waiting = select_task(
+        build_task_catalog(SHA, (open_dependency, dependent), _terminal()), "NEXT"
+    )
+    assert isinstance(waiting, NoEligibleTask)
+
+    superseded = TerminalTask(
+        "TSK-0100", TaskStatus.SUPERSEDED, "DEC-1", "Dependency"
+    )
+    assert isinstance(
+        select_task(build_task_catalog(SHA, (dependent,), _terminal(superseded)), "NEXT"),
+        NoEligibleTask,
+    )
+
+
+def test_malformed_nonterminal_document_is_not_ignored() -> None:
+    malformed = _record("TSK-0100", "# TSK-0100 — Missing metadata\n")
+    with pytest.raises(TaskCatalogError, match="invalid task document"):
+        build_task_catalog(SHA, (malformed,), _terminal())
+
+
+def test_task_document_digest_covers_exact_text() -> None:
+    text = _draft("TSK-0100")
+    document = parse_task_document(text, "docs/tasks/TSK-0100.md")
+    assert document.text == text
+    assert document.digest == hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert re.fullmatch(r"[0-9a-f]{64}", document.digest)

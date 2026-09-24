@@ -167,7 +167,7 @@ def spec_is_unchanged(spec: TaskExecutionSpec, current_text: str | None) -> bool
 
 
 def parse_task_document(text: str, path: str) -> TaskDocument:
-    """Parse a prospective standalone task document without activating it.
+    """Parse one standalone task document without granting invocation authority.
 
     The document starts with the canonical H1 and exactly one ``Task metadata``
     fenced JSON object. A draft may omit the execution body or carry a partial
@@ -177,8 +177,8 @@ def parse_task_document(text: str, path: str) -> TaskDocument:
     :func:`parse_task_execution_spec` after the metadata section is removed.
     The returned document always retains the exact original text and digest.
 
-    This CP-1 primitive is intentionally not wired into public preflight or
-    selection yet; atomic activation belongs to TSK-0029 CP-5.
+    This is the operational public catalog parser. Parsing never grants
+    invocation authority: it only validates immutable execution input.
     """
 
     filename_id = _task_id_from_path(path)

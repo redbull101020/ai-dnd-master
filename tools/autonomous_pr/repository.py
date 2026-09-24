@@ -994,7 +994,8 @@ def build_cumulative_patch(repo: Path, purpose: ReviewPurpose) -> ReviewPatch:
     The identical range serves two distinct purposes that must never be
     conflated: :attr:`ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW` (built
     before Task Closure exists on the delivery branch, satisfies
-    ``docs/TASK.md`` §18.1) and :attr:`ReviewPurpose.FINAL_CUMULATIVE_AUDIT`
+    the pre-closure implementation-review prerequisite) and
+    :attr:`ReviewPurpose.FINAL_CUMULATIVE_AUDIT`
     (mode C itself — built only after Task Closure is reviewed, committed,
     and pushed, and only after ``origin/main`` is freshly revalidated).
     This function refuses :attr:`ReviewPurpose.CHECKPOINT` — that purpose

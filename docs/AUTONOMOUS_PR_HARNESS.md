@@ -616,14 +616,14 @@ Read §20 before any other section of this Part.
 
 ## 20. Status and completed transition boundary (operational v2)
 
-`TSK-0028` atomically activated Part II, the v2 public entrypoint, the thin
-tracker, and the `AGENTS.md` declaration. Therefore:
+`TSK-0028` activated Part II and `TSK-0029` completed its file-based dispatch
+revision. Therefore:
 
 - v2 is the only operational version; there is no mixed mode, version flag,
   per-task version selection, v1 fallback, runtime planning/plan-review, or
   numeric repair budget;
-- the thin `docs/TASK.md` tracker and the exact-base Task Execution Spec are
-  the only execution inputs;
+- the permanent terminal registry and standalone task documents read from one
+  exact base are the only task-state execution inputs;
 - Part I records how v1 operated before activation and supplies no v1 runtime
   path; its common definitions/invariants apply only where Part II explicitly
   incorporates them by reference;
@@ -641,8 +641,8 @@ authoritative boundary.
 | --- | --- |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | canonical system behavior and contracts |
 | [`ROADMAP.md`](ROADMAP.md) | capability and phase scope and ordering |
-| [`TASK.md`](TASK.md) | task lifecycle: Status, Priority, Size, dependencies, `Current`/`Next`, queue order, task allocation |
-| `docs/tasks/TSK-XXXX.md` | the approved execution target of one task |
+| [`TASK.md`](TASK.md) | standalone-task rules and permanent `Done`/`Superseded` registry |
+| `docs/tasks/TSK-NNNN.md` | identity and metadata of each open task; for approved tasks, the fixed execution contract |
 | [`../AGENTS.md`](../AGENTS.md) | authority, Git, review, and merge governance |
 | this document | subordinate execution mechanics |
 | [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md) | factual delivery history |
@@ -666,25 +666,21 @@ them agree.
 
 ## 22. Task Execution Spec: identity, storage, and lifecycle (operational v2)
 
-- **Path.** Exactly `docs/tasks/TSK-XXXX.md`, a function of the immutable
+- **Path.** Exactly `docs/tasks/TSK-NNNN.md`, a function of the immutable
   task ID alone. One spec per task; the ID in the file must match its
   filename. There are no status-based directories (`current/`, `done/`,
   `backlog/`): a file that moved when the task's status changed would break
   stable references and turn the directory layout into a second lifecycle
   record.
-- **Responsibility split.** The spec is the approved execution contract of
-  one task. `docs/TASK.md` keeps every mutable fact about that task. The
-  spec never carries a Status, Priority, Size, dependency, or queue-position
-  field; a second authoritative copy of any of them is a defect.
-- **Progressive elaboration.** Applies to activated v2 only:
-
-  | Task status | Spec |
-  | --- | --- |
-  | `Backlog` | optional |
-  | `Ready` | required |
-  | `Current` | required and execution-ready |
-
-  A spec is execution-ready when every required section is present and
+- **Envelope.** H1 is followed by exactly one `## Task metadata` section with
+  one fenced JSON object. Required keys are `execution_approval`, `priority`,
+  `size`, `roadmap_target`, and `depends_on`; optional `group` uses the closed
+  repository vocabulary. Unknown fields, duplicate JSON keys, malformed
+  types, and filename/H1 mismatch are invalid.
+- **Draft and approved.** `execution_approval` is explicit and has no default.
+  A `draft` owns valid metadata but is never executable; its body may be absent,
+  partial, or complete. An `approved` task is executable only when every
+  required section is present and
   concrete, its checkpoints declare every required field (§23), no
   unresolved placeholder or open decision blocks execution, nothing in it
   conflicts with a higher-level source (§21), and no requirement that
@@ -692,10 +688,10 @@ them agree.
   are not written
   mechanically for distant backlog, and none is written retroactively for
   completed tasks (`TSK-0001`–`TSK-0026`).
-- **Completed specs.** After a task is `Done` its spec stays in place as the
-  historical record of what was approved for implementation. It is not
-  current canonical Architecture. Task Closure does not edit it, and the
-  task's `Done` status is recorded only through `docs/TASK.md`.
+- **Terminal tasks.** `Done` and `Superseded` live only in the permanent
+  `docs/TASK.md` registry. A retained terminal file is filtered before body
+  parsing and may later be removed by a separate reviewed change. Cancellation
+  is recorded as `Superseded` before removal.
 - **Provider neutrality.** A spec is never stored as a provider-specific
   prompt or prompt sequence (for example "Prompt 1 for provider X"). The
   orchestrator derives any runtime handoff from the provider-neutral spec.
@@ -704,7 +700,7 @@ them agree.
 
 ## 23. Task Execution Spec: structure (operational v2)
 
-A spec has these sections, in this order:
+After H1 and Task metadata, an approved task has these sections, in this order:
 
 1. Goal
 2. Context / References
@@ -732,8 +728,20 @@ file set.
 
 Skeleton:
 
-```markdown
-# TSK-XXXX — <title>
+````markdown
+# TSK-NNNN — <title>
+
+## Task metadata
+```json
+{
+  "execution_approval": "approved",
+  "priority": "P2",
+  "size": "S",
+  "roadmap_target": "<concrete target>",
+  "depends_on": [],
+  "group": "engineering"
+}
+```
 
 ## Goal
 ## Context / References
@@ -750,7 +758,7 @@ Skeleton:
 - Review focus:
 ## Full verification
 ## Known constraints / edge cases
-```
+````
 
 ---
 
@@ -798,86 +806,45 @@ provided a decision does not:
 A decision that would do any of these is not the implementer's to take: it
 ends the run as `BLOCKED` for refinement or a human decision.
 
-### Prospective TSK-0029 CP-1 input model (inactive)
+### File-based dispatch, revalidation, and terminal-only closure
 
-TSK-0029 CP-1 introduces pure, fixture-tested parsing primitives for its
-future standalone task format. A prospective document has the canonical
-`docs/tasks/TSK-NNNN.md` path and matching H1, followed by one `## Task
-metadata` fenced JSON object. That envelope explicitly carries
-`execution_approval`, `priority`, `size`, `roadmap_target`, and `depends_on`;
-`group` is optional. An approved document additionally carries the existing
-nine execution sections. A draft may omit the execution body or carry a
-partial or complete body, but remains non-executable and is not checked for
-approved readiness. The parsed document retains its exact source text and
-digest.
+The public selector is one explicit `TSK-NNNN` or literal `NEXT`; omission is
+a configuration error. One captured `origin/main` SHA supplies the strict
+terminal registry and every regular Git-tracked task blob. Terminal identities
+are excluded before body parsing. Every remaining envelope is validated and
+the dependency graph is checked; drafts are valid catalog members but never
+eligible. `NEXT` chooses eligible approved work by `P0` through `P3`, then
+numeric task ID. An empty or waiting-only catalog returns run-level
+`NO_ELIGIBLE_TASK` with exit code 0 before any branch, agent, or PR write.
 
-The same slice exposes the durable `ID | Status | Evidence | Title` terminal
-registry independently of `Current` and the Open task index. It does not yet
-list or select task files, filter terminal IDs from a catalog, or connect the
-new input model to public preflight/CLI. The Current-based operational contract
-in §§20–35 remains active until TSK-0029's atomic CP-5 activation; this note is
-prospective documentation, not a selectable partial runtime or fallback.
+Selection happens once. The run keeps the concrete ID plus original source
+SHA, canonical path, exact full-document text and digest; a default delivery
+branch is derived only after selection. Fixed-target revalidation never
+recalculates `NEXT`: from one fresh exact SHA it checks the strict terminal
+registry, the selected document and approval, and that selected task's `Done`
+dependencies. Unrelated catalog additions or malformed unrelated bodies do
+not replace or invalidate the fixed target, while a new invocation still
+performs full strict catalog validation. Open same-task PR provenance and
+branch collisions fail closed; there is no implicit resume.
 
-TSK-0029 CP-2 adds the still-prospective deterministic input boundary for that
-activation. The repository boundary lists regular Git-tracked task blobs at
-one exact commit; the pure catalog excludes terminal identities before body
-parsing, validates every remaining document and dependency graph, and resolves
-one explicit ID or `NEXT`. `NEXT` orders eligible approved documents by
-priority and numeric task ID. An empty or waiting-only catalog produces the
-run-level `NO_ELIGIBLE_TASK` no-work result with exit code 0, not a reviewer
-verdict or a selected task ID. These primitives perform no branch, agent, PR,
-queue, or scheduler action and remain disconnected from the public CLI/run
-until the atomic CP-5 activation.
+Ordinary Task Closure is terminal-only. Against exact accepted `docs/TASK.md`
+bytes, the candidate inserts exactly one parser-valid row for the selected
+task with `Done`, actual draft PR evidence, and its unchanged title, and
+appends one factual Development Log entry. It preserves every foreign terminal
+row, order, and evidence byte-for-byte; it creates no next task and does not
+edit, archive, or delete any task document. Strict UTF-8, exact LF/CRLF bytes,
+escaped `\|` titles, Git attributes, and clean filters are checked against the
+same bytes a normal address-specific staging would produce, using an isolated
+temporary index that does not mutate the user's index.
 
-TSK-0029 CP-3 prospectively connects that selector to the existing concrete
-v2 lifecycle without adding a second runtime or fallback. The public input is
-one explicit `TSK-NNNN` or literal `NEXT`; selection occurs once against one
-captured `origin/main` commit, and every later gate is bound to the selected
-ID and the original full-document source SHA/path/text digest. The default
-delivery branch is derived only after selection. `NO_ELIGIBLE_TASK` exits
-before branch, agent, or PR writes. Acceptance revalidation rereads that same
-selected ID (never `NEXT`) from a fresh exact base and blocks changed document
-bytes/metadata/approval, lost `Done` dependencies, or a concurrent terminal
-outcome, while unrelated catalog additions cannot switch the run to another
-task. This remains prospective on the TSK-0029 delivery branch until the
-single atomic activation merges. Before branch creation, Git branch-name
-guards and a structured `selected_task_id` provenance check across open PRs
-reject prior same-task work even when it used a custom head branch or targets
-a non-`main` base. The structured block and field must each be unique; exact
-task identity in the conventional PR title is the compatibility fallback,
-while free-form mentions are not identity. An unreadable, malformed, or
-potentially truncated PR listing fails closed. After selection, moved-base
-revalidation is intentionally narrower than initial catalog validation: it
-checks the strict terminal registry, exact selected document/approval, and
-that selected task's `Done` dependencies, without reparsing unrelated task
-bodies. A later invocation still performs the complete strict catalog
-preflight.
-
-TSK-0029 CP-4 prospectively narrows ordinary Task Closure to terminal-only
-history. Against the exact accepted `docs/TASK.md` baseline, the candidate
-may insert only one row for the selected task: `Done`, the actual draft PR
-number, and the existing title. Every foreign terminal row, order, and
-evidence remains byte-preserved; no next task is created or selected, and no
-task document is edited, archived, or deleted. The closure also appends one
-factual Development Log entry. The established accepted cumulative review →
-draft PR → Closure Review → local unpublished commit → fresh revalidation →
-Mode C → exact publication → required CI sequence is unchanged. Any movement
-of the authoritative tracker makes the prepared closure stale; touched
-Roadmap/Deferred inputs retain their existing materiality checks. Terminal
-facts remain sufficient after a later human removal of a completed task's
-spec, while disappearance of the still-selected active document blocks the
-current run.
-Authoritative tracker blobs and the working closure candidate are decoded as
-strict UTF-8 without newline normalization, so an LF/CRLF-only rewrite is a
-material tracker change rather than an equivalent snapshot. A terminal title
-containing `|` is represented as `\|` in the narrow terminal table and is
-validated against the unchanged selected-task title. Any parser-valid compact
-or aligned form of that one row is accepted; validation removes its actual
-raw line and requires the remaining tracker bytes to equal the baseline.
-The candidate bytes are obtained by address-staging into an isolated copy of
-the current Git index, so tracked-file attributes and EOL safeguards match a
-real commit composition while the user's index, HEAD, and worktree stay
-unchanged.
+The accepted cumulative review → draft PR → unpublished prospective closure →
+Closure Review → local unpublished commit → fresh revalidation → Mode C →
+publication of the exact audited candidate → required CI sequence is
+unchanged. Any candidate, delivery-branch, or base movement makes completed
+Mode C stale. A retained terminal spec is ignored before body validation; its
+later deletion is optional separate reviewed work. Deletion of the active
+selected document blocks the current run. After terminal `STOP` the harness
+does not select another task or perform automatic cleanup.
 
 ---
 
@@ -1102,7 +1069,7 @@ spec. The planning and plan-review phases of Part I are v1-only.
 The operational v2 lifecycle is:
 
 ```text
-preflight (one captured origin/main SHA: docs/TASK.md and the task spec)
+preflight (one captured origin/main SHA: terminal registry + task catalog)
   → delivery branch
   → for each declared checkpoint, in order:
       implement → verify → review/repair* → APPROVED → commit/push
@@ -1124,24 +1091,22 @@ outcomes and `READY_FOR_HUMAN_MERGE` keep the meaning given in §10. Mode C must
 remain fresh from the moment it is built through `READY_FOR_HUMAN_MERGE` and the
 mandatory `STOP`; `STOP` does not make it permanently valid (§32).
 
-**Preflight.** The orchestrator fetches, captures one exact `origin/main` SHA,
-and reads both `docs/TASK.md` and `docs/tasks/TSK-XXXX.md` from that SHA — not
-from the working tree, and never from two different SHAs. At minimum it
-checks that:
+**Preflight.** The orchestrator fetches and captures one exact `origin/main`
+SHA. From that SHA it reads the strict terminal registry and every regular
+Git-tracked canonical task blob, validates all nonterminal envelopes/bodies and
+their dependency graph, then resolves exactly one explicit ID or `NEXT`.
+Dependencies must be terminal `Done`; `Superseded`, open, unknown, self,
+duplicate, or cyclic dependencies do not permit execution. The selected task
+must be approved, execution-ready (§22), and inside permitted Roadmap scope.
+Missing selector is configuration error; invalid/draft/terminal explicit ID
+has no fallback. `NO_ELIGIBLE_TASK` is a successful no-work result, not a
+reviewer verdict.
 
-- the named task is the authoritative `Current` task;
-- every dependency is `Done`;
-- the task's Roadmap target is permitted;
-- the spec exists and belongs to that same task;
-- the spec is execution-ready (§22);
-- no unresolved placeholder or open decision blocks execution;
-- the task metadata and the spec were read from the same captured SHA.
-
-A failed check ends the run as `BLOCKED`. If `origin/main` later moves and the
-named task's `docs/TASK.md` entry, its dependencies, its Roadmap target, or its
-spec changed, the run fails closed; it never continues on a stale execution
-target. A movement that changes none of these is handled by revalidation as in
-§12 and is not by itself `BLOCKED`.
+A failed check ends the run as `BLOCKED`. Later revalidation rereads only the
+strict terminal registry, exact selected document, and its dependencies from
+one fresh exact SHA. It never recalculates `NEXT` or rejects the fixed target
+because an unrelated document changed. Selected document/approval changes,
+lost `Done` dependencies, or a concurrent terminal outcome fail closed.
 
 **Spec immutability.** Within one invocation the Task Execution Spec is fixed.
 No implementation or repair may change the task's own
@@ -1173,8 +1138,8 @@ For each checkpoint:
 After every declared checkpoint is approved, the orchestrator runs the spec's
 Full verification and then the pre-closure cumulative implementation review.
 That review keeps its v1 definition (§8): its input is `origin/main...HEAD`
-before Task Closure exists on the branch, it satisfies `docs/TASK.md` §18.1,
-and it is not Mode C.
+before Task Closure exists on the branch, it satisfies the pre-closure
+implementation-review prerequisite, and it is not Mode C.
 
 A `CHANGES_REQUESTED` from the cumulative review follows the adaptive repair
 contract (§25–§29). A repair invalidates evidence built against the old

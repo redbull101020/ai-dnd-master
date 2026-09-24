@@ -57,7 +57,7 @@ from .model import (
     VerificationEvidence,
 )
 from .repository import RepositoryError
-from .task_context import TaskPreflightError, TaskTrackerError
+from .task_context import TaskTrackerError
 from .task_spec import TaskSpecError, parse_task_document
 
 # Post-closure origin/main-movement replay is bounded to this many rounds
@@ -395,7 +395,6 @@ def _execution_target_from_selection(selection: SelectedTask) -> ExecutionTarget
         base_sha=selection.source_sha,
         task=TrackerTask(
             task_id=document.task_id,
-            status=TaskStatus.READY,
             priority=metadata.priority,
             size=metadata.size,
             group=metadata.group or "",
@@ -514,7 +513,7 @@ def run(config: OrchestratorConfig) -> RunResult:
                 revalidated, _ = _revalidate_v2_execution_target(
                     config, execution_target, accepted_origin_base_sha
                 )
-            except (_Blocked, RepositoryError, TaskPreflightError):
+            except (_Blocked, RepositoryError):
                 acceptance_revalidation_failed = True
                 raise
             accepted_origin_base_sha = revalidated.base_sha
@@ -610,7 +609,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_path=spec_path,
             spec_digest=spec_digest,
         )
-    except (_Blocked, RepositoryError, TaskPreflightError) as exc:
+    except (_Blocked, RepositoryError) as exc:
         return RunResult(
             task_id=selected_task_id,
             phase=phase,
@@ -1223,33 +1222,19 @@ def _revalidate_v2_execution_target(
     fresh_sha = repository.fetch_and_capture_origin_main_sha(config.repo)
     if fresh_sha == current_base_sha:
         return replace(accepted, base_sha=fresh_sha), False
-    if accepted.document is not None:
-        try:
-            _revalidate_file_selected_target_at_sha(config, accepted, fresh_sha)
-        except (RepositoryError, TaskTrackerError, TaskSpecError) as exc:
-            raise _Blocked(
-                "origin/main moved and selected task revalidation failed: "
-                f"{exc}"
-            ) from exc
-        return replace(accepted, base_sha=fresh_sha), True
-    try:
-        exact_input = task_context.load_exact_base_input(
-            config.repo, accepted.task.task_id, fresh_sha
-        )
-        revalidated = task_context.preflight_execution_target(
-            exact_input, accepted.task.task_id
-        )
-    except TaskPreflightError as exc:
+    if accepted.document is None:
         raise _Blocked(
-            "origin/main moved and v2 execution-target revalidation failed: "
+            "execution target has no standalone selected task document; "
+            "Current-based revalidation is not supported"
+        )
+    try:
+        _revalidate_file_selected_target_at_sha(config, accepted, fresh_sha)
+    except (RepositoryError, TaskTrackerError, TaskSpecError) as exc:
+        raise _Blocked(
+            "origin/main moved and selected task revalidation failed: "
             f"{exc}"
         ) from exc
-    if not _same_v2_execution_target(accepted, revalidated):
-        raise _Blocked(
-            "origin/main moved and changed the accepted v2 execution target "
-            "(authoritative task entry or fixed spec)"
-        )
-    return revalidated, True
+    return replace(accepted, base_sha=fresh_sha), True
 
 
 def _capture_v2_closure_material_baseline(
@@ -1351,7 +1336,7 @@ def _build_v2_cumulative_review_input(
         "CURRENT_GATE: pre-closure cumulative implementation review\n"
         "REVIEW_PURPOSE: PRE_CLOSURE_CUMULATIVE_REVIEW\n"
         "RANGE: origin/main...HEAD before Task Closure; this is not Mode C and "
-        "satisfies docs/TASK.md §18.1's implementation-diff review prerequisite.\n"
+        "satisfies the pre-closure implementation-diff review prerequisite.\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review the complete implementation diff in a fresh, independent "
         f"context. {contract}"

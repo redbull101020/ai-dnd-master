@@ -1,269 +1,154 @@
-# Task Queue
+# Task dispatch and terminal registry
 
-Thin operational lifecycle tracker for AI D&D Engine development.
+This document defines task-file governance and stores the permanent terminal
+registry. It is not an active-task queue. Open-task metadata belongs only to
+Git-tracked regular files at `docs/tasks/TSK-NNNN.md`.
 
-`docs/TASK.md` owns task lifecycle and queue facts. Execution requirements for
-an executable task live only in its stable Task Execution Spec at
-`docs/tasks/TSK-NNNN.md`.
+## 1. Standalone task documents
 
----
+A task file has a filename/H1-matching immutable ID, one `## Task metadata`
+section containing exactly one fenced JSON object, and either `draft` or
+`approved` `execution_approval`. Required metadata are `execution_approval`,
+`priority`, `size`, `roadmap_target`, and `depends_on`; `group` is optional and
+is one of `mechanics`, `cross-cutting`, `engineering`, `documentation`, or
+`architecture`.
 
-## 1. Authority
+Priority means: `P0` — correctness or a hard delivery-path blocker; `P1` —
+current critical-path work; `P2` — useful adjacent work; `P3` — future,
+optional, or cleanup work. It orders otherwise eligible `NEXT` candidates as
+P0 → P1 → P2 → P3, but never overrides Roadmap scope or dependencies.
 
-Sources of truth, in order:
+Size measures review complexity, not elapsed time: `S` is one narrow coherent
+slice, `M` is larger but still cohesive and reviewable, and `L` is too broad
+or insufficiently understood for execution as one task. Approved executable
+work is S or M; L must be decomposed before approval. Every task must remain
+independently reviewable and mergeable.
 
-1. `docs/ARCHITECTURE.md` — canonical product architecture.
-2. `docs/ROADMAP.md` — phase and capability scope.
-3. `docs/TASK.md` — task lifecycle, dependencies, and ordering.
-4. `docs/tasks/TSK-NNNN.md` — fixed execution contract for one task.
-5. `docs/DECISIONS.md` and `docs/DEFERRED.md` — rationale and deferred scope.
+Draft documents have a valid envelope but need not have a complete execution
+body and are never executable. Approved documents contain all nine execution
+sections in the order shown by the template below, concrete CP-1…CP-N fields,
+JSON-argv verification commands, and no unresolved execution requirement.
+Approval and publication are execution input, not invocation authority.
 
-The tracker never grants commit, push, PR, merge, or `AUTONOMOUS_PR`
-authority. Those permissions remain exclusively in `AGENTS.md`.
+## 2. Identity, dependencies, and deterministic selection
 
-## 2. Task identity and lifecycle
+Task IDs are never reused. Allocate `max(standalone IDs, terminal IDs) + 1`;
+gaps remain allocated. Concurrent allocation conflicts are reconciled before
+merge. Before deleting a cancelled nonterminal file, record its identity as
+`Superseded` in the terminal registry.
 
-Task IDs are immutable `TSK-NNNN` identifiers. The closed status set is:
+Dependencies are task IDs. Unknown, self, duplicate, and cyclic dependencies
+are invalid. Only authoritative `Done` satisfies a dependency; `Superseded`
+does not. A known nonterminal dependency makes a task wait.
 
-- `Backlog`
-- `Ready`
-- `Current`
-- `Blocked`
-- `Done`
-- `Superseded`
+An invocation supplies exactly one explicit `TSK-NNNN` or literal `NEXT`.
+Explicit selection does not fall back. `NEXT` considers approved eligible S/M
+tasks from one exact `origin/main` snapshot and orders them by priority, then
+numeric ID. Draft, terminal, and waiting tasks are excluded. A valid catalog
+without an eligible candidate returns `NO_ELIGIBLE_TASK` without branch,
+agent, or PR writes. Initial catalog validation is strict; after selection,
+fixed-target revalidation checks only the selected document, its approval,
+terminal outcome, dependencies, and repository safety facts. It never
+reselects because an unrelated file changed.
 
-The Open task index contains only `Backlog`, `Ready`, `Current`, and
-`Blocked`. The Terminal task index contains only `Done` and `Superseded` and
-is never truncated. A task ID appears in exactly one index.
-
-- `Backlog` records recognized work that is not yet execution-ready.
-- `Ready` means the readiness gate is satisfied, but does not authorize work.
-- `Current` is the one selected execution target.
-- `Blocked` records work that cannot proceed until its stated dependency,
-  decision, or external condition is resolved.
-- `Done` is authoritative only after the implementation and Task Closure are
-  accepted on `main` (or the fallback reconciliation of §18.2 lands).
-- `Superseded` permanently reserves work that was replaced, absorbed,
-  invalidated, or deliberately dropped; its durable reason belongs in
-  terminal evidence and `docs/DEVELOPMENT_LOG.md`.
-
-Task IDs are never reused. `Next free ID` must be greater than every allocated
-Open or Terminal ID; gaps do not become reusable IDs.
-
-## 3. Task Execution Spec
-
-The stable spec path is a pure function of task identity:
+## 3. Workflow and authority
 
 ```text
-docs/tasks/TSK-NNNN.md
+discussion and approval
+→ publish one reviewed task file on main
+→ separate explicit AUTONOMOUS_PR <ID|NEXT> invocation
+→ fixed task / checkpoints / independent review / adaptive repair
+→ Full verification
+→ accepted cumulative implementation review
+→ reviewed draft PR
+→ unpublished prospective Task Closure and Closure Review
+→ fresh revalidation and Mode C
+→ publish exact audited candidate
+→ required CI
+→ READY_FOR_HUMAN_MERGE → STOP
+→ human merge
+→ optional separate reviewed removal of a terminal spec
 ```
 
-Spec lifecycle:
+A chat instruction is not the configured CLI. A real run additionally needs
+actual implementer/reviewer executables, a fresh independent reviewer context,
+and verified sandboxes without direct Git/GitHub write capability. No provider
+integration is implied by this document. Merge remains human-only. `STOP`,
+`BLOCKED`, and `NO_ELIGIBLE_TASK` never start another task or perform cleanup.
 
-| Tracker status | Task Execution Spec |
-| --- | --- |
-| `Backlog` | optional |
-| `Ready` | required and execution-ready |
-| `Current` | required and execution-ready |
-| `Blocked` | retained if it exists |
-| `Done` / `Superseded` | retained if it exists |
+Task Closure appends only the selected task's `Done` row with real PR evidence
+and one factual Development Log entry. It preserves all other terminal rows
+and does not delete the task file. After authoritative `Done` or `Superseded`
+on main, that file may be removed by a separate reviewed change; terminal
+facts remain sufficient without it.
 
-The spec carries execution facts only. It must not duplicate mutable tracker
-fields such as Status, Priority, Size, dependencies, or queue position.
-The nine mandatory spec sections and their binding semantics are defined in
-`docs/AUTONOMOUS_PR_HARNESS.md` §§22–24.
+If a delivery merges without its closure, `Done` is not inferred from the
+merged code or PR. A separate reviewed **MANUAL** reconciliation must add the
+terminal row with factual evidence and the factual Development Log entry.
+Until that reconciliation reaches authoritative `main`, the task is not
+`Done` and no dependency on it is satisfied.
 
-Goal, Scope, Out of scope, Approved implementation approach, Acceptance
-criteria, execution checkpoints, and verification live in the Task Execution
-Spec, not in this thin lifecycle tracker.
+## 4. Future approved task template
 
-`TSK-0028` is the one transition task that began under operational v1 and is
-completed manually by the activation change itself. It deliberately has no
-`docs/tasks/TSK-0028.md`; this historical fact is not a runtime exception.
+````markdown
+# TSK-NNNN — Task title
 
-## 4. Open task index schema
+## Task metadata
 
-The table has exactly these columns:
+```json
+{
+  "execution_approval": "approved",
+  "priority": "P2",
+  "size": "M",
+  "roadmap_target": "Phase / approved capability slice",
+  "depends_on": [],
+  "group": "engineering"
+}
+```
 
-| ID | Status | P | Size | Group | Roadmap target | Depends on | Title |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+## Goal
 
-- `P0` is correctness or a hard current-path blocker; `P1` is current
-  critical-path work; `P2` is useful adjacent work; `P3` is future, optional,
-  or cleanup work. Priority is not queue order and never overrides Roadmap
-  scope, dependencies, or the explicit Current/Next selection.
-- Size measures review complexity, not elapsed time: `S` is one narrow
-  coherent slice, `M` is a larger but still cohesive reviewable slice, and
-  `L` is too broad or insufficiently understood for execution as one task.
-  Size `L` must be decomposed before `Ready` or `Current`.
-- `Group` is one of `mechanics`, `cross-cutting`, `engineering`,
-  `documentation`, `architecture`.
-- `Depends on` is `—` or a comma-separated list of backtick-wrapped task IDs.
-- every dependency of a `Ready` or `Current` task is a `Done` row in the
-  Terminal task index.
-- there is at most one `Current` row, and it must match Current position.
+Concrete outcome.
 
-Full task detail is not stored in this file for `Ready` or `Current` tasks;
-the Task Execution Spec is their complete execution target. A compact backlog
-row is sufficient until refinement produces its spec.
+## Context / References
 
-## 5. Terminal task index schema
+Authoritative references.
 
-The durable table has exactly these columns:
+## Scope
 
-| ID | Status | Evidence | Title |
-| --- | --- | --- | --- |
+- Included work.
 
-`Evidence` identifies the accepted PR or the historical decomposition/closure
-commit that proves the terminal state. Unlike the human-oriented recent view,
-this index is authoritative and unbounded.
+## Out of scope
 
-## 6. Readiness and selection
+- Explicit exclusions.
 
-A task may become `Ready` only when its dependencies are terminal `Done`, its
-Roadmap target is still active, its size is `S` or `M`, and its Task Execution
-Spec exists and is execution-ready. The task must be one coherent,
-independently reviewable and mergeable delivery slice. `Current` is selected
-from eligible work in deliberate order; it is an execution target, not
-authorization to start.
+## Approved implementation approach
 
-If no eligible task exists, Current is `—`. A task is never promoted merely to
-avoid an empty Current position.
+Approved approach and binding decisions.
 
-## 7. Progressive elaboration
+## Acceptance criteria
 
-Backlog tasks may remain compact. Refinement creates or completes the stable
-Task Execution Spec before promotion to `Ready`. Once an autonomous invocation
-starts, the accepted spec is fixed for that run; changing it is a fail-closed
-condition, never an in-run repair technique.
+- Observable acceptance result.
 
-## 8. Dependencies
+## Execution checkpoints
 
-Dependencies are lifecycle facts in the Open task index. They are not inferred
-from prose or from the bounded Recently completed view. A missing terminal row
-cannot be interpreted as `Done`. Every dependency names an existing Open or
-Terminal task, self-dependencies and dependency cycles are forbidden, and only
-`Ready`/`Current` require every dependency to be Terminal `Done`.
-`Backlog`/`Blocked` may depend on unfinished Open tasks.
+### CP-1 — Checkpoint name
+- Objective: Why this checkpoint exists.
+- Required result: Observable result.
+- Constraints: Scope and safety limits.
+- Verification: ["python", "-m", "pytest", "tests/relevant"]
+- Review focus: Highest-risk review area.
 
-## 9. Review triggers
+## Full verification
 
-Revalidate the queue after task closure, dependency changes, Roadmap changes,
-new blockers, task decomposition, or any change to Current/Next selection.
+["python", "-m", "pytest"]
+["python", "-m", "mypy", "src", "tools/autonomous_pr"]
+["git", "diff", "--check"]
 
-## 10. Current position
+## Known constraints / edge cases
 
-The authoritative live values are in the unnumbered section below. `Next`
-lists at most five `Ready` tasks in deliberate order. `Next free ID` is the
-allocation source and does not imply that every lower number is an active task.
-Current followed by Next is the only authoritative queue order; Open index row
-order has no scheduling meaning.
-
-## 11. Open task index
-
-The authoritative live table is in the unnumbered section below. It is the
-only source for mutable facts about open tasks.
-
-## 12. Readiness gate
-
-Promotion to `Ready` or `Current` requires all mechanical conditions in §§3,
-4, 6, and 8 plus an approved, internally consistent execution spec. A task
-requiring a new architectural decision or production dependency remains
-ineligible until that decision or dependency is separately approved.
-
-## 13. Task references
-
-Architecture and Roadmap references belong in the Task Execution Spec. The
-tracker keeps only the Roadmap target needed for lifecycle validation.
-
-## 14. Contract impact
-
-Contract-impact analysis belongs in the Task Execution Spec and its review,
-not in duplicated tracker detail.
-
-## 15. Task details
-
-Operational v2 has no Open task details section. `Ready` and `Current` details
-live in `docs/tasks/TSK-NNNN.md`; Backlog uses its compact index row.
-
-## 16. Queue selection
-
-Selection follows Roadmap scope, dependencies, priority, review risk, and
-smallest coherent delivery slices. It never silently changes architecture.
-
-## 17. Current and Next invariants
-
-1. At most one task is `Current`.
-2. Current position matches the single Current row.
-3. Every task in Next is `Ready`.
-4. Every `Ready`/`Current` task has an execution-ready spec and all
-   dependencies terminal `Done`.
-5. Size `L` is never `Ready` or `Current`.
-6. Open and terminal IDs are unique and disjoint.
-
-## 18. Task closure and history
-
-Closure atomically moves the completed task from the Open task index to the
-Terminal task index as `Done`, records evidence, updates the recent view,
-reconciles Current/Next/blockers, and appends one concise factual entry to
-`docs/DEVELOPMENT_LOG.md`. The accepted spec remains at its stable path.
-Prepared closure is prospective: neither `Done` nor a represented next
-`Current` becomes authoritative until the delivery PR merges to `main`.
-
-### 18.1 Normal path — closure prepared before merge
-
-Before prospective closure, deterministic Full verification is green and the
-complete implementation diff has been reviewed and accepted. In v2 the closure
-candidate stays unpublished while Closure Review and Mode C audit it. Only the
-exact audited candidate is then pushed. Its tracker changes are prospective
-until the delivery PR merges.
-
-### 18.1.1 Prospective immediate-dependent representation
-
-The same closure may represent one immediate dependent as the prospective next
-`Current` only when its sole unfinished dependency is the task becoming `Done`
-in that closure and every other readiness condition already holds. No work on
-that next task starts before merge and a fresh authoritative preflight.
-
-### 18.2 Fallback path — post-merge reconciliation
-
-If closure was not prepared in the delivery PR, a separate reviewed
-reconciliation change records the terminal state before another task begins.
-
-## 19. Recently completed
-
-This is a bounded human-readable view, not dependency truth. The Terminal task
-index is authoritative.
-
-## 20. Operational principles
-
-- one operational `AUTONOMOUS_PR` contract: v2;
-- lifecycle in this tracker, execution in Task Execution Specs;
-- deterministic orchestration owns all transitions;
-- no LLM-selected gate transition;
-- no numeric repair limit;
-- no merge or auto-merge authority.
-
----
-
-# Current position
-
-- **Current:** TSK-0029
-- **Next:** —
-- **Hard blockers:** —
-- **Next free ID:** TSK-0030
-- **Last reviewed:** 2026-09-21
-
----
-
-# Open task index
-
-| ID | Status | P | Size | Group | Roadmap target | Depends on | Title |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `TSK-0029` | `Current` | `P2` | `M` | `engineering` | engineering prerequisite for continued Phase 3 delivery: simplify approved task dispatch | `TSK-0028` | File-based task dispatch, deterministic NEXT and removable completed specs |
-| `TSK-0023` | `Backlog` | `P2` | `L` | `mechanics` | Phase 3 / Reactions + Opportunity attacks | — | Opportunity Attack / Reaction continuation |
-
----
+Concrete known constraints.
+````
 
 # Terminal task index
 
@@ -296,20 +181,3 @@ index is authoritative.
 | `TSK-0026` | `Done` | PR #103 | Implement minimal local `AUTONOMOUS_PR` execution harness |
 | `TSK-0027` | `Done` | PR #104 | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract |
 | `TSK-0028` | `Done` | PR #106 | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
-
----
-
-# Recently completed
-
-| ID | Title | Evidence |
-| --- | --- | --- |
-| `TSK-0028` | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 | PR #106 |
-| `TSK-0027` | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract | PR #104 |
-| `TSK-0026` | Implement minimal local `AUTONOMOUS_PR` execution harness | PR #103 |
-| `TSK-0025` | Define minimal `AUTONOMOUS_PR` execution-harness contract | PR #102 |
-| `TSK-0024` | Define bounded `AUTONOMOUS_PR` development-governance contract | PR #101 |
-| `TSK-0022` | Implement initial Combat tactical placement vertical slice | PR #98 |
-| `TSK-0021` | Define minimal Combat Movement and placement-boundary contract | PR #97 |
-| `TSK-0020` | Tighten development workflow and task-governance automation | PR #95 |
-| `TSK-0019` | Implement minimal CombatEnded vertical slice | PR #94 |
-| `TSK-0018` | Define minimal Combat end lifecycle contract | PR #93 |

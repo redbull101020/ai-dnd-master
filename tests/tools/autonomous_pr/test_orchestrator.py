@@ -463,17 +463,18 @@ def _public_dispatch_config(
     env: PublicDispatchEnv,
     *,
     selector: str,
+    expected_task_id: str = _TASK_ID,
 ) -> OrchestratorConfig:
     reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
     return OrchestratorConfig(
         task_id=selector,
         repo=env.work,
         implementer_spec=_implementer_spec(
-            env.work, _public_dispatch_implementer_code(_TASK_ID)
+            env.work, _public_dispatch_implementer_code(expected_task_id)
         ),
         reviewer_spec=_reviewer_spec(env.work, reviewer_code),
         delivery_branch="",
-        gh_command=_public_dispatch_gh_command(_TASK_ID),
+        gh_command=_public_dispatch_gh_command(expected_task_id),
     )
 
 
@@ -736,6 +737,57 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
     assert _run_git(["branch", "--show-current"], cwd=work).strip() == "main"
     assert _run_git(["rev-parse", "HEAD"], cwd=work).strip() == initial_head
     assert _run_git(["status", "--porcelain"], cwd=work) == ""
+
+
+def test_public_explicit_id_runs_outside_next_priority_order(tmp_path: Path) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    higher_id = "TSK-9002"
+    higher_path = env.seed / "docs" / "tasks" / f"{higher_id}.md"
+    higher_path.write_text(
+        _v2_spec_text(higher_id, priority="P0"), encoding="utf-8"
+    )
+    _commit_and_push_main(
+        env.seed, "add higher priority approved task", f"docs/tasks/{higher_id}.md"
+    )
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.STOP
+    assert result.task_id == _TASK_ID
+    assert result.selection_mode is TaskSelectionMode.EXPLICIT
+
+
+def test_public_next_changes_when_approved_file_is_added_without_tracker_edit(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    before_sha = repository.fetch_and_capture_origin_main_sha(env.work)
+    before = orch_module._resolve_file_based_target(
+        _public_dispatch_config(env, selector="NEXT"), "NEXT", before_sha
+    )
+    assert isinstance(before, SelectedTask)
+    assert before.document.task_id == _TASK_ID
+
+    tracker_before = (env.seed / "docs" / "TASK.md").read_bytes()
+    higher_id = "TSK-9002"
+    higher_path = env.seed / "docs" / "tasks" / f"{higher_id}.md"
+    higher_path.write_text(
+        _v2_spec_text(higher_id, priority="P0"), encoding="utf-8"
+    )
+    _commit_and_push_main(
+        env.seed, "add higher priority approved task", f"docs/tasks/{higher_id}.md"
+    )
+    assert (env.seed / "docs" / "TASK.md").read_bytes() == tracker_before
+
+    result = run(
+        _public_dispatch_config(
+            env, selector="NEXT", expected_task_id=higher_id
+        )
+    )
+
+    assert result.outcome is RunOutcome.STOP
+    assert result.task_id == higher_id
+    assert result.selection_mode is TaskSelectionMode.NEXT
 
 
 def test_same_task_branch_collision_cannot_be_bypassed_with_alternate_name(
@@ -2233,11 +2285,10 @@ def _cp3_spec() -> TaskExecutionSpec:
 
 
 def _cp3_target(base_sha: str, spec: TaskExecutionSpec) -> ExecutionTarget:
-    return ExecutionTarget(
+    legacy_target = ExecutionTarget(
         base_sha=base_sha,
         task=TrackerTask(
             task_id=spec.task_id,
-            status=TaskStatus.CURRENT,
             priority="P2",
             size="M",
             group="engineering",
@@ -2246,6 +2297,9 @@ def _cp3_target(base_sha: str, spec: TaskExecutionSpec) -> ExecutionTarget:
             title="Test task",
         ),
         spec=spec,
+    )
+    return orch_module._execution_target_from_selection(
+        _selected_from_target(legacy_target)
     )
 
 
@@ -2404,19 +2458,20 @@ def _mock_cp3_revalidated_target(
 ) -> list[str]:
     loaded_shas: list[str] = []
 
-    def fake_load(repo: Path, task_id: str, base_sha: str) -> object:
-        assert task_id == target.task.task_id
-        loaded_shas.append(base_sha)
-        return object()
+    def fake_revalidate(
+        config: OrchestratorConfig,
+        accepted: ExecutionTarget,
+        fresh_sha: str,
+    ) -> None:
+        assert config.repo
+        loaded_shas.append(fresh_sha)
+        if accepted.task != target.task or accepted.spec != target.spec:
+            raise orch_module._Blocked(
+                "origin/main changed the accepted v2 execution target"
+            )
 
-    def fake_preflight(base: object, task_id: str) -> ExecutionTarget:
-        assert loaded_shas
-        assert task_id == target.task.task_id
-        return dataclasses.replace(target, base_sha=loaded_shas[-1])
-
-    monkeypatch.setattr(orch_module.task_context, "load_exact_base_input", fake_load)
     monkeypatch.setattr(
-        orch_module.task_context, "preflight_execution_target", fake_preflight
+        orch_module, "_revalidate_file_selected_target_at_sha", fake_revalidate
     )
     return loaded_shas
 
