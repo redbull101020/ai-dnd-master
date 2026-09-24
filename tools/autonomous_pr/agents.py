@@ -27,6 +27,7 @@ external executables and parses their output.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -221,11 +222,26 @@ def parse_reviewer_verdict(output: str) -> ReviewVerdict:
 
 
 _FINDING_FIELDS = (
+    "binding_basis",
     "problem",
     "evidence",
+    "failure_mode",
     "required_outcome",
     "recommended_repair",
     "verification_focus",
+)
+_TASK_BINDING_BASES = frozenset(
+    {
+        "task:goal",
+        "task:scope",
+        "task:out_of_scope",
+        "task:approved_implementation_approach",
+        "task:acceptance_criteria",
+        "task:full_verification",
+    }
+)
+_CHECKPOINT_BINDING_BASIS = re.compile(
+    r"checkpoint:CP-[1-9]\d*:(?:objective|required_result|constraints|verification)"
 )
 _NON_CONVERGENCE_FIELDS = (
     "previous_requirement",
@@ -254,6 +270,21 @@ def _required_non_empty_string(
     return value.strip()
 
 
+def _validate_binding_basis(value: str, *, where: str) -> str:
+    """Validate only the approved provider-neutral binding-basis grammar."""
+
+    if value in _TASK_BINDING_BASES or _CHECKPOINT_BINDING_BASIS.fullmatch(value):
+        return value
+    if value.startswith("repo:"):
+        reference = value.removeprefix("repo:")
+        if reference and reference == reference.strip():
+            return value
+    raise ValueError(
+        f"{where}.binding_basis must be an approved task, checkpoint, or "
+        "non-empty repo reference"
+    )
+
+
 def _parse_repair_packet(value: object) -> RepairPacket:
     if not isinstance(value, dict):
         raise ValueError("repair packet must be one JSON object")
@@ -273,6 +304,9 @@ def _parse_repair_packet(value: object) -> RepairPacket:
             )
             for name in _FINDING_FIELDS
         }
+        required["binding_basis"] = _validate_binding_basis(
+            required["binding_basis"], where=where
+        )
         raw_paths = raw_finding.get("affected_paths", [])
         if not isinstance(raw_paths, list) or any(
             not isinstance(path, str) or not path.strip() for path in raw_paths

@@ -1750,8 +1750,10 @@ def _v2_verification(passed: bool) -> VerificationEvidence:
 
 def _finding(problem: str) -> RepairFinding:
     return RepairFinding(
+        binding_basis="checkpoint:CP-1:required_result",
         problem=problem,
         evidence=f"evidence for {problem}",
+        failure_mode=f"failure mode for {problem}",
         required_outcome=f"required outcome for {problem}",
         recommended_repair=f"repair for {problem}",
         verification_focus=f"verify {problem}",
@@ -2002,13 +2004,24 @@ def test_v2_reviewer_handoff_declares_complete_structured_output_contract(
     assert "non_convergence_required: false" in first
     assert "non_convergence_required: true" in second
     for field in (
+        "binding_basis",
         "problem",
         "evidence",
+        "failure_mode",
         "required_outcome",
         "recommended_repair",
         "verification_focus",
     ):
         assert field in first
+    for binding_basis_fragment in (
+        "task:approved_implementation_approach",
+        "checkpoint:CP-N:<field>",
+        "objective, required_result, constraints, verification",
+        "repo:<non-empty trimmed reference>",
+        "Review focus is advisory",
+        "recommended_repair is required but advisory",
+    ):
+        assert binding_basis_fragment in first
     for field in (
         "previous_requirement",
         "actual_change",

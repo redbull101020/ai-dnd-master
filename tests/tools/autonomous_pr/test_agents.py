@@ -99,8 +99,10 @@ def _repair_packet_json(*, diagnosis: bool = False) -> str:
     packet: dict[str, object] = {
         "findings": [
             {
+                "binding_basis": "checkpoint:CP-1:required_result",
                 "problem": "wrong value",
                 "evidence": "candidate.py:1",
+                "failure_mode": "the candidate retains the wrong value",
                 "required_outcome": "use the required value",
                 "recommended_repair": "replace it",
                 "verification_focus": "assert the exact value",
@@ -128,9 +130,92 @@ def test_parse_structured_reviewer_output_accepts_complete_repair_packet() -> No
     assert result.verdict is ReviewVerdict.CHANGES_REQUESTED
     assert result.blocked_reason is None
     assert result.repair_packet is not None
-    assert result.repair_packet.findings[0].problem == "wrong value"
-    assert result.repair_packet.findings[0].affected_paths == ("candidate.py",)
+    finding = result.repair_packet.findings[0]
+    assert finding.binding_basis == "checkpoint:CP-1:required_result"
+    assert finding.problem == "wrong value"
+    assert finding.failure_mode == "the candidate retains the wrong value"
+    assert finding.affected_paths == ("candidate.py",)
     assert result.repair_packet.non_convergence is not None
+
+
+@pytest.mark.parametrize(
+    "binding_basis",
+    [
+        "task:goal",
+        "task:scope",
+        "task:out_of_scope",
+        "task:approved_implementation_approach",
+        "task:acceptance_criteria",
+        "task:full_verification",
+        "checkpoint:CP-1:objective",
+        "checkpoint:CP-23:required_result",
+        "checkpoint:CP-2:constraints",
+        "checkpoint:CP-9:verification",
+        "repo:AGENTS.md#review-authority",
+        "repo:docs/AUTONOMOUS_PR_HARNESS.md#25",
+    ],
+)
+def test_parse_structured_reviewer_output_accepts_binding_basis_grammar(
+    binding_basis: str,
+) -> None:
+    packet = json.loads(_repair_packet_json())
+    packet["findings"][0]["binding_basis"] = binding_basis  # type: ignore[index]
+
+    result = parse_structured_reviewer_output(
+        f"CHANGES_REQUESTED\n{json.dumps(packet)}\n"
+    )
+
+    assert result.verdict is ReviewVerdict.CHANGES_REQUESTED
+    assert result.repair_packet is not None
+    assert result.repair_packet.findings[0].binding_basis == binding_basis
+
+
+@pytest.mark.parametrize("field", ["binding_basis", "failure_mode"])
+def test_parse_structured_reviewer_output_blocks_missing_grounding_fields(
+    field: str,
+) -> None:
+    packet = json.loads(_repair_packet_json())
+    del packet["findings"][0][field]  # type: ignore[index]
+
+    result = parse_structured_reviewer_output(
+        f"CHANGES_REQUESTED\n{json.dumps(packet)}\n"
+    )
+
+    assert result.verdict is ReviewVerdict.BLOCKED
+    assert result.repair_packet is None
+    assert "malformed" in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("binding_basis", None),
+        ("binding_basis", "  "),
+        ("binding_basis", "task:review_focus"),
+        ("binding_basis", "checkpoint:CP-1:acceptance_criteria"),
+        ("binding_basis", "checkpoint:CP-zero:objective"),
+        ("binding_basis", "checkpoint:CP-0:objective"),
+        ("binding_basis", "checkpoint:CP-01:objective"),
+        ("binding_basis", "Review focus"),
+        ("binding_basis", "repo:"),
+        ("binding_basis", "repo:   "),
+        ("failure_mode", None),
+        ("failure_mode", " \t "),
+    ],
+)
+def test_parse_structured_reviewer_output_blocks_invalid_grounding_fields(
+    field: str, value: object
+) -> None:
+    packet = json.loads(_repair_packet_json())
+    packet["findings"][0][field] = value  # type: ignore[index]
+
+    result = parse_structured_reviewer_output(
+        f"CHANGES_REQUESTED\n{json.dumps(packet)}\n"
+    )
+
+    assert result.verdict is ReviewVerdict.BLOCKED
+    assert result.repair_packet is None
+    assert "malformed" in (result.blocked_reason or "")
 
 
 @pytest.mark.parametrize(
@@ -142,8 +227,10 @@ def test_parse_structured_reviewer_output_accepts_complete_repair_packet() -> No
         {
             "findings": [
                 {
+                    "binding_basis": "task:scope",
                     "problem": "p",
                     "evidence": "e",
+                    "failure_mode": "f",
                     "required_outcome": "r",
                     "recommended_repair": "fix",
                     "verification_focus": "v",

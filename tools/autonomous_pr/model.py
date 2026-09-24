@@ -87,8 +87,10 @@ class AgentRole(Enum):
 class RepairFinding:
     """One complete, provider-neutral v2 repair finding (Harness §25)."""
 
+    binding_basis: str
     problem: str
     evidence: str
+    failure_mode: str
     required_outcome: str
     recommended_repair: str
     verification_focus: str
