@@ -7531,3 +7531,14 @@ The tracker is now thin and retains a durable terminal lifecycle index. No
 gameplay code or production dependency changed. Verification: tooling tests —
 357 passed; architecture tests — 19 passed; full pytest — 2655 passed; mypy —
 131 files clean; `git diff --check` clean.
+
+## 2026-09-24 — TSK-0029: File-based task dispatch (delivery summary)
+
+Implemented standalone file-based task dispatch in PR #108: callers select one
+approved task by explicit ID or deterministic `NEXT`, while the permanent
+terminal registry remains authoritative for completion and terminal specs may
+be removed by a separate reviewed change. Deterministic review, fixed-target
+revalidation, unpublished closure, Mode C, required CI, and human-only merge
+boundaries remain in force. Verification: tooling tests — 443 passed;
+architecture tests — 19 passed; full pytest — 2741 passed; mypy — 132 source
+files clean; `git diff --check` clean.

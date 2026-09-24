@@ -181,3 +181,4 @@ Concrete known constraints.
 | `TSK-0026` | `Done` | PR #103 | Implement minimal local `AUTONOMOUS_PR` execution harness |
 | `TSK-0027` | `Done` | PR #104 | Define Task Execution Spec and adaptive `AUTONOMOUS_PR` v2 contract |
 | `TSK-0028` | `Done` | PR #106 | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
+| `TSK-0029` | `Done` | PR #108 | File-based task dispatch, deterministic NEXT and removable completed specs |
