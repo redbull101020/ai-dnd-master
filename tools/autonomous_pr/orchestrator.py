@@ -739,6 +739,22 @@ def _build_v2_reviewer_input(
     repair_delta: str | None,
     require_non_convergence: bool,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "ORDINARY_CHECKPOINT",
+        (
+            "Applicable task binding bases: task:goal, task:scope, "
+            "task:out_of_scope, task:approved_implementation_approach.\n"
+            f"Applicable current-checkpoint binding bases: checkpoint:"
+            f"{checkpoint.checkpoint_id}:objective, checkpoint:"
+            f"{checkpoint.checkpoint_id}:required_result, checkpoint:"
+            f"{checkpoint.checkpoint_id}:constraints, checkpoint:"
+            f"{checkpoint.checkpoint_id}:verification.\n"
+            "Applicable repository contracts may be used through concrete "
+            "repo:<reference> bases. task:acceptance_criteria and "
+            "task:full_verification are not independent bases at this gate; "
+            "do not demand future-checkpoint results early.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(require_non_convergence)
     text = (
         f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
@@ -748,7 +764,7 @@ def _build_v2_reviewer_input(
         f"review_focus: {checkpoint.review_focus}\n"
         f"REVIEW_ITERATION: {review_iteration}\n"
         "ROLE: Review this checkpoint in a fresh, independent context. "
-        f"{contract}"
+        f"{protocol}{contract}"
         f"CURRENT_PATCH:\n{patch_text}\n"
         f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
     )
@@ -760,6 +776,36 @@ def _build_v2_reviewer_input(
     if repair_delta is not None:
         text += f"REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n{repair_delta}\n"
     return text
+
+
+def _v2_designated_review_protocol(gate_name: str, applicability: str) -> str:
+    """Shared semantic protocol for every operational designated review."""
+
+    return (
+        "DESIGNATED_REVIEW_PROTOCOL:\n"
+        "Before returning a verdict, determine the binding requirements "
+        "applicable to this gate. Review the complete current review artifact "
+        "and all supplied deterministic evidence. On a repeat review, first "
+        "re-evaluate the previous reviewer findings against the current candidate, "
+        "then perform a fresh material pass over every remaining applicable "
+        "requirement. Already-corrected findings need not be repeated. Return "
+        "one CHANGES_REQUESTED containing all independent material defects that "
+        "remain or are newly discovered by that pass. Use a blocking finding "
+        "only when it has a concrete binding_basis. Style preferences, optional "
+        "improvements, speculative abstraction or generalization, future scope, "
+        "and advisory Review focus are non-blocking unless a separate binding "
+        "requirement makes them material.\n"
+        "VERDICT_SEMANTICS:\n"
+        "APPROVED: the applicable material pass is complete and no proven "
+        "binding defect remains.\n"
+        "CHANGES_REQUESTED: one or more proven repairable binding defects exist "
+        "inside the fixed spec.\n"
+        "BLOCKED: correct continuation requires a missing decision, scope, "
+        "architecture contract, dependency, or other information not supplied "
+        "by the fixed approved contract.\n"
+        f"GATE_APPLICABILITY: {gate_name}\n"
+        f"{applicability}"
+    )
 
 
 def _v2_structured_output_contract(require_non_convergence: bool) -> str:
@@ -1345,6 +1391,17 @@ def _build_v2_cumulative_review_input(
     full_verification: V2FullVerificationEvidence,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "PRE_CLOSURE_CUMULATIVE_IMPLEMENTATION_REVIEW",
+        (
+            "Review the complete implementation contract: every binding Task "
+            "Execution Spec section, every declared checkpoint objective, "
+            "required result, constraint, and verification, Full verification, "
+            "and all applicable repository contracts. The current artifact is "
+            "the complete origin/main...HEAD implementation diff before Task "
+            "Closure.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -1356,7 +1413,7 @@ def _build_v2_cumulative_review_input(
         "satisfies the pre-closure implementation-diff review prerequisite.\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review the complete implementation diff in a fresh, independent "
-        f"context. {contract}"
+        f"context. {protocol}{contract}"
         f"SPEC_IDENTITY: {spec.digest}\n"
         f"BASE_IDENTITY: {patch.base_sha}\n"
         f"REVIEWED_HEAD_SHA: {patch.head_sha}\n"
@@ -1407,6 +1464,16 @@ def _build_v2_late_repair_review_input(
     verification: VerificationEvidence,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "LATE_IMPLEMENTATION_REPAIR",
+        (
+            "First review the original/current repair findings and their "
+            "required_outcome values against the current repaired candidate. "
+            "Then perform a fresh material pass over the task-wide binding "
+            "boundaries and applicable repository contracts. This review does "
+            "not replace required downstream checkpoint/evidence replay.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -1416,7 +1483,7 @@ def _build_v2_late_repair_review_input(
         "REVIEW_PURPOSE: CHECKPOINT (mode A implementation repair)\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review this implementation repair in a fresh, independent "
-        f"context. {contract}"
+        f"context. {protocol}{contract}"
         f"CURRENT_PATCH:\n{patch.diff_text}\n"
         f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
     )
@@ -2118,6 +2185,14 @@ def _build_v2_closure_review_input(
     diff_text: str,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "PROSPECTIVE_TASK_CLOSURE",
+        (
+            "Review only the exact closure candidate diff, its factual closure "
+            "evidence, and applicable closure, terminal-registry, and governance "
+            "requirements. Do not repeat the full implementation review.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -2127,7 +2202,7 @@ def _build_v2_closure_review_input(
         "REVIEW_PURPOSE: CHECKPOINT (mode A closure candidate)\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review only the canonical prospective Task Closure diff. "
-        f"{contract}"
+        f"{protocol}{contract}"
         f"CURRENT_PATCH:\n{diff_text}\n"
     )
     if history.latest_valid_repair_packet is not None:
@@ -2292,6 +2367,15 @@ def _build_v2_mode_c_review_input(
     patch: repository.ReviewPatch,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "MODE_C_FINAL_CUMULATIVE_AUDIT",
+        (
+            "Review the full final cumulative candidate — implementation plus "
+            "the unpublished Task Closure — against the complete applicable "
+            "Task Execution Spec and repository contract, including every "
+            "checkpoint, Full verification, and closure/governance boundaries.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -2301,7 +2385,7 @@ def _build_v2_mode_c_review_input(
         "REVIEW_PURPOSE: FINAL_CUMULATIVE_AUDIT\n"
         "ROLE: Review the exact local unpublished closure candidate. Report "
         "semantic findings only; the orchestrator chooses every transition. "
-        f"{contract}"
+        f"{protocol}{contract}"
         f"BASE_SHA: {patch.base_sha}\n"
         f"CANDIDATE_HEAD_SHA: {candidate.candidate_head_sha}\n"
         f"CANDIDATE_TREE_SHA: {candidate.tree_sha}\n"

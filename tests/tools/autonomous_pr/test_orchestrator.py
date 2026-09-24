@@ -2033,6 +2033,127 @@ def test_v2_reviewer_handoff_declares_complete_structured_output_contract(
         assert field in second
 
 
+def test_v2_designated_review_builders_declare_material_pass_and_applicability() -> None:
+    spec = _v2_spec(checkpoint_count=2)
+    verification = dataclasses.replace(_v2_verification(True), head_sha="h" * 40)
+    patch = repository.ReviewPatch(
+        purpose=repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        range_description="origin/main...HEAD",
+        base_sha="b" * 40,
+        head_sha="h" * 40,
+        branch="delivery",
+        diff_text="current diff",
+        digest="patch-digest",
+    )
+    previous_packet = RepairPacket(findings=(_finding("previous defect"),))
+    history = GateHistory(
+        context=GateContext(
+            gate_id="test-gate",
+            spec_identity=spec.digest,
+            accepted_base_context_identity="b" * 40,
+        ),
+        review_iteration=1,
+        consecutive_changes_requested=1,
+        latest_valid_repair_packet=previous_packet,
+        previous_reviewed_candidate_state="previous diff",
+    )
+    full_verification = orch_module.V2FullVerificationEvidence(
+        spec_identity=spec.digest,
+        base_identity="b" * 40,
+        candidate_identity=CandidateIdentity("candidate"),
+        head_sha="h" * 40,
+        verification=verification,
+    )
+    execution_target = _cp3_target("b" * 40, spec)
+    candidate = repository.UnpublishedCommitCandidate(
+        branch="delivery",
+        published_predecessor_sha="h" * 40,
+        candidate_head_sha="c" * 40,
+        tree_sha="t" * 40,
+    )
+
+    checkpoint_prompt = orch_module._build_v2_reviewer_input(
+        spec,
+        spec.checkpoints[0],
+        "current diff",
+        verification,
+        review_iteration=2,
+        previous_packet=previous_packet,
+        repair_delta="repair delta",
+        require_non_convergence=True,
+    )
+    cumulative_prompt = orch_module._build_v2_cumulative_review_input(
+        spec, patch, full_verification, history
+    )
+    late_repair_prompt = orch_module._build_v2_late_repair_review_input(
+        spec, "late-repair", patch, verification, history
+    )
+    closure_prompt = orch_module._build_v2_closure_review_input(
+        execution_target, "closure diff", history
+    )
+    mode_c_prompt = orch_module._build_v2_mode_c_review_input(
+        execution_target, candidate, patch, history
+    )
+
+    prompts = (
+        checkpoint_prompt,
+        cumulative_prompt,
+        late_repair_prompt,
+        closure_prompt,
+        mode_c_prompt,
+    )
+    for prompt in prompts:
+        assert "determine the binding requirements applicable to this gate" in prompt
+        assert "complete current review artifact" in prompt
+        assert "all supplied deterministic evidence" in prompt
+        assert "first re-evaluate the previous reviewer findings" in prompt
+        assert "fresh material pass over every remaining applicable" in prompt
+        assert "all independent material defects" in prompt
+        assert "only when it has a concrete binding_basis" in prompt
+        assert "advisory Review focus are non-blocking" in prompt
+        assert "APPROVED: the applicable material pass is complete" in prompt
+        assert "CHANGES_REQUESTED: one or more proven repairable" in prompt
+        assert "BLOCKED: correct continuation requires a missing decision" in prompt
+
+    assert "GATE_APPLICABILITY: ORDINARY_CHECKPOINT" in checkpoint_prompt
+    assert "task:goal, task:scope, task:out_of_scope" in checkpoint_prompt
+    assert "checkpoint:CP-1:objective" in checkpoint_prompt
+    assert "checkpoint:CP-1:verification" in checkpoint_prompt
+    assert "checkpoint:CP-2:required_result" not in checkpoint_prompt
+    assert (
+        "task:acceptance_criteria and task:full_verification are not independent"
+        in checkpoint_prompt
+    )
+    assert "do not demand future-checkpoint results early" in checkpoint_prompt
+
+    assert (
+        "GATE_APPLICABILITY: PRE_CLOSURE_CUMULATIVE_IMPLEMENTATION_REVIEW"
+        in cumulative_prompt
+    )
+    assert "every binding Task Execution Spec section" in cumulative_prompt
+    assert "every declared checkpoint objective" in cumulative_prompt
+    assert "Full verification" in cumulative_prompt
+    assert "complete origin/main...HEAD implementation diff" in cumulative_prompt
+
+    assert "GATE_APPLICABILITY: LATE_IMPLEMENTATION_REPAIR" in late_repair_prompt
+    assert "First review the original/current repair findings" in late_repair_prompt
+    assert "required_outcome values" in late_repair_prompt
+    assert "task-wide binding boundaries" in late_repair_prompt
+    assert "does not replace required downstream checkpoint/evidence replay" in late_repair_prompt
+
+    assert "GATE_APPLICABILITY: PROSPECTIVE_TASK_CLOSURE" in closure_prompt
+    assert "exact closure candidate diff" in closure_prompt
+    assert "factual closure evidence" in closure_prompt
+    assert "terminal-registry" in closure_prompt
+    assert "Do not repeat the full implementation review" in closure_prompt
+
+    assert "GATE_APPLICABILITY: MODE_C_FINAL_CUMULATIVE_AUDIT" in mode_c_prompt
+    assert "implementation plus the unpublished Task Closure" in mode_c_prompt
+    assert "complete applicable Task Execution Spec" in mode_c_prompt
+    assert "every checkpoint, Full verification" in mode_c_prompt
+    assert "closure/governance boundaries" in mode_c_prompt
+
+
 def test_v2_checkpoint_distinct_candidates_continue_without_numeric_limit(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
