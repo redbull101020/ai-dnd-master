@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import sys
@@ -112,6 +113,277 @@ def test_fetch_and_capture_origin_main_sha_matches_origin_main_sha(
     captured = repo_module.fetch_and_capture_origin_main_sha(work)
 
     assert captured == repo_module.origin_main_sha(work)
+
+
+def test_task_file_listing_reads_regular_blobs_from_one_exact_commit_only(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    seed = git_env.seed
+    empty_sha = repo_module.origin_main_sha(work)
+
+    local_tasks = work / "docs" / "tasks"
+    local_tasks.mkdir(parents=True)
+    (local_tasks / "TSK-9999.md").write_text("local only\n", encoding="utf-8")
+    before_branch = repo_module.current_branch(work)
+    before_head = repo_module.head_sha(work)
+
+    seed_tasks = seed / "docs" / "tasks"
+    seed_tasks.mkdir(parents=True)
+    (seed_tasks / "TSK-0030.md").write_text("tracked v1\n", encoding="utf-8")
+    (seed / "symlink-target.txt").write_text("TSK-0030.md", encoding="utf-8")
+    link_blob = _run_git(
+        ["hash-object", "-w", "symlink-target.txt"], cwd=seed
+    ).strip()
+    _run_git(["add", "docs/tasks/TSK-0030.md"], cwd=seed)
+    _run_git(
+        [
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"120000,{link_blob},docs/tasks/TSK-0031.md",
+        ],
+        cwd=seed,
+    )
+    _run_git(["commit", "-q", "-m", "add task catalog"], cwd=seed)
+    catalog_sha = _run_git(["rev-parse", "HEAD"], cwd=seed).strip()
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    repo_module.fetch_origin(work)
+
+    assert repo_module.list_task_files_at_commit(work, empty_sha) == ()
+    records = repo_module.list_task_files_at_commit(work, catalog_sha)
+    assert [(record.source_sha, record.path, record.text) for record in records] == [
+        (catalog_sha, "docs/tasks/TSK-0030.md", "tracked v1\n")
+    ]
+    assert repo_module.current_branch(work) == before_branch
+    assert repo_module.head_sha(work) == before_head
+    assert (local_tasks / "TSK-9999.md").read_text(encoding="utf-8") == "local only\n"
+
+    (seed_tasks / "TSK-0030.md").write_text("tracked v2\n", encoding="utf-8")
+    _run_git(["add", "docs/tasks/TSK-0030.md"], cwd=seed)
+    _run_git(["commit", "-q", "-m", "change task"], cwd=seed)
+    changed_sha = _run_git(["rev-parse", "HEAD"], cwd=seed).strip()
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    repo_module.fetch_origin(work)
+
+    assert repo_module.list_task_files_at_commit(work, catalog_sha)[0].text == "tracked v1\n"
+    assert repo_module.list_task_files_at_commit(work, changed_sha)[0].text == "tracked v2\n"
+
+
+def test_task_file_listing_rejects_symbolic_or_abbreviated_ref(
+    git_env: GitEnv,
+) -> None:
+    with pytest.raises(RepositoryError, match="exact lowercase commit SHA"):
+        repo_module.list_task_files_at_commit(git_env.work, "origin/main")
+
+    abbreviated = repo_module.origin_main_sha(git_env.work)[:12]
+    with pytest.raises(RepositoryError, match="exact lowercase commit SHA"):
+        repo_module.list_task_files_at_commit(git_env.work, abbreviated)
+
+
+def test_task_file_listing_preserves_exact_lf_crlf_and_unicode_blob_bytes(
+    git_env: GitEnv,
+) -> None:
+    seed = git_env.seed
+    work = git_env.work
+    _run_git(["config", "core.autocrlf", "false"], cwd=seed)
+    _run_git(["config", "core.autocrlf", "false"], cwd=work)
+    task_dir = seed / "docs" / "tasks"
+    task_dir.mkdir(parents=True)
+    expected = {
+        "docs/tasks/TSK-0030.md": "line one\nline two\n".encode("utf-8"),
+        "docs/tasks/TSK-0031.md": "line one\r\nline two\r\n".encode("utf-8"),
+        "docs/tasks/TSK-0032.md": "Задача — сохранена\n".encode("utf-8"),
+    }
+    for path, blob in expected.items():
+        (seed / path).write_bytes(blob)
+    _run_git(["add", "docs/tasks"], cwd=seed)
+    _run_git(["commit", "-q", "-m", "add exact task blobs"], cwd=seed)
+    source_sha = _run_git(["rev-parse", "HEAD"], cwd=seed).strip()
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    repo_module.fetch_origin(work)
+
+    records = {
+        record.path: record
+        for record in repo_module.list_task_files_at_commit(work, source_sha)
+    }
+
+    assert records.keys() == expected.keys()
+    for path, blob in expected.items():
+        encoded = records[path].text.encode("utf-8")
+        assert encoded == blob
+        assert hashlib.sha256(encoded).hexdigest() == hashlib.sha256(blob).hexdigest()
+    assert records["docs/tasks/TSK-0030.md"].text != records[
+        "docs/tasks/TSK-0031.md"
+    ].text
+
+
+def test_task_file_listing_rejects_invalid_utf8_as_typed_repository_error(
+    git_env: GitEnv,
+) -> None:
+    seed = git_env.seed
+    work = git_env.work
+    _run_git(["config", "core.autocrlf", "false"], cwd=seed)
+    task_dir = seed / "docs" / "tasks"
+    task_dir.mkdir(parents=True)
+    invalid_path = task_dir / "TSK-0030.md"
+    invalid_path.write_bytes(b"valid prefix\n\xff\xfe\n")
+    valid_path = task_dir / "TSK-0031.md"
+    valid_path.write_text("Обычная задача\n", encoding="utf-8", newline="")
+    _run_git(["add", "docs/tasks/TSK-0030.md", "docs/tasks/TSK-0031.md"], cwd=seed)
+    _run_git(["commit", "-q", "-m", "add invalid utf8 task blob"], cwd=seed)
+    source_sha = _run_git(["rev-parse", "HEAD"], cwd=seed).strip()
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    repo_module.fetch_origin(work)
+
+    records = repo_module.list_task_files_at_commit(
+        work,
+        source_sha,
+        excluded_task_ids=frozenset({"TSK-0030"}),
+    )
+    assert [(record.source_sha, record.path, record.text) for record in records] == [
+        (source_sha, "docs/tasks/TSK-0031.md", "Обычная задача\n")
+    ]
+
+    with pytest.raises(RepositoryError) as exc_info:
+        repo_module.list_task_files_at_commit(work, source_sha)
+
+    message = str(exc_info.value)
+    assert "docs/tasks/TSK-0030.md" in message
+    assert source_sha in message
+    assert "not valid UTF-8" in message
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [b"# Tracker\n\nline\n", b"# Tracker\r\n\r\nline\r\n"],
+    ids=["lf", "crlf"],
+)
+def test_exact_authoritative_file_reader_preserves_git_blob_bytes(
+    git_env: GitEnv, blob: bytes
+) -> None:
+    seed = git_env.seed
+    work = git_env.work
+    _run_git(["config", "core.autocrlf", "false"], cwd=seed)
+    _run_git(["config", "core.autocrlf", "false"], cwd=work)
+    (seed / "docs").mkdir()
+    (seed / "docs" / "TASK.md").write_bytes(blob)
+    _run_git(["add", "docs/TASK.md"], cwd=seed)
+    _run_git(["commit", "-q", "-m", "add exact tracker"], cwd=seed)
+    source_sha = _run_git(["rev-parse", "HEAD"], cwd=seed).strip()
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    repo_module.fetch_origin(work)
+
+    text = repo_module.read_utf8_file_at_ref_exact(
+        work, source_sha, "docs/TASK.md"
+    )
+
+    assert text.encode("utf-8") == blob
+
+
+def test_exact_authoritative_and_worktree_readers_reject_invalid_utf8(
+    git_env: GitEnv,
+) -> None:
+    seed = git_env.seed
+    work = git_env.work
+    _run_git(["config", "core.autocrlf", "false"], cwd=seed)
+    (seed / "docs").mkdir()
+    (seed / "docs" / "TASK.md").write_bytes(b"tracker\n\xff\n")
+    _run_git(["add", "docs/TASK.md"], cwd=seed)
+    _run_git(["commit", "-q", "-m", "add invalid tracker"], cwd=seed)
+    source_sha = _run_git(["rev-parse", "HEAD"], cwd=seed).strip()
+    _run_git(["push", "-q", "origin", "main"], cwd=seed)
+    repo_module.fetch_origin(work)
+
+    with pytest.raises(RepositoryError, match=r"docs/TASK\.md.*not valid UTF-8"):
+        repo_module.read_utf8_file_at_ref_exact(work, source_sha, "docs/TASK.md")
+
+    (work / "docs").mkdir(exist_ok=True)
+    (work / "docs" / "TASK.md").write_bytes(b"candidate\n\xfe\n")
+    with pytest.raises(RepositoryError, match=r"docs/TASK\.md.*not valid UTF-8"):
+        repo_module.read_worktree_utf8_file_exact(work, "docs/TASK.md")
+
+
+@pytest.mark.parametrize(
+    ("tracked_eol", "autocrlf"),
+    [(b"\n", "false"), (b"\r\n", "false"), (b"\n", "true"), (b"\r\n", "true")],
+    ids=["lf-false", "crlf-false", "lf-true", "crlf-true"],
+)
+def test_worktree_candidate_reader_matches_real_staging_without_side_effects(
+    git_env: GitEnv, tracked_eol: bytes, autocrlf: str
+) -> None:
+    work = git_env.work
+    _run_git(["config", "core.autocrlf", "false"], cwd=work)
+    (work / "docs").mkdir()
+    task_path = work / "docs" / "TASK.md"
+    baseline = tracked_eol.join((b"line one", b"line two", b""))
+    task_path.write_bytes(baseline)
+    _run_git(["add", "docs/TASK.md"], cwd=work)
+    _run_git(["commit", "-q", "-m", "track exact task eol"], cwd=work)
+    _run_git(["config", "core.autocrlf", autocrlf], cwd=work)
+    candidate = baseline + tracked_eol.join((b"done row", b""))
+    task_path.write_bytes(candidate)
+    index_path = Path(_run_git(["rev-parse", "--git-path", "index"], cwd=work).strip())
+    if not index_path.is_absolute():
+        index_path = work / index_path
+    before_head = _run_git(["rev-parse", "HEAD"], cwd=work)
+    before_worktree = task_path.read_bytes()
+    before_status = _run_git(["status", "--porcelain=v1"], cwd=work)
+    before_index = index_path.read_bytes()
+
+    actual = repo_module.read_worktree_utf8_file_exact(work, "docs/TASK.md")
+
+    assert index_path.read_bytes() == before_index
+    assert _run_git(["rev-parse", "HEAD"], cwd=work) == before_head
+    assert task_path.read_bytes() == before_worktree
+    assert _run_git(["status", "--porcelain=v1"], cwd=work) == before_status
+
+    _run_git(["add", "docs/TASK.md"], cwd=work)
+    staged_entry = _run_git(
+        ["ls-files", "--stage", "--", "docs/TASK.md"], cwd=work
+    ).strip()
+    object_sha = staged_entry.split()[1]
+    staged_blob = subprocess.run(
+        ["git", "cat-file", "blob", object_sha],
+        cwd=work,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert actual.encode("utf-8") == staged_blob
+
+
+def test_worktree_candidate_reader_rejects_git_symlink_instead_of_target_blob(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    # Model a Git symlink portably without requiring a physical filesystem link.
+    _run_git(["config", "core.symlinks", "false"], cwd=work)
+    (work / "docs").mkdir()
+    target = work / "closure-target.md"
+    target.write_text(
+        "# Terminal task index\n\n"
+        "| ID | Status | Evidence | Title |\n"
+        "| --- | --- | --- | --- |\n"
+        "| `TSK-0030` | `Done` | PR #77 | Delivered task |\n",
+        encoding="utf-8",
+    )
+    link_record = work / "link-record.txt"
+    link_record.write_text("../closure-target.md", encoding="utf-8")
+    link_blob = _run_git(["hash-object", "-w", "link-record.txt"], cwd=work).strip()
+    _run_git(
+        [
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"120000,{link_blob},docs/TASK.md",
+        ],
+        cwd=work,
+    )
+    candidate = work / "docs" / "TASK.md"
+    candidate.write_text("../closure-target.md", encoding="utf-8")
+
+    with pytest.raises(RepositoryError, match="unsupported index mode 120000"):
+        repo_module.read_worktree_utf8_file_exact(work, "docs/TASK.md")
 
 
 def test_create_delivery_branch_from_sha_anchors_to_exact_sha_not_origin_main(

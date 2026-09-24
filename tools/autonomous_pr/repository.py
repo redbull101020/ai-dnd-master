@@ -34,15 +34,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import shutil
+import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Sequence
 
+from .model import TaskFileRecord
+
 _PROTECTED_BRANCHES = frozenset({"main", "master"})
 _DEFAULT_GH_COMMAND: tuple[str, ...] = ("gh",)
 _DEFAULT_TIMEOUT_SECONDS = 60.0
+_EXACT_COMMIT_SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_TASK_FILE_NAME = re.compile(r"TSK-.*\.md")
+_REGULAR_FILE_MODES = frozenset({"100644", "100755"})
 
 
 class RepositoryError(Exception):
@@ -285,6 +295,264 @@ def read_file_at_ref(repo: Path, ref: str, path: str) -> str:
     return _git(repo, ["show", f"{ref}:{path}"])
 
 
+def read_utf8_file_at_ref_exact(repo: Path, ref: str, path: str) -> str:
+    """Read one regular Git blob without newline normalization.
+
+    This is the byte-preserving boundary for authoritative documents whose
+    exact content is part of a gate identity. It deliberately avoids both
+    ``git show`` through the text-mode runner and checkout filters.
+    """
+
+    listing = _git(repo, ["ls-tree", "-z", ref, "--", path])
+    entries = [entry for entry in listing.split("\0") if entry]
+    if len(entries) != 1:
+        raise RepositoryError(
+            f"expected exactly one tracked file {path} at {ref}, found {len(entries)}"
+        )
+    metadata, separator, actual_path = entries[0].partition("\t")
+    fields = metadata.split()
+    if not separator or len(fields) != 3 or actual_path != path:
+        raise RepositoryError(f"git ls-tree returned a malformed entry for {path} at {ref}")
+    mode, object_type, object_sha = fields
+    if object_type != "blob" or mode not in _REGULAR_FILE_MODES:
+        raise RepositoryError(f"{path} at {ref} is not a regular Git blob")
+    return _read_utf8_blob_exact(
+        repo, object_sha=object_sha, path=path, source_sha=ref
+    )
+
+
+def read_worktree_utf8_file_exact(repo: Path, path: str) -> str:
+    """Read exact bytes Git would store for a working-tree candidate.
+
+    A temporary copy of the current index is staged with an address-specific
+    ``git add``. Reading that temporary entry exactly matches real staging,
+    including Git's tracked-file EOL safeguards and attributes, without
+    changing the user's index, HEAD, or working tree.
+    """
+
+    candidate_path = repo / path
+    try:
+        mode = candidate_path.lstat().st_mode
+    except OSError as exc:
+        raise RepositoryError(f"cannot inspect working-tree file {path}: {exc}") from exc
+    if not stat.S_ISREG(mode):
+        raise RepositoryError(
+            f"working-tree candidate {path} is not a regular file"
+        )
+    git_index = Path(_git(repo, ["rev-parse", "--git-path", "index"]).strip())
+    if not git_index.is_absolute():
+        git_index = repo / git_index
+    staged = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix="autonomous-pr-index-") as temp_dir:
+            temporary_index = Path(temp_dir) / "index"
+            shutil.copyfile(git_index, temporary_index)
+            environment = {**os.environ, "GIT_INDEX_FILE": str(temporary_index)}
+            for args in (
+                ["git", "add", "--", path],
+                ["git", "ls-files", "--stage", "-z", "--", path],
+            ):
+                result = subprocess.run(
+                    args,
+                    cwd=repo,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=_DEFAULT_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    raise RepositoryError(
+                        f"temporary-index {' '.join(args[1:])} failed "
+                        f"(exit {result.returncode}): {result.stderr.strip()}"
+                    )
+                if args[1] == "ls-files":
+                    staged = result.stdout
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RepositoryError(
+            f"cannot stage working-tree candidate {path} in an isolated index: {exc}"
+        ) from exc
+
+    entries = [item for item in staged.split("\0") if item]
+    if len(entries) != 1:
+        raise RepositoryError(
+            f"temporary index has {len(entries)} entries for {path}, expected one"
+        )
+    metadata, separator, actual_path = entries[0].partition("\t")
+    fields = metadata.split()
+    if not separator or len(fields) != 3 or actual_path != path:
+        raise RepositoryError(f"git ls-files returned a malformed entry for {path}")
+    index_mode, object_sha, stage = fields
+    if stage != "0":
+        raise RepositoryError(f"working-tree candidate {path} is unmerged")
+    if index_mode not in _REGULAR_FILE_MODES:
+        raise RepositoryError(
+            f"working-tree candidate {path} has unsupported index mode {index_mode}"
+        )
+    return _read_utf8_blob_exact(
+        repo, object_sha=object_sha, path=path, source_sha="working-tree candidate"
+    )
+
+
+def _read_utf8_blob_exact(
+    repo: Path,
+    *,
+    object_sha: str,
+    path: str,
+    source_sha: str,
+) -> str:
+    """Read one Git blob byte-for-byte, then decode it as strict UTF-8.
+
+    This deliberately bypasses :func:`_run`'s text mode: Python universal
+    newline handling would otherwise normalize CRLF to LF on Windows before
+    the task document's text/digest reached the catalog. ``cat-file blob``
+    addresses the exact object reported by ``ls-tree`` and performs no
+    checkout or working-tree filtering.
+    """
+
+    args = ["git", "cat-file", "blob", object_sha]
+    try:
+        result = subprocess.run(
+            args,
+            cwd=repo,
+            capture_output=True,
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RepositoryError("required tool not found: 'git'") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RepositoryError(
+            f"reading blob for {path} at {source_sha} timed out after "
+            f"{_DEFAULT_TIMEOUT_SECONDS}s"
+        ) from exc
+    if result.returncode != 0:
+        raise RepositoryError(
+            f"git cat-file failed for {path} at {source_sha} "
+            f"(exit {result.returncode}): {result.stderr!r}"
+        )
+    try:
+        return result.stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RepositoryError(
+            f"Git blob for {path} at {source_sha} is not valid UTF-8"
+        ) from exc
+
+
+def list_task_files_at_commit(
+    repo: Path,
+    commit_sha: str,
+    *,
+    excluded_task_ids: frozenset[str] = frozenset(),
+) -> tuple[TaskFileRecord, ...]:
+    """Read regular tracked ``docs/tasks/TSK-*.md`` files at one exact commit.
+
+    The commit is validated once and then used literally for both ``ls-tree``
+    and every blob read. Filesystem contents, mtimes, directory order, and the
+    mutable working tree are never consulted. Git symlinks (mode ``120000``),
+    submodules, trees, and other non-regular entries are not task files.
+    A missing ``docs/tasks`` tree therefore yields an empty tuple. The caller
+    may identify task IDs whose payload is not needed; those paths are still
+    listed from the same commit but are excluded before their blobs are read
+    or decoded. This boundary does not decide why an ID is excluded.
+    """
+
+    if _EXACT_COMMIT_SHA.fullmatch(commit_sha) is None:
+        raise RepositoryError(
+            f"{commit_sha!r} is not an exact lowercase commit SHA"
+        )
+    if resolve_sha(repo, f"{commit_sha}^{{commit}}") != commit_sha:
+        raise RepositoryError(f"{commit_sha!r} is not the exact SHA of a commit")
+
+    listing = _git(repo, ["ls-tree", "-r", "-z", commit_sha, "--", "docs/tasks"])
+    records: list[TaskFileRecord] = []
+    for raw_entry in listing.split("\0"):
+        if not raw_entry:
+            continue
+        metadata, separator, path = raw_entry.partition("\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3:
+            raise RepositoryError(
+                f"git ls-tree returned a malformed task entry: {raw_entry!r}"
+            )
+        mode, object_type, object_sha = fields
+        task_path = Path(path)
+        if (
+            task_path.parent.as_posix() != "docs/tasks"
+            or _TASK_FILE_NAME.fullmatch(task_path.name) is None
+            or object_type != "blob"
+            or mode not in _REGULAR_FILE_MODES
+        ):
+            continue
+        if task_path.stem in excluded_task_ids:
+            continue
+        records.append(
+            TaskFileRecord(
+                source_sha=commit_sha,
+                path=task_path.as_posix(),
+                text=_read_utf8_blob_exact(
+                    repo,
+                    object_sha=object_sha,
+                    path=task_path.as_posix(),
+                    source_sha=commit_sha,
+                ),
+            )
+        )
+    return tuple(records)
+
+
+def read_task_file_at_commit(
+    repo: Path, commit_sha: str, task_id: str
+) -> TaskFileRecord:
+    """Read one canonical regular task file from one exact commit.
+
+    Unlike :func:`list_task_files_at_commit`, this fixed-target boundary never
+    reads unrelated task blobs. It retains the selected blob's exact bytes
+    through strict UTF-8 decoding and rejects missing, symlink, or malformed
+    tree entries rather than treating them as an empty catalog.
+    """
+
+    if _EXACT_COMMIT_SHA.fullmatch(commit_sha) is None:
+        raise RepositoryError(
+            f"{commit_sha!r} is not an exact lowercase commit SHA"
+        )
+    if resolve_sha(repo, f"{commit_sha}^{{commit}}") != commit_sha:
+        raise RepositoryError(f"{commit_sha!r} is not the exact SHA of a commit")
+    if re.fullmatch(r"TSK-\d{4,}", task_id) is None:
+        raise RepositoryError(f"{task_id!r} is not a canonical task ID")
+
+    path = f"docs/tasks/{task_id}.md"
+    listing = _git(repo, ["ls-tree", "-z", commit_sha, "--", path])
+    entries = [entry for entry in listing.split("\0") if entry]
+    if len(entries) != 1:
+        raise RepositoryError(
+            f"expected exactly one tracked task file {path} at {commit_sha}, "
+            f"found {len(entries)}"
+        )
+    metadata, separator, actual_path = entries[0].partition("\t")
+    fields = metadata.split()
+    if not separator or len(fields) != 3 or actual_path != path:
+        raise RepositoryError(
+            f"git ls-tree returned a malformed entry for {path} at {commit_sha}"
+        )
+    mode, object_type, object_sha = fields
+    if object_type != "blob" or mode not in _REGULAR_FILE_MODES:
+        raise RepositoryError(
+            f"task file {path} at {commit_sha} is not a regular Git blob"
+        )
+    return TaskFileRecord(
+        source_sha=commit_sha,
+        path=path,
+        text=_read_utf8_blob_exact(
+            repo,
+            object_sha=object_sha,
+            path=path,
+            source_sha=commit_sha,
+        ),
+    )
+
+
 def file_exists_at_ref(repo: Path, ref: str, path: str) -> bool:
     """Whether ``path`` exists as a file at ``ref`` (``git ls-tree``).
 
@@ -389,6 +657,134 @@ def _branch_collision_exists(repo: Path, branch: str) -> bool:
     return _ref_exists(repo, f"refs/heads/{branch}") or _ref_exists(
         repo, f"refs/remotes/origin/{branch}"
     )
+
+
+def require_branch_name_available(repo: Path, branch: str) -> None:
+    """Fail closed when a local or fetched remote branch already owns ``branch``."""
+
+    if _branch_collision_exists(repo, branch):
+        raise RepositoryError(
+            f"branch {branch!r} already exists locally or on origin; implicit "
+            "resume/reuse is forbidden"
+        )
+
+
+def require_no_open_pr_for_task(
+    repo: Path,
+    task_id: str,
+    *,
+    gh_command: Sequence[str] = _DEFAULT_GH_COMMAND,
+) -> None:
+    """Fail closed if an open PR declares the exact selected task identity.
+
+    A branch name is not a task identity: a prior invocation may have used a
+    custom head branch. The orchestrator therefore publishes a structured
+    ``Selected task provenance`` block in every v2 PR body and this guard
+    compares its ``selected_task_id`` field exactly. The conventional exact
+    ``TSK-NNNN: ...`` title prefix is the compatibility fallback for older
+    PRs; free-form title/body substring matches are deliberately ignored.
+    """
+
+    output = _gh(
+        repo,
+        [
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "100",
+            "--json",
+            "number,url,headRefName,baseRefName,title,body",
+        ],
+        gh_command=gh_command,
+    )
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RepositoryError(
+            f"gh pr list output was not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(parsed, list):
+        raise RepositoryError("gh pr list output was not a JSON array")
+    if len(parsed) >= 100:
+        raise RepositoryError(
+            "gh pr list reached its 100-record safety limit; the open-PR "
+            "collision result may be truncated and cannot authorize a new run"
+        )
+
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise RepositoryError("gh pr list returned a malformed PR record")
+        number = item.get("number")
+        url = item.get("url")
+        head = item.get("headRefName")
+        base = item.get("baseRefName")
+        title = item.get("title")
+        body = item.get("body")
+        if (
+            not isinstance(number, int)
+            or not isinstance(url, str)
+            or not url
+            or not isinstance(head, str)
+            or not head
+            or not isinstance(base, str)
+            or not base
+            or not isinstance(title, str)
+            or not isinstance(body, str)
+        ):
+            raise RepositoryError("gh pr list returned a malformed PR record")
+        provenance_task_id = _pr_provenance_task_id(body)
+        title_match = re.match(r"^(TSK-\d{4,}):(?:\s|$)", title)
+        title_task_id = title_match.group(1) if title_match is not None else None
+        if (
+            provenance_task_id is not None
+            and title_task_id is not None
+            and provenance_task_id != title_task_id
+        ):
+            raise RepositoryError(
+                f"open PR #{number} has conflicting structured task identities"
+            )
+        if task_id in (provenance_task_id, title_task_id):
+            raise RepositoryError(
+                f"open PR #{number} ({url}) already owns selected task "
+                f"{task_id} on head branch {head!r}; MANUAL reconciliation "
+                "is required and implicit resume/reuse is forbidden"
+            )
+
+
+def _pr_provenance_task_id(body: str) -> str | None:
+    lines = body.splitlines()
+    marker_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if line == "Selected task provenance:"
+    ]
+    if not marker_indexes:
+        return None
+    if len(marker_indexes) != 1:
+        raise RepositoryError(
+            "open PR must contain at most one Selected task provenance block"
+        )
+
+    selected_ids: list[str] = []
+    for line in lines[marker_indexes[0] + 1 :]:
+        if not line.strip():
+            break
+        key, separator, value = line.partition(":")
+        if separator and key.strip() == "selected_task_id":
+            candidate = value.strip()
+            if re.fullmatch(r"TSK-\d{4,}", candidate) is None:
+                raise RepositoryError(
+                    "open PR has a malformed selected_task_id provenance field"
+                )
+            selected_ids.append(candidate)
+    if len(selected_ids) != 1:
+        raise RepositoryError(
+            "open PR Selected task provenance block must contain exactly one "
+            "selected_task_id field"
+        )
+    return selected_ids[0]
 
 
 def create_delivery_branch_from_origin_main(repo: Path, branch: str) -> str:
@@ -608,7 +1004,8 @@ def build_cumulative_patch(repo: Path, purpose: ReviewPurpose) -> ReviewPatch:
     The identical range serves two distinct purposes that must never be
     conflated: :attr:`ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW` (built
     before Task Closure exists on the delivery branch, satisfies
-    ``docs/TASK.md`` §18.1) and :attr:`ReviewPurpose.FINAL_CUMULATIVE_AUDIT`
+    the pre-closure implementation-review prerequisite) and
+    :attr:`ReviewPurpose.FINAL_CUMULATIVE_AUDIT`
     (mode C itself — built only after Task Closure is reviewed, committed,
     and pushed, and only after ``origin/main`` is freshly revalidated).
     This function refuses :attr:`ReviewPurpose.CHECKPOINT` — that purpose

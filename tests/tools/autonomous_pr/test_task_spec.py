@@ -1,13 +1,21 @@
 import dataclasses
 import hashlib
+import json
 
 import pytest
 
-from tools.autonomous_pr.model import ExecutionCheckpoint, TaskExecutionSpec
+from tools.autonomous_pr.model import (
+    ApprovedTaskDocument,
+    DraftTaskDocument,
+    ExecutionApproval,
+    ExecutionCheckpoint,
+    TaskExecutionSpec,
+)
 from tools.autonomous_pr.task_spec import (
     CHECKPOINT_FIELDS,
     SPEC_SECTIONS,
     TaskSpecError,
+    parse_task_document,
     parse_task_execution_spec,
     spec_digest,
     spec_is_unchanged,
@@ -83,6 +91,33 @@ def _valid_text() -> str:
     return _render(_default_sections())
 
 
+def _metadata(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "execution_approval": "approved",
+        "priority": "P2",
+        "size": "M",
+        "roadmap_target": "Phase 3 / approved engineering slice",
+        "depends_on": ["TSK-0028"],
+        "group": "engineering",
+    }
+    value.update(overrides)
+    return value
+
+
+def _task_document(
+    metadata_json: str | None = None,
+    *,
+    sections: list[tuple[str, str]] | None = None,
+    task_id: str = TASK_ID,
+    h1: str | None = None,
+) -> str:
+    parts = [h1 or f"# {task_id} — Example task", "", "## Task metadata", ""]
+    parts += ["```json", metadata_json or json.dumps(_metadata(), indent=2), "```", ""]
+    for name, body in sections or []:
+        parts += [f"## {name}", "", body, ""]
+    return "\n".join(parts)
+
+
 def _parse(text: str, path: str = PATH) -> TaskExecutionSpec:
     return parse_task_execution_spec(text, path)
 
@@ -140,6 +175,284 @@ def test_spec_is_unchanged_detects_any_edit_and_removal() -> None:
     assert not spec_is_unchanged(spec, text + "\n")
     assert not spec_is_unchanged(spec, text.replace("Deliver", "Ship"))
     assert not spec_is_unchanged(spec, None)
+
+
+def test_approved_standalone_task_parses_metadata_and_complete_body() -> None:
+    text = _task_document(sections=_default_sections())
+
+    document = parse_task_document(text, PATH)
+
+    assert isinstance(document, ApprovedTaskDocument)
+    assert document.task_id == TASK_ID
+    assert document.path == PATH
+    assert document.title == "Example task"
+    assert document.metadata.execution_approval is ExecutionApproval.APPROVED
+    assert document.metadata.priority == "P2"
+    assert document.metadata.size == "M"
+    assert document.metadata.roadmap_target == "Phase 3 / approved engineering slice"
+    assert document.metadata.depends_on == ("TSK-0028",)
+    assert document.metadata.group == "engineering"
+    assert document.execution_spec.task_id == TASK_ID
+    assert [cp.checkpoint_id for cp in document.execution_spec.checkpoints] == [
+        "CP-1",
+        "CP-2",
+    ]
+    assert document.execution_spec.full_verification == (
+        ("python", "-m", "pytest"),
+        ("git", "diff", "--check"),
+    )
+    assert "## Task metadata" not in document.execution_spec.text
+    assert document.text == text
+    assert document.digest == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        document.metadata.priority = "P0"  # type: ignore[misc]
+
+
+def test_bodyless_draft_requires_only_valid_metadata_envelope() -> None:
+    text = _task_document(
+        json.dumps(
+            _metadata(
+                execution_approval="draft",
+                size="L",
+                roadmap_target="",
+            )
+            | {"group": "mechanics"},
+            indent=2,
+        )
+    )
+
+    document = parse_task_document(text, PATH)
+
+    assert isinstance(document, DraftTaskDocument)
+    assert document.metadata.execution_approval is ExecutionApproval.DRAFT
+    assert document.metadata.size == "L"
+    assert document.metadata.roadmap_target == ""
+    assert document.text == text
+    assert document.digest == spec_digest(text)
+
+
+def test_optional_group_may_be_absent() -> None:
+    metadata = _metadata()
+    metadata.pop("group")
+
+    document = parse_task_document(
+        _task_document(json.dumps(metadata), sections=_default_sections()), PATH
+    )
+
+    assert isinstance(document, ApprovedTaskDocument)
+    assert document.metadata.group is None
+
+
+@pytest.mark.parametrize(
+    "sections",
+    [
+        [],
+        [("Goal", "A partial draft body.")],
+        _replace("Full verification", "not valid JSON argv yet"),
+    ],
+    ids=("no-body", "partial-body", "full-unready-body"),
+)
+def test_draft_may_omit_or_carry_any_execution_body(
+    sections: list[tuple[str, str]],
+) -> None:
+    text = _task_document(
+        json.dumps(_metadata(execution_approval="draft")),
+        sections=sections,
+    )
+
+    document = parse_task_document(text, PATH)
+
+    assert isinstance(document, DraftTaskDocument)
+    assert document.metadata.execution_approval is ExecutionApproval.DRAFT
+    assert document.text == text
+    assert document.digest == spec_digest(text)
+
+
+@pytest.mark.parametrize("approval", ["draft", "approved"])
+@pytest.mark.parametrize(
+    "preamble",
+    [
+        "Prose is not permitted here.",
+        "Priority: P2",
+        "### External metadata",
+    ],
+    ids=("prose", "external-metadata-label", "h3"),
+)
+def test_only_blank_lines_are_allowed_between_h1_and_metadata(
+    approval: str, preamble: str
+) -> None:
+    sections = _default_sections() if approval == "approved" else []
+    text = _task_document(
+        json.dumps(_metadata(execution_approval=approval)),
+        sections=sections,
+    ).replace(
+        f"# {TASK_ID} — Example task\n\n## Task metadata",
+        f"# {TASK_ID} — Example task\n\n{preamble}\n\n## Task metadata",
+        1,
+    )
+
+    with pytest.raises(TaskSpecError, match="only blank lines are allowed"):
+        parse_task_document(text, PATH)
+
+
+def test_approved_task_requires_complete_execution_body() -> None:
+    with pytest.raises(TaskSpecError, match="no execution sections"):
+        parse_task_document(_task_document(), PATH)
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        (_valid_text(), "exactly one '## Task metadata'"),
+        (
+            _task_document()
+            + "\n## Task metadata\n\n```json\n{}\n```\n",
+            "exactly one '## Task metadata'",
+        ),
+        (
+            _task_document(json.dumps(_metadata())).replace("```json", "```yaml", 1),
+            "fenced JSON object",
+        ),
+        (_task_document("[]"), "JSON must be an object"),
+        (_task_document("{not-json}"), "not valid JSON"),
+    ],
+)
+def test_task_metadata_envelope_is_strict(text: str, message: str) -> None:
+    with pytest.raises(TaskSpecError, match=message):
+        parse_task_document(text, PATH)
+
+
+def test_duplicate_json_key_is_rejected() -> None:
+    duplicate = (
+        '{"execution_approval":"draft","priority":"P2","priority":"P1",'
+        '"size":"S","roadmap_target":"x","depends_on":[]}'
+    )
+
+    with pytest.raises(TaskSpecError, match="duplicate JSON key 'priority'"):
+        parse_task_document(_task_document(duplicate), PATH)
+
+
+@pytest.mark.parametrize(
+    "metadata, message",
+    [
+        (
+            {key: value for key, value in _metadata().items() if key != "priority"},
+            "missing required field.*priority",
+        ),
+        (_metadata(extra="value"), "unknown field.*extra"),
+        (_metadata(execution_approval=True), "execution_approval must be a JSON string"),
+        (_metadata(priority=2), "priority must be a JSON string"),
+        (_metadata(size=None), "size must be a JSON string"),
+        (_metadata(roadmap_target=[]), "roadmap_target must be a JSON string"),
+        (_metadata(depends_on="TSK-0028"), "depends_on must be a JSON array"),
+        (_metadata(group=None), "group must be a JSON string"),
+    ],
+)
+def test_task_metadata_rejects_missing_unknown_and_wrong_types(
+    metadata: dict[str, object], message: str
+) -> None:
+    with pytest.raises(TaskSpecError, match=message):
+        parse_task_document(_task_document(json.dumps(metadata)), PATH)
+
+
+@pytest.mark.parametrize(
+    "metadata, message",
+    [
+        (_metadata(execution_approval="ready"), "must be 'draft' or 'approved'"),
+        (_metadata(priority="P4"), "priority has unknown value"),
+        (_metadata(size="XL"), "size has unknown value"),
+        (_metadata(group="provider"), "group has unknown value"),
+        (_metadata(size="L"), "approved task size must be S or M"),
+        (_metadata(roadmap_target=""), "substantive roadmap_target"),
+        (_metadata(roadmap_target="—"), "substantive roadmap_target"),
+    ],
+)
+def test_task_metadata_rejects_unknown_or_unexecutable_values(
+    metadata: dict[str, object], message: str
+) -> None:
+    with pytest.raises(TaskSpecError, match=message):
+        parse_task_document(
+            _task_document(json.dumps(metadata), sections=_default_sections()), PATH
+        )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "TBD",
+        "TODO",
+        "FIXME",
+        "XXX",
+        "OPEN DECISION",
+        "OPEN QUESTION",
+        "<title>",
+        "<name>",
+    ],
+)
+def test_approved_roadmap_target_rejects_existing_unresolved_markers(
+    marker: str,
+) -> None:
+    text = _task_document(
+        json.dumps(_metadata(roadmap_target=f"Phase 3 / {marker}")),
+        sections=_default_sections(),
+    )
+
+    with pytest.raises(TaskSpecError, match="roadmap_target contains unresolved marker"):
+        parse_task_document(text, PATH)
+
+
+@pytest.mark.parametrize(
+    "depends_on, message",
+    [
+        ([3], "every depends_on item"),
+        (["task-1"], "every depends_on item"),
+        ([TASK_ID], "cannot depend on itself"),
+        (["TSK-0028", "TSK-0028"], "duplicate task ID"),
+    ],
+)
+def test_task_metadata_rejects_invalid_dependencies(
+    depends_on: list[object], message: str
+) -> None:
+    with pytest.raises(TaskSpecError, match=message):
+        parse_task_document(
+            _task_document(
+                json.dumps(_metadata(depends_on=depends_on)),
+                sections=_default_sections(),
+            ),
+            PATH,
+        )
+
+
+def test_standalone_task_identity_matches_canonical_path_and_h1() -> None:
+    text = _task_document(task_id="TSK-0031", sections=_default_sections())
+
+    with pytest.raises(TaskSpecError, match="does not match the file name"):
+        parse_task_document(text, PATH)
+
+    with pytest.raises(TaskSpecError, match="not a Task Execution Spec path"):
+        parse_task_document(
+            _task_document(sections=_default_sections()),
+            "docs/tasks/current/TSK-0030.md",
+        )
+
+
+@pytest.mark.parametrize(
+    "section, body, message",
+    [
+        ("Scope", "- Group: engineering", "duplicates Task metadata field"),
+        ("Scope", "- TODO: decide later", "unresolved"),
+        ("Full verification", '"python -m pytest"', "JSON array of strings"),
+    ],
+)
+def test_approved_body_keeps_existing_execution_readiness_guards(
+    section: str, body: str, message: str
+) -> None:
+    with pytest.raises(TaskSpecError, match=message):
+        parse_task_document(
+            _task_document(sections=_replace(section, body)),
+            PATH,
+        )
 
 
 def test_spec_path_is_a_function_of_the_task_id_alone() -> None:

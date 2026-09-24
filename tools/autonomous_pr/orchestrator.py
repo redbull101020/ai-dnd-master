@@ -21,11 +21,11 @@ import hashlib
 import json
 import re
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from . import repository, task_context
+from . import catalog, repository, task_context
 from .agents import (
     AgentInvocationSpec,
     run_implementer,
@@ -33,6 +33,7 @@ from .agents import (
 )
 from .model import (
     AgentRole,
+    ApprovedTaskDocument,
     CandidateIdentity,
     CandidateRejectionBasis,
     ExecutionCheckpoint,
@@ -40,18 +41,24 @@ from .model import (
     GateAttempt,
     GateContext,
     GateHistory,
+    NoEligibleTask,
     Phase,
     RepairPacket,
     ReviewVerdict,
     RunOutcome,
     RunResult,
     StructuredReviewResult,
+    SelectedTask,
     TaskExecutionSpec,
+    TaskSelectionMode,
+    TaskStatus,
+    TrackerTask,
     VerificationCommandResult,
     VerificationEvidence,
 )
 from .repository import RepositoryError
-from .task_context import TaskPreflightError
+from .task_context import TaskTrackerError
+from .task_spec import TaskSpecError, parse_task_document
 
 # Post-closure origin/main-movement replay is bounded to this many rounds
 # (fetch/revalidate -> mode C -> required CI -> re-fetch to confirm
@@ -116,6 +123,7 @@ class OrchestratorConfig:
     delivery_branch: str
     verification_timeout_seconds: float = 600.0
     gh_command: tuple[str, ...] = ("gh",)
+    selected_task_context: str | None = None
 
     def __post_init__(self) -> None:
         if self.implementer_spec.role is not AgentRole.IMPLEMENTER:
@@ -354,6 +362,73 @@ def _run_v2_designated_review(
     return review
 
 
+def _resolve_file_based_target(
+    config: OrchestratorConfig,
+    selector: str,
+    source_sha: str,
+) -> SelectedTask | NoEligibleTask:
+    """Resolve one selector entirely from a single immutable main snapshot."""
+
+    try:
+        task_md_text = repository.read_utf8_file_at_ref_exact(
+            config.repo, source_sha, "docs/TASK.md"
+        )
+        terminal = task_context.parse_terminal_registry(
+            task_md_text, source_sha=source_sha
+        )
+        records = repository.list_task_files_at_commit(
+            config.repo,
+            source_sha,
+            excluded_task_ids=frozenset(task.task_id for task in terminal.tasks),
+        )
+        return catalog.resolve_task_selection(
+            source_sha, records, terminal, selector
+        )
+    except (
+        TaskTrackerError,
+        catalog.TaskCatalogError,
+        catalog.TaskSelectionError,
+    ) as exc:
+        raise _Blocked(f"file-based task selection failed: {exc}") from exc
+
+
+def _execution_target_from_selection(selection: SelectedTask) -> ExecutionTarget:
+    document = selection.document
+    metadata = document.metadata
+    return ExecutionTarget(
+        base_sha=selection.source_sha,
+        task=TrackerTask(
+            task_id=document.task_id,
+            priority=metadata.priority,
+            size=metadata.size,
+            group=metadata.group or "",
+            roadmap_target=metadata.roadmap_target,
+            depends_on=metadata.depends_on,
+            title=document.title,
+        ),
+        spec=document.execution_spec,
+        document=document,
+        spec_source_sha=selection.source_sha,
+        selection_mode=selection.mode,
+        selection_basis=selection.basis,
+    )
+
+
+def _selected_task_context(execution_target: ExecutionTarget) -> str:
+    document = execution_target.document
+    if document is None or execution_target.spec_source_sha is None:
+        return ""
+    mode = execution_target.selection_mode
+    return (
+        f"selected_task_id: {document.task_id}\n"
+        f"selection_mode: {mode.value if mode is not None else 'unknown'}\n"
+        f"selection_basis: {execution_target.selection_basis or '(none)'}\n"
+        f"original_source_sha: {execution_target.spec_source_sha}\n"
+        f"canonical_path: {document.path}\n"
+        f"full_document_digest: {document.digest}\n"
+    )
+
+
 def run(config: OrchestratorConfig) -> RunResult:
     """Execute the full AUTONOMOUS_PR orchestration for one already-
     authorized task.
@@ -374,23 +449,61 @@ def run(config: OrchestratorConfig) -> RunResult:
     delivery_branch: str | None = None
     head_sha: str | None = None
     pr_url: str | None = None
+    selected_task_id: str | None = None
+    selection_mode: TaskSelectionMode | None = None
+    spec_source_sha: str | None = None
+    spec_path: str | None = None
+    spec_digest: str | None = None
     acceptance_revalidation_failed = False
     try:
         base_sha = repository.fetch_and_capture_origin_main_sha(config.repo)
         if not repository.is_worktree_clean(config.repo):
             raise _Blocked("working tree/index is not clean before v2 preflight")
-        exact_input = task_context.load_exact_base_input(
-            config.repo, config.task_id, base_sha
+        selection = _resolve_file_based_target(config, config.task_id, base_sha)
+        if isinstance(selection, NoEligibleTask):
+            return RunResult(
+                task_id=None,
+                phase=Phase.PREFLIGHT,
+                outcome=RunOutcome.NO_ELIGIBLE_TASK,
+                delivery_branch=None,
+                head_sha=None,
+                blocked_reason=None,
+                no_work_reasons=selection.reasons,
+            )
+        execution_target = _execution_target_from_selection(selection)
+        selected_task_id = selection.document.task_id
+        selection_mode = selection.mode
+        spec_source_sha = selection.source_sha
+        spec_path = selection.document.path
+        spec_digest = selection.document.digest
+        delivery_branch_name = config.delivery_branch or (
+            f"autonomous-pr/{selected_task_id.lower()}"
         )
-        execution_target = task_context.preflight_execution_target(
-            exact_input, config.task_id
+        canonical_delivery_branch = f"autonomous-pr/{selected_task_id.lower()}"
+        repository.require_branch_name_available(
+            config.repo, canonical_delivery_branch
+        )
+        if delivery_branch_name != canonical_delivery_branch:
+            repository.require_branch_name_available(
+                config.repo, delivery_branch_name
+            )
+        repository.require_no_open_pr_for_task(
+            config.repo,
+            selected_task_id,
+            gh_command=config.gh_command,
+        )
+        config = replace(
+            config,
+            task_id=selected_task_id,
+            delivery_branch=delivery_branch_name,
+            selected_task_context=_selected_task_context(execution_target),
         )
 
         phase = Phase.DELIVERY_BRANCH_READY
         repository.create_delivery_branch_from_sha(
-            config.repo, config.delivery_branch, base_sha
+            config.repo, delivery_branch_name, base_sha
         )
-        delivery_branch = config.delivery_branch
+        delivery_branch = delivery_branch_name
         head_sha = repository.head_sha(config.repo)
         accepted_origin_base_sha = execution_target.base_sha
 
@@ -404,7 +517,7 @@ def run(config: OrchestratorConfig) -> RunResult:
                 revalidated, _ = _revalidate_v2_execution_target(
                     config, execution_target, accepted_origin_base_sha
                 )
-            except (_Blocked, RepositoryError, TaskPreflightError):
+            except (_Blocked, RepositoryError):
                 acceptance_revalidation_failed = True
                 raise
             accepted_origin_base_sha = revalidated.base_sha
@@ -488,23 +601,31 @@ def run(config: OrchestratorConfig) -> RunResult:
             )
 
         return RunResult(
-            task_id=config.task_id,
+            task_id=selected_task_id,
             phase=Phase.READY_FOR_HUMAN_MERGE,
             outcome=RunOutcome.STOP,
             delivery_branch=delivery_branch,
             head_sha=head_sha,
             blocked_reason=None,
             pr_url=pr_url,
+            selection_mode=selection_mode,
+            spec_source_sha=spec_source_sha,
+            spec_path=spec_path,
+            spec_digest=spec_digest,
         )
-    except (_Blocked, RepositoryError, TaskPreflightError) as exc:
+    except (_Blocked, RepositoryError) as exc:
         return RunResult(
-            task_id=config.task_id,
+            task_id=selected_task_id,
             phase=phase,
             outcome=RunOutcome.BLOCKED,
             delivery_branch=delivery_branch,
             head_sha=head_sha,
             blocked_reason=str(exc),
             pr_url=pr_url,
+            selection_mode=selection_mode,
+            spec_source_sha=spec_source_sha,
+            spec_path=spec_path,
+            spec_digest=spec_digest,
         )
 def _v2_commit_message(task_id: str, gate_id: str) -> str:
     """Return a deterministic, gate-labelled message for accepted v2 work."""
@@ -685,6 +806,7 @@ def _require_v2_checkpoint_scope(
 def _format_v2_repository_context(
     branch_head: repository.BranchHead,
     accepted_base_context_identity: str,
+    selected_task_context: str | None = None,
 ) -> str:
     """Current repository facts for one v2 implementer invocation.
 
@@ -694,11 +816,14 @@ def _format_v2_repository_context(
     repairs and the first checkpoint after an accepted commit/push transition.
     """
 
-    return (
+    context = (
         f"delivery_branch: {branch_head.branch}\n"
         f"accepted_base_context_identity: {accepted_base_context_identity}\n"
         f"head_sha: {branch_head.head_sha}\n"
     )
+    if selected_task_context:
+        context += f"SELECTED_TASK_CONTEXT:\n{selected_task_context}"
+    return context
 
 
 def execute_v2_checkpoints(
@@ -768,7 +893,9 @@ def execute_v2_checkpoints(
             terminal_phase = Phase.IMPLEMENTATION_CHECKPOINT
             before = repository.capture_branch_head(config.repo)
             repository_context_text = _format_v2_repository_context(
-                before, context.accepted_base_context_identity
+                before,
+                context.accepted_base_context_identity,
+                config.selected_task_context,
             )
             prompt = _build_v2_implementer_prompt(
                 spec,
@@ -1015,11 +1142,69 @@ def _same_v2_execution_target(
 ) -> bool:
     """Compare every §30 load-bearing execution-target fact."""
 
+    if accepted.document is not None:
+        return (
+            revalidated.document is not None
+            and revalidated.document == accepted.document
+            and revalidated.task == accepted.task
+            and revalidated.spec.digest == accepted.spec.digest
+            and revalidated.spec.text == accepted.spec.text
+        )
     return (
         revalidated.task == accepted.task
         and revalidated.spec.digest == accepted.spec.digest
         and revalidated.spec.text == accepted.spec.text
     )
+
+
+def _revalidate_file_selected_target_at_sha(
+    config: OrchestratorConfig,
+    accepted: ExecutionTarget,
+    fresh_sha: str,
+) -> None:
+    document = accepted.document
+    if document is None:
+        raise AssertionError("file-selected revalidation requires a full document")
+
+    tracker_text = repository.read_utf8_file_at_ref_exact(
+        config.repo, fresh_sha, "docs/TASK.md"
+    )
+    terminal = task_context.parse_terminal_registry(
+        tracker_text, source_sha=fresh_sha
+    )
+    terminal_by_id = {task.task_id: task for task in terminal.tasks}
+    terminal_outcome = terminal_by_id.get(document.task_id)
+    if terminal_outcome is not None:
+        raise _Blocked(
+            f"selected task {document.task_id} is terminal "
+            f"({terminal_outcome.status.value})"
+        )
+
+    record = repository.read_task_file_at_commit(
+        config.repo, fresh_sha, document.task_id
+    )
+    revalidated_document = parse_task_document(record.text, record.path)
+    if not isinstance(revalidated_document, ApprovedTaskDocument):
+        raise _Blocked(f"selected task {document.task_id} is no longer approved")
+    if revalidated_document != document:
+        raise _Blocked(
+            "origin/main moved and changed the fixed selected task document "
+            "(metadata, approval, exact text, or digest)"
+        )
+    for dependency in revalidated_document.metadata.depends_on:
+        terminal_dependency = terminal_by_id.get(dependency)
+        if (
+            terminal_dependency is None
+            or terminal_dependency.status is not TaskStatus.DONE
+        ):
+            actual = (
+                "not terminal"
+                if terminal_dependency is None
+                else terminal_dependency.status.value
+            )
+            raise _Blocked(
+                f"selected task dependency {dependency} is {actual}, not Done"
+            )
 
 
 def _revalidate_v2_execution_target(
@@ -1029,36 +1214,31 @@ def _revalidate_v2_execution_target(
 ) -> tuple[ExecutionTarget, bool]:
     """Freshly capture origin/main and revalidate a moved exact base.
 
-    An unchanged SHA needs no second read. A moved SHA is loaded through the
-    Group-2 exact-base primitives, preflighted again, and accepted only when
-    every §30 load-bearing fact is unchanged. The returned boolean records a
-    base-context transition; callers must invalidate cumulative evidence and
-    gate history before using it.
+    An unchanged SHA needs no second read. For a file-selected target, a moved
+    SHA revalidates only the strict terminal registry, the exact selected
+    document, its approval, and its ``Done`` dependencies. It deliberately
+    does not rebuild the initial catalog: unrelated task bodies cannot change
+    an already-fixed target. The returned boolean records a base-context
+    transition; callers must invalidate cumulative evidence and gate history
+    before using it.
     """
 
     fresh_sha = repository.fetch_and_capture_origin_main_sha(config.repo)
     if fresh_sha == current_base_sha:
-        return ExecutionTarget(
-            base_sha=fresh_sha, task=accepted.task, spec=accepted.spec
-        ), False
-    try:
-        exact_input = task_context.load_exact_base_input(
-            config.repo, accepted.task.task_id, fresh_sha
-        )
-        revalidated = task_context.preflight_execution_target(
-            exact_input, accepted.task.task_id
-        )
-    except TaskPreflightError as exc:
+        return replace(accepted, base_sha=fresh_sha), False
+    if accepted.document is None:
         raise _Blocked(
-            "origin/main moved and v2 execution-target revalidation failed: "
+            "execution target has no standalone selected task document; "
+            "Current-based revalidation is not supported"
+        )
+    try:
+        _revalidate_file_selected_target_at_sha(config, accepted, fresh_sha)
+    except (RepositoryError, TaskTrackerError, TaskSpecError) as exc:
+        raise _Blocked(
+            "origin/main moved and selected task revalidation failed: "
             f"{exc}"
         ) from exc
-    if not _same_v2_execution_target(accepted, revalidated):
-        raise _Blocked(
-            "origin/main moved and changed the accepted v2 execution target "
-            "(authoritative task entry or fixed spec)"
-        )
-    return revalidated, True
+    return replace(accepted, base_sha=fresh_sha), True
 
 
 def _capture_v2_closure_material_baseline(
@@ -1071,7 +1251,9 @@ def _capture_v2_closure_material_baseline(
         if path == "docs/TASK.md" or repository.file_exists_at_ref(
             repo, base_sha, path
         ):
-            text: str | None = repository.read_file_at_ref(repo, base_sha, path)
+            text: str | None = repository.read_utf8_file_at_ref_exact(
+                repo, base_sha, path
+            )
         else:
             text = None
         texts.append((path, text))
@@ -1106,7 +1288,9 @@ def _require_v2_closure_material_unchanged(
     for path in sorted(baseline.material_paths):
         exists = repository.file_exists_at_ref(repo, revalidated_base_sha, path)
         current = (
-            repository.read_file_at_ref(repo, revalidated_base_sha, path)
+            repository.read_utf8_file_at_ref_exact(
+                repo, revalidated_base_sha, path
+            )
             if exists
             else None
         )
@@ -1156,7 +1340,7 @@ def _build_v2_cumulative_review_input(
         "CURRENT_GATE: pre-closure cumulative implementation review\n"
         "REVIEW_PURPOSE: PRE_CLOSURE_CUMULATIVE_REVIEW\n"
         "RANGE: origin/main...HEAD before Task Closure; this is not Mode C and "
-        "satisfies docs/TASK.md §18.1's implementation-diff review prerequisite.\n"
+        "satisfies the pre-closure implementation-diff review prerequisite.\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review the complete implementation diff in a fresh, independent "
         f"context. {contract}"
@@ -1267,7 +1451,9 @@ def _execute_v2_late_repair(
             history.latest_valid_repair_packet or initial_packet,
             verification_failure,
             _format_v2_repository_context(
-                before, history.context.accepted_base_context_identity
+                before,
+                history.context.accepted_base_context_identity,
+                config.selected_task_context,
             ),
         )
         result = run_implementer(config.implementer_spec, prompt)
@@ -1891,11 +2077,18 @@ def _build_v2_closure_prompt(
         raise _Blocked("accepted cumulative evidence is required for Task Closure")
     return (
         f"TASK_EXECUTION_SPEC:\n{execution_target.spec.text}\n"
+        "SELECTED_TASK_CONTEXT:\n"
+        f"{_selected_task_context(execution_target)}"
         "CURRENT_GATE: prospective Task Closure\n"
         "ROLE: Prepare or repair only the canonical Task Closure content. "
-        "Edit docs/TASK.md and docs/DEVELOPMENT_LOG.md; edit docs/ROADMAP.md "
-        "or docs/DEFERRED.md only when required by the task. Do not commit, "
-        "push, merge, or change implementation files.\n"
+        "In docs/TASK.md insert exactly one terminal row for the selected task: "
+        "Status Done, the real draft PR evidence below, and its existing title. "
+        "Preserve every other terminal row, order, and evidence; do not create or "
+        "select a next task, change another task, or edit/delete any task spec. "
+        "Append exactly one concise factual delivery entry to "
+        "docs/DEVELOPMENT_LOG.md. Edit docs/ROADMAP.md or docs/DEFERRED.md only "
+        "when required by the delivered task. Do not commit, push, merge, or "
+        "change implementation files.\n"
         f"DRAFT_PR_NUMBER: {pr_number}\n"
         f"ACCEPTED_IMPLEMENTATION_BASE: {cumulative.base_identity}\n"
         f"ACCEPTED_IMPLEMENTATION_HEAD: {cumulative.reviewed_head_sha}\n"
@@ -1944,6 +2137,7 @@ def _prepare_v2_unpublished_closure(
     *,
     pr_number: str,
     expected_published_head: str,
+    task_md_baseline: str,
     initial_packet: RepairPacket | None = None,
     strict_closure_only_repair: bool = False,
 ) -> tuple[
@@ -1984,6 +2178,18 @@ def _prepare_v2_unpublished_closure(
                 "unsafe narrow continuation is refused"
             )
         _require_canonical_closure_files_touched(touched)
+        try:
+            task_context.validate_terminal_only_closure(
+                task_md_baseline,
+                repository.read_worktree_utf8_file_exact(
+                    config.repo, "docs/TASK.md"
+                ),
+                task_id=execution_target.task.task_id,
+                pr_number=pr_number,
+                title=execution_target.task.title,
+            )
+        except (RepositoryError, TaskTrackerError) as exc:
+            raise _Blocked(f"invalid terminal-only Task Closure: {exc}") from exc
         identity = _candidate_identity(patch.diff_text)
         if identity in history.rejected_candidate_identities:
             raise _Blocked("Task Closure repair reproduced a rejected candidate")
@@ -2299,10 +2505,15 @@ def execute_v2_unpublished_closure(
                 "remote delivery branch does not contain the accepted implementation HEAD"
             )
         terminal_phase = Phase.DRAFT_PR
+        pr_body = (
+            "AUTONOMOUS_PR v2 draft; unpublished Task Closure follows Mode C.\n\n"
+            "Selected task provenance:\n"
+            f"{_selected_task_context(execution_target)}"
+        )
         pr_url = repository.create_draft_pull_request(
             config.repo,
             title=f"{execution_target.task.task_id}: {execution_target.task.title}",
-            body="AUTONOMOUS_PR v2 draft; unpublished Task Closure follows Mode C.",
+            body=pr_body,
             head=config.delivery_branch,
             expected_branch=config.delivery_branch,
             gh_command=config.gh_command,
@@ -2317,6 +2528,9 @@ def execute_v2_unpublished_closure(
             captured_baseline = _capture_v2_closure_material_baseline(
                 config.repo, current_pre_closure.evidence.base_identity
             )
+            task_md_baseline = dict(captured_baseline.texts)["docs/TASK.md"]
+            if task_md_baseline is None:
+                raise _Blocked("authoritative closure baseline has no docs/TASK.md")
             try:
                 terminal_phase = Phase.CLOSURE_REVIEW
                 candidate, _, closure_touched = _prepare_v2_unpublished_closure(
@@ -2325,6 +2539,7 @@ def execute_v2_unpublished_closure(
                     current_pre_closure,
                     pr_number=pr_number,
                     expected_published_head=implementation_head,
+                    task_md_baseline=task_md_baseline,
                     initial_packet=pending_closure_packet,
                     strict_closure_only_repair=strict_closure_only,
                 )

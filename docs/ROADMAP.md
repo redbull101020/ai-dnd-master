@@ -2,16 +2,17 @@
 
 Фазы разработки AI D&D Engine.
 
-Другие документы: [`../README.md`](../README.md) — обзор проекта · [`ARCHITECTURE.md`](ARCHITECTURE.md) — текущий канонический контракт · [`TASK.md`](TASK.md) — конкретная исполнимая очередь `Current`/`Next` · [`DECISIONS.md`](DECISIONS.md) — append-only мотивация и история решений · [`DEFERRED.md`](DEFERRED.md) — подчинённый companion закрытия Phase 2 и реестр продолжений · [`../CLAUDE.md`](../CLAUDE.md) — выжимка правил для AI-агента.
+Другие документы: [`../README.md`](../README.md) — обзор проекта · [`ARCHITECTURE.md`](ARCHITECTURE.md) — текущий канонический контракт · [`TASK.md`](TASK.md) — правила file-based dispatch и terminal registry · `tasks/` — metadata/contract открытых задач · [`DECISIONS.md`](DECISIONS.md) — append-only мотивация и история решений · [`DEFERRED.md`](DEFERRED.md) — подчинённый companion закрытия Phase 2 и реестр продолжений · [`../CLAUDE.md`](../CLAUDE.md) — выжимка правил для AI-агента.
 
 Каждая фаза реализуется в рамках контрактов из `ARCHITECTURE.md`. Опорные разделы указаны под заголовком фазы.
 
 `ARCHITECTURE.md = current canonical contract`; `DECISIONS.md = append-only rationale/history`.
 
 `ROADMAP.md` определяет scope фаз/capabilities, их порядок и статус завершения.
-[`TASK.md`](TASK.md) определяет конкретные reviewable `Current`/`Next` срезы
-внутри разрешённого Roadmap scope. Task остаётся ниже Roadmap по authority и
-не может менять его scope или порядок capabilities.
+Standalone-документы в `docs/tasks/` определяют reviewable task slices внутри
+разрешённого Roadmap scope; [`TASK.md`](TASK.md) задаёт правила выбора и
+terminal facts. Task остаётся ниже Roadmap по authority и не может менять его
+scope или порядок capabilities.
 
 ---
 
@@ -484,4 +485,5 @@ Web UI
 ---
 
 Архитектурные контракты, которым должна соответствовать каждая реализуемая фаза, описаны в [`ARCHITECTURE.md`](ARCHITECTURE.md).
-Конкретный краткосрочный порядок исполнимых задач находится в [`TASK.md`](TASK.md).
+Конкретные открытые task contracts находятся в `docs/tasks/`; `NEXT` выбирает
+eligible approved задачу по Priority, затем numeric task ID, согласно [`TASK.md`](TASK.md).

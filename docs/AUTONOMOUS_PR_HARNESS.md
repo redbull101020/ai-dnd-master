@@ -616,14 +616,14 @@ Read §20 before any other section of this Part.
 
 ## 20. Status and completed transition boundary (operational v2)
 
-`TSK-0028` atomically activated Part II, the v2 public entrypoint, the thin
-tracker, and the `AGENTS.md` declaration. Therefore:
+`TSK-0028` activated Part II and `TSK-0029` completed its file-based dispatch
+revision. Therefore:
 
 - v2 is the only operational version; there is no mixed mode, version flag,
   per-task version selection, v1 fallback, runtime planning/plan-review, or
   numeric repair budget;
-- the thin `docs/TASK.md` tracker and the exact-base Task Execution Spec are
-  the only execution inputs;
+- the permanent terminal registry and standalone task documents read from one
+  exact base are the only task-state execution inputs;
 - Part I records how v1 operated before activation and supplies no v1 runtime
   path; its common definitions/invariants apply only where Part II explicitly
   incorporates them by reference;
@@ -641,8 +641,8 @@ authoritative boundary.
 | --- | --- |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | canonical system behavior and contracts |
 | [`ROADMAP.md`](ROADMAP.md) | capability and phase scope and ordering |
-| [`TASK.md`](TASK.md) | task lifecycle: Status, Priority, Size, dependencies, `Current`/`Next`, queue order, task allocation |
-| `docs/tasks/TSK-XXXX.md` | the approved execution target of one task |
+| [`TASK.md`](TASK.md) | standalone-task rules and permanent `Done`/`Superseded` registry |
+| `docs/tasks/TSK-NNNN.md` | identity and metadata of each open task; for approved tasks, the fixed execution contract |
 | [`../AGENTS.md`](../AGENTS.md) | authority, Git, review, and merge governance |
 | this document | subordinate execution mechanics |
 | [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md) | factual delivery history |
@@ -666,25 +666,21 @@ them agree.
 
 ## 22. Task Execution Spec: identity, storage, and lifecycle (operational v2)
 
-- **Path.** Exactly `docs/tasks/TSK-XXXX.md`, a function of the immutable
+- **Path.** Exactly `docs/tasks/TSK-NNNN.md`, a function of the immutable
   task ID alone. One spec per task; the ID in the file must match its
   filename. There are no status-based directories (`current/`, `done/`,
   `backlog/`): a file that moved when the task's status changed would break
   stable references and turn the directory layout into a second lifecycle
   record.
-- **Responsibility split.** The spec is the approved execution contract of
-  one task. `docs/TASK.md` keeps every mutable fact about that task. The
-  spec never carries a Status, Priority, Size, dependency, or queue-position
-  field; a second authoritative copy of any of them is a defect.
-- **Progressive elaboration.** Applies to activated v2 only:
-
-  | Task status | Spec |
-  | --- | --- |
-  | `Backlog` | optional |
-  | `Ready` | required |
-  | `Current` | required and execution-ready |
-
-  A spec is execution-ready when every required section is present and
+- **Envelope.** H1 is followed by exactly one `## Task metadata` section with
+  one fenced JSON object. Required keys are `execution_approval`, `priority`,
+  `size`, `roadmap_target`, and `depends_on`; optional `group` uses the closed
+  repository vocabulary. Unknown fields, duplicate JSON keys, malformed
+  types, and filename/H1 mismatch are invalid.
+- **Draft and approved.** `execution_approval` is explicit and has no default.
+  A `draft` owns valid metadata but is never executable; its body may be absent,
+  partial, or complete. An `approved` task is executable only when every
+  required section is present and
   concrete, its checkpoints declare every required field (§23), no
   unresolved placeholder or open decision blocks execution, nothing in it
   conflicts with a higher-level source (§21), and no requirement that
@@ -692,10 +688,10 @@ them agree.
   are not written
   mechanically for distant backlog, and none is written retroactively for
   completed tasks (`TSK-0001`–`TSK-0026`).
-- **Completed specs.** After a task is `Done` its spec stays in place as the
-  historical record of what was approved for implementation. It is not
-  current canonical Architecture. Task Closure does not edit it, and the
-  task's `Done` status is recorded only through `docs/TASK.md`.
+- **Terminal tasks.** `Done` and `Superseded` live only in the permanent
+  `docs/TASK.md` registry. A retained terminal file is filtered before body
+  parsing and may later be removed by a separate reviewed change. Cancellation
+  is recorded as `Superseded` before removal.
 - **Provider neutrality.** A spec is never stored as a provider-specific
   prompt or prompt sequence (for example "Prompt 1 for provider X"). The
   orchestrator derives any runtime handoff from the provider-neutral spec.
@@ -704,7 +700,7 @@ them agree.
 
 ## 23. Task Execution Spec: structure (operational v2)
 
-A spec has these sections, in this order:
+After H1 and Task metadata, an approved task has these sections, in this order:
 
 1. Goal
 2. Context / References
@@ -732,8 +728,20 @@ file set.
 
 Skeleton:
 
-```markdown
-# TSK-XXXX — <title>
+````markdown
+# TSK-NNNN — <title>
+
+## Task metadata
+```json
+{
+  "execution_approval": "approved",
+  "priority": "P2",
+  "size": "S",
+  "roadmap_target": "<concrete target>",
+  "depends_on": [],
+  "group": "engineering"
+}
+```
 
 ## Goal
 ## Context / References
@@ -750,7 +758,7 @@ Skeleton:
 - Review focus:
 ## Full verification
 ## Known constraints / edge cases
-```
+````
 
 ---
 
@@ -797,6 +805,46 @@ provided a decision does not:
 
 A decision that would do any of these is not the implementer's to take: it
 ends the run as `BLOCKED` for refinement or a human decision.
+
+### File-based dispatch, revalidation, and terminal-only closure
+
+The public selector is one explicit `TSK-NNNN` or literal `NEXT`; omission is
+a configuration error. One captured `origin/main` SHA supplies the strict
+terminal registry and every regular Git-tracked task blob. Terminal identities
+are excluded before body parsing. Every remaining envelope is validated and
+the dependency graph is checked; drafts are valid catalog members but never
+eligible. `NEXT` chooses eligible approved work by `P0` through `P3`, then
+numeric task ID. An empty or waiting-only catalog returns run-level
+`NO_ELIGIBLE_TASK` with exit code 0 before any branch, agent, or PR write.
+
+Selection happens once. The run keeps the concrete ID plus original source
+SHA, canonical path, exact full-document text and digest; a default delivery
+branch is derived only after selection. Fixed-target revalidation never
+recalculates `NEXT`: from one fresh exact SHA it checks the strict terminal
+registry, the selected document and approval, and that selected task's `Done`
+dependencies. Unrelated catalog additions or malformed unrelated bodies do
+not replace or invalidate the fixed target, while a new invocation still
+performs full strict catalog validation. Open same-task PR provenance and
+branch collisions fail closed; there is no implicit resume.
+
+Ordinary Task Closure is terminal-only. Against exact accepted `docs/TASK.md`
+bytes, the candidate inserts exactly one parser-valid row for the selected
+task with `Done`, actual draft PR evidence, and its unchanged title, and
+appends one factual Development Log entry. It preserves every foreign terminal
+row, order, and evidence byte-for-byte; it creates no next task and does not
+edit, archive, or delete any task document. Strict UTF-8, exact LF/CRLF bytes,
+escaped `\|` titles, Git attributes, and clean filters are checked against the
+same bytes a normal address-specific staging would produce, using an isolated
+temporary index that does not mutate the user's index.
+
+The accepted cumulative review → draft PR → unpublished prospective closure →
+Closure Review → local unpublished commit → fresh revalidation → Mode C →
+publication of the exact audited candidate → required CI sequence is
+unchanged. Any candidate, delivery-branch, or base movement makes completed
+Mode C stale. A retained terminal spec is ignored before body validation; its
+later deletion is optional separate reviewed work. Deletion of the active
+selected document blocks the current run. After terminal `STOP` the harness
+does not select another task or perform automatic cleanup.
 
 ---
 
@@ -1021,7 +1069,7 @@ spec. The planning and plan-review phases of Part I are v1-only.
 The operational v2 lifecycle is:
 
 ```text
-preflight (one captured origin/main SHA: docs/TASK.md and the task spec)
+preflight (one captured origin/main SHA: terminal registry + task catalog)
   → delivery branch
   → for each declared checkpoint, in order:
       implement → verify → review/repair* → APPROVED → commit/push
@@ -1043,24 +1091,22 @@ outcomes and `READY_FOR_HUMAN_MERGE` keep the meaning given in §10. Mode C must
 remain fresh from the moment it is built through `READY_FOR_HUMAN_MERGE` and the
 mandatory `STOP`; `STOP` does not make it permanently valid (§32).
 
-**Preflight.** The orchestrator fetches, captures one exact `origin/main` SHA,
-and reads both `docs/TASK.md` and `docs/tasks/TSK-XXXX.md` from that SHA — not
-from the working tree, and never from two different SHAs. At minimum it
-checks that:
+**Preflight.** The orchestrator fetches and captures one exact `origin/main`
+SHA. From that SHA it reads the strict terminal registry and every regular
+Git-tracked canonical task blob, validates all nonterminal envelopes/bodies and
+their dependency graph, then resolves exactly one explicit ID or `NEXT`.
+Dependencies must be terminal `Done`; `Superseded`, open, unknown, self,
+duplicate, or cyclic dependencies do not permit execution. The selected task
+must be approved, execution-ready (§22), and inside permitted Roadmap scope.
+Missing selector is configuration error; invalid/draft/terminal explicit ID
+has no fallback. `NO_ELIGIBLE_TASK` is a successful no-work result, not a
+reviewer verdict.
 
-- the named task is the authoritative `Current` task;
-- every dependency is `Done`;
-- the task's Roadmap target is permitted;
-- the spec exists and belongs to that same task;
-- the spec is execution-ready (§22);
-- no unresolved placeholder or open decision blocks execution;
-- the task metadata and the spec were read from the same captured SHA.
-
-A failed check ends the run as `BLOCKED`. If `origin/main` later moves and the
-named task's `docs/TASK.md` entry, its dependencies, its Roadmap target, or its
-spec changed, the run fails closed; it never continues on a stale execution
-target. A movement that changes none of these is handled by revalidation as in
-§12 and is not by itself `BLOCKED`.
+A failed check ends the run as `BLOCKED`. Later revalidation rereads only the
+strict terminal registry, exact selected document, and its dependencies from
+one fresh exact SHA. It never recalculates `NEXT` or rejects the fixed target
+because an unrelated document changed. Selected document/approval changes,
+lost `Done` dependencies, or a concurrent terminal outcome fail closed.
 
 **Spec immutability.** Within one invocation the Task Execution Spec is fixed.
 No implementation or repair may change the task's own
@@ -1092,8 +1138,8 @@ For each checkpoint:
 After every declared checkpoint is approved, the orchestrator runs the spec's
 Full verification and then the pre-closure cumulative implementation review.
 That review keeps its v1 definition (§8): its input is `origin/main...HEAD`
-before Task Closure exists on the branch, it satisfies `docs/TASK.md` §18.1,
-and it is not Mode C.
+before Task Closure exists on the branch, it satisfies the pre-closure
+implementation-review prerequisite, and it is not Mode C.
 
 A `CHANGES_REQUESTED` from the cumulative review follows the adaptive repair
 contract (§25–§29). A repair invalidates evidence built against the old
