@@ -7553,3 +7553,14 @@ independence, adaptive-repair safety, Mode C, CI, or human-only merge
 boundaries. Verification: tooling tests — 478 passed; architecture tests — 19
 passed; full pytest — 2776 passed; mypy — 132 source files clean;
 `git diff --check` clean.
+
+## 2026-09-25 — TSK-0031: Deterministic adaptive compute routing (delivery summary)
+
+Added provider-neutral deterministic `ROUTINE` / `DELIBERATE` / `CRITICAL`
+compute-profile routing in PR #110, with role-specific invocation mappings,
+gate-local escalation and de-escalation, causal repair boundaries, and
+append-only routing diagnostics. Routing does not change reviewer authority,
+workflow verdicts, Mode C, CI, or human-only merge boundaries. Verification:
+tooling tests — 520 passed; focused routing/orchestrator tests — 121 passed;
+mypy for `tools/autonomous_pr` — 10 source files clean; `git diff --check`
+clean.
