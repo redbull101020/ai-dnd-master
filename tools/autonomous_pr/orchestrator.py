@@ -44,6 +44,7 @@ from .model import (
     NoEligibleTask,
     Phase,
     RepairPacket,
+    ReviewGateMetrics,
     ReviewVerdict,
     RunOutcome,
     RunResult,
@@ -362,6 +363,132 @@ def _run_v2_designated_review(
     return review
 
 
+def _record_v2_interpreted_review_attempt(
+    history: GateHistory,
+    review: StructuredReviewResult,
+    *,
+    candidate_identity: CandidateIdentity,
+    candidate_state: str,
+    verification: VerificationEvidence | None,
+    repair_delta_digest: str | None = None,
+) -> int | None:
+    """Record one structurally valid explicit reviewer verdict canonically.
+
+    Malformed output and process failures use the existing fail-closed result
+    with ``verdict_is_explicit=False`` and deliberately create no synthetic
+    reviewer verdict here. Callers invoke this only after any review-staleness
+    check and before applying the corresponding workflow transition.
+    """
+
+    if not review.verdict_is_explicit:
+        return None
+
+    review_iteration = history.review_iteration + 1
+    history.review_iteration = review_iteration
+    packet = review.repair_packet
+    if review.verdict is ReviewVerdict.CHANGES_REQUESTED:
+        if packet is None:  # Structurally unreachable after parser validation.
+            raise AssertionError("explicit CHANGES_REQUESTED has no repair packet")
+        rejected = True
+        rejection_basis = CandidateRejectionBasis.CHANGES_REQUESTED
+        findings = packet.findings
+    else:
+        rejected = False
+        rejection_basis = None
+        findings = ()
+
+    history.attempts.append(
+        GateAttempt(
+            candidate_identity=candidate_identity,
+            candidate_state=candidate_state,
+            verification=verification,
+            rejected=rejected,
+            rejection_basis=rejection_basis,
+            review_iteration=review_iteration,
+            reviewer_verdict=review.verdict,
+            findings=findings,
+            repair_packet=packet,
+            repair_delta_digest=repair_delta_digest,
+        )
+    )
+    return review_iteration
+
+
+def _summarize_v2_gate_history(history: GateHistory) -> ReviewGateMetrics:
+    """Derive deterministic, read-only convergence diagnostics for one gate."""
+
+    review_attempts = tuple(
+        attempt
+        for attempt in history.attempts
+        if attempt.reviewer_verdict is not None
+    )
+    binding_bases_per_review = tuple(
+        tuple(finding.binding_basis for finding in attempt.findings)
+        for attempt in review_attempts
+    )
+    first_seen_iteration: dict[str, int] = {}
+    seen_iterations: dict[str, set[int]] = {}
+    first_seen_order: list[str] = []
+    for attempt in review_attempts:
+        if attempt.reviewer_verdict is not ReviewVerdict.CHANGES_REQUESTED:
+            continue
+        assert attempt.review_iteration is not None
+        bases_in_iteration: set[str] = set()
+        for finding in attempt.findings:
+            basis = finding.binding_basis
+            if basis not in first_seen_iteration:
+                first_seen_iteration[basis] = attempt.review_iteration
+                first_seen_order.append(basis)
+            bases_in_iteration.add(basis)
+        for basis in bases_in_iteration:
+            seen_iterations.setdefault(basis, set()).add(attempt.review_iteration)
+
+    return ReviewGateMetrics(
+        gate_id=history.context.gate_id,
+        review_iterations=len(review_attempts),
+        changes_requested_count=sum(
+            attempt.reviewer_verdict is ReviewVerdict.CHANGES_REQUESTED
+            for attempt in review_attempts
+        ),
+        verification_rejection_count=sum(
+            attempt.rejection_basis is CandidateRejectionBasis.VERIFICATION_FAILURE
+            for attempt in history.attempts
+        ),
+        findings_per_review=tuple(
+            len(attempt.findings) for attempt in review_attempts
+        ),
+        binding_bases_per_review=binding_bases_per_review,
+        new_binding_bases_after_first_review=tuple(
+            basis
+            for basis in first_seen_order
+            if first_seen_iteration[basis] > 1
+        ),
+        repeated_binding_bases=tuple(
+            basis for basis in first_seen_order if len(seen_iterations[basis]) > 1
+        ),
+        last_reviewer_verdict=(
+            review_attempts[-1].reviewer_verdict if review_attempts else None
+        ),
+    )
+
+
+def _summarize_v2_review_histories(
+    histories: list[GateHistory],
+) -> tuple[ReviewGateMetrics, ...]:
+    metrics = tuple(_summarize_v2_gate_history(history) for history in histories)
+    return tuple(metric for metric in metrics if metric.review_iterations > 0)
+
+
+def _retain_v2_gate_history(
+    history: GateHistory, history_sink: list[GateHistory] | None
+) -> GateHistory:
+    """Retain the original mutable history reference for run-lifetime reporting."""
+
+    if history_sink is not None:
+        history_sink.append(history)
+    return history
+
+
 def _resolve_file_based_target(
     config: OrchestratorConfig,
     selector: str,
@@ -455,6 +582,7 @@ def run(config: OrchestratorConfig) -> RunResult:
     spec_path: str | None = None
     spec_digest: str | None = None
     acceptance_revalidation_failed = False
+    review_histories: list[GateHistory] = []
     try:
         base_sha = repository.fetch_and_capture_origin_main_sha(config.repo)
         if not repository.is_worktree_clean(config.repo):
@@ -546,6 +674,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             execution_target.spec,
             accepted_base_context_identity=base_sha,
             checkpoint_acceptor=accept_candidate,
+            history_sink=review_histories,
         )
         if not checkpoint_result.completed:
             phase = (
@@ -564,6 +693,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             execution_target,
             checkpoint_result,
             repair_acceptor=accept_candidate,
+            history_sink=review_histories,
         )
         if not pre_closure_result.completed:
             phase = (
@@ -587,6 +717,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             checkpoint_result,
             pre_closure_result,
             repair_acceptor=accept_candidate,
+            history_sink=review_histories,
         )
         pr_url = closure_result.pr_url
         head_sha = repository.head_sha(config.repo)
@@ -612,6 +743,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_source_sha=spec_source_sha,
             spec_path=spec_path,
             spec_digest=spec_digest,
+            review_metrics=_summarize_v2_review_histories(review_histories),
         )
     except (_Blocked, RepositoryError) as exc:
         return RunResult(
@@ -626,6 +758,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_source_sha=spec_source_sha,
             spec_path=spec_path,
             spec_digest=spec_digest,
+            review_metrics=_summarize_v2_review_histories(review_histories),
         )
 def _v2_commit_message(task_id: str, gate_id: str) -> str:
     """Return a deterministic, gate-labelled message for accepted v2 work."""
@@ -725,6 +858,16 @@ def _build_v2_implementer_prompt(
         "Git/GitHub writes.\n"
         f"CURRENT_REPAIR_PACKET:\n{repair_text}\n"
         f"CURRENT_VERIFICATION_FAILURE:\n{verification_text}\n"
+        "PRE_RETURN_CONFORMANCE_PASS:\n"
+        "Before returning control, inspect the resulting candidate against the "
+        "task-wide Scope, Out of scope, and Approved implementation approach; "
+        "the current checkpoint Required result and Constraints; the current "
+        "repair packet when present; relevant negative and fail-closed cases "
+        "that follow directly from those binding requirements; and deterministic "
+        "verification failure evidence when present. Correct every violation "
+        "you find before returning. Perform this pass internally: do not create "
+        "a separate self-review artifact, verdict, confidence claim, or reviewer "
+        "anchoring statement.\n"
         f"REPOSITORY_CONTEXT:\n{repository_context_text}"
     )
 
@@ -739,6 +882,22 @@ def _build_v2_reviewer_input(
     repair_delta: str | None,
     require_non_convergence: bool,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "ORDINARY_CHECKPOINT",
+        (
+            "Applicable task binding bases: task:goal, task:scope, "
+            "task:out_of_scope, task:approved_implementation_approach.\n"
+            f"Applicable current-checkpoint binding bases: checkpoint:"
+            f"{checkpoint.checkpoint_id}:objective, checkpoint:"
+            f"{checkpoint.checkpoint_id}:required_result, checkpoint:"
+            f"{checkpoint.checkpoint_id}:constraints, checkpoint:"
+            f"{checkpoint.checkpoint_id}:verification.\n"
+            "Applicable repository contracts may be used through concrete "
+            "repo:<reference> bases. task:acceptance_criteria and "
+            "task:full_verification are not independent bases at this gate; "
+            "do not demand future-checkpoint results early.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(require_non_convergence)
     text = (
         f"TASK_EXECUTION_SPEC:\n{spec.text}\n"
@@ -748,7 +907,7 @@ def _build_v2_reviewer_input(
         f"review_focus: {checkpoint.review_focus}\n"
         f"REVIEW_ITERATION: {review_iteration}\n"
         "ROLE: Review this checkpoint in a fresh, independent context. "
-        f"{contract}"
+        f"{protocol}{contract}"
         f"CURRENT_PATCH:\n{patch_text}\n"
         f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
     )
@@ -760,6 +919,36 @@ def _build_v2_reviewer_input(
     if repair_delta is not None:
         text += f"REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:\n{repair_delta}\n"
     return text
+
+
+def _v2_designated_review_protocol(gate_name: str, applicability: str) -> str:
+    """Shared semantic protocol for every operational designated review."""
+
+    return (
+        "DESIGNATED_REVIEW_PROTOCOL:\n"
+        "Before returning a verdict, determine the binding requirements "
+        "applicable to this gate. Review the complete current review artifact "
+        "and all supplied deterministic evidence. On a repeat review, first "
+        "re-evaluate the previous reviewer findings against the current candidate, "
+        "then perform a fresh material pass over every remaining applicable "
+        "requirement. Already-corrected findings need not be repeated. Return "
+        "one CHANGES_REQUESTED containing all independent material defects that "
+        "remain or are newly discovered by that pass. Use a blocking finding "
+        "only when it has a concrete binding_basis. Style preferences, optional "
+        "improvements, speculative abstraction or generalization, future scope, "
+        "and advisory Review focus are non-blocking unless a separate binding "
+        "requirement makes them material.\n"
+        "VERDICT_SEMANTICS:\n"
+        "APPROVED: the applicable material pass is complete and no proven "
+        "binding defect remains.\n"
+        "CHANGES_REQUESTED: one or more proven repairable binding defects exist "
+        "inside the fixed spec.\n"
+        "BLOCKED: correct continuation requires a missing decision, scope, "
+        "architecture contract, dependency, or other information not supplied "
+        "by the fixed approved contract.\n"
+        f"GATE_APPLICABILITY: {gate_name}\n"
+        f"{applicability}"
+    )
 
 
 def _v2_structured_output_contract(require_non_convergence: bool) -> str:
@@ -775,13 +964,26 @@ def _v2_structured_output_contract(require_non_convergence: bool) -> str:
         "exactly APPROVED, CHANGES_REQUESTED, or BLOCKED on the first non-empty "
         "line. CHANGES_REQUESTED must be followed by one machine-readable JSON "
         "repair object with a non-empty findings array. Every finding must "
-        "contain these non-empty string fields: problem, evidence, "
-        "required_outcome, recommended_repair, verification_focus. "
+        "contain these non-empty string fields: binding_basis, problem, "
+        "evidence, failure_mode, required_outcome, recommended_repair, "
+        "verification_focus. binding_basis must be exactly an approved "
+        "task:<section>, checkpoint:CP-N:<field>, or non-empty trimmed "
+        "repo:<reference>; Review focus is advisory and is not a valid "
+        "binding basis. recommended_repair is required but advisory; the "
+        "binding requirement and required_outcome control the repair. "
         "affected_paths is optional metadata and never replaces a required "
         "field.\n"
         "MACHINE_READABLE_OUTPUT_CONTRACT:\n"
-        "finding_required_fields: problem, evidence, required_outcome, "
-        "recommended_repair, verification_focus\n"
+        "finding_required_fields: binding_basis, problem, evidence, "
+        "failure_mode, required_outcome, recommended_repair, "
+        "verification_focus\n"
+        "binding_basis_allowed_task_values: task:goal, task:scope, "
+        "task:out_of_scope, task:approved_implementation_approach, "
+        "task:acceptance_criteria, task:full_verification\n"
+        "binding_basis_checkpoint_form: checkpoint:CP-N:<field>, where N >= 1\n"
+        "binding_basis_allowed_checkpoint_fields: objective, required_result, "
+        "constraints, verification\n"
+        "binding_basis_repository_form: repo:<non-empty trimmed reference>\n"
         f"non_convergence_required: {non_convergence_requirement}\n"
         "non_convergence_required_fields: previous_requirement, actual_change, "
         "why_unsatisfied, misunderstanding, remaining_required_outcome, "
@@ -832,6 +1034,7 @@ def execute_v2_checkpoints(
     *,
     accepted_base_context_identity: str,
     checkpoint_acceptor: Callable[[AcceptedCheckpointCandidate], str] | None,
+    history_sink: list[GateHistory] | None = None,
 ) -> V2CheckpointExecutionResult:
     """Execute the fixed spec's checkpoint gates in declared order.
 
@@ -885,7 +1088,9 @@ def execute_v2_checkpoints(
             spec_identity=spec.digest,
             accepted_base_context_identity=base_context_identity,
         )
-        history = GateHistory(context=context)
+        history = _retain_v2_gate_history(
+            GateHistory(context=context), history_sink
+        )
         histories.append(history)
         verification_failure: str | None = None
 
@@ -1007,24 +1212,18 @@ def execute_v2_checkpoints(
             except RepositoryError as exc:
                 return blocked(str(exc))
 
-            if review.verdict_is_explicit:
-                history.review_iteration = next_review_iteration
+            recorded_iteration = _record_v2_interpreted_review_attempt(
+                history,
+                review,
+                candidate_identity=identity,
+                candidate_state=patch.diff_text,
+                verification=verification,
+                repair_delta_digest=delta_digest,
+            )
 
             packet = review.repair_packet
-            findings = packet.findings if packet is not None else ()
             if review.verdict is ReviewVerdict.APPROVED:
-                history.attempts.append(
-                    GateAttempt(
-                        candidate_identity=identity,
-                        candidate_state=patch.diff_text,
-                        verification=verification,
-                        rejected=False,
-                        rejection_basis=None,
-                        review_iteration=next_review_iteration,
-                        reviewer_verdict=ReviewVerdict.APPROVED,
-                        repair_delta_digest=delta_digest,
-                    )
-                )
+                assert recorded_iteration == next_review_iteration
                 history.previous_reviewed_candidate_identity = identity
                 history.previous_reviewed_candidate_state = patch.diff_text
                 history.consecutive_changes_requested = 0
@@ -1063,22 +1262,9 @@ def execute_v2_checkpoints(
                 break
 
             if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+                assert recorded_iteration == next_review_iteration
                 history.consecutive_changes_requested += 1
                 history.rejected_candidate_identities.add(identity)
-                history.attempts.append(
-                    GateAttempt(
-                        candidate_identity=identity,
-                        candidate_state=patch.diff_text,
-                        verification=verification,
-                        rejected=True,
-                        rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
-                        review_iteration=next_review_iteration,
-                        reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
-                        findings=findings,
-                        repair_packet=packet,
-                        repair_delta_digest=delta_digest,
-                    )
-                )
                 history.previous_reviewed_candidate_identity = identity
                 history.previous_reviewed_candidate_state = patch.diff_text
                 if (
@@ -1093,22 +1279,19 @@ def execute_v2_checkpoints(
                 history.latest_valid_repair_packet = packet
                 continue
 
-            history.attempts.append(
-                GateAttempt(
-                    candidate_identity=identity,
-                    candidate_state=patch.diff_text,
-                    verification=verification,
-                    rejected=False,
-                    rejection_basis=None,
-                    review_iteration=(
-                        next_review_iteration if review.verdict_is_explicit else None
-                    ),
-                    reviewer_verdict=(
-                        ReviewVerdict.BLOCKED if review.verdict_is_explicit else None
-                    ),
-                    repair_delta_digest=delta_digest,
+            if recorded_iteration is None:
+                history.attempts.append(
+                    GateAttempt(
+                        candidate_identity=identity,
+                        candidate_state=patch.diff_text,
+                        verification=verification,
+                        rejected=False,
+                        rejection_basis=None,
+                        review_iteration=None,
+                        reviewer_verdict=None,
+                        repair_delta_digest=delta_digest,
+                    )
                 )
-            )
             return blocked(
                 review.blocked_reason
                 or f"designated reviewer returned BLOCKED for {checkpoint.checkpoint_id}"
@@ -1332,6 +1515,17 @@ def _build_v2_cumulative_review_input(
     full_verification: V2FullVerificationEvidence,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "PRE_CLOSURE_CUMULATIVE_IMPLEMENTATION_REVIEW",
+        (
+            "Review the complete implementation contract: every binding Task "
+            "Execution Spec section, every declared checkpoint objective, "
+            "required result, constraint, and verification, Full verification, "
+            "and all applicable repository contracts. The current artifact is "
+            "the complete origin/main...HEAD implementation diff before Task "
+            "Closure.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -1343,7 +1537,7 @@ def _build_v2_cumulative_review_input(
         "satisfies the pre-closure implementation-diff review prerequisite.\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review the complete implementation diff in a fresh, independent "
-        f"context. {contract}"
+        f"context. {protocol}{contract}"
         f"SPEC_IDENTITY: {spec.digest}\n"
         f"BASE_IDENTITY: {patch.base_sha}\n"
         f"REVIEWED_HEAD_SHA: {patch.head_sha}\n"
@@ -1383,6 +1577,16 @@ def _build_v2_late_repair_prompt(
         f"CURRENT_REPAIR_PACKET:\n{_repair_packet_json(repair_packet)}\n"
         f"CURRENT_VERIFICATION_FAILURE:\n"
         f"{verification_failure or '(none)'}\n"
+        "PRE_RETURN_CONFORMANCE_PASS:\n"
+        "Before returning control, inspect the repaired candidate against each "
+        "current binding finding and its required_outcome, any deterministic "
+        "verification failure above, the task-wide Scope, Out of scope, and "
+        "Approved implementation approach, and applicable existing repository "
+        "constraints. Correct every violation you find before returning. "
+        "recommended_repair is an advisory implementation suggestion; the "
+        "binding_basis and required_outcome are the actual repair target. "
+        "Perform this pass internally: do not create a separate self-review "
+        "artifact, verdict, confidence claim, or reviewer anchoring statement.\n"
         f"REPOSITORY_CONTEXT:\n{repository_context}"
     )
 
@@ -1394,6 +1598,16 @@ def _build_v2_late_repair_review_input(
     verification: VerificationEvidence,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "LATE_IMPLEMENTATION_REPAIR",
+        (
+            "First review the original/current repair findings and their "
+            "required_outcome values against the current repaired candidate. "
+            "Then perform a fresh material pass over the task-wide binding "
+            "boundaries and applicable repository contracts. This review does "
+            "not replace required downstream checkpoint/evidence replay.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -1403,7 +1617,7 @@ def _build_v2_late_repair_review_input(
         "REVIEW_PURPOSE: CHECKPOINT (mode A implementation repair)\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review this implementation repair in a fresh, independent "
-        f"context. {contract}"
+        f"context. {protocol}{contract}"
         f"CURRENT_PATCH:\n{patch.diff_text}\n"
         f"PASSING_VERIFICATION:\n{_format_verification(verification)}"
     )
@@ -1430,16 +1644,20 @@ def _execute_v2_late_repair(
     verification_commands: tuple[tuple[str, ...], ...],
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
     initial_verification_failure: str | None = None,
+    history_sink: list[GateHistory] | None = None,
 ) -> tuple[AcceptedImplementationRepairCandidate, GateHistory, str]:
     """Adaptive mode-A repair with CP-2 no-progress semantics and no budget."""
 
-    history = GateHistory(
-        context=GateContext(
-            gate_id=gate_id,
-            spec_identity=spec.digest,
-            accepted_base_context_identity=accepted_base_context_identity,
+    history = _retain_v2_gate_history(
+        GateHistory(
+            context=GateContext(
+                gate_id=gate_id,
+                spec_identity=spec.digest,
+                accepted_base_context_identity=accepted_base_context_identity,
+            ),
+            latest_valid_repair_packet=initial_packet,
         ),
-        latest_valid_repair_packet=initial_packet,
+        history_sink,
     )
     verification_failure = initial_verification_failure
 
@@ -1525,24 +1743,19 @@ def _execute_v2_late_repair(
             context=f"{gate_id} review",
         )
         next_iteration = history.review_iteration + 1
-        if review.verdict_is_explicit:
-            history.review_iteration = next_iteration
+        recorded_iteration = _record_v2_interpreted_review_attempt(
+            history,
+            review,
+            candidate_identity=identity,
+            candidate_state=patch.diff_text,
+            verification=verification,
+            repair_delta_digest=delta_digest,
+        )
 
         packet = review.repair_packet
         if review.verdict is ReviewVerdict.APPROVED:
+            assert recorded_iteration == next_iteration
             history.consecutive_changes_requested = 0
-            history.attempts.append(
-                GateAttempt(
-                    candidate_identity=identity,
-                    candidate_state=patch.diff_text,
-                    verification=verification,
-                    rejected=False,
-                    rejection_basis=None,
-                    review_iteration=next_iteration,
-                    reviewer_verdict=ReviewVerdict.APPROVED,
-                    repair_delta_digest=delta_digest,
-                )
-            )
             accepted = AcceptedImplementationRepairCandidate(
                 gate_context=history.context,
                 candidate_identity=identity,
@@ -1559,22 +1772,9 @@ def _execute_v2_late_repair(
             return accepted, history, next_base
 
         if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+            assert recorded_iteration == next_iteration
             history.consecutive_changes_requested += 1
             history.rejected_candidate_identities.add(identity)
-            history.attempts.append(
-                GateAttempt(
-                    candidate_identity=identity,
-                    candidate_state=patch.diff_text,
-                    verification=verification,
-                    rejected=True,
-                    rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
-                    review_iteration=next_iteration,
-                    reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
-                    findings=packet.findings,
-                    repair_packet=packet,
-                    repair_delta_digest=delta_digest,
-                )
-            )
             history.previous_reviewed_candidate_identity = identity
             history.previous_reviewed_candidate_state = patch.diff_text
             if (
@@ -1650,23 +1850,18 @@ def _review_v2_replayed_checkpoint(
         context=f"replayed {checkpoint.checkpoint_id} review",
     )
     next_iteration = history.review_iteration + 1
-    if review.verdict_is_explicit:
-        history.review_iteration = next_iteration
+    recorded_iteration = _record_v2_interpreted_review_attempt(
+        history,
+        review,
+        candidate_identity=identity,
+        candidate_state=patch.diff_text,
+        verification=verification,
+    )
 
     packet = review.repair_packet
     if review.verdict is ReviewVerdict.APPROVED:
+        assert recorded_iteration == next_iteration
         history.consecutive_changes_requested = 0
-        history.attempts.append(
-            GateAttempt(
-                candidate_identity=identity,
-                candidate_state=patch.diff_text,
-                verification=verification,
-                rejected=False,
-                rejection_basis=None,
-                review_iteration=next_iteration,
-                reviewer_verdict=ReviewVerdict.APPROVED,
-            )
-        )
         current_head = repository.head_sha(config.repo)
         candidate = AcceptedCheckpointCandidate(
             checkpoint=checkpoint,
@@ -1689,21 +1884,9 @@ def _review_v2_replayed_checkpoint(
         )
 
     if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+        assert recorded_iteration == next_iteration
         history.consecutive_changes_requested += 1
         history.rejected_candidate_identities.add(identity)
-        history.attempts.append(
-            GateAttempt(
-                candidate_identity=identity,
-                candidate_state=patch.diff_text,
-                verification=verification,
-                rejected=True,
-                rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
-                review_iteration=next_iteration,
-                reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
-                findings=packet.findings,
-                repair_packet=packet,
-            )
-        )
         history.previous_reviewed_candidate_identity = identity
         history.previous_reviewed_candidate_state = patch.diff_text
         if (
@@ -1729,19 +1912,25 @@ def _replay_v2_checkpoints_conservatively(
     originals: tuple[AcceptedCheckpointEvidence, ...],
     evidence: V2ImplementationEvidence,
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
+    history_sink: list[GateHistory] | None = None,
 ) -> tuple[GateHistory, ...]:
     """Replay from CP-1, preserving every original predecessor boundary."""
 
-    histories = {
-        item.candidate.checkpoint.checkpoint_id: GateHistory(
-            context=GateContext(
-                gate_id=f"replay:{item.candidate.checkpoint.checkpoint_id}",
-                spec_identity=spec.digest,
-                accepted_base_context_identity=item.predecessor_review_boundary_sha,
-            )
+    histories: dict[str, GateHistory] = {}
+    for item in originals:
+        checkpoint_id = item.candidate.checkpoint.checkpoint_id
+        histories[checkpoint_id] = _retain_v2_gate_history(
+            GateHistory(
+                context=GateContext(
+                    gate_id=f"replay:{checkpoint_id}",
+                    spec_identity=spec.digest,
+                    accepted_base_context_identity=(
+                        item.predecessor_review_boundary_sha
+                    ),
+                )
+            ),
+            history_sink,
         )
-        for item in originals
-    }
 
     while True:
         evidence.invalidate_from_checkpoint(0)
@@ -1773,6 +1962,7 @@ def _replay_v2_checkpoints_conservatively(
                 verification_commands=checkpoint.verification,
                 repair_acceptor=repair_acceptor,
                 initial_verification_failure=verification_failure,
+                history_sink=history_sink,
             )
             histories[f"repair:{checkpoint.checkpoint_id}:{len(histories)}"] = (
                 repair_history
@@ -1794,6 +1984,7 @@ def execute_v2_pre_closure_review(
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str] | None,
     initial_repair_packet: RepairPacket | None = None,
     initial_repair_gate_id: str = "mode-c-implementation-repair",
+    history_sink: list[GateHistory] | None = None,
 ) -> V2PreClosureExecutionResult:
     """Run CP-3 Full verification, cumulative review, repair, and replay.
 
@@ -1810,12 +2001,15 @@ def execute_v2_pre_closure_review(
     )
 
     def new_cumulative_history(base_sha: str) -> GateHistory:
-        return GateHistory(
-            context=GateContext(
-                gate_id="pre-closure-cumulative-review",
-                spec_identity=spec.digest,
-                accepted_base_context_identity=base_sha,
-            )
+        return _retain_v2_gate_history(
+            GateHistory(
+                context=GateContext(
+                    gate_id="pre-closure-cumulative-review",
+                    spec_identity=spec.digest,
+                    accepted_base_context_identity=base_sha,
+                )
+            ),
+            history_sink,
         )
 
     cumulative_history = new_cumulative_history(execution_target.base_sha)
@@ -1892,11 +2086,17 @@ def execute_v2_pre_closure_review(
                 initial_packet=initial_repair_packet,
                 verification_commands=_all_checkpoint_verification_commands(spec),
                 repair_acceptor=repair_acceptor,
+                history_sink=history_sink,
             )
             replay_histories.append(repair_history)
             replay_histories.extend(
                 _replay_v2_checkpoints_conservatively(
-                    config, spec, originals, evidence, repair_acceptor
+                    config,
+                    spec,
+                    originals,
+                    evidence,
+                    repair_acceptor,
+                    history_sink=history_sink,
                 )
             )
 
@@ -1960,24 +2160,19 @@ def execute_v2_pre_closure_review(
                 continue
             terminal_phase = Phase.PRE_CLOSURE_CUMULATIVE_REVIEW
             next_iteration = cumulative_history.review_iteration + 1
-            if review.verdict_is_explicit:
-                cumulative_history.review_iteration = next_iteration
+            recorded_iteration = _record_v2_interpreted_review_attempt(
+                cumulative_history,
+                review,
+                candidate_identity=identity,
+                candidate_state=patch.diff_text,
+                verification=full.verification,
+            )
 
             packet = review.repair_packet
             if review.verdict is ReviewVerdict.APPROVED:
+                assert recorded_iteration == next_iteration
                 terminal_phase = Phase.PRE_CLOSURE_CUMULATIVE_REVIEW
                 cumulative_history.consecutive_changes_requested = 0
-                cumulative_history.attempts.append(
-                    GateAttempt(
-                        candidate_identity=identity,
-                        candidate_state=patch.diff_text,
-                        verification=full.verification,
-                        rejected=False,
-                        rejection_basis=None,
-                        review_iteration=next_iteration,
-                        reviewer_verdict=ReviewVerdict.APPROVED,
-                    )
-                )
                 evidence.cumulative_review = V2CumulativeReviewEvidence(
                     spec_identity=spec.digest,
                     base_identity=current_target.base_sha,
@@ -1989,21 +2184,9 @@ def execute_v2_pre_closure_review(
                 return result(True)
 
             if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+                assert recorded_iteration == next_iteration
                 cumulative_history.consecutive_changes_requested += 1
                 cumulative_history.rejected_candidate_identities.add(identity)
-                cumulative_history.attempts.append(
-                    GateAttempt(
-                        candidate_identity=identity,
-                        candidate_state=patch.diff_text,
-                        verification=full.verification,
-                        rejected=True,
-                        rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
-                        review_iteration=next_iteration,
-                        reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
-                        findings=packet.findings,
-                        repair_packet=packet,
-                    )
-                )
                 cumulative_history.previous_reviewed_candidate_identity = identity
                 cumulative_history.previous_reviewed_candidate_state = patch.diff_text
                 if (
@@ -2028,11 +2211,17 @@ def execute_v2_pre_closure_review(
                     initial_packet=packet,
                     verification_commands=_all_checkpoint_verification_commands(spec),
                     repair_acceptor=repair_acceptor,
+                    history_sink=history_sink,
                 )
                 replay_histories.append(repair_history)
                 replay_histories.extend(
                     _replay_v2_checkpoints_conservatively(
-                        config, spec, originals, evidence, repair_acceptor
+                        config,
+                        spec,
+                        originals,
+                        evidence,
+                        repair_acceptor,
+                        history_sink=history_sink,
                     )
                 )
                 terminal_phase = Phase.FULL_VERIFICATION
@@ -2097,6 +2286,14 @@ def _build_v2_closure_prompt(
         f"{_repair_packet_json(upstream_packet)}\n"
         "CURRENT_CLOSURE_REVIEW_REPAIR_PACKET:\n"
         f"{_repair_packet_json(closure_gate_packet)}\n"
+        "PRE_RETURN_CONFORMANCE_PASS:\n"
+        "Before returning control, inspect only the resulting closure candidate "
+        "against canonical closure content, factual evidence, terminal-registry "
+        "and governance boundaries, and the allowed closure files and content "
+        "stated above. Correct every violation you find before returning. Do not "
+        "re-review the implementation during this closure-scoped pass. Perform "
+        "the pass internally: do not create a separate self-review artifact, "
+        "verdict, confidence claim, or reviewer anchoring statement.\n"
     )
 
 
@@ -2105,6 +2302,14 @@ def _build_v2_closure_review_input(
     diff_text: str,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "PROSPECTIVE_TASK_CLOSURE",
+        (
+            "Review only the exact closure candidate diff, its factual closure "
+            "evidence, and applicable closure, terminal-registry, and governance "
+            "requirements. Do not repeat the full implementation review.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -2114,7 +2319,7 @@ def _build_v2_closure_review_input(
         "REVIEW_PURPOSE: CHECKPOINT (mode A closure candidate)\n"
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review only the canonical prospective Task Closure diff. "
-        f"{contract}"
+        f"{protocol}{contract}"
         f"CURRENT_PATCH:\n{diff_text}\n"
     )
     if history.latest_valid_repair_packet is not None:
@@ -2140,6 +2345,7 @@ def _prepare_v2_unpublished_closure(
     task_md_baseline: str,
     initial_packet: RepairPacket | None = None,
     strict_closure_only_repair: bool = False,
+    history_sink: list[GateHistory] | None = None,
 ) -> tuple[
     repository.UnpublishedCommitCandidate,
     GateHistory,
@@ -2148,12 +2354,15 @@ def _prepare_v2_unpublished_closure(
     """Adaptively review Task Closure, then create one local-only commit."""
 
     upstream_packet = initial_packet
-    history = GateHistory(
-        context=GateContext(
-            gate_id="prospective-task-closure",
-            spec_identity=execution_target.spec.digest,
-            accepted_base_context_identity=expected_published_head,
-        )
+    history = _retain_v2_gate_history(
+        GateHistory(
+            context=GateContext(
+                gate_id="prospective-task-closure",
+                spec_identity=execution_target.spec.digest,
+                accepted_base_context_identity=expected_published_head,
+            )
+        ),
+        history_sink,
     )
     while True:
         before = repository.capture_branch_head(config.repo)
@@ -2203,22 +2412,17 @@ def _prepare_v2_unpublished_closure(
             context="v2 Task Closure review",
         )
         next_iteration = history.review_iteration + 1
-        if review.verdict_is_explicit:
-            history.review_iteration = next_iteration
+        recorded_iteration = _record_v2_interpreted_review_attempt(
+            history,
+            review,
+            candidate_identity=identity,
+            candidate_state=patch.diff_text,
+            verification=None,
+        )
         packet = review.repair_packet
         if review.verdict is ReviewVerdict.APPROVED:
+            assert recorded_iteration == next_iteration
             history.consecutive_changes_requested = 0
-            history.attempts.append(
-                GateAttempt(
-                    candidate_identity=identity,
-                    candidate_state=patch.diff_text,
-                    verification=None,
-                    rejected=False,
-                    rejection_basis=None,
-                    review_iteration=next_iteration,
-                    reviewer_verdict=ReviewVerdict.APPROVED,
-                )
-            )
             candidate = repository.create_unpublished_reviewed_commit(
                 config.repo,
                 reviewed_patch=patch,
@@ -2232,6 +2436,7 @@ def _prepare_v2_unpublished_closure(
             )
             return candidate, history, touched
         if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+            assert recorded_iteration == next_iteration
             if not _v2_repair_is_proven_closure_only(packet):
                 repository.discard_reviewed_uncommitted_candidate(
                     config.repo,
@@ -2244,19 +2449,6 @@ def _prepare_v2_unpublished_closure(
                 raise _ImplementationRepairRequired(packet)
             history.consecutive_changes_requested += 1
             history.rejected_candidate_identities.add(identity)
-            history.attempts.append(
-                GateAttempt(
-                    candidate_identity=identity,
-                    candidate_state=patch.diff_text,
-                    verification=None,
-                    rejected=True,
-                    rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
-                    review_iteration=next_iteration,
-                    reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
-                    findings=packet.findings,
-                    repair_packet=packet,
-                )
-            )
             history.previous_reviewed_candidate_identity = identity
             history.previous_reviewed_candidate_state = patch.diff_text
             if (
@@ -2279,6 +2471,15 @@ def _build_v2_mode_c_review_input(
     patch: repository.ReviewPatch,
     history: GateHistory,
 ) -> str:
+    protocol = _v2_designated_review_protocol(
+        "MODE_C_FINAL_CUMULATIVE_AUDIT",
+        (
+            "Review the full final cumulative candidate — implementation plus "
+            "the unpublished Task Closure — against the complete applicable "
+            "Task Execution Spec and repository contract, including every "
+            "checkpoint, Full verification, and closure/governance boundaries.\n"
+        ),
+    )
     contract = _v2_structured_output_contract(
         history.consecutive_changes_requested >= 1
     )
@@ -2288,7 +2489,7 @@ def _build_v2_mode_c_review_input(
         "REVIEW_PURPOSE: FINAL_CUMULATIVE_AUDIT\n"
         "ROLE: Review the exact local unpublished closure candidate. Report "
         "semantic findings only; the orchestrator chooses every transition. "
-        f"{contract}"
+        f"{protocol}{contract}"
         f"BASE_SHA: {patch.base_sha}\n"
         f"CANDIDATE_HEAD_SHA: {candidate.candidate_head_sha}\n"
         f"CANDIDATE_TREE_SHA: {candidate.tree_sha}\n"
@@ -2380,6 +2581,7 @@ def _stabilize_v2_published_candidate(
     initial_base_sha: str,
     closure_baseline: _V2ClosureMaterialBaseline,
     set_phase: Callable[[Phase], None],
+    history_sink: list[GateHistory] | None = None,
 ) -> V2ModeCAuditEvidence | None:
     """Keep Mode C fresh through CI without changing the published candidate."""
 
@@ -2398,12 +2600,15 @@ def _stabilize_v2_published_candidate(
         _require_v2_closure_material_unchanged(
             config.repo, closure_baseline, base_sha
         )
-        history = GateHistory(
-            context=GateContext(
-                gate_id="post-publication-mode-c-replay",
-                spec_identity=execution_target.spec.digest,
-                accepted_base_context_identity=base_sha,
-            )
+        history = _retain_v2_gate_history(
+            GateHistory(
+                context=GateContext(
+                    gate_id="post-publication-mode-c-replay",
+                    spec_identity=execution_target.spec.digest,
+                    accepted_base_context_identity=base_sha,
+                )
+            ),
+            history_sink,
         )
         while True:
             set_phase(Phase.MODE_C_FINAL_AUDIT)
@@ -2424,22 +2629,34 @@ def _stabilize_v2_published_candidate(
                 _require_v2_closure_material_unchanged(
                     config.repo, closure_baseline, base_sha
                 )
-                history = GateHistory(
-                    context=GateContext(
-                        gate_id="post-publication-mode-c-replay",
-                        spec_identity=execution_target.spec.digest,
-                        accepted_base_context_identity=base_sha,
-                    )
+                history = _retain_v2_gate_history(
+                    GateHistory(
+                        context=GateContext(
+                            gate_id="post-publication-mode-c-replay",
+                            spec_identity=execution_target.spec.digest,
+                            accepted_base_context_identity=base_sha,
+                        )
+                    ),
+                    history_sink,
                 )
                 continue
             set_phase(Phase.MODE_C_FINAL_AUDIT)
+            identity = _candidate_identity(patch.diff_text)
+            review_iteration = _record_v2_interpreted_review_attempt(
+                history,
+                review,
+                candidate_identity=identity,
+                candidate_state=patch.diff_text,
+                verification=None,
+            )
             if review.verdict is ReviewVerdict.APPROVED:
+                assert review_iteration is not None
                 replacement_audit = V2ModeCAuditEvidence(
                     base_sha=base_sha,
                     candidate_head_sha=candidate.candidate_head_sha,
                     candidate_tree_sha=candidate.tree_sha,
                     review_patch=patch,
-                    review_iteration=1,
+                    review_iteration=review_iteration,
                 )
                 break
             if review.verdict is ReviewVerdict.CHANGES_REQUESTED:
@@ -2460,6 +2677,7 @@ def execute_v2_unpublished_closure(
     pre_closure_result: V2PreClosureExecutionResult,
     *,
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
+    history_sink: list[GateHistory] | None = None,
 ) -> V2ClosureExecutionResult:
     """Run isolated CP-4: local closure, Mode C, exact publish, required CI."""
 
@@ -2542,6 +2760,7 @@ def execute_v2_unpublished_closure(
                     task_md_baseline=task_md_baseline,
                     initial_packet=pending_closure_packet,
                     strict_closure_only_repair=strict_closure_only,
+                    history_sink=history_sink,
                 )
                 closure_baseline = _select_v2_closure_material_paths(
                     captured_baseline, closure_touched
@@ -2555,6 +2774,7 @@ def execute_v2_unpublished_closure(
                     repair_acceptor=repair_acceptor,
                     initial_repair_packet=transition.packet,
                     initial_repair_gate_id="closure-review-implementation-repair",
+                    history_sink=history_sink,
                 )
                 if not current_pre_closure.completed:
                     terminal_phase = current_pre_closure.terminal_phase
@@ -2596,12 +2816,15 @@ def execute_v2_unpublished_closure(
                 base_sha = current_target.base_sha
                 context_key = (base_sha, implementation_head)
                 if mode_history is None or mode_history_context != context_key:
-                    mode_history = GateHistory(
-                        context=GateContext(
-                            gate_id="mode-c-final-cumulative-audit",
-                            spec_identity=execution_target.spec.digest,
-                            accepted_base_context_identity=implementation_head,
-                        )
+                    mode_history = _retain_v2_gate_history(
+                        GateHistory(
+                            context=GateContext(
+                                gate_id="mode-c-final-cumulative-audit",
+                                spec_identity=execution_target.spec.digest,
+                                accepted_base_context_identity=implementation_head,
+                            )
+                        ),
+                        history_sink,
                     )
                     mode_history_context = context_key
                 identity = _candidate_identity(
@@ -2632,12 +2855,15 @@ def execute_v2_unpublished_closure(
                         config.repo, closure_baseline, post_target.base_sha
                     )
                     current_pre_closure.evidence.base_identity = post_target.base_sha
-                    mode_history = GateHistory(
-                        context=GateContext(
-                            gate_id="mode-c-final-cumulative-audit",
-                            spec_identity=execution_target.spec.digest,
-                            accepted_base_context_identity=implementation_head,
-                        )
+                    mode_history = _retain_v2_gate_history(
+                        GateHistory(
+                            context=GateContext(
+                                gate_id="mode-c-final-cumulative-audit",
+                                spec_identity=execution_target.spec.digest,
+                                accepted_base_context_identity=implementation_head,
+                            )
+                        ),
+                        history_sink,
                     )
                     mode_history_context = (
                         post_target.base_sha,
@@ -2646,22 +2872,17 @@ def execute_v2_unpublished_closure(
                     continue
                 terminal_phase = Phase.MODE_C_FINAL_AUDIT
                 next_iteration = mode_history.review_iteration + 1
-                if review.verdict_is_explicit:
-                    mode_history.review_iteration = next_iteration
+                recorded_iteration = _record_v2_interpreted_review_attempt(
+                    mode_history,
+                    review,
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=None,
+                )
                 packet = review.repair_packet
                 if review.verdict is ReviewVerdict.APPROVED:
+                    assert recorded_iteration == next_iteration
                     mode_history.consecutive_changes_requested = 0
-                    mode_history.attempts.append(
-                        GateAttempt(
-                            candidate_identity=identity,
-                            candidate_state=patch.diff_text,
-                            verification=None,
-                            rejected=False,
-                            rejection_basis=None,
-                            review_iteration=next_iteration,
-                            reviewer_verdict=ReviewVerdict.APPROVED,
-                        )
-                    )
                     accepted_audit = V2ModeCAuditEvidence(
                         base_sha=base_sha,
                         candidate_head_sha=candidate.candidate_head_sha,
@@ -2689,26 +2910,15 @@ def execute_v2_unpublished_closure(
                         base_sha,
                         closure_baseline,
                         set_phase,
+                        history_sink=history_sink,
                     )
                     if replacement_audit is not None:
                         accepted_audit = replacement_audit
                     return outcome(True)
                 if review.verdict is ReviewVerdict.CHANGES_REQUESTED and packet is not None:
+                    assert recorded_iteration == next_iteration
                     mode_history.consecutive_changes_requested += 1
                     mode_history.rejected_candidate_identities.add(identity)
-                    mode_history.attempts.append(
-                        GateAttempt(
-                            candidate_identity=identity,
-                            candidate_state=patch.diff_text,
-                            verification=None,
-                            rejected=True,
-                            rejection_basis=CandidateRejectionBasis.CHANGES_REQUESTED,
-                            review_iteration=next_iteration,
-                            reviewer_verdict=ReviewVerdict.CHANGES_REQUESTED,
-                            findings=packet.findings,
-                            repair_packet=packet,
-                        )
-                    )
                     mode_history.previous_reviewed_candidate_identity = identity
                     mode_history.previous_reviewed_candidate_state = patch.diff_text
                     if (
@@ -2735,6 +2945,7 @@ def execute_v2_unpublished_closure(
                         current_checkpoint_result,
                         repair_acceptor=repair_acceptor,
                         initial_repair_packet=packet,
+                        history_sink=history_sink,
                     )
                     if not current_pre_closure.completed:
                         terminal_phase = current_pre_closure.terminal_phase

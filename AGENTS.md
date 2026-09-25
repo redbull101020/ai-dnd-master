@@ -363,7 +363,13 @@ Implementation and review happen in separate, fresh contexts:
   this contract stays provider-neutral: no provider or model family receives
   special canonical privileges;
 - the reviewer returns exactly one verdict: `APPROVED`, `CHANGES_REQUESTED`,
-  or `BLOCKED`.
+  or `BLOCKED`;
+- before that verdict, the reviewer completes the material pass applicable to
+  the current gate, including a fresh pass after checking any previous
+  findings on a repeat review;
+- every blocking repair finding identifies a concrete binding basis; style,
+  preference, optional improvement, future scope, and advisory `Review focus`
+  alone are not blocking requirements.
 
 An `APPROVED` verdict from the designated autonomous reviewer is an accepted
 review checkpoint. After the final cumulative implementation review (see

@@ -5,7 +5,13 @@ import pytest
 
 from tools.autonomous_pr import __main__ as main_module
 from tools.autonomous_pr.__main__ import _build_config, _parse_args
-from tools.autonomous_pr.model import Phase, RunOutcome, RunResult
+from tools.autonomous_pr.model import (
+    Phase,
+    ReviewGateMetrics,
+    ReviewVerdict,
+    RunOutcome,
+    RunResult,
+)
 
 
 def _argv(*extra: str) -> list[str]:
@@ -87,3 +93,44 @@ def test_no_eligible_task_is_exit_zero_without_a_synthetic_task_id(
     output = capsys.readouterr().out
     assert "task_id: None" in output
     assert "outcome: NO_ELIGIBLE_TASK" in output
+
+
+def test_cli_reports_review_metrics_as_deterministic_json_lines(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = RunResult(
+        task_id="TSK-9001",
+        phase=Phase.CHECKPOINT_REVIEW,
+        outcome=RunOutcome.BLOCKED,
+        delivery_branch="delivery",
+        head_sha="a" * 40,
+        blocked_reason="review blocked",
+        review_metrics=(
+            ReviewGateMetrics(
+                gate_id="CP-1",
+                review_iterations=2,
+                changes_requested_count=1,
+                verification_rejection_count=1,
+                findings_per_review=(1, 0),
+                binding_bases_per_review=(("task:scope",), ()),
+                new_binding_bases_after_first_review=(),
+                repeated_binding_bases=(),
+                last_reviewer_verdict=ReviewVerdict.BLOCKED,
+            ),
+        ),
+    )
+
+    main_module._report(result)
+
+    metric_lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("review_metric_json: ")
+    ]
+    assert metric_lines == [
+        'review_metric_json: {"binding_bases_per_review":[["task:scope"],[]],'
+        '"changes_requested_count":1,"findings_per_review":[1,0],'
+        '"gate_id":"CP-1","last_reviewer_verdict":"BLOCKED",'
+        '"new_binding_bases_after_first_review":[],"repeated_binding_bases":[],'
+        '"review_iterations":2,"verification_rejection_count":1}'
+    ]

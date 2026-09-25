@@ -87,8 +87,10 @@ class AgentRole(Enum):
 class RepairFinding:
     """One complete, provider-neutral v2 repair finding (Harness §25)."""
 
+    binding_basis: str
     problem: str
     evidence: str
+    failure_mode: str
     required_outcome: str
     recommended_repair: str
     verification_focus: str
@@ -430,6 +432,21 @@ class ExecutionTarget:
 
 
 @dataclass(frozen=True)
+class ReviewGateMetrics:
+    """Immutable diagnostics derived from one in-memory review-gate history."""
+
+    gate_id: str
+    review_iterations: int
+    changes_requested_count: int
+    verification_rejection_count: int
+    findings_per_review: tuple[int, ...]
+    binding_bases_per_review: tuple[tuple[str, ...], ...]
+    new_binding_bases_after_first_review: tuple[str, ...]
+    repeated_binding_bases: tuple[str, ...]
+    last_reviewer_verdict: ReviewVerdict | None
+
+
+@dataclass(frozen=True)
 class RunResult:
     """The outcome of one orchestrator run, returned to the CLI caller.
 
@@ -450,6 +467,10 @@ class RunResult:
 
     ``pr_url`` is populated once the draft PR exists (``None`` before that
     phase, or on any run that never reaches it).
+
+    ``review_metrics`` is a read-only diagnostic projection of the in-memory
+    gate histories that reached an explicit designated-reviewer verdict. It is
+    empty when no designated review occurred and never drives orchestration.
     """
 
     task_id: str | None
@@ -464,3 +485,4 @@ class RunResult:
     spec_path: str | None = None
     spec_digest: str | None = None
     no_work_reasons: tuple[TaskSelectionReason, ...] = ()
+    review_metrics: tuple[ReviewGateMetrics, ...] = ()

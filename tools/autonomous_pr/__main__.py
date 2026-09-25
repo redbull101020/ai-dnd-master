@@ -34,6 +34,7 @@ way to grant Git/GitHub write access to either role.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -200,6 +201,28 @@ def _report(result: RunResult) -> None:
         print(f"spec_digest: {result.spec_digest}")
     for reason in result.no_work_reasons:
         print(f"no_work_reason: {reason.task_id or '(catalog)'}: {reason.reason}")
+    for metric in result.review_metrics:
+        payload = {
+            "binding_bases_per_review": metric.binding_bases_per_review,
+            "changes_requested_count": metric.changes_requested_count,
+            "findings_per_review": metric.findings_per_review,
+            "gate_id": metric.gate_id,
+            "last_reviewer_verdict": (
+                metric.last_reviewer_verdict.value
+                if metric.last_reviewer_verdict is not None
+                else None
+            ),
+            "new_binding_bases_after_first_review": (
+                metric.new_binding_bases_after_first_review
+            ),
+            "repeated_binding_bases": metric.repeated_binding_bases,
+            "review_iterations": metric.review_iterations,
+            "verification_rejection_count": metric.verification_rejection_count,
+        }
+        print(
+            "review_metric_json: "
+            + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        )
     if result.blocked_reason is not None:
         print(f"blocked_reason: {result.blocked_reason}")
 

@@ -21,6 +21,7 @@ from tools.autonomous_pr.model import (
     ExecutionCheckpoint,
     ExecutionApproval,
     ExecutionTarget,
+    GateAttempt,
     GateContext,
     GateHistory,
     NonConvergenceDiagnosis,
@@ -669,6 +670,17 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
     assert result.spec_path == f"docs/tasks/{_TASK_ID}.md"
     assert result.spec_digest is not None
     assert result.pr_url == "https://github.com/example/repo/pull/1"
+    assert tuple(metric.gate_id for metric in result.review_metrics) == (
+        "CP-1",
+        "pre-closure-cumulative-review",
+        "prospective-task-closure",
+        "mode-c-final-cumulative-audit",
+    )
+    assert all(metric.review_iterations == 1 for metric in result.review_metrics)
+    assert all(
+        metric.last_reviewer_verdict is ReviewVerdict.APPROVED
+        for metric in result.review_metrics
+    )
     assert result.head_sha == _run_git(["rev-parse", "HEAD"], cwd=work).strip()
     assert result.head_sha == _run_git(
         ["rev-parse", f"origin/autonomous-pr/{_TASK_ID.lower()}"], cwd=work
@@ -694,6 +706,34 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
         "",
         "- Public run integration closure.",
     ]
+
+
+def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('BLOCKED')\n"
+    config = OrchestratorConfig(
+        task_id=_TASK_ID,
+        repo=env.work,
+        implementer_spec=_implementer_spec(
+            env.work, _public_dispatch_implementer_code(_TASK_ID)
+        ),
+        reviewer_spec=_reviewer_spec(env.work, reviewer_code),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID),
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.CHECKPOINT_REVIEW
+    assert len(result.review_metrics) == 1
+    metric = result.review_metrics[0]
+    assert metric.gate_id == "CP-1"
+    assert metric.review_iterations == 1
+    assert metric.findings_per_review == (0,)
+    assert metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
 
 
 def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) -> None:
@@ -735,6 +775,7 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
     assert result.delivery_branch is None
     assert result.phase is Phase.PREFLIGHT
     assert result.no_work_reasons[0].task_id == _TASK_ID
+    assert result.review_metrics == ()
     assert _run_git(["branch", "--show-current"], cwd=work).strip() == "main"
     assert _run_git(["rev-parse", "HEAD"], cwd=work).strip() == initial_head
     assert _run_git(["status", "--porcelain"], cwd=work) == ""
@@ -1750,8 +1791,10 @@ def _v2_verification(passed: bool) -> VerificationEvidence:
 
 def _finding(problem: str) -> RepairFinding:
     return RepairFinding(
+        binding_basis="checkpoint:CP-1:required_result",
         problem=problem,
         evidence=f"evidence for {problem}",
+        failure_mode=f"failure mode for {problem}",
         required_outcome=f"required outcome for {problem}",
         recommended_repair=f"repair for {problem}",
         verification_focus=f"verify {problem}",
@@ -1798,6 +1841,65 @@ def _v2_blocked(reason: str) -> StructuredReviewResult:
         raw_output="",
         blocked_reason=reason,
     )
+
+
+def _v2_explicit_blocked(reason: str) -> StructuredReviewResult:
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.BLOCKED,
+        repair_packet=None,
+        raw_output="BLOCKED\n",
+        blocked_reason=reason,
+        verdict_is_explicit=True,
+    )
+
+
+def _capture_recorded_review_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[GateContext, GateAttempt]]:
+    captured: list[tuple[GateContext, GateAttempt]] = []
+    real_record = orch_module._record_v2_interpreted_review_attempt
+
+    def capture(
+        history: GateHistory,
+        review: StructuredReviewResult,
+        **kwargs: object,
+    ) -> int | None:
+        iteration = real_record(history, review, **kwargs)
+        if iteration is not None:
+            captured.append((history.context, history.attempts[-1]))
+        return iteration
+
+    monkeypatch.setattr(orch_module, "_record_v2_interpreted_review_attempt", capture)
+    return captured
+
+
+def _v2_changes_for_bases(*bases: str) -> StructuredReviewResult:
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.CHANGES_REQUESTED,
+        repair_packet=RepairPacket(
+            findings=tuple(
+                dataclasses.replace(
+                    _finding(f"problem-{index}"), binding_basis=basis
+                )
+                for index, basis in enumerate(bases, start=1)
+            )
+        ),
+        raw_output="CHANGES_REQUESTED\n{}\n",
+        verdict_is_explicit=True,
+    )
+
+
+def _record_metric_review(
+    history: GateHistory, review: StructuredReviewResult, candidate: str
+) -> None:
+    iteration = orch_module._record_v2_interpreted_review_attempt(
+        history,
+        review,
+        candidate_identity=CandidateIdentity(candidate),
+        candidate_state=candidate,
+        verification=None,
+    )
+    assert iteration is not None
 
 
 @dataclass
@@ -2002,13 +2104,24 @@ def test_v2_reviewer_handoff_declares_complete_structured_output_contract(
     assert "non_convergence_required: false" in first
     assert "non_convergence_required: true" in second
     for field in (
+        "binding_basis",
         "problem",
         "evidence",
+        "failure_mode",
         "required_outcome",
         "recommended_repair",
         "verification_focus",
     ):
         assert field in first
+    for binding_basis_fragment in (
+        "task:approved_implementation_approach",
+        "checkpoint:CP-N:<field>",
+        "objective, required_result, constraints, verification",
+        "repo:<non-empty trimmed reference>",
+        "Review focus is advisory",
+        "recommended_repair is required but advisory",
+    ):
+        assert binding_basis_fragment in first
     for field in (
         "previous_requirement",
         "actual_change",
@@ -2018,6 +2131,231 @@ def test_v2_reviewer_handoff_declares_complete_structured_output_contract(
         "recommended_corrective_approach",
     ):
         assert field in second
+
+
+def test_v2_designated_review_builders_declare_material_pass_and_applicability() -> None:
+    spec = _v2_spec(checkpoint_count=2)
+    verification = dataclasses.replace(_v2_verification(True), head_sha="h" * 40)
+    patch = repository.ReviewPatch(
+        purpose=repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        range_description="origin/main...HEAD",
+        base_sha="b" * 40,
+        head_sha="h" * 40,
+        branch="delivery",
+        diff_text="current diff",
+        digest="patch-digest",
+    )
+    previous_packet = RepairPacket(findings=(_finding("previous defect"),))
+    history = GateHistory(
+        context=GateContext(
+            gate_id="test-gate",
+            spec_identity=spec.digest,
+            accepted_base_context_identity="b" * 40,
+        ),
+        review_iteration=1,
+        consecutive_changes_requested=1,
+        latest_valid_repair_packet=previous_packet,
+        previous_reviewed_candidate_state="previous diff",
+    )
+    full_verification = orch_module.V2FullVerificationEvidence(
+        spec_identity=spec.digest,
+        base_identity="b" * 40,
+        candidate_identity=CandidateIdentity("candidate"),
+        head_sha="h" * 40,
+        verification=verification,
+    )
+    execution_target = _cp3_target("b" * 40, spec)
+    candidate = repository.UnpublishedCommitCandidate(
+        branch="delivery",
+        published_predecessor_sha="h" * 40,
+        candidate_head_sha="c" * 40,
+        tree_sha="t" * 40,
+    )
+
+    checkpoint_prompt = orch_module._build_v2_reviewer_input(
+        spec,
+        spec.checkpoints[0],
+        "current diff",
+        verification,
+        review_iteration=2,
+        previous_packet=previous_packet,
+        repair_delta="repair delta",
+        require_non_convergence=True,
+    )
+    cumulative_prompt = orch_module._build_v2_cumulative_review_input(
+        spec, patch, full_verification, history
+    )
+    late_repair_prompt = orch_module._build_v2_late_repair_review_input(
+        spec, "late-repair", patch, verification, history
+    )
+    closure_prompt = orch_module._build_v2_closure_review_input(
+        execution_target, "closure diff", history
+    )
+    mode_c_prompt = orch_module._build_v2_mode_c_review_input(
+        execution_target, candidate, patch, history
+    )
+
+    prompts = (
+        checkpoint_prompt,
+        cumulative_prompt,
+        late_repair_prompt,
+        closure_prompt,
+        mode_c_prompt,
+    )
+    for prompt in prompts:
+        assert "determine the binding requirements applicable to this gate" in prompt
+        assert "complete current review artifact" in prompt
+        assert "all supplied deterministic evidence" in prompt
+        assert "first re-evaluate the previous reviewer findings" in prompt
+        assert "fresh material pass over every remaining applicable" in prompt
+        assert "all independent material defects" in prompt
+        assert "only when it has a concrete binding_basis" in prompt
+        assert "advisory Review focus are non-blocking" in prompt
+        assert "APPROVED: the applicable material pass is complete" in prompt
+        assert "CHANGES_REQUESTED: one or more proven repairable" in prompt
+        assert "BLOCKED: correct continuation requires a missing decision" in prompt
+        assert "PRE_RETURN_CONFORMANCE_PASS:" not in prompt
+        assert "self-review artifact" not in prompt
+
+    assert "GATE_APPLICABILITY: ORDINARY_CHECKPOINT" in checkpoint_prompt
+    assert "task:goal, task:scope, task:out_of_scope" in checkpoint_prompt
+    assert "checkpoint:CP-1:objective" in checkpoint_prompt
+    assert "checkpoint:CP-1:verification" in checkpoint_prompt
+    assert "checkpoint:CP-2:required_result" not in checkpoint_prompt
+    assert (
+        "task:acceptance_criteria and task:full_verification are not independent"
+        in checkpoint_prompt
+    )
+    assert "do not demand future-checkpoint results early" in checkpoint_prompt
+
+    assert (
+        "GATE_APPLICABILITY: PRE_CLOSURE_CUMULATIVE_IMPLEMENTATION_REVIEW"
+        in cumulative_prompt
+    )
+    assert "every binding Task Execution Spec section" in cumulative_prompt
+    assert "every declared checkpoint objective" in cumulative_prompt
+    assert "Full verification" in cumulative_prompt
+    assert "complete origin/main...HEAD implementation diff" in cumulative_prompt
+
+    assert "GATE_APPLICABILITY: LATE_IMPLEMENTATION_REPAIR" in late_repair_prompt
+    assert "First review the original/current repair findings" in late_repair_prompt
+    assert "required_outcome values" in late_repair_prompt
+    assert "task-wide binding boundaries" in late_repair_prompt
+    assert "does not replace required downstream checkpoint/evidence replay" in late_repair_prompt
+
+    assert "GATE_APPLICABILITY: PROSPECTIVE_TASK_CLOSURE" in closure_prompt
+    assert "exact closure candidate diff" in closure_prompt
+    assert "factual closure evidence" in closure_prompt
+    assert "terminal-registry" in closure_prompt
+    assert "Do not repeat the full implementation review" in closure_prompt
+
+    assert "GATE_APPLICABILITY: MODE_C_FINAL_CUMULATIVE_AUDIT" in mode_c_prompt
+    assert "implementation plus the unpublished Task Closure" in mode_c_prompt
+    assert "complete applicable Task Execution Spec" in mode_c_prompt
+    assert "every checkpoint, Full verification" in mode_c_prompt
+    assert "closure/governance boundaries" in mode_c_prompt
+
+
+def test_v2_candidate_changing_handoffs_require_internal_conformance_pass() -> None:
+    spec = _v2_spec()
+    checkpoint = spec.checkpoints[0]
+    packet = RepairPacket(findings=(_finding("binding defect"),))
+    patch = repository.ReviewPatch(
+        purpose=repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        range_description="origin/main...HEAD",
+        base_sha="b" * 40,
+        head_sha="h" * 40,
+        branch="delivery",
+        diff_text="implementation diff",
+        digest="implementation-patch",
+    )
+    cumulative = orch_module.V2CumulativeReviewEvidence(
+        spec_identity=spec.digest,
+        base_identity="b" * 40,
+        candidate_identity=CandidateIdentity("implementation"),
+        reviewed_head_sha="h" * 40,
+        review_patch=patch,
+        review_iteration=1,
+    )
+    pre_closure = orch_module.V2PreClosureExecutionResult(
+        completed=True,
+        evidence=orch_module.V2ImplementationEvidence(
+            spec_identity=spec.digest,
+            base_identity="b" * 40,
+            accepted_checkpoints=[],
+            cumulative_review=cumulative,
+        ),
+        cumulative_history=GateHistory(
+            context=GateContext(
+                gate_id="pre-closure-cumulative-review",
+                spec_identity=spec.digest,
+                accepted_base_context_identity="b" * 40,
+            )
+        ),
+        replay_histories=(),
+    )
+    target = _cp3_target("b" * 40, spec)
+
+    initial_checkpoint = orch_module._build_v2_implementer_prompt(
+        spec, checkpoint, None, None, "repository facts"
+    )
+    checkpoint_repair = orch_module._build_v2_implementer_prompt(
+        spec,
+        checkpoint,
+        packet,
+        "deterministic checkpoint verification failed",
+        "repository facts",
+    )
+    late_repair = orch_module._build_v2_late_repair_prompt(
+        spec,
+        "late-repair",
+        packet,
+        "deterministic late verification failed",
+        "repository facts",
+    )
+    initial_closure = orch_module._build_v2_closure_prompt(
+        target, pre_closure, "108", None, None
+    )
+    closure_repair = orch_module._build_v2_closure_prompt(
+        target, pre_closure, "108", None, packet
+    )
+
+    for prompt in (
+        initial_checkpoint,
+        checkpoint_repair,
+        late_repair,
+        initial_closure,
+        closure_repair,
+    ):
+        assert "PRE_RETURN_CONFORMANCE_PASS:" in prompt
+        assert "Correct every violation you find before returning" in prompt
+        assert "do not create a separate self-review artifact" in prompt
+        assert "verdict, confidence claim, or reviewer anchoring statement" in prompt
+
+    for prompt in (initial_checkpoint, checkpoint_repair):
+        assert "task-wide Scope, Out of scope, and Approved implementation" in prompt
+        assert "current checkpoint Required result and Constraints" in prompt
+        assert "negative and fail-closed cases" in prompt
+        assert "deterministic verification failure evidence when present" in prompt
+    assert "binding defect" not in initial_checkpoint
+    assert "binding defect" in checkpoint_repair
+    assert "required outcome for binding defect" in checkpoint_repair
+    assert "deterministic checkpoint verification failed" in checkpoint_repair
+
+    assert "each current binding finding and its required_outcome" in late_repair
+    assert "deterministic late verification failed" in late_repair
+    assert "applicable existing repository constraints" in late_repair
+    assert "recommended_repair is an advisory implementation suggestion" in late_repair
+    assert "binding_basis and required_outcome are the actual repair target" in late_repair
+
+    for prompt in (initial_closure, closure_repair):
+        assert "canonical closure content, factual evidence" in prompt
+        assert "terminal-registry and governance boundaries" in prompt
+        assert "allowed closure files and content" in prompt
+        assert "Do not re-review the implementation" in prompt
+        assert "task-wide Scope" not in prompt
+    assert "binding defect" not in initial_closure
+    assert "binding defect" in closure_repair
 
 
 def test_v2_checkpoint_distinct_candidates_continue_without_numeric_limit(
@@ -2078,6 +2416,104 @@ def test_v2_checkpoint_malformed_repair_output_is_terminal_blocked(
     assert result.gate_histories[0].review_iteration == 0
     assert result.gate_histories[0].attempts[0].review_iteration is None
     assert result.gate_histories[0].attempts[0].reviewer_verdict is None
+
+
+def test_v2_review_gate_metrics_are_pure_deterministic_history_derivatives() -> None:
+    basis_a = "task:scope"
+    basis_b = "repo:AGENTS.md review authority"
+
+    def history(gate_id: str = "shared-gate") -> GateHistory:
+        return GateHistory(
+            context=GateContext(
+                gate_id=gate_id,
+                spec_identity="spec",
+                accepted_base_context_identity="base",
+            )
+        )
+
+    cr_then_approved = history()
+    _record_metric_review(
+        cr_then_approved, _v2_changes_for_bases(basis_a), "candidate-1"
+    )
+    _record_metric_review(cr_then_approved, _v2_approved(), "candidate-2")
+    first = orch_module._summarize_v2_gate_history(cr_then_approved)
+    assert first.review_iterations == 2
+    assert first.changes_requested_count == 1
+    assert first.findings_per_review == (1, 0)
+    assert first.binding_bases_per_review == ((basis_a,), ())
+    assert first.new_binding_bases_after_first_review == ()
+    assert first.repeated_binding_bases == ()
+    assert first.last_reviewer_verdict is ReviewVerdict.APPROVED
+
+    repeated = history()
+    _record_metric_review(repeated, _v2_changes_for_bases(basis_a), "candidate-1")
+    _record_metric_review(repeated, _v2_changes_for_bases(basis_a), "candidate-2")
+    _record_metric_review(repeated, _v2_approved(), "candidate-3")
+    repeated_metric = orch_module._summarize_v2_gate_history(repeated)
+    assert repeated_metric.changes_requested_count == 2
+    assert repeated_metric.repeated_binding_bases == (basis_a,)
+    assert repeated_metric.new_binding_bases_after_first_review == ()
+
+    late_basis = history()
+    _record_metric_review(late_basis, _v2_changes_for_bases(basis_a), "candidate-1")
+    _record_metric_review(late_basis, _v2_changes_for_bases(basis_b), "candidate-2")
+    _record_metric_review(late_basis, _v2_approved(), "candidate-3")
+    late_metric = orch_module._summarize_v2_gate_history(late_basis)
+    assert late_metric.new_binding_bases_after_first_review == (basis_b,)
+    assert late_metric.repeated_binding_bases == ()
+
+    verification_then_review = history("verification-gate")
+    verification_then_review.attempts.append(
+        GateAttempt(
+            candidate_identity=CandidateIdentity("verification-failure"),
+            candidate_state="verification-failure",
+            verification=_v2_verification(False),
+            rejected=True,
+            rejection_basis=CandidateRejectionBasis.VERIFICATION_FAILURE,
+            review_iteration=None,
+            reviewer_verdict=None,
+        )
+    )
+    _record_metric_review(
+        verification_then_review,
+        _v2_changes_for_bases(basis_a),
+        "reviewed-candidate",
+    )
+    verification_metric = orch_module._summarize_v2_gate_history(
+        verification_then_review
+    )
+    assert verification_metric.review_iterations == 1
+    assert verification_metric.verification_rejection_count == 1
+
+    blocked = history("blocked-gate")
+    _record_metric_review(blocked, _v2_changes_for_bases(basis_a), "candidate-1")
+    _record_metric_review(
+        blocked, _v2_explicit_blocked("missing decision"), "candidate-2"
+    )
+    blocked_metric = orch_module._summarize_v2_gate_history(blocked)
+    assert blocked_metric.findings_per_review == (1, 0)
+    assert blocked_metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
+
+    duplicate_in_one_packet = history("duplicate-basis-packet")
+    _record_metric_review(
+        duplicate_in_one_packet,
+        _v2_changes_for_bases(basis_a, basis_a),
+        "candidate-1",
+    )
+    duplicate_metric = orch_module._summarize_v2_gate_history(
+        duplicate_in_one_packet
+    )
+    assert duplicate_metric.repeated_binding_bases == ()
+
+    same_id_metrics = orch_module._summarize_v2_review_histories(
+        [cr_then_approved, repeated]
+    )
+    assert len(same_id_metrics) == 2
+    assert [metric.gate_id for metric in same_id_metrics] == [
+        "shared-gate",
+        "shared-gate",
+    ]
+    assert orch_module._summarize_v2_review_histories([history("no-review")]) == ()
 
 
 def test_v2_checkpoint_second_change_requires_non_convergence_diagnosis(
@@ -2936,6 +3372,73 @@ def test_v2_late_repair_has_no_numeric_repair_limit(
     assert accepted_base == accepted_heads[0]
 
 
+def test_v2_late_repair_records_explicit_blocked_before_terminal_transition(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    _install_cp3_reviewer_sequence(
+        env, monkeypatch, [_v2_explicit_blocked("late repair blocked")]
+    )
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    initial = _v2_changes("initial").repair_packet
+    assert initial is not None
+
+    with pytest.raises(orch_module._Blocked, match="late repair blocked"):
+        orch_module._execute_v2_late_repair(
+            _cp3_config(env),
+            spec,
+            gate_id="late-repair-blocked",
+            accepted_base_context_identity=_run_git(
+                ["rev-parse", "HEAD"], cwd=env.work
+            ).strip(),
+            initial_packet=initial,
+            verification_commands=spec.checkpoints[0].verification,
+            repair_acceptor=lambda candidate: pytest.fail(
+                f"blocked candidate was accepted: {candidate}"
+            ),
+        )
+
+    assert len(recorded) == 1
+    context, attempt = recorded[0]
+    assert context.gate_id == "late-repair-blocked"
+    assert attempt.review_iteration == 1
+    assert attempt.reviewer_verdict is ReviewVerdict.BLOCKED
+    assert attempt.findings == ()
+    assert not attempt.rejected and attempt.rejection_basis is None
+
+
+def test_v2_replayed_checkpoint_records_explicit_blocked(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    original = checkpoint_result.checkpoint_evidence[0]
+    history = GateHistory(
+        context=GateContext(
+            gate_id=f"replay:{original.candidate.checkpoint.checkpoint_id}",
+            spec_identity=spec.digest,
+            accepted_base_context_identity=original.predecessor_review_boundary_sha,
+        )
+    )
+    _install_cp3_reviewer_sequence(
+        env, monkeypatch, [_v2_explicit_blocked("checkpoint replay blocked")]
+    )
+
+    with pytest.raises(orch_module._Blocked, match="checkpoint replay blocked"):
+        orch_module._review_v2_replayed_checkpoint(
+            _cp3_config(env), spec, original, history
+        )
+
+    assert history.review_iteration == 1
+    assert len(history.attempts) == 1
+    attempt = history.attempts[0]
+    assert attempt.reviewer_verdict is ReviewVerdict.BLOCKED
+    assert attempt.findings == ()
+    assert not attempt.rejected and attempt.rejection_basis is None
+
+
 # --- TSK-0028 CP-4: unpublished Task Closure and Mode C ordering ------------
 
 
@@ -3397,6 +3900,7 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
             _v2_approved(),
         ],
     )
+    histories: list[GateHistory] = []
 
     result = orch_module.execute_v2_unpublished_closure(
         _cp3_config(env),
@@ -3404,6 +3908,7 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
         checkpoints,
         pre_closure,
         repair_acceptor=_cp4_repair_acceptor(env),
+        history_sink=histories,
     )
 
     assert result.completed
@@ -3412,8 +3917,55 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
         for prompt in implementer_prompts
     )
     assert result.pre_closure_result.replay_histories
+    closure_metrics = [
+        metric
+        for metric in orch_module._summarize_v2_review_histories(histories)
+        if metric.gate_id == "prospective-task-closure"
+    ]
+    assert closure_metrics[0].changes_requested_count == 1
+    assert closure_metrics[0].binding_bases_per_review == (
+        ("checkpoint:CP-1:required_result",),
+    )
     assert result.closure_candidate is not None
     assert result.closure_candidate.published_predecessor_sha != implementation_head
+
+
+def test_v2_closure_implementation_cr_is_recorded_before_repair_transition(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    review = _v2_changes("closure review found implementation defect")
+    _install_cp4_agents(env, monkeypatch, [review])
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    histories: list[GateHistory] = []
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+
+    with pytest.raises(orch_module._ImplementationRepairRequired) as raised:
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+            history_sink=histories,
+        )
+
+    assert raised.value.packet is review.repair_packet
+    assert review.repair_packet is not None
+    assert len(recorded) == 1
+    context, attempt = recorded[0]
+    assert context.gate_id == "prospective-task-closure"
+    assert attempt.reviewer_verdict is ReviewVerdict.CHANGES_REQUESTED
+    assert attempt.rejection_basis is CandidateRejectionBasis.CHANGES_REQUESTED
+    assert attempt.findings == review.repair_packet.findings
+    closure_metrics = orch_module._summarize_v2_review_histories(histories)
+    assert len(closure_metrics) == 1
+    assert closure_metrics[0].gate_id == "prospective-task-closure"
+    assert closure_metrics[0].changes_requested_count == 1
 
 
 def test_v2_mode_c_missing_paths_uses_implementation_repair_and_cp3_replay(
@@ -3635,6 +4187,8 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     _install_cp4_agents(
         env, monkeypatch, [_v2_approved(), _v2_approved(), _v2_approved()]
     )
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    histories: list[GateHistory] = []
     real_checks = repository.pr_required_checks
     checks_count = 0
     moved_sha: str | None = None
@@ -3657,6 +4211,7 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
         checkpoints,
         pre_closure,
         repair_acceptor=_cp4_repair_acceptor(env),
+        history_sink=histories,
     )
 
     assert result.completed and result.published
@@ -3664,6 +4219,83 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     assert moved_sha is not None
     assert result.mode_c_evidence is not None
     assert result.mode_c_evidence.base_sha == moved_sha
+    post_publication = [
+        attempt
+        for context, attempt in recorded
+        if context.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication) == 1
+    assert post_publication[0].reviewer_verdict is ReviewVerdict.APPROVED
+    assert post_publication[0].findings == ()
+    post_publication_metrics = [
+        metric
+        for metric in orch_module._summarize_v2_review_histories(histories)
+        if metric.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication_metrics) == 1
+    assert post_publication_metrics[0].last_reviewer_verdict is ReviewVerdict.APPROVED
+
+
+def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    _mock_cp3_revalidated_target(monkeypatch, target)
+    review = _v2_changes("post-publication binding defect")
+    _install_cp4_agents(
+        env, monkeypatch, [_v2_approved(), _v2_approved(), review]
+    )
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    histories: list[GateHistory] = []
+    real_checks = repository.pr_required_checks
+    checks_count = 0
+
+    def move_base_after_first_ci(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        nonlocal checks_count
+        checks_count += 1
+        result = real_checks(repo, pr_number, gh_command=gh_command)
+        if checks_count == 1:
+            _advance_cp3_origin_main(env, "post-publication-cr-base-move")
+        return result
+
+    monkeypatch.setattr(repository, "pr_required_checks", move_base_after_first_ci)
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+        history_sink=histories,
+    )
+
+    assert not result.completed and result.published
+    assert "candidate-changing repair" in (result.blocked_reason or "")
+    post_publication = [
+        attempt
+        for context, attempt in recorded
+        if context.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication) == 1
+    attempt = post_publication[0]
+    assert attempt.reviewer_verdict is ReviewVerdict.CHANGES_REQUESTED
+    assert attempt.rejection_basis is CandidateRejectionBasis.CHANGES_REQUESTED
+    assert review.repair_packet is not None
+    assert attempt.findings == review.repair_packet.findings
+    post_publication_metrics = [
+        metric
+        for metric in orch_module._summarize_v2_review_histories(histories)
+        if metric.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication_metrics) == 1
+    assert post_publication_metrics[0].changes_requested_count == 1
+    assert (
+        post_publication_metrics[0].last_reviewer_verdict
+        is ReviewVerdict.CHANGES_REQUESTED
+    )
 
 
 def test_v2_post_publication_tracker_movement_blocks_ready_for_human_merge(
