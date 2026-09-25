@@ -371,6 +371,13 @@ Implementation and review happen in separate, fresh contexts:
   preference, optional improvement, future scope, and advisory `Review focus`
   alone are not blocking requirements.
 
+For every operational agent invocation, the orchestrator deterministically
+selects the compute profile; neither implementer nor reviewer chooses its own
+model or effort. Escalation is local to the current gate or causal repair
+episode and is not carried past an accepted gate or into a new run. Routing
+changes no authority, independent-review, publication, CI, or human-only merge
+boundary.
+
 An `APPROVED` verdict from the designated autonomous reviewer is an accepted
 review checkpoint. After the final cumulative implementation review (see
 "Autonomous flow" below), such an `APPROVED` verdict satisfies `docs/TASK.md`
