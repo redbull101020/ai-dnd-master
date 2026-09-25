@@ -725,6 +725,16 @@ def _build_v2_implementer_prompt(
         "Git/GitHub writes.\n"
         f"CURRENT_REPAIR_PACKET:\n{repair_text}\n"
         f"CURRENT_VERIFICATION_FAILURE:\n{verification_text}\n"
+        "PRE_RETURN_CONFORMANCE_PASS:\n"
+        "Before returning control, inspect the resulting candidate against the "
+        "task-wide Scope, Out of scope, and Approved implementation approach; "
+        "the current checkpoint Required result and Constraints; the current "
+        "repair packet when present; relevant negative and fail-closed cases "
+        "that follow directly from those binding requirements; and deterministic "
+        "verification failure evidence when present. Correct every violation "
+        "you find before returning. Perform this pass internally: do not create "
+        "a separate self-review artifact, verdict, confidence claim, or reviewer "
+        "anchoring statement.\n"
         f"REPOSITORY_CONTEXT:\n{repository_context_text}"
     )
 
@@ -1453,6 +1463,16 @@ def _build_v2_late_repair_prompt(
         f"CURRENT_REPAIR_PACKET:\n{_repair_packet_json(repair_packet)}\n"
         f"CURRENT_VERIFICATION_FAILURE:\n"
         f"{verification_failure or '(none)'}\n"
+        "PRE_RETURN_CONFORMANCE_PASS:\n"
+        "Before returning control, inspect the repaired candidate against each "
+        "current binding finding and its required_outcome, any deterministic "
+        "verification failure above, the task-wide Scope, Out of scope, and "
+        "Approved implementation approach, and applicable existing repository "
+        "constraints. Correct every violation you find before returning. "
+        "recommended_repair is an advisory implementation suggestion; the "
+        "binding_basis and required_outcome are the actual repair target. "
+        "Perform this pass internally: do not create a separate self-review "
+        "artifact, verdict, confidence claim, or reviewer anchoring statement.\n"
         f"REPOSITORY_CONTEXT:\n{repository_context}"
     )
 
@@ -2177,6 +2197,14 @@ def _build_v2_closure_prompt(
         f"{_repair_packet_json(upstream_packet)}\n"
         "CURRENT_CLOSURE_REVIEW_REPAIR_PACKET:\n"
         f"{_repair_packet_json(closure_gate_packet)}\n"
+        "PRE_RETURN_CONFORMANCE_PASS:\n"
+        "Before returning control, inspect only the resulting closure candidate "
+        "against canonical closure content, factual evidence, terminal-registry "
+        "and governance boundaries, and the allowed closure files and content "
+        "stated above. Correct every violation you find before returning. Do not "
+        "re-review the implementation during this closure-scoped pass. Perform "
+        "the pass internally: do not create a separate self-review artifact, "
+        "verdict, confidence claim, or reviewer anchoring statement.\n"
     )
 
 

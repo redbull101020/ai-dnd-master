@@ -2114,6 +2114,8 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
         assert "APPROVED: the applicable material pass is complete" in prompt
         assert "CHANGES_REQUESTED: one or more proven repairable" in prompt
         assert "BLOCKED: correct continuation requires a missing decision" in prompt
+        assert "PRE_RETURN_CONFORMANCE_PASS:" not in prompt
+        assert "self-review artifact" not in prompt
 
     assert "GATE_APPLICABILITY: ORDINARY_CHECKPOINT" in checkpoint_prompt
     assert "task:goal, task:scope, task:out_of_scope" in checkpoint_prompt
@@ -2152,6 +2154,108 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
     assert "complete applicable Task Execution Spec" in mode_c_prompt
     assert "every checkpoint, Full verification" in mode_c_prompt
     assert "closure/governance boundaries" in mode_c_prompt
+
+
+def test_v2_candidate_changing_handoffs_require_internal_conformance_pass() -> None:
+    spec = _v2_spec()
+    checkpoint = spec.checkpoints[0]
+    packet = RepairPacket(findings=(_finding("binding defect"),))
+    patch = repository.ReviewPatch(
+        purpose=repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        range_description="origin/main...HEAD",
+        base_sha="b" * 40,
+        head_sha="h" * 40,
+        branch="delivery",
+        diff_text="implementation diff",
+        digest="implementation-patch",
+    )
+    cumulative = orch_module.V2CumulativeReviewEvidence(
+        spec_identity=spec.digest,
+        base_identity="b" * 40,
+        candidate_identity=CandidateIdentity("implementation"),
+        reviewed_head_sha="h" * 40,
+        review_patch=patch,
+        review_iteration=1,
+    )
+    pre_closure = orch_module.V2PreClosureExecutionResult(
+        completed=True,
+        evidence=orch_module.V2ImplementationEvidence(
+            spec_identity=spec.digest,
+            base_identity="b" * 40,
+            accepted_checkpoints=[],
+            cumulative_review=cumulative,
+        ),
+        cumulative_history=GateHistory(
+            context=GateContext(
+                gate_id="pre-closure-cumulative-review",
+                spec_identity=spec.digest,
+                accepted_base_context_identity="b" * 40,
+            )
+        ),
+        replay_histories=(),
+    )
+    target = _cp3_target("b" * 40, spec)
+
+    initial_checkpoint = orch_module._build_v2_implementer_prompt(
+        spec, checkpoint, None, None, "repository facts"
+    )
+    checkpoint_repair = orch_module._build_v2_implementer_prompt(
+        spec,
+        checkpoint,
+        packet,
+        "deterministic checkpoint verification failed",
+        "repository facts",
+    )
+    late_repair = orch_module._build_v2_late_repair_prompt(
+        spec,
+        "late-repair",
+        packet,
+        "deterministic late verification failed",
+        "repository facts",
+    )
+    initial_closure = orch_module._build_v2_closure_prompt(
+        target, pre_closure, "108", None, None
+    )
+    closure_repair = orch_module._build_v2_closure_prompt(
+        target, pre_closure, "108", None, packet
+    )
+
+    for prompt in (
+        initial_checkpoint,
+        checkpoint_repair,
+        late_repair,
+        initial_closure,
+        closure_repair,
+    ):
+        assert "PRE_RETURN_CONFORMANCE_PASS:" in prompt
+        assert "Correct every violation you find before returning" in prompt
+        assert "do not create a separate self-review artifact" in prompt
+        assert "verdict, confidence claim, or reviewer anchoring statement" in prompt
+
+    for prompt in (initial_checkpoint, checkpoint_repair):
+        assert "task-wide Scope, Out of scope, and Approved implementation" in prompt
+        assert "current checkpoint Required result and Constraints" in prompt
+        assert "negative and fail-closed cases" in prompt
+        assert "deterministic verification failure evidence when present" in prompt
+    assert "binding defect" not in initial_checkpoint
+    assert "binding defect" in checkpoint_repair
+    assert "required outcome for binding defect" in checkpoint_repair
+    assert "deterministic checkpoint verification failed" in checkpoint_repair
+
+    assert "each current binding finding and its required_outcome" in late_repair
+    assert "deterministic late verification failed" in late_repair
+    assert "applicable existing repository constraints" in late_repair
+    assert "recommended_repair is an advisory implementation suggestion" in late_repair
+    assert "binding_basis and required_outcome are the actual repair target" in late_repair
+
+    for prompt in (initial_closure, closure_repair):
+        assert "canonical closure content, factual evidence" in prompt
+        assert "terminal-registry and governance boundaries" in prompt
+        assert "allowed closure files and content" in prompt
+        assert "Do not re-review the implementation" in prompt
+        assert "task-wide Scope" not in prompt
+    assert "binding defect" not in initial_closure
+    assert "binding defect" in closure_repair
 
 
 def test_v2_checkpoint_distinct_candidates_continue_without_numeric_limit(
