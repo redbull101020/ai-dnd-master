@@ -2238,11 +2238,13 @@ def execute_v2_pre_closure_review(
             review_input = _build_v2_cumulative_review_input(
                 spec, patch, full, cumulative_history
             )
-            review = _run_v2_designated_review(
+            review = _run_routed_v2_designated_review(
                 config,
                 review_input,
                 patch,
                 context="pre-closure cumulative review",
+                work_kind=AgentWorkKind.PRE_CLOSURE_CUMULATIVE_REVIEW,
+                history=cumulative_history,
             )
             terminal_phase = Phase.ORIGIN_MAIN_REVALIDATION
             post_review_target, base_moved = _revalidate_v2_execution_target(
@@ -2454,6 +2456,9 @@ def _prepare_v2_unpublished_closure(
     """Adaptively review Task Closure, then create one local-only commit."""
 
     upstream_packet = initial_packet
+    # Reviewer direct-response context is one-hop, but implementer routing keeps
+    # the original causal seed for the lifetime of this closure gate episode.
+    implementer_causal_seed = initial_packet
     history = _retain_v2_gate_history(
         GateHistory(
             context=GateContext(
@@ -2473,7 +2478,18 @@ def _prepare_v2_unpublished_closure(
             upstream_packet,
             history.latest_valid_repair_packet,
         )
-        impl_result = run_implementer(config.implementer_spec, prompt)
+        closure_work_kind = (
+            AgentWorkKind.TASK_CLOSURE_PREPARATION
+            if upstream_packet is None and not history.attempts
+            else AgentWorkKind.TASK_CLOSURE_REPAIR
+        )
+        impl_result = _run_routed_v2_implementer(
+            config,
+            prompt,
+            work_kind=closure_work_kind,
+            history=history,
+            direct_upstream_repair_packet=implementer_causal_seed,
+        )
         repository.verify_branch_head_unchanged(
             config.repo, before, context="v2 Task Closure implementer invocation"
         )
@@ -2505,11 +2521,14 @@ def _prepare_v2_unpublished_closure(
         review_input = _build_v2_closure_review_input(
             execution_target, patch.diff_text, history
         )
-        review = _run_v2_designated_review(
+        review = _run_routed_v2_designated_review(
             config,
             review_input,
             patch,
             context="v2 Task Closure review",
+            work_kind=AgentWorkKind.TASK_CLOSURE_REVIEW,
+            history=history,
+            direct_upstream_repair_packet=upstream_packet,
         )
         next_iteration = history.review_iteration + 1
         recorded_iteration = _record_v2_interpreted_review_attempt(
@@ -2637,11 +2656,13 @@ def _review_v2_mode_c_candidate(
     review_input = _build_v2_mode_c_review_input(
         execution_target, candidate, patch, history
     )
-    review = _run_v2_designated_review(
+    review = _run_routed_v2_designated_review(
         config,
         review_input,
         patch,
         context="v2 Mode C final cumulative audit",
+        work_kind=AgentWorkKind.MODE_C_REVIEW,
+        history=history,
     )
     return review, patch
 
