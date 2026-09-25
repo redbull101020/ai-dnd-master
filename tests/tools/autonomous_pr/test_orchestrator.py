@@ -21,6 +21,7 @@ from tools.autonomous_pr.model import (
     ExecutionCheckpoint,
     ExecutionApproval,
     ExecutionTarget,
+    GateAttempt,
     GateContext,
     GateHistory,
     NonConvergenceDiagnosis,
@@ -1802,6 +1803,36 @@ def _v2_blocked(reason: str) -> StructuredReviewResult:
     )
 
 
+def _v2_explicit_blocked(reason: str) -> StructuredReviewResult:
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.BLOCKED,
+        repair_packet=None,
+        raw_output="BLOCKED\n",
+        blocked_reason=reason,
+        verdict_is_explicit=True,
+    )
+
+
+def _capture_recorded_review_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[GateContext, GateAttempt]]:
+    captured: list[tuple[GateContext, GateAttempt]] = []
+    real_record = orch_module._record_v2_interpreted_review_attempt
+
+    def capture(
+        history: GateHistory,
+        review: StructuredReviewResult,
+        **kwargs: object,
+    ) -> int | None:
+        iteration = real_record(history, review, **kwargs)
+        if iteration is not None:
+            captured.append((history.context, history.attempts[-1]))
+        return iteration
+
+    monkeypatch.setattr(orch_module, "_record_v2_interpreted_review_attempt", capture)
+    return captured
+
+
 @dataclass
 class _V2Scenario:
     result: object
@@ -3174,6 +3205,73 @@ def test_v2_late_repair_has_no_numeric_repair_limit(
     assert accepted_base == accepted_heads[0]
 
 
+def test_v2_late_repair_records_explicit_blocked_before_terminal_transition(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    _install_cp3_reviewer_sequence(
+        env, monkeypatch, [_v2_explicit_blocked("late repair blocked")]
+    )
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    initial = _v2_changes("initial").repair_packet
+    assert initial is not None
+
+    with pytest.raises(orch_module._Blocked, match="late repair blocked"):
+        orch_module._execute_v2_late_repair(
+            _cp3_config(env),
+            spec,
+            gate_id="late-repair-blocked",
+            accepted_base_context_identity=_run_git(
+                ["rev-parse", "HEAD"], cwd=env.work
+            ).strip(),
+            initial_packet=initial,
+            verification_commands=spec.checkpoints[0].verification,
+            repair_acceptor=lambda candidate: pytest.fail(
+                f"blocked candidate was accepted: {candidate}"
+            ),
+        )
+
+    assert len(recorded) == 1
+    context, attempt = recorded[0]
+    assert context.gate_id == "late-repair-blocked"
+    assert attempt.review_iteration == 1
+    assert attempt.reviewer_verdict is ReviewVerdict.BLOCKED
+    assert attempt.findings == ()
+    assert not attempt.rejected and attempt.rejection_basis is None
+
+
+def test_v2_replayed_checkpoint_records_explicit_blocked(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    original = checkpoint_result.checkpoint_evidence[0]
+    history = GateHistory(
+        context=GateContext(
+            gate_id=f"replay:{original.candidate.checkpoint.checkpoint_id}",
+            spec_identity=spec.digest,
+            accepted_base_context_identity=original.predecessor_review_boundary_sha,
+        )
+    )
+    _install_cp3_reviewer_sequence(
+        env, monkeypatch, [_v2_explicit_blocked("checkpoint replay blocked")]
+    )
+
+    with pytest.raises(orch_module._Blocked, match="checkpoint replay blocked"):
+        orch_module._review_v2_replayed_checkpoint(
+            _cp3_config(env), spec, original, history
+        )
+
+    assert history.review_iteration == 1
+    assert len(history.attempts) == 1
+    attempt = history.attempts[0]
+    assert attempt.reviewer_verdict is ReviewVerdict.BLOCKED
+    assert attempt.findings == ()
+    assert not attempt.rejected and attempt.rejection_basis is None
+
+
 # --- TSK-0028 CP-4: unpublished Task Closure and Mode C ordering ------------
 
 
@@ -3654,6 +3752,38 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
     assert result.closure_candidate.published_predecessor_sha != implementation_head
 
 
+def test_v2_closure_implementation_cr_is_recorded_before_repair_transition(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    review = _v2_changes("closure review found implementation defect")
+    _install_cp4_agents(env, monkeypatch, [review])
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+
+    with pytest.raises(orch_module._ImplementationRepairRequired) as raised:
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+        )
+
+    assert raised.value.packet is review.repair_packet
+    assert review.repair_packet is not None
+    assert len(recorded) == 1
+    context, attempt = recorded[0]
+    assert context.gate_id == "prospective-task-closure"
+    assert attempt.reviewer_verdict is ReviewVerdict.CHANGES_REQUESTED
+    assert attempt.rejection_basis is CandidateRejectionBasis.CHANGES_REQUESTED
+    assert attempt.findings == review.repair_packet.findings
+
+
 def test_v2_mode_c_missing_paths_uses_implementation_repair_and_cp3_replay(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3873,6 +4003,7 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     _install_cp4_agents(
         env, monkeypatch, [_v2_approved(), _v2_approved(), _v2_approved()]
     )
+    recorded = _capture_recorded_review_attempts(monkeypatch)
     real_checks = repository.pr_required_checks
     checks_count = 0
     moved_sha: str | None = None
@@ -3902,6 +4033,63 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     assert moved_sha is not None
     assert result.mode_c_evidence is not None
     assert result.mode_c_evidence.base_sha == moved_sha
+    post_publication = [
+        attempt
+        for context, attempt in recorded
+        if context.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication) == 1
+    assert post_publication[0].reviewer_verdict is ReviewVerdict.APPROVED
+    assert post_publication[0].findings == ()
+
+
+def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    _mock_cp3_revalidated_target(monkeypatch, target)
+    review = _v2_changes("post-publication binding defect")
+    _install_cp4_agents(
+        env, monkeypatch, [_v2_approved(), _v2_approved(), review]
+    )
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    real_checks = repository.pr_required_checks
+    checks_count = 0
+
+    def move_base_after_first_ci(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        nonlocal checks_count
+        checks_count += 1
+        result = real_checks(repo, pr_number, gh_command=gh_command)
+        if checks_count == 1:
+            _advance_cp3_origin_main(env, "post-publication-cr-base-move")
+        return result
+
+    monkeypatch.setattr(repository, "pr_required_checks", move_base_after_first_ci)
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert not result.completed and result.published
+    assert "candidate-changing repair" in (result.blocked_reason or "")
+    post_publication = [
+        attempt
+        for context, attempt in recorded
+        if context.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication) == 1
+    attempt = post_publication[0]
+    assert attempt.reviewer_verdict is ReviewVerdict.CHANGES_REQUESTED
+    assert attempt.rejection_basis is CandidateRejectionBasis.CHANGES_REQUESTED
+    assert review.repair_packet is not None
+    assert attempt.findings == review.repair_packet.findings
 
 
 def test_v2_post_publication_tracker_movement_blocks_ready_for_human_merge(
