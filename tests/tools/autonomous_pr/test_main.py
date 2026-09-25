@@ -6,12 +6,16 @@ import pytest
 from tools.autonomous_pr import __main__ as main_module
 from tools.autonomous_pr.__main__ import _build_config, _parse_args
 from tools.autonomous_pr.model import (
+    AgentRole,
+    AgentWorkKind,
     ComputeProfile,
     Phase,
     ReviewGateMetrics,
     ReviewVerdict,
     RunOutcome,
     RunResult,
+    RoutingDecisionRecord,
+    RoutingEscalationReason,
 )
 
 
@@ -177,3 +181,48 @@ def test_cli_reports_review_metrics_as_deterministic_json_lines(
         '"new_binding_bases_after_first_review":[],"repeated_binding_bases":[],'
         '"review_iterations":2,"verification_rejection_count":1}'
     ]
+
+
+def test_cli_reports_routing_decisions_as_safe_deterministic_json_lines(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = RunResult(
+        task_id="TSK-9001",
+        phase=Phase.CHECKPOINT_REVIEW,
+        outcome=RunOutcome.BLOCKED,
+        delivery_branch="delivery",
+        head_sha="a" * 40,
+        blocked_reason="agent output must stay private",
+        routing_decisions=(
+            RoutingDecisionRecord(
+                sequence=1,
+                role=AgentRole.IMPLEMENTER,
+                work_kind=AgentWorkKind.IMPLEMENTATION_REPAIR,
+                gate_id="repair:CP-1",
+                baseline_profile=ComputeProfile.DELIBERATE,
+                selected_profile=ComputeProfile.CRITICAL,
+                escalation_reasons=(
+                    RoutingEscalationReason.REPEATED_BINDING_BASIS,
+                ),
+            ),
+        ),
+    )
+
+    main_module._report(result)
+
+    output = capsys.readouterr().out
+    decision_lines = [
+        line
+        for line in output.splitlines()
+        if line.startswith("routing_decision_json: ")
+    ]
+    assert decision_lines == [
+        'routing_decision_json: {"baseline_profile":"DELIBERATE",'
+        '"escalation_reasons":["repeated_binding_basis"],'
+        '"gate_id":"repair:CP-1","role":"implementer",'
+        '"selected_profile":"CRITICAL","sequence":1,'
+        '"work_kind":"implementation_repair"}'
+    ]
+    assert "--critical" not in decision_lines[0]
+    assert "prompt" not in decision_lines[0]
+    assert "agent output" not in decision_lines[0]

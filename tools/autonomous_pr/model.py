@@ -526,6 +526,10 @@ class RunResult:
     ``review_metrics`` is a read-only diagnostic projection of the in-memory
     gate histories that reached an explicit designated-reviewer verdict. It is
     empty when no designated review occurred and never drives orchestration.
+
+    ``routing_decisions`` is the append-only, provider-neutral sequence of
+    agent routing decisions actually made during this run. It is recorded
+    before each selected subprocess invocation and is diagnostic-only.
     """
 
     task_id: str | None
@@ -541,3 +545,4 @@ class RunResult:
     spec_digest: str | None = None
     no_work_reasons: tuple[TaskSelectionReason, ...] = ()
     review_metrics: tuple[ReviewGateMetrics, ...] = ()
+    routing_decisions: tuple[RoutingDecisionRecord, ...] = ()

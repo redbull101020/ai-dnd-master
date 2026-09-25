@@ -49,6 +49,8 @@ from .model import (
     RepairPacket,
     ReviewGateMetrics,
     ReviewVerdict,
+    RoutingDecision,
+    RoutingDecisionRecord,
     RunOutcome,
     RunResult,
     StructuredReviewResult,
@@ -129,6 +131,7 @@ class OrchestratorConfig:
     verification_timeout_seconds: float = 600.0
     gh_command: tuple[str, ...] = ("gh",)
     selected_task_context: str | None = None
+    _routing_decisions: list[RoutingDecisionRecord] | None = None
 
     @property
     def implementer_spec(self) -> AgentInvocationSpec:
@@ -382,6 +385,29 @@ def _run_v2_designated_review(
     return review
 
 
+def _record_v2_routing_decision(
+    config: OrchestratorConfig,
+    decision: RoutingDecision,
+    history: GateHistory,
+) -> None:
+    """Append telemetry after routing and before the selected subprocess."""
+
+    sink = config._routing_decisions
+    if sink is None:
+        return
+    sink.append(
+        RoutingDecisionRecord(
+            sequence=len(sink) + 1,
+            role=decision.role,
+            work_kind=decision.work_kind,
+            gate_id=history.context.gate_id,
+            baseline_profile=decision.baseline_profile,
+            selected_profile=decision.selected_profile,
+            escalation_reasons=decision.escalation_reasons,
+        )
+    )
+
+
 def _run_routed_v2_implementer(
     config: OrchestratorConfig,
     prompt: str,
@@ -398,6 +424,7 @@ def _run_routed_v2_implementer(
         direct_upstream_repair_packet=direct_upstream_repair_packet,
         seed_verification_rejection_count=seed_verification_rejection_count,
     )
+    _record_v2_routing_decision(config, decision, history)
     invocation = config.implementer_profiles.materialize(decision.selected_profile)
     return run_implementer(invocation, prompt)
 
@@ -420,6 +447,7 @@ def _run_routed_v2_designated_review(
         direct_upstream_repair_packet=direct_upstream_repair_packet,
         seed_verification_rejection_count=seed_verification_rejection_count,
     )
+    _record_v2_routing_decision(config, decision, history)
     invocation = config.reviewer_profiles.materialize(decision.selected_profile)
     return _run_v2_designated_review(
         config,
@@ -639,6 +667,8 @@ def run(config: OrchestratorConfig) -> RunResult:
     returned only once every phase below has actually completed.
     """
 
+    routing_decisions: list[RoutingDecisionRecord] = []
+    config = replace(config, _routing_decisions=routing_decisions)
     phase = Phase.PREFLIGHT
     delivery_branch: str | None = None
     head_sha: str | None = None
@@ -811,6 +841,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_path=spec_path,
             spec_digest=spec_digest,
             review_metrics=_summarize_v2_review_histories(review_histories),
+            routing_decisions=tuple(routing_decisions),
         )
     except (_Blocked, RepositoryError) as exc:
         return RunResult(
@@ -826,6 +857,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_path=spec_path,
             spec_digest=spec_digest,
             review_metrics=_summarize_v2_review_histories(review_histories),
+            routing_decisions=tuple(routing_decisions),
         )
 def _v2_commit_message(task_id: str, gate_id: str) -> str:
     """Return a deterministic, gate-labelled message for accepted v2 work."""

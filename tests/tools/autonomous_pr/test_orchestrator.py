@@ -762,6 +762,21 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
             ComputeProfile.CRITICAL,
         ),
     ]
+    assert [decision.sequence for decision in result.routing_decisions] == list(
+        range(1, len(routed) + 1)
+    )
+    assert [
+        (decision.role, decision.work_kind, decision.selected_profile)
+        for decision in result.routing_decisions
+    ] == routed
+    assert [decision.gate_id for decision in result.routing_decisions] == [
+        "CP-1",
+        "CP-1",
+        "pre-closure-cumulative-review",
+        "prospective-task-closure",
+        "prospective-task-closure",
+        "mode-c-final-cumulative-audit",
+    ]
     assert result.head_sha == _run_git(["rev-parse", "HEAD"], cwd=work).strip()
     assert result.head_sha == _run_git(
         ["rev-parse", f"origin/autonomous-pr/{_TASK_ID.lower()}"], cwd=work
@@ -817,6 +832,46 @@ def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
     assert metric.review_iterations == 1
     assert metric.findings_per_review == (0,)
     assert metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
+    assert [decision.sequence for decision in result.routing_decisions] == [1, 2]
+    assert result.routing_decisions[-1].role is AgentRole.REVIEWER
+    assert result.routing_decisions[-1].work_kind is AgentWorkKind.CHECKPOINT_REVIEW
+
+
+def test_public_runs_reset_routing_sequence_and_record_failed_agent_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roots = (tmp_path / "first", tmp_path / "second")
+    for root in roots:
+        root.mkdir()
+    environments = tuple(_make_public_dispatch_env(root) for root in roots)
+    invocations = 0
+
+    def failed_implementer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        nonlocal invocations
+        assert spec.role is AgentRole.IMPLEMENTER
+        assert prompt
+        invocations += 1
+        return AgentInvocationResult("", "process failed", 9, False)
+
+    monkeypatch.setattr(orch_module, "run_implementer", failed_implementer)
+
+    results = tuple(
+        run(_public_dispatch_config(env, selector=_TASK_ID))
+        for env in environments
+    )
+
+    assert invocations == 2
+    for result in results:
+        assert result.outcome is RunOutcome.BLOCKED
+        assert result.phase is Phase.IMPLEMENTATION_CHECKPOINT
+        assert len(result.routing_decisions) == 1
+        decision = result.routing_decisions[0]
+        assert decision.sequence == 1
+        assert decision.role is AgentRole.IMPLEMENTER
+        assert decision.work_kind is AgentWorkKind.CHECKPOINT_IMPLEMENTATION
+        assert decision.selected_profile is ComputeProfile.ROUTINE
 
 
 def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) -> None:
@@ -861,6 +916,7 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
     assert result.phase is Phase.PREFLIGHT
     assert result.no_work_reasons[0].task_id == _TASK_ID
     assert result.review_metrics == ()
+    assert result.routing_decisions == ()
     assert _run_git(["branch", "--show-current"], cwd=work).strip() == "main"
     assert _run_git(["rev-parse", "HEAD"], cwd=work).strip() == initial_head
     assert _run_git(["status", "--porcelain"], cwd=work) == ""
@@ -934,6 +990,7 @@ def test_same_task_branch_collision_cannot_be_bypassed_with_alternate_name(
     assert result.outcome is RunOutcome.BLOCKED
     assert result.phase is Phase.PREFLIGHT
     assert result.delivery_branch is None
+    assert result.routing_decisions == ()
     assert "implicit resume/reuse is forbidden" in (result.blocked_reason or "")
     assert _run_git(["branch", "--list", "codex/alternate-name"], cwd=env.work) == ""
 
@@ -1550,6 +1607,7 @@ def test_public_run_reports_no_delivery_branch_when_branch_creation_fails(
     assert result.phase is Phase.DELIVERY_BRANCH_READY
     assert result.delivery_branch is None
     assert result.head_sha is None
+    assert result.routing_decisions == ()
 
 
 def test_public_run_reports_local_commit_head_when_push_fails(

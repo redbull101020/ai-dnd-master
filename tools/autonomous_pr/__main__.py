@@ -259,6 +259,22 @@ def _report(result: RunResult) -> None:
             "review_metric_json: "
             + json.dumps(payload, sort_keys=True, separators=(",", ":"))
         )
+    for decision in result.routing_decisions:
+        payload = {
+            "baseline_profile": decision.baseline_profile.value,
+            "escalation_reasons": tuple(
+                reason.value for reason in decision.escalation_reasons
+            ),
+            "gate_id": decision.gate_id,
+            "role": decision.role.value,
+            "selected_profile": decision.selected_profile.value,
+            "sequence": decision.sequence,
+            "work_kind": decision.work_kind.value,
+        }
+        print(
+            "routing_decision_json: "
+            + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        )
     if result.blocked_reason is not None:
         print(f"blocked_reason: {result.blocked_reason}")
 
