@@ -670,6 +670,17 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
     assert result.spec_path == f"docs/tasks/{_TASK_ID}.md"
     assert result.spec_digest is not None
     assert result.pr_url == "https://github.com/example/repo/pull/1"
+    assert tuple(metric.gate_id for metric in result.review_metrics) == (
+        "CP-1",
+        "pre-closure-cumulative-review",
+        "prospective-task-closure",
+        "mode-c-final-cumulative-audit",
+    )
+    assert all(metric.review_iterations == 1 for metric in result.review_metrics)
+    assert all(
+        metric.last_reviewer_verdict is ReviewVerdict.APPROVED
+        for metric in result.review_metrics
+    )
     assert result.head_sha == _run_git(["rev-parse", "HEAD"], cwd=work).strip()
     assert result.head_sha == _run_git(
         ["rev-parse", f"origin/autonomous-pr/{_TASK_ID.lower()}"], cwd=work
@@ -695,6 +706,34 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
         "",
         "- Public run integration closure.",
     ]
+
+
+def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
+    tmp_path: Path,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('BLOCKED')\n"
+    config = OrchestratorConfig(
+        task_id=_TASK_ID,
+        repo=env.work,
+        implementer_spec=_implementer_spec(
+            env.work, _public_dispatch_implementer_code(_TASK_ID)
+        ),
+        reviewer_spec=_reviewer_spec(env.work, reviewer_code),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID),
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.CHECKPOINT_REVIEW
+    assert len(result.review_metrics) == 1
+    metric = result.review_metrics[0]
+    assert metric.gate_id == "CP-1"
+    assert metric.review_iterations == 1
+    assert metric.findings_per_review == (0,)
+    assert metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
 
 
 def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) -> None:
@@ -736,6 +775,7 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
     assert result.delivery_branch is None
     assert result.phase is Phase.PREFLIGHT
     assert result.no_work_reasons[0].task_id == _TASK_ID
+    assert result.review_metrics == ()
     assert _run_git(["branch", "--show-current"], cwd=work).strip() == "main"
     assert _run_git(["rev-parse", "HEAD"], cwd=work).strip() == initial_head
     assert _run_git(["status", "--porcelain"], cwd=work) == ""
@@ -1833,6 +1873,35 @@ def _capture_recorded_review_attempts(
     return captured
 
 
+def _v2_changes_for_bases(*bases: str) -> StructuredReviewResult:
+    return StructuredReviewResult(
+        verdict=ReviewVerdict.CHANGES_REQUESTED,
+        repair_packet=RepairPacket(
+            findings=tuple(
+                dataclasses.replace(
+                    _finding(f"problem-{index}"), binding_basis=basis
+                )
+                for index, basis in enumerate(bases, start=1)
+            )
+        ),
+        raw_output="CHANGES_REQUESTED\n{}\n",
+        verdict_is_explicit=True,
+    )
+
+
+def _record_metric_review(
+    history: GateHistory, review: StructuredReviewResult, candidate: str
+) -> None:
+    iteration = orch_module._record_v2_interpreted_review_attempt(
+        history,
+        review,
+        candidate_identity=CandidateIdentity(candidate),
+        candidate_state=candidate,
+        verification=None,
+    )
+    assert iteration is not None
+
+
 @dataclass
 class _V2Scenario:
     result: object
@@ -2347,6 +2416,104 @@ def test_v2_checkpoint_malformed_repair_output_is_terminal_blocked(
     assert result.gate_histories[0].review_iteration == 0
     assert result.gate_histories[0].attempts[0].review_iteration is None
     assert result.gate_histories[0].attempts[0].reviewer_verdict is None
+
+
+def test_v2_review_gate_metrics_are_pure_deterministic_history_derivatives() -> None:
+    basis_a = "task:scope"
+    basis_b = "repo:AGENTS.md review authority"
+
+    def history(gate_id: str = "shared-gate") -> GateHistory:
+        return GateHistory(
+            context=GateContext(
+                gate_id=gate_id,
+                spec_identity="spec",
+                accepted_base_context_identity="base",
+            )
+        )
+
+    cr_then_approved = history()
+    _record_metric_review(
+        cr_then_approved, _v2_changes_for_bases(basis_a), "candidate-1"
+    )
+    _record_metric_review(cr_then_approved, _v2_approved(), "candidate-2")
+    first = orch_module._summarize_v2_gate_history(cr_then_approved)
+    assert first.review_iterations == 2
+    assert first.changes_requested_count == 1
+    assert first.findings_per_review == (1, 0)
+    assert first.binding_bases_per_review == ((basis_a,), ())
+    assert first.new_binding_bases_after_first_review == ()
+    assert first.repeated_binding_bases == ()
+    assert first.last_reviewer_verdict is ReviewVerdict.APPROVED
+
+    repeated = history()
+    _record_metric_review(repeated, _v2_changes_for_bases(basis_a), "candidate-1")
+    _record_metric_review(repeated, _v2_changes_for_bases(basis_a), "candidate-2")
+    _record_metric_review(repeated, _v2_approved(), "candidate-3")
+    repeated_metric = orch_module._summarize_v2_gate_history(repeated)
+    assert repeated_metric.changes_requested_count == 2
+    assert repeated_metric.repeated_binding_bases == (basis_a,)
+    assert repeated_metric.new_binding_bases_after_first_review == ()
+
+    late_basis = history()
+    _record_metric_review(late_basis, _v2_changes_for_bases(basis_a), "candidate-1")
+    _record_metric_review(late_basis, _v2_changes_for_bases(basis_b), "candidate-2")
+    _record_metric_review(late_basis, _v2_approved(), "candidate-3")
+    late_metric = orch_module._summarize_v2_gate_history(late_basis)
+    assert late_metric.new_binding_bases_after_first_review == (basis_b,)
+    assert late_metric.repeated_binding_bases == ()
+
+    verification_then_review = history("verification-gate")
+    verification_then_review.attempts.append(
+        GateAttempt(
+            candidate_identity=CandidateIdentity("verification-failure"),
+            candidate_state="verification-failure",
+            verification=_v2_verification(False),
+            rejected=True,
+            rejection_basis=CandidateRejectionBasis.VERIFICATION_FAILURE,
+            review_iteration=None,
+            reviewer_verdict=None,
+        )
+    )
+    _record_metric_review(
+        verification_then_review,
+        _v2_changes_for_bases(basis_a),
+        "reviewed-candidate",
+    )
+    verification_metric = orch_module._summarize_v2_gate_history(
+        verification_then_review
+    )
+    assert verification_metric.review_iterations == 1
+    assert verification_metric.verification_rejection_count == 1
+
+    blocked = history("blocked-gate")
+    _record_metric_review(blocked, _v2_changes_for_bases(basis_a), "candidate-1")
+    _record_metric_review(
+        blocked, _v2_explicit_blocked("missing decision"), "candidate-2"
+    )
+    blocked_metric = orch_module._summarize_v2_gate_history(blocked)
+    assert blocked_metric.findings_per_review == (1, 0)
+    assert blocked_metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
+
+    duplicate_in_one_packet = history("duplicate-basis-packet")
+    _record_metric_review(
+        duplicate_in_one_packet,
+        _v2_changes_for_bases(basis_a, basis_a),
+        "candidate-1",
+    )
+    duplicate_metric = orch_module._summarize_v2_gate_history(
+        duplicate_in_one_packet
+    )
+    assert duplicate_metric.repeated_binding_bases == ()
+
+    same_id_metrics = orch_module._summarize_v2_review_histories(
+        [cr_then_approved, repeated]
+    )
+    assert len(same_id_metrics) == 2
+    assert [metric.gate_id for metric in same_id_metrics] == [
+        "shared-gate",
+        "shared-gate",
+    ]
+    assert orch_module._summarize_v2_review_histories([history("no-review")]) == ()
 
 
 def test_v2_checkpoint_second_change_requires_non_convergence_diagnosis(
@@ -3733,6 +3900,7 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
             _v2_approved(),
         ],
     )
+    histories: list[GateHistory] = []
 
     result = orch_module.execute_v2_unpublished_closure(
         _cp3_config(env),
@@ -3740,6 +3908,7 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
         checkpoints,
         pre_closure,
         repair_acceptor=_cp4_repair_acceptor(env),
+        history_sink=histories,
     )
 
     assert result.completed
@@ -3748,6 +3917,15 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
         for prompt in implementer_prompts
     )
     assert result.pre_closure_result.replay_histories
+    closure_metrics = [
+        metric
+        for metric in orch_module._summarize_v2_review_histories(histories)
+        if metric.gate_id == "prospective-task-closure"
+    ]
+    assert closure_metrics[0].changes_requested_count == 1
+    assert closure_metrics[0].binding_bases_per_review == (
+        ("checkpoint:CP-1:required_result",),
+    )
     assert result.closure_candidate is not None
     assert result.closure_candidate.published_predecessor_sha != implementation_head
 
@@ -3760,6 +3938,7 @@ def test_v2_closure_implementation_cr_is_recorded_before_repair_transition(
     review = _v2_changes("closure review found implementation defect")
     _install_cp4_agents(env, monkeypatch, [review])
     recorded = _capture_recorded_review_attempts(monkeypatch)
+    histories: list[GateHistory] = []
     task_md_baseline = repository.read_utf8_file_at_ref_exact(
         env.work, target.base_sha, "docs/TASK.md"
     )
@@ -3772,6 +3951,7 @@ def test_v2_closure_implementation_cr_is_recorded_before_repair_transition(
             pr_number="1",
             expected_published_head=implementation_head,
             task_md_baseline=task_md_baseline,
+            history_sink=histories,
         )
 
     assert raised.value.packet is review.repair_packet
@@ -3782,6 +3962,10 @@ def test_v2_closure_implementation_cr_is_recorded_before_repair_transition(
     assert attempt.reviewer_verdict is ReviewVerdict.CHANGES_REQUESTED
     assert attempt.rejection_basis is CandidateRejectionBasis.CHANGES_REQUESTED
     assert attempt.findings == review.repair_packet.findings
+    closure_metrics = orch_module._summarize_v2_review_histories(histories)
+    assert len(closure_metrics) == 1
+    assert closure_metrics[0].gate_id == "prospective-task-closure"
+    assert closure_metrics[0].changes_requested_count == 1
 
 
 def test_v2_mode_c_missing_paths_uses_implementation_repair_and_cp3_replay(
@@ -4004,6 +4188,7 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
         env, monkeypatch, [_v2_approved(), _v2_approved(), _v2_approved()]
     )
     recorded = _capture_recorded_review_attempts(monkeypatch)
+    histories: list[GateHistory] = []
     real_checks = repository.pr_required_checks
     checks_count = 0
     moved_sha: str | None = None
@@ -4026,6 +4211,7 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
         checkpoints,
         pre_closure,
         repair_acceptor=_cp4_repair_acceptor(env),
+        history_sink=histories,
     )
 
     assert result.completed and result.published
@@ -4041,6 +4227,13 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     assert len(post_publication) == 1
     assert post_publication[0].reviewer_verdict is ReviewVerdict.APPROVED
     assert post_publication[0].findings == ()
+    post_publication_metrics = [
+        metric
+        for metric in orch_module._summarize_v2_review_histories(histories)
+        if metric.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication_metrics) == 1
+    assert post_publication_metrics[0].last_reviewer_verdict is ReviewVerdict.APPROVED
 
 
 def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
@@ -4054,6 +4247,7 @@ def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
         env, monkeypatch, [_v2_approved(), _v2_approved(), review]
     )
     recorded = _capture_recorded_review_attempts(monkeypatch)
+    histories: list[GateHistory] = []
     real_checks = repository.pr_required_checks
     checks_count = 0
 
@@ -4075,6 +4269,7 @@ def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
         checkpoints,
         pre_closure,
         repair_acceptor=_cp4_repair_acceptor(env),
+        history_sink=histories,
     )
 
     assert not result.completed and result.published
@@ -4090,6 +4285,17 @@ def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
     assert attempt.rejection_basis is CandidateRejectionBasis.CHANGES_REQUESTED
     assert review.repair_packet is not None
     assert attempt.findings == review.repair_packet.findings
+    post_publication_metrics = [
+        metric
+        for metric in orch_module._summarize_v2_review_histories(histories)
+        if metric.gate_id == "post-publication-mode-c-replay"
+    ]
+    assert len(post_publication_metrics) == 1
+    assert post_publication_metrics[0].changes_requested_count == 1
+    assert (
+        post_publication_metrics[0].last_reviewer_verdict
+        is ReviewVerdict.CHANGES_REQUESTED
+    )
 
 
 def test_v2_post_publication_tracker_movement_blocks_ready_for_human_merge(
