@@ -858,22 +858,47 @@ The reviewer returns exactly one of `APPROVED`, `CHANGES_REQUESTED`, or
   timeout, crash, or execution error. None of these ever starts a repair
   episode, and none is upgraded to `APPROVED`.
 - **`APPROVED`.** The current review gate passes and the orchestrator may
-  move to the next deterministic phase. The approval criteria are identical
-  at every iteration: they are never weakened by how many times the gate has
-  already returned `CHANGES_REQUESTED`.
+  move to the next deterministic phase only after completing the applicable
+  material pass with no proven binding defect remaining. The approval criteria
+  are identical at every iteration: they are never weakened by how many times
+  the gate has already returned `CHANGES_REQUESTED`.
 - **`CHANGES_REQUESTED`.** Not terminal. It starts a repair episode, provided
-  the reviewer's output contains a complete repair packet.
+  the reviewer's output contains a complete repair packet proving one or more
+  repairable binding defects inside the fixed spec.
+- **`BLOCKED`.** Correct continuation requires a missing decision, scope,
+  architecture contract, dependency, or other information not supplied by
+  the fixed approved contract. It is not a substitute for a repairable
+  finding.
 
 A repair packet holds one or more findings. Each finding has at least these
 required fields, and they are part of the repair handoff contract, not an
 advisory format:
 
+- **Binding basis** — the exact binding task section, checkpoint field, or
+  repository-contract reference that makes the defect material;
 - **Problem** — what is wrong with the candidate;
 - **Evidence** — where and how the problem shows in the candidate;
+- **Failure mode** — how the candidate violates the binding basis;
 - **Required outcome** — the condition the next candidate must satisfy;
-- **Recommended repair** — a suggested way to reach it;
+- **Recommended repair** — an advisory suggested way to reach it; the binding
+  requirement and required outcome, not this suggestion, control the repair;
 - **Verification focus** — what the next deterministic verification and
   review should check.
+
+`binding_basis` uses only this provider-neutral grammar:
+
+- `task:goal`, `task:scope`, `task:out_of_scope`,
+  `task:approved_implementation_approach`, `task:acceptance_criteria`, or
+  `task:full_verification`;
+- `checkpoint:CP-N:<field>`, where `N >= 1` and `<field>` is exactly
+  `objective`, `required_result`, `constraints`, or `verification`;
+- `repo:<non-empty trimmed reference>`.
+
+The `repo:*` form receives syntactic validation only; it introduces no path,
+anchor, or requirement registry. `Review focus` is advisory and cannot be a
+binding basis. Missing, blank, or malformed `binding_basis` or `failure_mode`
+is malformed output under the same fail-closed rule as any other missing
+required finding field.
 
 A `CHANGES_REQUESTED` verdict with no finding, or with a finding that lacks
 any required field, is malformed reviewer output and ends the run as
@@ -909,6 +934,56 @@ the consecutive `CHANGES_REQUESTED` count nor the review iteration number of
 The reviewer never edits the working tree. The repair stays inside the fixed
 spec and the approved scope; a repair that would need more than that is a
 fail-closed condition (§27).
+
+### Complete material review and gate applicability
+
+Before every verdict, a designated reviewer determines the binding
+requirements applicable to that gate, reviews the complete current
+`review.patch` and supplied deterministic evidence, and reports all independent
+material defects found in one `CHANGES_REQUESTED`. A blocking finding requires
+a concrete binding basis. Style preferences, optional improvements,
+speculative abstraction or generalization, future scope, and advisory
+`Review focus` are non-blocking unless a separate binding requirement makes
+them material.
+
+On a second-or-later review at the same gate, the reviewer first re-evaluates
+the previous findings against the current candidate and repair delta, then
+performs a fresh pass over every remaining applicable requirement. The new
+repair packet contains defects still material on the current candidate plus
+new independent material defects; already-corrected findings need not be
+repeated. Fresh reviewer context and the explicit previous-findings/delta
+handoff of §29 remain mandatory.
+
+Applicability is gate-specific:
+
+- an ordinary checkpoint review covers task Goal, Scope, Out of scope,
+  Approved implementation approach, the current checkpoint's Objective,
+  Required result, Constraints and Verification, and applicable repository
+  contracts. Final Acceptance criteria and Full verification do not by
+  themselves demand future-checkpoint results early;
+- the pre-closure cumulative implementation review covers the complete Task
+  Execution Spec, every checkpoint, Full verification, and applicable
+  repository contracts;
+- a late implementation-repair review first checks the current binding
+  findings and required outcomes against the repair, then performs a fresh
+  task-wide and repository-contract pass. It does not replace downstream
+  replay;
+- prospective Task Closure review is limited to the exact closure candidate
+  diff, factual closure evidence, and closure/terminal/governance requirements;
+  it does not repeat the full implementation review;
+- Mode C reviews the full final cumulative candidate — implementation plus
+  unpublished closure — against the complete applicable task and repository
+  contract.
+
+Every candidate-changing implementer handoff also requires an internal,
+context-appropriate pre-return conformance pass. Checkpoint and implementation
+repair passes cover the binding task boundaries, current checkpoint or repair
+requirements, directly implied negative/fail-closed cases, verification
+failure evidence, and applicable repository constraints. Closure preparation
+and repair use a closure-scoped pass only. The implementer corrects violations
+it finds before returning, but this creates no new agent call, gate, verdict,
+artifact, authoritative evidence, or reviewer input; designated review stays
+fresh and independent.
 
 ---
 
@@ -1054,6 +1129,35 @@ Every designated review stays fresh and independent: `implementer context !=
 designated reviewer context` (§5) holds at every review. Adaptive repair
 never continues an earlier reviewer conversation, and review correctness never
 depends on hidden reviewer state that is absent from this explicit handoff.
+
+### Review-convergence diagnostics
+
+For every gate history that reached an explicit designated-reviewer verdict,
+the orchestrator derives one immutable in-memory `ReviewGateMetrics` value.
+Distinct histories remain distinct even when they share a gate ID; occurrence
+order is preserved. A run with no designated review activity has no metrics.
+Each metric contains:
+
+- gate ID;
+- total designated-review iterations;
+- total `CHANGES_REQUESTED` review iterations;
+- count of attempts rejected by deterministic verification;
+- finding counts and ordered binding-basis strings per review iteration;
+- binding bases first seen in a `CHANGES_REQUESTED` after review iteration 1;
+- binding bases present in `CHANGES_REQUESTED` on more than one distinct
+  review iteration, ignoring duplicates within one packet;
+- the last actual explicit reviewer verdict.
+
+`APPROVED` and explicit `BLOCKED` review iterations have zero findings.
+Verification failures have no synthetic reviewer verdict but remain visible in
+their gate's verification-rejection count. Derived basis collections use
+deterministic first-seen order. The CLI emits one stable
+`review_metric_json: ` JSON line per metric, with the verdict token or `null`,
+and never emits prompts, patches, secrets, hidden reasoning, or full evidence.
+
+These diagnostics are a pure read-only projection of existing in-memory
+history. They add no persistence or timestamps and are never input to verdict,
+retry, no-progress, replay, phase-transition, or merge-readiness decisions.
 
 ---
 

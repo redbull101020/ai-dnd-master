@@ -30,6 +30,12 @@ sections in the order shown by the template below, concrete CP-1…CP-N fields,
 JSON-argv verification commands, and no unresolved execution requirement.
 Approval and publication are execution input, not invocation authority.
 
+For orchestration or tooling tasks, refinement must put every already-known
+material boundary failure mode into binding task content — especially
+checkpoint `Constraints`, Acceptance criteria, and/or deterministic
+`Verification`, as appropriate. Advisory `Review focus` may direct attention
+but does not make a requirement binding by itself.
+
 ## 2. Identity, dependencies, and deterministic selection
 
 Task IDs are never reused. Allocate `max(standalone IDs, terminal IDs) + 1`;
