@@ -12,12 +12,18 @@ import pytest
 from tools.autonomous_pr import orchestrator as orch_module
 from tools.autonomous_pr import repository
 from tools.autonomous_pr import task_context
-from tools.autonomous_pr.agents import AgentInvocationResult, AgentInvocationSpec
+from tools.autonomous_pr.agents import (
+    AgentInvocationResult,
+    AgentInvocationSpec,
+    AgentProfileConfig,
+)
 from tools.autonomous_pr.model import (
     AgentRole,
+    AgentWorkKind,
     ApprovedTaskDocument,
     CandidateIdentity,
     CandidateRejectionBasis,
+    ComputeProfile,
     ExecutionCheckpoint,
     ExecutionApproval,
     ExecutionTarget,
@@ -32,6 +38,8 @@ from tools.autonomous_pr.model import (
     ReviewVerdict,
     RunOutcome,
     RunResult,
+    RoutingDecision,
+    RoutingEscalationReason,
     SelectedTask,
     StructuredReviewResult,
     TaskExecutionSpec,
@@ -56,6 +64,21 @@ _SCOPE_MARKER = "SCOPE_MARKER_TEXT"
 _OUT_OF_SCOPE_MARKER = "OUT_OF_SCOPE_MARKER_TEXT"
 _ACCEPTANCE_MARKER = "ACCEPTANCE_CRITERIA_MARKER_TEXT"
 _VERIFICATION_MARKER = "VERIFICATION_MARKER_TEXT"
+
+
+def _profiles(spec: AgentInvocationSpec) -> AgentProfileConfig:
+    if spec.role is AgentRole.IMPLEMENTER:
+        profile_args = {
+            ComputeProfile.ROUTINE: ("routine",),
+            ComputeProfile.DELIBERATE: ("deliberate",),
+            ComputeProfile.CRITICAL: ("critical",),
+        }
+    else:
+        profile_args = {
+            ComputeProfile.DELIBERATE: ("deliberate",),
+            ComputeProfile.CRITICAL: ("critical",),
+        }
+    return AgentProfileConfig(spec=spec, profile_args=profile_args)
 
 
 def _run_git(args: list[str], cwd: Path) -> str:
@@ -382,8 +405,8 @@ def _default_config(
     return OrchestratorConfig(
         task_id=_TASK_ID,
         repo=env.work,
-        implementer_spec=implementer_spec,
-        reviewer_spec=reviewer_spec,
+        implementer_profiles=_profiles(implementer_spec),
+        reviewer_profiles=_profiles(reviewer_spec),
         delivery_branch=delivery_branch,
         gh_command=gh_command if gh_command is not None else _default_gh_command(),
     )
@@ -471,10 +494,12 @@ def _public_dispatch_config(
     return OrchestratorConfig(
         task_id=selector,
         repo=env.work,
-        implementer_spec=_implementer_spec(
-            env.work, _public_dispatch_implementer_code(expected_task_id)
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work, _public_dispatch_implementer_code(expected_task_id)
+            )
         ),
-        reviewer_spec=_reviewer_spec(env.work, reviewer_code),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
         delivery_branch="",
         gh_command=_public_dispatch_gh_command(expected_task_id),
     )
@@ -621,6 +646,7 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
     tmp_path: Path,
     selector: str,
     expected_mode: TaskSelectionMode,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     origin = tmp_path / "public-origin.git"
     _run_git(["init", "-q", "--bare", "-b", "main", str(origin)], cwd=tmp_path)
@@ -653,11 +679,35 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
     config = OrchestratorConfig(
         task_id=selector,
         repo=work,
-        implementer_spec=_implementer_spec(work, implementer_code),
-        reviewer_spec=_reviewer_spec(work, reviewer_code),
+        implementer_profiles=_profiles(_implementer_spec(work, implementer_code)),
+        reviewer_profiles=_profiles(_reviewer_spec(work, reviewer_code)),
         delivery_branch="",
         gh_command=_public_dispatch_gh_command(_TASK_ID),
     )
+    routed: list[tuple[AgentRole, AgentWorkKind, ComputeProfile]] = []
+    real_route_agent_work = orch_module.route_agent_work
+
+    def observe_route(
+        *,
+        role: AgentRole,
+        work_kind: AgentWorkKind,
+        history: GateHistory | None = None,
+        direct_upstream_repair_packet: RepairPacket | None = None,
+        seed_verification_rejection_count: int = 0,
+    ) -> RoutingDecision:
+        decision = real_route_agent_work(
+            role=role,
+            work_kind=work_kind,
+            history=history,
+            direct_upstream_repair_packet=direct_upstream_repair_packet,
+            seed_verification_rejection_count=seed_verification_rejection_count,
+        )
+        routed.append(
+            (decision.role, decision.work_kind, decision.selected_profile)
+        )
+        return decision
+
+    monkeypatch.setattr(orch_module, "route_agent_work", observe_route)
 
     result = run(config)
 
@@ -681,6 +731,53 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
         metric.last_reviewer_verdict is ReviewVerdict.APPROVED
         for metric in result.review_metrics
     )
+    assert routed == [
+        (
+            AgentRole.IMPLEMENTER,
+            AgentWorkKind.CHECKPOINT_IMPLEMENTATION,
+            ComputeProfile.ROUTINE,
+        ),
+        (
+            AgentRole.REVIEWER,
+            AgentWorkKind.CHECKPOINT_REVIEW,
+            ComputeProfile.DELIBERATE,
+        ),
+        (
+            AgentRole.REVIEWER,
+            AgentWorkKind.PRE_CLOSURE_CUMULATIVE_REVIEW,
+            ComputeProfile.CRITICAL,
+        ),
+        (
+            AgentRole.IMPLEMENTER,
+            AgentWorkKind.TASK_CLOSURE_PREPARATION,
+            ComputeProfile.ROUTINE,
+        ),
+        (
+            AgentRole.REVIEWER,
+            AgentWorkKind.TASK_CLOSURE_REVIEW,
+            ComputeProfile.DELIBERATE,
+        ),
+        (
+            AgentRole.REVIEWER,
+            AgentWorkKind.MODE_C_REVIEW,
+            ComputeProfile.CRITICAL,
+        ),
+    ]
+    assert [decision.sequence for decision in result.routing_decisions] == list(
+        range(1, len(routed) + 1)
+    )
+    assert [
+        (decision.role, decision.work_kind, decision.selected_profile)
+        for decision in result.routing_decisions
+    ] == routed
+    assert [decision.gate_id for decision in result.routing_decisions] == [
+        "CP-1",
+        "CP-1",
+        "pre-closure-cumulative-review",
+        "prospective-task-closure",
+        "prospective-task-closure",
+        "mode-c-final-cumulative-audit",
+    ]
     assert result.head_sha == _run_git(["rev-parse", "HEAD"], cwd=work).strip()
     assert result.head_sha == _run_git(
         ["rev-parse", f"origin/autonomous-pr/{_TASK_ID.lower()}"], cwd=work
@@ -716,10 +813,12 @@ def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
     config = OrchestratorConfig(
         task_id=_TASK_ID,
         repo=env.work,
-        implementer_spec=_implementer_spec(
-            env.work, _public_dispatch_implementer_code(_TASK_ID)
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work, _public_dispatch_implementer_code(_TASK_ID)
+            )
         ),
-        reviewer_spec=_reviewer_spec(env.work, reviewer_code),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
         delivery_branch="",
         gh_command=_public_dispatch_gh_command(_TASK_ID),
     )
@@ -734,6 +833,46 @@ def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
     assert metric.review_iterations == 1
     assert metric.findings_per_review == (0,)
     assert metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
+    assert [decision.sequence for decision in result.routing_decisions] == [1, 2]
+    assert result.routing_decisions[-1].role is AgentRole.REVIEWER
+    assert result.routing_decisions[-1].work_kind is AgentWorkKind.CHECKPOINT_REVIEW
+
+
+def test_public_runs_reset_routing_sequence_and_record_failed_agent_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roots = (tmp_path / "first", tmp_path / "second")
+    for root in roots:
+        root.mkdir()
+    environments = tuple(_make_public_dispatch_env(root) for root in roots)
+    invocations = 0
+
+    def failed_implementer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        nonlocal invocations
+        assert spec.role is AgentRole.IMPLEMENTER
+        assert prompt
+        invocations += 1
+        return AgentInvocationResult("", "process failed", 9, False)
+
+    monkeypatch.setattr(orch_module, "run_implementer", failed_implementer)
+
+    results = tuple(
+        run(_public_dispatch_config(env, selector=_TASK_ID))
+        for env in environments
+    )
+
+    assert invocations == 2
+    for result in results:
+        assert result.outcome is RunOutcome.BLOCKED
+        assert result.phase is Phase.IMPLEMENTATION_CHECKPOINT
+        assert len(result.routing_decisions) == 1
+        decision = result.routing_decisions[0]
+        assert decision.sequence == 1
+        assert decision.role is AgentRole.IMPLEMENTER
+        assert decision.work_kind is AgentWorkKind.CHECKPOINT_IMPLEMENTATION
+        assert decision.selected_profile is ComputeProfile.ROUTINE
 
 
 def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) -> None:
@@ -763,8 +902,10 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
         OrchestratorConfig(
             task_id="NEXT",
             repo=work,
-            implementer_spec=_implementer_spec(work, fail_if_invoked),
-            reviewer_spec=_reviewer_spec(work, fail_if_invoked),
+            implementer_profiles=_profiles(
+                _implementer_spec(work, fail_if_invoked)
+            ),
+            reviewer_profiles=_profiles(_reviewer_spec(work, fail_if_invoked)),
             delivery_branch="",
             gh_command=(sys.executable, "-c", fail_if_invoked),
         )
@@ -776,6 +917,7 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
     assert result.phase is Phase.PREFLIGHT
     assert result.no_work_reasons[0].task_id == _TASK_ID
     assert result.review_metrics == ()
+    assert result.routing_decisions == ()
     assert _run_git(["branch", "--show-current"], cwd=work).strip() == "main"
     assert _run_git(["rev-parse", "HEAD"], cwd=work).strip() == initial_head
     assert _run_git(["status", "--porcelain"], cwd=work) == ""
@@ -849,6 +991,7 @@ def test_same_task_branch_collision_cannot_be_bypassed_with_alternate_name(
     assert result.outcome is RunOutcome.BLOCKED
     assert result.phase is Phase.PREFLIGHT
     assert result.delivery_branch is None
+    assert result.routing_decisions == ()
     assert "implicit resume/reuse is forbidden" in (result.blocked_reason or "")
     assert _run_git(["branch", "--list", "codex/alternate-name"], cwd=env.work) == ""
 
@@ -890,8 +1033,8 @@ def test_open_same_task_pr_on_custom_branch_blocks_before_side_effects(
     config = dataclasses.replace(
         _public_dispatch_config(env, selector=_TASK_ID),
         delivery_branch=delivery_branch,
-        implementer_spec=_implementer_spec(env.work, agent_code),
-        reviewer_spec=_reviewer_spec(env.work, agent_code),
+        implementer_profiles=_profiles(_implementer_spec(env.work, agent_code)),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, agent_code)),
         gh_command=_public_dispatch_gh_command(
             _TASK_ID,
             open_prs=(_open_pr_record(_TASK_ID, base="release"),),
@@ -948,8 +1091,8 @@ def test_open_pr_collision_read_failure_blocks_before_side_effects(
     )
     config = dataclasses.replace(
         _public_dispatch_config(env, selector=_TASK_ID),
-        implementer_spec=_implementer_spec(env.work, agent_code),
-        reviewer_spec=_reviewer_spec(env.work, agent_code),
+        implementer_profiles=_profiles(_implementer_spec(env.work, agent_code)),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, agent_code)),
         gh_command=_public_dispatch_gh_command(
             _TASK_ID, fail_list=True, command_log=gh_log
         ),
@@ -984,8 +1127,8 @@ def _assert_open_pr_guard_blocks_without_writes(
     )
     config = dataclasses.replace(
         _public_dispatch_config(env, selector=_TASK_ID),
-        implementer_spec=_implementer_spec(env.work, agent_code),
-        reviewer_spec=_reviewer_spec(env.work, agent_code),
+        implementer_profiles=_profiles(_implementer_spec(env.work, agent_code)),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, agent_code)),
         gh_command=_public_dispatch_gh_command(
             _TASK_ID, open_prs=open_prs, command_log=gh_log
         ),
@@ -1416,8 +1559,10 @@ def test_public_run_rejects_invalid_utf8_nonterminal_before_side_effects(
     )
     config = dataclasses.replace(
         _public_dispatch_config(env, selector=_TASK_ID),
-        implementer_spec=_implementer_spec(env.work, fail_if_invoked),
-        reviewer_spec=_reviewer_spec(env.work, fail_if_invoked),
+        implementer_profiles=_profiles(
+            _implementer_spec(env.work, fail_if_invoked)
+        ),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, fail_if_invoked)),
         gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
     )
 
@@ -1463,6 +1608,7 @@ def test_public_run_reports_no_delivery_branch_when_branch_creation_fails(
     assert result.phase is Phase.DELIVERY_BRANCH_READY
     assert result.delivery_branch is None
     assert result.head_sha is None
+    assert result.routing_decisions == ()
 
 
 def test_public_run_reports_local_commit_head_when_push_fails(
@@ -1907,6 +2053,8 @@ class _V2Scenario:
     result: object
     implementer_prompts: list[str]
     reviewer_prompts: list[str]
+    implementer_profiles: list[ComputeProfile]
+    reviewer_profiles: list[ComputeProfile]
 
 
 def _default_v2_checkpoint_acceptor(
@@ -1934,11 +2082,14 @@ def _execute_v2_scenario(
     review_queue = list(reviews)
     implementer_prompts: list[str] = []
     reviewer_prompts: list[str] = []
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
 
     def fake_implementer(
         spec: AgentInvocationSpec, prompt_text: str
     ) -> AgentInvocationResult:
         assert spec.role is AgentRole.IMPLEMENTER
+        implementer_profiles.append(ComputeProfile(spec.args[-1].upper()))
         implementer_prompts.append(prompt_text)
         return AgentInvocationResult(
             stdout="implemented", stderr="", returncode=0, timed_out=False
@@ -1969,6 +2120,7 @@ def _execute_v2_scenario(
         spec: AgentInvocationSpec, review_input_text: str
     ) -> StructuredReviewResult:
         assert spec.role is AgentRole.REVIEWER
+        reviewer_profiles.append(ComputeProfile(spec.args[-1].upper()))
         artifact = (env.work / "review.patch").read_text(encoding="utf-8")
         assert f"CURRENT_PATCH:\n{artifact}\n" in review_input_text
         if mutate_review_patch:
@@ -2004,7 +2156,13 @@ def _execute_v2_scenario(
     assert not candidate_queue
     assert not verification_queue
     assert not review_queue
-    return _V2Scenario(result, implementer_prompts, reviewer_prompts)
+    return _V2Scenario(
+        result,
+        implementer_prompts,
+        reviewer_prompts,
+        implementer_profiles,
+        reviewer_profiles,
+    )
 
 
 def test_v2_checkpoint_first_candidate_approved(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2025,6 +2183,8 @@ def test_v2_checkpoint_first_candidate_approved(env: Env, monkeypatch: pytest.Mo
     assert result.gate_histories[0].consecutive_changes_requested == 0
     assert "PREVIOUS_REVIEWER_FINDINGS:" not in scenario.reviewer_prompts[0]
     assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:" not in scenario.reviewer_prompts[0]
+    assert scenario.implementer_profiles == [ComputeProfile.ROUTINE]
+    assert scenario.reviewer_profiles == [ComputeProfile.DELIBERATE]
 
 
 def test_v2_checkpoint_review_blocks_if_reviewer_mutates_review_patch(
@@ -2087,6 +2247,88 @@ def test_v2_checkpoint_one_change_then_approved_has_bounded_fresh_handoff(
     assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE:" in scenario.reviewer_prompts[1]
     assert "CURRENT_REPAIR_PACKET:" in scenario.implementer_prompts[1]
     assert "problem-1" in scenario.implementer_prompts[1]
+    assert scenario.implementer_profiles == [
+        ComputeProfile.ROUTINE,
+        ComputeProfile.DELIBERATE,
+    ]
+    assert scenario.reviewer_profiles == [
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ]
+
+
+def test_v2_checkpoint_repeated_basis_routes_next_repair_critical(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B", "C"],
+        verifications=[_v2_verification(True)] * 3,
+        reviews=[
+            _v2_changes("first"),
+            _v2_changes("same basis", diagnosis=True),
+            _v2_approved(),
+        ],
+    )
+
+    assert scenario.result.completed
+    assert scenario.implementer_profiles == [
+        ComputeProfile.ROUTINE,
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ]
+
+
+def test_v2_checkpoint_second_verification_rejection_routes_repair_critical(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B", "C"],
+        verifications=[
+            _v2_verification(False),
+            _v2_verification(False),
+            _v2_verification(True),
+        ],
+        reviews=[_v2_approved()],
+    )
+
+    assert scenario.result.completed
+    assert scenario.implementer_profiles == [
+        ComputeProfile.ROUTINE,
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ]
+    assert scenario.reviewer_profiles == [ComputeProfile.DELIBERATE]
+
+
+def test_v2_next_checkpoint_restarts_at_routine_after_critical_episode(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = _execute_v2_scenario(
+        env,
+        monkeypatch,
+        candidates=["A", "B", "C", "D"],
+        verifications=[_v2_verification(True)] * 4,
+        reviews=[
+            _v2_changes("first"),
+            _v2_changes("same basis", diagnosis=True),
+            _v2_approved(),
+            _v2_approved(),
+        ],
+        checkpoint_count=2,
+    )
+
+    assert scenario.result.completed
+    assert scenario.implementer_profiles == [
+        ComputeProfile.ROUTINE,
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+        ComputeProfile.ROUTINE,
+    ]
+    assert scenario.reviewer_profiles[-1] is ComputeProfile.DELIBERATE
 
 
 def test_v2_reviewer_handoff_declares_complete_structured_output_contract(
@@ -2874,9 +3116,15 @@ def _selected_from_target(
 
 
 def _changes_with_paths(
-    problem: str, paths: tuple[str, ...], *, diagnosis: bool = False
+    problem: str,
+    paths: tuple[str, ...],
+    *,
+    diagnosis: bool = False,
+    binding_basis: str | None = None,
 ) -> StructuredReviewResult:
     finding = dataclasses.replace(_finding(problem), affected_paths=paths)
+    if binding_basis is not None:
+        finding = dataclasses.replace(finding, binding_basis=binding_basis)
     return StructuredReviewResult(
         verdict=ReviewVerdict.CHANGES_REQUESTED,
         repair_packet=RepairPacket(
@@ -2892,6 +3140,9 @@ def _install_cp3_reviewer_sequence(
     env: Env,
     monkeypatch: pytest.MonkeyPatch,
     reviews: list[StructuredReviewResult],
+    *,
+    implementer_profiles: list[ComputeProfile] | None = None,
+    reviewer_profiles: list[ComputeProfile] | None = None,
 ) -> tuple[list[str], list[str], list[tuple[tuple[str, ...], ...]], list[str]]:
     review_queue = list(reviews)
     reviewer_prompts: list[str] = []
@@ -2905,6 +3156,8 @@ def _install_cp3_reviewer_sequence(
     ) -> AgentInvocationResult:
         nonlocal repair_number
         repair_number += 1
+        if implementer_profiles is not None:
+            implementer_profiles.append(ComputeProfile(spec.args[-1].upper()))
         implementer_prompts.append(prompt_text)
         (env.work / "late_repair.txt").write_text(
             f"repair {repair_number}\n", encoding="utf-8"
@@ -2914,6 +3167,8 @@ def _install_cp3_reviewer_sequence(
     def fake_reviewer(
         spec: AgentInvocationSpec, review_input_text: str
     ) -> StructuredReviewResult:
+        if reviewer_profiles is not None:
+            reviewer_profiles.append(ComputeProfile(spec.args[-1].upper()))
         artifact = (env.work / "review.patch").read_text(encoding="utf-8")
         assert f"CURRENT_PATCH:\n{artifact}\n" in review_input_text
         reviewer_prompts.append(review_input_text)
@@ -3020,6 +3275,7 @@ def test_v2_cumulative_repair_replays_checkpoints_full_verification_and_review(
     assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
     old_full_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
     accepted_heads: list[str] = []
+    reviewer_profiles: list[ComputeProfile] = []
     prompts, _, commands, ranges = _install_cp3_reviewer_sequence(
         env,
         monkeypatch,
@@ -3030,6 +3286,7 @@ def test_v2_cumulative_repair_replays_checkpoints_full_verification_and_review(
             _v2_approved(),  # conservative replay CP-2
             _v2_approved(),  # rebuilt cumulative review
         ],
+        reviewer_profiles=reviewer_profiles,
     )
 
     result = orch_module.execute_v2_pre_closure_review(
@@ -3077,6 +3334,11 @@ def test_v2_cumulative_repair_replays_checkpoints_full_verification_and_review(
     assert all(
         "FINAL_CUMULATIVE_AUDIT" not in prompt for prompt in prompts
     )
+    assert [
+        profile
+        for prompt, profile in zip(prompts, reviewer_profiles, strict=True)
+        if "PRE_CLOSURE_CUMULATIVE_REVIEW" in prompt
+    ] == [ComputeProfile.CRITICAL, ComputeProfile.CRITICAL]
     assert {
         purpose.value for purpose in repository.ReviewPurpose
     } == {
@@ -3372,6 +3634,131 @@ def test_v2_late_repair_has_no_numeric_repair_limit(
     assert accepted_base == accepted_heads[0]
 
 
+def test_v2_late_repair_upstream_packet_routes_first_review_critical(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
+    _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [_v2_approved()],
+        implementer_profiles=implementer_profiles,
+        reviewer_profiles=reviewer_profiles,
+    )
+    upstream = _v2_changes("upstream").repair_packet
+    assert upstream is not None
+
+    orch_module._execute_v2_late_repair(
+        _cp3_config(env),
+        spec,
+        gate_id="upstream-child-repair",
+        accepted_base_context_identity=_run_git(
+            ["rev-parse", "HEAD"], cwd=env.work
+        ).strip(),
+        initial_packet=upstream,
+        verification_commands=spec.checkpoints[0].verification,
+        repair_acceptor=_commit_late_repair(env, []),
+    )
+
+    assert implementer_profiles == [ComputeProfile.DELIBERATE]
+    assert reviewer_profiles == [ComputeProfile.CRITICAL]
+
+
+def test_v2_late_repair_upstream_packet_is_one_hop_reviewer_context(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    upstream = _v2_changes("upstream").repair_packet
+    assert upstream is not None
+    decisions: list[orch_module.RoutingDecisionRecord] = []
+    config = dataclasses.replace(_cp3_config(env), _routing_decisions=decisions)
+    _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [
+            _v2_changes("upstream"),
+            _v2_approved(),
+        ],
+    )
+
+    orch_module._execute_v2_late_repair(
+        config,
+        spec,
+        gate_id="upstream-one-hop-review",
+        accepted_base_context_identity=_run_git(
+            ["rev-parse", "HEAD"], cwd=env.work
+        ).strip(),
+        initial_packet=upstream,
+        verification_commands=spec.checkpoints[0].verification,
+        repair_acceptor=_commit_late_repair(env, []),
+    )
+
+    reviewer_decisions = [
+        decision for decision in decisions if decision.role is AgentRole.REVIEWER
+    ]
+    assert [decision.selected_profile for decision in reviewer_decisions] == [
+        ComputeProfile.CRITICAL,
+        ComputeProfile.CRITICAL,
+    ]
+    assert reviewer_decisions[0].escalation_reasons == (
+        RoutingEscalationReason.DIRECT_UPSTREAM_REPAIR_PACKET,
+    )
+    assert reviewer_decisions[1].escalation_reasons == (
+        RoutingEscalationReason.REPEAT_REVIEW,
+    )
+
+
+def test_v2_seeded_verification_episode_escalates_repair_not_first_review(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
+    _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [_v2_approved()],
+        implementer_profiles=implementer_profiles,
+        reviewer_profiles=reviewer_profiles,
+    )
+    verification_queue = [_v2_verification(False), _v2_verification(True)]
+
+    def verification(
+        config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
+    ) -> VerificationEvidence:
+        assert config.repo == env.work
+        assert commands == spec.checkpoints[0].verification
+        return verification_queue.pop(0)
+
+    monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
+
+    orch_module._execute_v2_late_repair(
+        _cp3_config(env),
+        spec,
+        gate_id="seeded-verification-child-repair",
+        accepted_base_context_identity=_run_git(
+            ["rev-parse", "HEAD"], cwd=env.work
+        ).strip(),
+        initial_packet=None,
+        initial_verification_failure="upstream verification failed",
+        initial_verification_rejection_count=1,
+        verification_commands=spec.checkpoints[0].verification,
+        repair_acceptor=_commit_late_repair(env, []),
+    )
+
+    assert not verification_queue
+    assert implementer_profiles == [
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ]
+    assert reviewer_profiles == [ComputeProfile.DELIBERATE]
+
+
 def test_v2_late_repair_records_explicit_blocked_before_terminal_transition(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3422,8 +3809,12 @@ def test_v2_replayed_checkpoint_records_explicit_blocked(
             accepted_base_context_identity=original.predecessor_review_boundary_sha,
         )
     )
+    reviewer_profiles: list[ComputeProfile] = []
     _install_cp3_reviewer_sequence(
-        env, monkeypatch, [_v2_explicit_blocked("checkpoint replay blocked")]
+        env,
+        monkeypatch,
+        [_v2_explicit_blocked("checkpoint replay blocked")],
+        reviewer_profiles=reviewer_profiles,
     )
 
     with pytest.raises(orch_module._Blocked, match="checkpoint replay blocked"):
@@ -3437,6 +3828,7 @@ def test_v2_replayed_checkpoint_records_explicit_blocked(
     assert attempt.reviewer_verdict is ReviewVerdict.BLOCKED
     assert attempt.findings == ()
     assert not attempt.rejected and attempt.rejection_basis is None
+    assert reviewer_profiles == [ComputeProfile.DELIBERATE]
 
 
 # --- TSK-0028 CP-4: unpublished Task Closure and Mode C ordering ------------
@@ -3505,6 +3897,8 @@ def _install_cp4_agents(
     reviews: list[StructuredReviewResult],
     *,
     source_during_second_closure: bool = False,
+    implementer_profiles: list[ComputeProfile] | None = None,
+    reviewer_profiles: list[ComputeProfile] | None = None,
 ) -> tuple[list[str], list[str]]:
     queue = list(reviews)
     implementer_prompts: list[str] = []
@@ -3516,6 +3910,8 @@ def _install_cp4_agents(
         spec: AgentInvocationSpec, prompt: str
     ) -> AgentInvocationResult:
         nonlocal closure_count, repair_count
+        if implementer_profiles is not None:
+            implementer_profiles.append(ComputeProfile(spec.args[-1].upper()))
         implementer_prompts.append(prompt)
         if "CURRENT_GATE: prospective Task Closure" in prompt:
             closure_count += 1
@@ -3554,6 +3950,8 @@ def _install_cp4_agents(
     def fake_reviewer(
         spec: AgentInvocationSpec, prompt: str
     ) -> StructuredReviewResult:
+        if reviewer_profiles is not None:
+            reviewer_profiles.append(ComputeProfile(spec.args[-1].upper()))
         artifact = (env.work / "review.patch").read_text(encoding="utf-8")
         assert f"CURRENT_PATCH:\n{artifact}\n" in prompt
         reviewer_prompts.append(prompt)
@@ -3848,6 +4246,8 @@ def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
 ) -> None:
     spec = _cp3_spec()
     target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
     _, reviewer_prompts = _install_cp4_agents(
         env,
         monkeypatch,
@@ -3856,6 +4256,8 @@ def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
             _v2_approved(),
             _v2_approved(),
         ],
+        implementer_profiles=implementer_profiles,
+        reviewer_profiles=reviewer_profiles,
     )
 
     result = orch_module.execute_v2_unpublished_closure(
@@ -3878,6 +4280,120 @@ def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
     assert "PREVIOUS_REVIEWER_FINDINGS" in closure_reviews[1]
     assert "closure review defect" in closure_reviews[1]
     assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" in closure_reviews[1]
+    assert implementer_profiles == [
+        ComputeProfile.ROUTINE,
+        ComputeProfile.DELIBERATE,
+    ]
+    assert reviewer_profiles == [
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+        ComputeProfile.CRITICAL,
+    ]
+
+
+def test_v2_repeated_closure_basis_escalates_second_repair(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
+    _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _changes_with_paths("closure defect", ("docs/TASK.md",)),
+            _changes_with_paths(
+                "closure defect persists", ("docs/TASK.md",), diagnosis=True
+            ),
+            _v2_approved(),
+            _v2_approved(),
+        ],
+        implementer_profiles=implementer_profiles,
+        reviewer_profiles=reviewer_profiles,
+    )
+
+    result = orch_module.execute_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert result.completed
+    assert implementer_profiles == [
+        ComputeProfile.ROUTINE,
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ]
+    assert reviewer_profiles == [
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+        ComputeProfile.CRITICAL,
+        ComputeProfile.CRITICAL,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("local_basis", "expected_second_repair_profile"),
+    [
+        ("checkpoint:CP-1:required_result", ComputeProfile.CRITICAL),
+        ("repo:independent closure requirement", ComputeProfile.DELIBERATE),
+    ],
+    ids=["repeated-upstream-basis", "new-local-basis"],
+)
+def test_v2_upstream_closure_seed_controls_later_implementer_routing(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    local_basis: str,
+    expected_second_repair_profile: ComputeProfile,
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    upstream = _changes_with_paths(
+        "upstream closure defect", ("docs/TASK.md",)
+    ).repair_packet
+    assert upstream is not None
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
+    _install_cp4_agents(
+        env,
+        monkeypatch,
+        [
+            _changes_with_paths(
+                "local closure defect",
+                ("docs/TASK.md",),
+                binding_basis=local_basis,
+            ),
+            _v2_approved(),
+        ],
+        implementer_profiles=implementer_profiles,
+        reviewer_profiles=reviewer_profiles,
+    )
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+
+    candidate, _, _ = orch_module._prepare_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        pre_closure,
+        pr_number="1",
+        expected_published_head=implementation_head,
+        task_md_baseline=task_md_baseline,
+        initial_packet=upstream,
+    )
+
+    assert candidate.published_predecessor_sha == implementation_head
+    assert implementer_profiles == [
+        ComputeProfile.DELIBERATE,
+        expected_second_repair_profile,
+    ]
+    assert reviewer_profiles == [
+        ComputeProfile.CRITICAL,
+        ComputeProfile.CRITICAL,
+    ]
 
 
 def test_v2_closure_review_implementation_repair_uses_cp3_replay(
@@ -4184,8 +4700,12 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     spec = _cp3_spec()
     target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
     _mock_cp3_revalidated_target(monkeypatch, target)
+    reviewer_profiles: list[ComputeProfile] = []
     _install_cp4_agents(
-        env, monkeypatch, [_v2_approved(), _v2_approved(), _v2_approved()]
+        env,
+        monkeypatch,
+        [_v2_approved(), _v2_approved(), _v2_approved()],
+        reviewer_profiles=reviewer_profiles,
     )
     recorded = _capture_recorded_review_attempts(monkeypatch)
     histories: list[GateHistory] = []
@@ -4234,6 +4754,11 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     ]
     assert len(post_publication_metrics) == 1
     assert post_publication_metrics[0].last_reviewer_verdict is ReviewVerdict.APPROVED
+    assert reviewer_profiles == [
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+        ComputeProfile.CRITICAL,
+    ]
 
 
 def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(

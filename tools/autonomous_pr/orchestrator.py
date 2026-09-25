@@ -27,12 +27,15 @@ from typing import Callable
 
 from . import catalog, repository, task_context
 from .agents import (
+    AgentInvocationResult,
     AgentInvocationSpec,
+    AgentProfileConfig,
     run_implementer,
     run_structured_reviewer,
 )
 from .model import (
     AgentRole,
+    AgentWorkKind,
     ApprovedTaskDocument,
     CandidateIdentity,
     CandidateRejectionBasis,
@@ -46,6 +49,8 @@ from .model import (
     RepairPacket,
     ReviewGateMetrics,
     ReviewVerdict,
+    RoutingDecision,
+    RoutingDecisionRecord,
     RunOutcome,
     RunResult,
     StructuredReviewResult,
@@ -58,6 +63,7 @@ from .model import (
     VerificationEvidence,
 )
 from .repository import RepositoryError
+from .routing import route_agent_work
 from .task_context import TaskTrackerError
 from .task_spec import TaskSpecError, parse_task_document
 
@@ -119,12 +125,25 @@ class OrchestratorConfig:
 
     task_id: str
     repo: Path
-    implementer_spec: AgentInvocationSpec
-    reviewer_spec: AgentInvocationSpec
+    implementer_profiles: AgentProfileConfig
+    reviewer_profiles: AgentProfileConfig
     delivery_branch: str
     verification_timeout_seconds: float = 600.0
     gh_command: tuple[str, ...] = ("gh",)
     selected_task_context: str | None = None
+    _routing_decisions: list[RoutingDecisionRecord] | None = None
+
+    @property
+    def implementer_spec(self) -> AgentInvocationSpec:
+        """Role-common spec retained until routed materialization in CP-3."""
+
+        return self.implementer_profiles.spec
+
+    @property
+    def reviewer_spec(self) -> AgentInvocationSpec:
+        """Role-common spec retained until routed materialization in CP-3."""
+
+        return self.reviewer_profiles.spec
 
     def __post_init__(self) -> None:
         if self.implementer_spec.role is not AgentRole.IMPLEMENTER:
@@ -350,17 +369,93 @@ def _run_v2_designated_review(
     patch: repository.ReviewPatch,
     *,
     context: str,
+    reviewer_spec: AgentInvocationSpec | None = None,
 ) -> StructuredReviewResult:
     """Materialize and protect the exact patch supplied to one reviewer."""
 
     repository.materialize_review_patch(config.repo, patch)
     fingerprint = repository.capture_fingerprint(config.repo)
-    review = run_structured_reviewer(config.reviewer_spec, review_input)
+    review = run_structured_reviewer(
+        reviewer_spec or config.reviewer_spec, review_input
+    )
     repository.verify_fingerprint_unchanged(
         config.repo, fingerprint, context=context
     )
     repository.verify_materialized_review_patch(config.repo, patch)
     return review
+
+
+def _record_v2_routing_decision(
+    config: OrchestratorConfig,
+    decision: RoutingDecision,
+    history: GateHistory,
+) -> None:
+    """Append telemetry after routing and before the selected subprocess."""
+
+    sink = config._routing_decisions
+    if sink is None:
+        return
+    sink.append(
+        RoutingDecisionRecord(
+            sequence=len(sink) + 1,
+            role=decision.role,
+            work_kind=decision.work_kind,
+            gate_id=history.context.gate_id,
+            baseline_profile=decision.baseline_profile,
+            selected_profile=decision.selected_profile,
+            escalation_reasons=decision.escalation_reasons,
+        )
+    )
+
+
+def _run_routed_v2_implementer(
+    config: OrchestratorConfig,
+    prompt: str,
+    *,
+    work_kind: AgentWorkKind,
+    history: GateHistory,
+    direct_upstream_repair_packet: RepairPacket | None = None,
+    seed_verification_rejection_count: int = 0,
+) -> AgentInvocationResult:
+    decision = route_agent_work(
+        role=AgentRole.IMPLEMENTER,
+        work_kind=work_kind,
+        history=history,
+        direct_upstream_repair_packet=direct_upstream_repair_packet,
+        seed_verification_rejection_count=seed_verification_rejection_count,
+    )
+    _record_v2_routing_decision(config, decision, history)
+    invocation = config.implementer_profiles.materialize(decision.selected_profile)
+    return run_implementer(invocation, prompt)
+
+
+def _run_routed_v2_designated_review(
+    config: OrchestratorConfig,
+    review_input: str,
+    patch: repository.ReviewPatch,
+    *,
+    context: str,
+    work_kind: AgentWorkKind,
+    history: GateHistory,
+    direct_upstream_repair_packet: RepairPacket | None = None,
+    seed_verification_rejection_count: int = 0,
+) -> StructuredReviewResult:
+    decision = route_agent_work(
+        role=AgentRole.REVIEWER,
+        work_kind=work_kind,
+        history=history,
+        direct_upstream_repair_packet=direct_upstream_repair_packet,
+        seed_verification_rejection_count=seed_verification_rejection_count,
+    )
+    _record_v2_routing_decision(config, decision, history)
+    invocation = config.reviewer_profiles.materialize(decision.selected_profile)
+    return _run_v2_designated_review(
+        config,
+        review_input,
+        patch,
+        context=context,
+        reviewer_spec=invocation,
+    )
 
 
 def _record_v2_interpreted_review_attempt(
@@ -572,6 +667,8 @@ def run(config: OrchestratorConfig) -> RunResult:
     returned only once every phase below has actually completed.
     """
 
+    routing_decisions: list[RoutingDecisionRecord] = []
+    config = replace(config, _routing_decisions=routing_decisions)
     phase = Phase.PREFLIGHT
     delivery_branch: str | None = None
     head_sha: str | None = None
@@ -744,6 +841,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_path=spec_path,
             spec_digest=spec_digest,
             review_metrics=_summarize_v2_review_histories(review_histories),
+            routing_decisions=tuple(routing_decisions),
         )
     except (_Blocked, RepositoryError) as exc:
         return RunResult(
@@ -759,6 +857,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_path=spec_path,
             spec_digest=spec_digest,
             review_metrics=_summarize_v2_review_histories(review_histories),
+            routing_decisions=tuple(routing_decisions),
         )
 def _v2_commit_message(task_id: str, gate_id: str) -> str:
     """Return a deterministic, gate-labelled message for accepted v2 work."""
@@ -1109,7 +1208,17 @@ def execute_v2_checkpoints(
                 verification_failure,
                 repository_context_text,
             )
-            impl_result = run_implementer(config.implementer_spec, prompt)
+            implementer_work_kind = (
+                AgentWorkKind.CHECKPOINT_IMPLEMENTATION
+                if not history.attempts
+                else AgentWorkKind.IMPLEMENTATION_REPAIR
+            )
+            impl_result = _run_routed_v2_implementer(
+                config,
+                prompt,
+                work_kind=implementer_work_kind,
+                history=history,
+            )
             try:
                 repository.verify_branch_head_unchanged(
                     config.repo, before, context="v2 checkpoint implementer invocation"
@@ -1203,11 +1312,13 @@ def execute_v2_checkpoints(
                 history.consecutive_changes_requested >= 1,
             )
             try:
-                review = _run_v2_designated_review(
+                review = _run_routed_v2_designated_review(
                     config,
                     review_input,
                     patch,
                     context="v2 checkpoint review",
+                    work_kind=AgentWorkKind.CHECKPOINT_REVIEW,
+                    history=history,
                 )
             except RepositoryError as exc:
                 return blocked(str(exc))
@@ -1644,6 +1755,7 @@ def _execute_v2_late_repair(
     verification_commands: tuple[tuple[str, ...], ...],
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
     initial_verification_failure: str | None = None,
+    initial_verification_rejection_count: int = 0,
     history_sink: list[GateHistory] | None = None,
 ) -> tuple[AcceptedImplementationRepairCandidate, GateHistory, str]:
     """Adaptive mode-A repair with CP-2 no-progress semantics and no budget."""
@@ -1660,6 +1772,7 @@ def _execute_v2_late_repair(
         history_sink,
     )
     verification_failure = initial_verification_failure
+    reviewer_upstream_packet = initial_packet
 
     while True:
         before = repository.capture_branch_head(config.repo)
@@ -1674,7 +1787,18 @@ def _execute_v2_late_repair(
                 config.selected_task_context,
             ),
         )
-        result = run_implementer(config.implementer_spec, prompt)
+        result = _run_routed_v2_implementer(
+            config,
+            prompt,
+            work_kind=AgentWorkKind.IMPLEMENTATION_REPAIR,
+            history=history,
+            direct_upstream_repair_packet=initial_packet,
+            seed_verification_rejection_count=(
+                initial_verification_rejection_count
+            ),
+        )
+        candidate_upstream_packet = reviewer_upstream_packet
+        reviewer_upstream_packet = None
         repository.verify_branch_head_unchanged(
             config.repo, before, context=f"{gate_id} implementer repair"
         )
@@ -1736,11 +1860,17 @@ def _execute_v2_late_repair(
         review_input = _build_v2_late_repair_review_input(
             spec, gate_id, patch, verification, history
         )
-        review = _run_v2_designated_review(
+        review = _run_routed_v2_designated_review(
             config,
             review_input,
             patch,
             context=f"{gate_id} review",
+            work_kind=AgentWorkKind.IMPLEMENTATION_REPAIR_REVIEW,
+            history=history,
+            direct_upstream_repair_packet=candidate_upstream_packet,
+            seed_verification_rejection_count=(
+                initial_verification_rejection_count
+            ),
         )
         next_iteration = history.review_iteration + 1
         recorded_iteration = _record_v2_interpreted_review_attempt(
@@ -1843,11 +1973,13 @@ def _review_v2_replayed_checkpoint(
         ),
         history.consecutive_changes_requested >= 1,
     )
-    review = _run_v2_designated_review(
+    review = _run_routed_v2_designated_review(
         config,
         review_input,
         patch,
         context=f"replayed {checkpoint.checkpoint_id} review",
+        work_kind=AgentWorkKind.CHECKPOINT_REVIEW,
+        history=history,
     )
     next_iteration = history.review_iteration + 1
     recorded_iteration = _record_v2_interpreted_review_attempt(
@@ -1962,6 +2094,9 @@ def _replay_v2_checkpoints_conservatively(
                 verification_commands=checkpoint.verification,
                 repair_acceptor=repair_acceptor,
                 initial_verification_failure=verification_failure,
+                initial_verification_rejection_count=(
+                    1 if verification_failure is not None else 0
+                ),
                 history_sink=history_sink,
             )
             histories[f"repair:{checkpoint.checkpoint_id}:{len(histories)}"] = (
@@ -2138,11 +2273,13 @@ def execute_v2_pre_closure_review(
             review_input = _build_v2_cumulative_review_input(
                 spec, patch, full, cumulative_history
             )
-            review = _run_v2_designated_review(
+            review = _run_routed_v2_designated_review(
                 config,
                 review_input,
                 patch,
                 context="pre-closure cumulative review",
+                work_kind=AgentWorkKind.PRE_CLOSURE_CUMULATIVE_REVIEW,
+                history=cumulative_history,
             )
             terminal_phase = Phase.ORIGIN_MAIN_REVALIDATION
             post_review_target, base_moved = _revalidate_v2_execution_target(
@@ -2354,6 +2491,9 @@ def _prepare_v2_unpublished_closure(
     """Adaptively review Task Closure, then create one local-only commit."""
 
     upstream_packet = initial_packet
+    # Reviewer direct-response context is one-hop, but implementer routing keeps
+    # the original causal seed for the lifetime of this closure gate episode.
+    implementer_causal_seed = initial_packet
     history = _retain_v2_gate_history(
         GateHistory(
             context=GateContext(
@@ -2373,7 +2513,18 @@ def _prepare_v2_unpublished_closure(
             upstream_packet,
             history.latest_valid_repair_packet,
         )
-        impl_result = run_implementer(config.implementer_spec, prompt)
+        closure_work_kind = (
+            AgentWorkKind.TASK_CLOSURE_PREPARATION
+            if upstream_packet is None and not history.attempts
+            else AgentWorkKind.TASK_CLOSURE_REPAIR
+        )
+        impl_result = _run_routed_v2_implementer(
+            config,
+            prompt,
+            work_kind=closure_work_kind,
+            history=history,
+            direct_upstream_repair_packet=implementer_causal_seed,
+        )
         repository.verify_branch_head_unchanged(
             config.repo, before, context="v2 Task Closure implementer invocation"
         )
@@ -2405,11 +2556,14 @@ def _prepare_v2_unpublished_closure(
         review_input = _build_v2_closure_review_input(
             execution_target, patch.diff_text, history
         )
-        review = _run_v2_designated_review(
+        review = _run_routed_v2_designated_review(
             config,
             review_input,
             patch,
             context="v2 Task Closure review",
+            work_kind=AgentWorkKind.TASK_CLOSURE_REVIEW,
+            history=history,
+            direct_upstream_repair_packet=upstream_packet,
         )
         next_iteration = history.review_iteration + 1
         recorded_iteration = _record_v2_interpreted_review_attempt(
@@ -2537,11 +2691,13 @@ def _review_v2_mode_c_candidate(
     review_input = _build_v2_mode_c_review_input(
         execution_target, candidate, patch, history
     )
-    review = _run_v2_designated_review(
+    review = _run_routed_v2_designated_review(
         config,
         review_input,
         patch,
         context="v2 Mode C final cumulative audit",
+        work_kind=AgentWorkKind.MODE_C_REVIEW,
+        history=history,
     )
     return review, patch
 

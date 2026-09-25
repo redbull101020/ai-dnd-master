@@ -189,3 +189,4 @@ Concrete known constraints.
 | `TSK-0028` | `Done` | PR #106 | Implement and atomically activate spec-driven adaptive `AUTONOMOUS_PR` v2 |
 | `TSK-0029` | `Done` | PR #108 | File-based task dispatch, deterministic NEXT and removable completed specs |
 | `TSK-0030` | `Done` | PR #109 | Harden AUTONOMOUS_PR review convergence, finding grounding and diagnostics |
+| `TSK-0031` | `Done` | PR #110 | Add deterministic adaptive compute-profile routing to AUTONOMOUS_PR |

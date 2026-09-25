@@ -29,12 +29,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Mapping
 
 from .model import (
     AgentRole,
+    ComputeProfile,
     NonConvergenceDiagnosis,
     RepairFinding,
     RepairPacket,
@@ -114,6 +116,81 @@ class AgentInvocationSpec:
     fresh_context_capable: bool = False
     can_edit_working_files: bool = False
     has_git_or_github_write_access: bool | None = None
+
+
+_REQUIRED_PROFILES: dict[AgentRole, tuple[ComputeProfile, ...]] = {
+    AgentRole.IMPLEMENTER: (
+        ComputeProfile.ROUTINE,
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ),
+    AgentRole.REVIEWER: (
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ),
+}
+
+
+@dataclass(frozen=True)
+class AgentProfileConfig:
+    """One role executable plus explicit opaque argv for every required tier.
+
+    Profile selection never changes the executable/provider or any capability
+    assertion.  The final argv is always role-common ``spec.args`` followed by
+    the selected profile's configured argv.
+    """
+
+    spec: AgentInvocationSpec
+    profile_args: Mapping[ComputeProfile, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        normalized = {
+            profile: tuple(args) for profile, args in self.profile_args.items()
+        }
+        required = _REQUIRED_PROFILES[self.spec.role]
+        required_set = frozenset(required)
+        configured_set = frozenset(normalized)
+        if configured_set != required_set:
+            missing = sorted(profile.value for profile in required_set - configured_set)
+            unsupported = sorted(
+                profile.value for profile in configured_set - required_set
+            )
+            details: list[str] = []
+            if missing:
+                details.append("missing " + ", ".join(missing))
+            if unsupported:
+                details.append("unsupported " + ", ".join(unsupported))
+            raise ValueError(
+                f"{self.spec.role.value} profile argv must configure exactly "
+                f"the required tiers ({'; '.join(details)})"
+            )
+        for profile in required:
+            argv = normalized[profile]
+            if not argv or any(not arg for arg in argv):
+                raise ValueError(
+                    f"{self.spec.role.value} {profile.value} profile argv "
+                    "must contain only non-empty entries"
+                )
+
+        effective_argv = [self.spec.args + normalized[profile] for profile in required]
+        if len(set(effective_argv)) != len(effective_argv):
+            raise ValueError(
+                f"{self.spec.role.value} required profiles must have distinct "
+                "effective argv"
+            )
+        object.__setattr__(self, "profile_args", MappingProxyType(normalized))
+
+    def materialize(self, profile: ComputeProfile) -> AgentInvocationSpec:
+        """Compose one selected tier without changing role capabilities."""
+
+        try:
+            selected_args = self.profile_args[profile]
+        except KeyError as exc:
+            raise ValueError(
+                f"profile {profile.value} is not configured for "
+                f"{self.spec.role.value}"
+            ) from exc
+        return replace(self.spec, args=self.spec.args + selected_args)
 
 
 @dataclass(frozen=True)

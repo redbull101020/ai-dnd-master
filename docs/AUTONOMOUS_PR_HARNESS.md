@@ -1440,3 +1440,98 @@ No task is designated by this contract as the first real v2 trial, and
 - no unresolved architectural question;
 - objective, deterministic tests;
 - limited cross-layer risk.
+
+---
+
+## 36. Deterministic adaptive compute routing (operational v2)
+
+Every operational implementer and designated-reviewer invocation is routed by
+the orchestrator through one of three closed, provider-neutral compute
+profiles: `ROUTINE`, `DELIBERATE`, or `CRITICAL`. These names express relative
+reasoning budget only. They do not name a provider, model, executable, or
+entitlement, and the agent cannot select or alter its own profile.
+
+The baseline profile is determined only by role and explicit work kind:
+
+| Role | Work kind | Baseline |
+| --- | --- | --- |
+| Implementer | initial ordinary checkpoint | `ROUTINE` |
+| Implementer | implementation repair | `DELIBERATE` |
+| Implementer | initial Task Closure preparation | `ROUTINE` |
+| Implementer | Task Closure repair | `DELIBERATE` |
+| Reviewer | ordinary or replayed checkpoint review | `DELIBERATE` |
+| Reviewer | implementation-repair review | `DELIBERATE` |
+| Reviewer | pre-closure cumulative implementation review | `CRITICAL` |
+| Reviewer | Task Closure review | `DELIBERATE` |
+| Reviewer | Mode C, including post-publication replay | `CRITICAL` |
+
+Each decision is recomputed from that baseline and structured local facts; the
+orchestrator stores no mutable current profile and has no upgrade/downgrade
+state machine. For an implementation or closure repair, the selected profile
+becomes `CRITICAL` when either:
+
+- the cumulative deterministic verification-rejection count in the current
+  causal repair episode is at least two, including a directly seeded upstream
+  verification failure; or
+- an exact `binding_basis` in the packet controlling the next repair occurred
+  in an earlier packet of that causal episode, including a direct upstream
+  seed. Non-adjacent repetition such as `A → B → A` therefore escalates, while
+  a new basis alone does not.
+
+For a reviewer whose baseline is not already `CRITICAL`, review iteration 2 or
+later in the same gate is `CRITICAL`. The first review of a repair candidate
+created directly from an upstream `RepairPacket` is also `CRITICAL`. A seeded
+verification failure without an upstream packet does not by itself escalate
+that first repair review. `CRITICAL` is saturating but is never a repair limit
+or a terminal condition.
+
+A direct upstream packet or verification failure crosses only into the child
+repair episode it causally creates. Local review and verification rejections
+then extend that episode. Acceptance ends the lineage: the next independent
+checkpoint, replay gate, closure preparation, or new run starts from its own
+baseline unless it receives a new explicit direct causal seed. In particular,
+a `CRITICAL` cumulative review does not make initial closure preparation more
+than `ROUTINE`.
+
+### External-process profile boundary
+
+Each role retains exactly one configured executable and one role-common argv.
+Required profile-specific argv are appended to that common argv to materialize
+the selected invocation. Implementer configuration supplies distinct mappings
+for all three profiles; reviewer configuration supplies distinct mappings for
+`DELIBERATE` and `CRITICAL`. Missing, empty, or indistinguishable required
+mappings fail configuration before the first agent invocation.
+
+Materialization preserves the role, executable, working directory, timeout,
+environment, fresh-context assertion, edit capability, and Git/GitHub
+write-capability assertion. Routing never switches provider or executable and
+never weakens the reviewer isolation or no-write requirements of §5 and §8.
+Failure of the selected external profile follows the existing fail-closed
+agent-failure path; there is no fallback to another profile, executable,
+provider, or model.
+
+### Routing diagnostics
+
+Immediately after a deterministic decision and before its subprocess starts,
+the orchestrator appends one immutable `RoutingDecisionRecord` to the current
+run's in-memory sequence. A record contains only:
+
+- monotonic per-run sequence;
+- role and work kind;
+- gate ID;
+- baseline and selected profiles;
+- closed-set escalation reasons.
+
+Consequently a timeout, launch error, or non-zero result from the selected
+process does not erase its routing record. Successful, blocked, and partially
+progressed run results retain records already made. `NO_ELIGIBLE_TASK` and a
+failure before the first routed invocation have an empty tuple, and every new
+`run()` starts its sequence again at one.
+
+The CLI emits one deterministic, sorted-key `routing_decision_json: ` JSON line
+per record. It never includes prompts, patches, agent stdout/stderr, full or
+profile argv, environment values, credentials, provider-sensitive values, or
+hidden reasoning. Records are append-only in-memory diagnostics: they are not
+persisted or resumable state, the router never reads them, and neither they nor
+`ReviewGateMetrics` affect routing, verdicts, retry, no-progress detection,
+replay, phase transitions, publication, CI, or merge readiness.

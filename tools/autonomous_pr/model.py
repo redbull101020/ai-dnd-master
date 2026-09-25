@@ -83,6 +83,61 @@ class AgentRole(Enum):
     REVIEWER = "reviewer"
 
 
+class ComputeProfile(Enum):
+    """Closed, provider-neutral compute-budget tiers for one invocation."""
+
+    ROUTINE = "ROUTINE"
+    DELIBERATE = "DELIBERATE"
+    CRITICAL = "CRITICAL"
+
+
+class AgentWorkKind(Enum):
+    """Closed classification of operational v2 LLM invocation work."""
+
+    CHECKPOINT_IMPLEMENTATION = "checkpoint_implementation"
+    IMPLEMENTATION_REPAIR = "implementation_repair"
+    CHECKPOINT_REVIEW = "checkpoint_review"
+    IMPLEMENTATION_REPAIR_REVIEW = "implementation_repair_review"
+    PRE_CLOSURE_CUMULATIVE_REVIEW = "pre_closure_cumulative_review"
+    TASK_CLOSURE_PREPARATION = "task_closure_preparation"
+    TASK_CLOSURE_REPAIR = "task_closure_repair"
+    TASK_CLOSURE_REVIEW = "task_closure_review"
+    MODE_C_REVIEW = "mode_c_review"
+
+
+class RoutingEscalationReason(Enum):
+    """Closed diagnostic reasons that can raise a routing baseline."""
+
+    REPEATED_BINDING_BASIS = "repeated_binding_basis"
+    REPEATED_VERIFICATION_REJECTION = "repeated_verification_rejection"
+    REPEAT_REVIEW = "repeat_review"
+    DIRECT_UPSTREAM_REPAIR_PACKET = "direct_upstream_repair_packet"
+
+
+@dataclass(frozen=True)
+class RoutingDecision:
+    """Pure routing result for one prospective agent invocation."""
+
+    role: AgentRole
+    work_kind: AgentWorkKind
+    baseline_profile: ComputeProfile
+    selected_profile: ComputeProfile
+    escalation_reasons: tuple[RoutingEscalationReason, ...] = ()
+
+
+@dataclass(frozen=True)
+class RoutingDecisionRecord:
+    """Provider-neutral diagnostics shape; runtime recording starts in CP-4."""
+
+    sequence: int
+    role: AgentRole
+    work_kind: AgentWorkKind
+    gate_id: str
+    baseline_profile: ComputeProfile
+    selected_profile: ComputeProfile
+    escalation_reasons: tuple[RoutingEscalationReason, ...] = ()
+
+
 @dataclass(frozen=True)
 class RepairFinding:
     """One complete, provider-neutral v2 repair finding (Harness §25)."""
@@ -471,6 +526,10 @@ class RunResult:
     ``review_metrics`` is a read-only diagnostic projection of the in-memory
     gate histories that reached an explicit designated-reviewer verdict. It is
     empty when no designated review occurred and never drives orchestration.
+
+    ``routing_decisions`` is the append-only, provider-neutral sequence of
+    agent routing decisions actually made during this run. It is recorded
+    before each selected subprocess invocation and is diagnostic-only.
     """
 
     task_id: str | None
@@ -486,3 +545,4 @@ class RunResult:
     spec_digest: str | None = None
     no_work_reasons: tuple[TaskSelectionReason, ...] = ()
     review_metrics: tuple[ReviewGateMetrics, ...] = ()
+    routing_decisions: tuple[RoutingDecisionRecord, ...] = ()

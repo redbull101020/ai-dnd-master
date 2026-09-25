@@ -5,13 +5,103 @@ import pytest
 
 from tools.autonomous_pr.agents import (
     AgentInvocationSpec,
+    AgentProfileConfig,
     AgentRoleError,
     parse_reviewer_verdict,
     parse_structured_reviewer_output,
     run_implementer,
     run_structured_reviewer,
 )
-from tools.autonomous_pr.model import AgentRole, ReviewVerdict
+from tools.autonomous_pr.model import AgentRole, ComputeProfile, ReviewVerdict
+
+
+def _profile_args(role: AgentRole) -> dict[ComputeProfile, tuple[str, ...]]:
+    if role is AgentRole.IMPLEMENTER:
+        return {
+            ComputeProfile.ROUTINE: ("--routine",),
+            ComputeProfile.DELIBERATE: ("--deliberate",),
+            ComputeProfile.CRITICAL: ("--critical",),
+        }
+    return {
+        ComputeProfile.DELIBERATE: ("--deliberate",),
+        ComputeProfile.CRITICAL: ("--critical",),
+    }
+
+
+def test_profile_config_requires_every_role_tier() -> None:
+    spec = AgentInvocationSpec(role=AgentRole.IMPLEMENTER, executable="agent")
+    mappings = _profile_args(AgentRole.IMPLEMENTER)
+    del mappings[ComputeProfile.CRITICAL]
+
+    with pytest.raises(ValueError, match="missing CRITICAL"):
+        AgentProfileConfig(spec=spec, profile_args=mappings)
+
+
+def test_profile_config_rejects_tier_unsupported_for_role() -> None:
+    spec = AgentInvocationSpec(role=AgentRole.REVIEWER, executable="agent")
+    mappings = _profile_args(AgentRole.REVIEWER)
+    mappings[ComputeProfile.ROUTINE] = ("--routine",)
+
+    with pytest.raises(ValueError, match="unsupported ROUTINE"):
+        AgentProfileConfig(spec=spec, profile_args=mappings)
+
+
+def test_profile_config_rejects_empty_and_indistinguishable_tiers() -> None:
+    spec = AgentInvocationSpec(role=AgentRole.REVIEWER, executable="agent")
+    with pytest.raises(ValueError, match="DELIBERATE.*non-empty"):
+        AgentProfileConfig(
+            spec=spec,
+            profile_args={
+                ComputeProfile.DELIBERATE: (),
+                ComputeProfile.CRITICAL: ("--critical",),
+            },
+        )
+    with pytest.raises(ValueError, match="distinct effective argv"):
+        AgentProfileConfig(
+            spec=spec,
+            profile_args={
+                ComputeProfile.DELIBERATE: ("--same",),
+                ComputeProfile.CRITICAL: ("--same",),
+            },
+        )
+
+
+@pytest.mark.parametrize("role", (AgentRole.IMPLEMENTER, AgentRole.REVIEWER))
+def test_materialized_profile_preserves_role_and_capability_fields(
+    role: AgentRole,
+) -> None:
+    spec = AgentInvocationSpec(
+        role=role,
+        executable="agent",
+        args=("--common",),
+        cwd=None,
+        timeout_seconds=17.0,
+        env={"KEY": "value"},
+        fresh_context_capable=role is AgentRole.REVIEWER,
+        can_edit_working_files=role is AgentRole.IMPLEMENTER,
+        has_git_or_github_write_access=False,
+    )
+    profiles = AgentProfileConfig(spec=spec, profile_args=_profile_args(role))
+    selected = (
+        ComputeProfile.ROUTINE
+        if role is AgentRole.IMPLEMENTER
+        else ComputeProfile.DELIBERATE
+    )
+
+    materialized = profiles.materialize(selected)
+
+    assert materialized.args == ("--common", f"--{selected.value.lower()}")
+    assert materialized.role is spec.role
+    assert materialized.executable == spec.executable
+    assert materialized.cwd == spec.cwd
+    assert materialized.timeout_seconds == spec.timeout_seconds
+    assert materialized.env == spec.env
+    assert materialized.fresh_context_capable == spec.fresh_context_capable
+    assert materialized.can_edit_working_files == spec.can_edit_working_files
+    assert (
+        materialized.has_git_or_github_write_access
+        == spec.has_git_or_github_write_access
+    )
 
 
 def _python_reviewer(code: str, timeout_seconds: float = 10.0) -> AgentInvocationSpec:
