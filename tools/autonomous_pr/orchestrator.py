@@ -28,6 +28,7 @@ from typing import Callable
 from . import catalog, repository, task_context
 from .agents import (
     AgentInvocationSpec,
+    AgentProfileConfig,
     run_implementer,
     run_structured_reviewer,
 )
@@ -119,12 +120,24 @@ class OrchestratorConfig:
 
     task_id: str
     repo: Path
-    implementer_spec: AgentInvocationSpec
-    reviewer_spec: AgentInvocationSpec
+    implementer_profiles: AgentProfileConfig
+    reviewer_profiles: AgentProfileConfig
     delivery_branch: str
     verification_timeout_seconds: float = 600.0
     gh_command: tuple[str, ...] = ("gh",)
     selected_task_context: str | None = None
+
+    @property
+    def implementer_spec(self) -> AgentInvocationSpec:
+        """Role-common spec retained until routed materialization in CP-3."""
+
+        return self.implementer_profiles.spec
+
+    @property
+    def reviewer_spec(self) -> AgentInvocationSpec:
+        """Role-common spec retained until routed materialization in CP-3."""
+
+        return self.reviewer_profiles.spec
 
     def __post_init__(self) -> None:
         if self.implementer_spec.role is not AgentRole.IMPLEMENTER:

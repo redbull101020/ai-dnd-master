@@ -6,6 +6,7 @@ import pytest
 from tools.autonomous_pr import __main__ as main_module
 from tools.autonomous_pr.__main__ import _build_config, _parse_args
 from tools.autonomous_pr.model import (
+    ComputeProfile,
     Phase,
     ReviewGateMetrics,
     ReviewVerdict,
@@ -21,6 +22,11 @@ def _argv(*extra: str) -> list[str]:
         "implementer",
         "--reviewer",
         "reviewer",
+        "--implementer-routine-arg=--routine",
+        "--implementer-deliberate-arg=--deliberate",
+        "--implementer-critical-arg=--critical",
+        "--reviewer-deliberate-arg=--deliberate",
+        "--reviewer-critical-arg=--critical",
         "--reviewer-fresh-context-capable",
         "--implementer-no-git-github-write-capability",
         "--reviewer-no-git-github-write-capability",
@@ -37,6 +43,38 @@ def test_cli_builds_v2_config_without_runtime_plan_or_verification_selectors() -
     assert config.delivery_branch == "codex/tsk-9001"
     assert not hasattr(config, "verification_commands")
     assert not hasattr(config, "max_repairs")
+
+
+def test_cli_composes_common_and_profile_specific_argv() -> None:
+    config = _build_config(
+        _parse_args(
+            _argv(
+                "--implementer-arg=--common-implementer",
+                "--reviewer-arg=--common-reviewer",
+            )
+        )
+    )
+
+    assert config.implementer_profiles.materialize(ComputeProfile.ROUTINE).args == (
+        "--common-implementer",
+        "--routine",
+    )
+    assert config.implementer_profiles.materialize(ComputeProfile.CRITICAL).args == (
+        "--common-implementer",
+        "--critical",
+    )
+    assert config.reviewer_profiles.materialize(ComputeProfile.DELIBERATE).args == (
+        "--common-reviewer",
+        "--deliberate",
+    )
+
+
+def test_cli_rejects_unconfigured_required_profile_before_run() -> None:
+    argv = _argv()
+    argv.remove("--implementer-critical-arg=--critical")
+
+    with pytest.raises(ValueError, match="CRITICAL.*non-empty"):
+        _build_config(_parse_args(argv))
 
 
 def test_v2_phase_model_has_no_runtime_planning_phases() -> None:
@@ -58,8 +96,13 @@ def test_cli_keeps_capability_assertions_fail_closed() -> None:
         repo=Path.cwd(),
         implementer="implementer",
         implementer_args=[],
+        implementer_routine_args=["--routine"],
+        implementer_deliberate_args=["--deliberate"],
+        implementer_critical_args=["--critical"],
         reviewer="reviewer",
         reviewer_args=[],
+        reviewer_deliberate_args=["--deliberate"],
+        reviewer_critical_args=["--critical"],
         reviewer_fresh_context_capable=False,
         implementer_no_git_github_write_capability=None,
         reviewer_no_git_github_write_capability=None,

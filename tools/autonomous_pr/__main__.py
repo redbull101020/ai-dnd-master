@@ -29,6 +29,11 @@ never verified by this module for an opaque external command; see
 though the command had been positively asserted safe — this CLI never
 manufactures that assertion on the operator's behalf, and never offers a
 way to grant Git/GitHub write access to either role.
+
+Each role keeps one executable and role-common ``--*-arg`` values. Required
+``--*-<profile>-arg`` values are appended for the selected compute profile;
+missing, empty, or indistinguishable profile mappings fail configuration
+before the first external agent invocation.
 """
 
 from __future__ import annotations
@@ -38,8 +43,8 @@ import json
 import sys
 from pathlib import Path
 
-from .agents import AgentInvocationSpec
-from .model import AgentRole, RunOutcome, RunResult
+from .agents import AgentInvocationSpec, AgentProfileConfig
+from .model import AgentRole, ComputeProfile, RunOutcome, RunResult
 from .orchestrator import OrchestratorConfig, run
 
 
@@ -71,6 +76,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         dest="implementer_args",
         help="One implementer argv entry; may repeat.",
     )
+    for profile in ComputeProfile:
+        parser.add_argument(
+            f"--implementer-{profile.value.lower()}-arg",
+            action="append",
+            default=[],
+            dest=f"implementer_{profile.value.lower()}_args",
+            help=(
+                f"One implementer {profile.value} profile argv entry; may repeat."
+            ),
+        )
     parser.add_argument(
         "--reviewer", required=True, help="Designated reviewer executable."
     )
@@ -81,6 +96,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         dest="reviewer_args",
         help="One reviewer argv entry; may repeat.",
     )
+    for profile in (ComputeProfile.DELIBERATE, ComputeProfile.CRITICAL):
+        parser.add_argument(
+            f"--reviewer-{profile.value.lower()}-arg",
+            action="append",
+            default=[],
+            dest=f"reviewer_{profile.value.lower()}_args",
+            help=f"One reviewer {profile.value} profile argv entry; may repeat.",
+        )
     parser.add_argument(
         "--reviewer-fresh-context-capable",
         action="store_true",
@@ -175,8 +198,21 @@ def _build_config(args: argparse.Namespace) -> OrchestratorConfig:
     return OrchestratorConfig(
         task_id=args.task_id,
         repo=args.repo,
-        implementer_spec=implementer_spec,
-        reviewer_spec=reviewer_spec,
+        implementer_profiles=AgentProfileConfig(
+            spec=implementer_spec,
+            profile_args={
+                ComputeProfile.ROUTINE: tuple(args.implementer_routine_args),
+                ComputeProfile.DELIBERATE: tuple(args.implementer_deliberate_args),
+                ComputeProfile.CRITICAL: tuple(args.implementer_critical_args),
+            },
+        ),
+        reviewer_profiles=AgentProfileConfig(
+            spec=reviewer_spec,
+            profile_args={
+                ComputeProfile.DELIBERATE: tuple(args.reviewer_deliberate_args),
+                ComputeProfile.CRITICAL: tuple(args.reviewer_critical_args),
+            },
+        ),
         delivery_branch=args.delivery_branch or "",
         verification_timeout_seconds=args.verify_timeout_seconds,
     )

@@ -12,12 +12,17 @@ import pytest
 from tools.autonomous_pr import orchestrator as orch_module
 from tools.autonomous_pr import repository
 from tools.autonomous_pr import task_context
-from tools.autonomous_pr.agents import AgentInvocationResult, AgentInvocationSpec
+from tools.autonomous_pr.agents import (
+    AgentInvocationResult,
+    AgentInvocationSpec,
+    AgentProfileConfig,
+)
 from tools.autonomous_pr.model import (
     AgentRole,
     ApprovedTaskDocument,
     CandidateIdentity,
     CandidateRejectionBasis,
+    ComputeProfile,
     ExecutionCheckpoint,
     ExecutionApproval,
     ExecutionTarget,
@@ -56,6 +61,21 @@ _SCOPE_MARKER = "SCOPE_MARKER_TEXT"
 _OUT_OF_SCOPE_MARKER = "OUT_OF_SCOPE_MARKER_TEXT"
 _ACCEPTANCE_MARKER = "ACCEPTANCE_CRITERIA_MARKER_TEXT"
 _VERIFICATION_MARKER = "VERIFICATION_MARKER_TEXT"
+
+
+def _profiles(spec: AgentInvocationSpec) -> AgentProfileConfig:
+    if spec.role is AgentRole.IMPLEMENTER:
+        profile_args = {
+            ComputeProfile.ROUTINE: ("routine",),
+            ComputeProfile.DELIBERATE: ("deliberate",),
+            ComputeProfile.CRITICAL: ("critical",),
+        }
+    else:
+        profile_args = {
+            ComputeProfile.DELIBERATE: ("deliberate",),
+            ComputeProfile.CRITICAL: ("critical",),
+        }
+    return AgentProfileConfig(spec=spec, profile_args=profile_args)
 
 
 def _run_git(args: list[str], cwd: Path) -> str:
@@ -382,8 +402,8 @@ def _default_config(
     return OrchestratorConfig(
         task_id=_TASK_ID,
         repo=env.work,
-        implementer_spec=implementer_spec,
-        reviewer_spec=reviewer_spec,
+        implementer_profiles=_profiles(implementer_spec),
+        reviewer_profiles=_profiles(reviewer_spec),
         delivery_branch=delivery_branch,
         gh_command=gh_command if gh_command is not None else _default_gh_command(),
     )
@@ -471,10 +491,12 @@ def _public_dispatch_config(
     return OrchestratorConfig(
         task_id=selector,
         repo=env.work,
-        implementer_spec=_implementer_spec(
-            env.work, _public_dispatch_implementer_code(expected_task_id)
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work, _public_dispatch_implementer_code(expected_task_id)
+            )
         ),
-        reviewer_spec=_reviewer_spec(env.work, reviewer_code),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
         delivery_branch="",
         gh_command=_public_dispatch_gh_command(expected_task_id),
     )
@@ -653,8 +675,8 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
     config = OrchestratorConfig(
         task_id=selector,
         repo=work,
-        implementer_spec=_implementer_spec(work, implementer_code),
-        reviewer_spec=_reviewer_spec(work, reviewer_code),
+        implementer_profiles=_profiles(_implementer_spec(work, implementer_code)),
+        reviewer_profiles=_profiles(_reviewer_spec(work, reviewer_code)),
         delivery_branch="",
         gh_command=_public_dispatch_gh_command(_TASK_ID),
     )
@@ -716,10 +738,12 @@ def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
     config = OrchestratorConfig(
         task_id=_TASK_ID,
         repo=env.work,
-        implementer_spec=_implementer_spec(
-            env.work, _public_dispatch_implementer_code(_TASK_ID)
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work, _public_dispatch_implementer_code(_TASK_ID)
+            )
         ),
-        reviewer_spec=_reviewer_spec(env.work, reviewer_code),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
         delivery_branch="",
         gh_command=_public_dispatch_gh_command(_TASK_ID),
     )
@@ -763,8 +787,10 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
         OrchestratorConfig(
             task_id="NEXT",
             repo=work,
-            implementer_spec=_implementer_spec(work, fail_if_invoked),
-            reviewer_spec=_reviewer_spec(work, fail_if_invoked),
+            implementer_profiles=_profiles(
+                _implementer_spec(work, fail_if_invoked)
+            ),
+            reviewer_profiles=_profiles(_reviewer_spec(work, fail_if_invoked)),
             delivery_branch="",
             gh_command=(sys.executable, "-c", fail_if_invoked),
         )
