@@ -39,6 +39,7 @@ from tools.autonomous_pr.model import (
     RunOutcome,
     RunResult,
     RoutingDecision,
+    RoutingEscalationReason,
     SelectedTask,
     StructuredReviewResult,
     TaskExecutionSpec,
@@ -3664,6 +3665,51 @@ def test_v2_late_repair_upstream_packet_routes_first_review_critical(
 
     assert implementer_profiles == [ComputeProfile.DELIBERATE]
     assert reviewer_profiles == [ComputeProfile.CRITICAL]
+
+
+def test_v2_late_repair_upstream_packet_is_one_hop_reviewer_context(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    upstream = _v2_changes("upstream").repair_packet
+    assert upstream is not None
+    decisions: list[orch_module.RoutingDecisionRecord] = []
+    config = dataclasses.replace(_cp3_config(env), _routing_decisions=decisions)
+    _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [
+            _v2_changes("upstream"),
+            _v2_approved(),
+        ],
+    )
+
+    orch_module._execute_v2_late_repair(
+        config,
+        spec,
+        gate_id="upstream-one-hop-review",
+        accepted_base_context_identity=_run_git(
+            ["rev-parse", "HEAD"], cwd=env.work
+        ).strip(),
+        initial_packet=upstream,
+        verification_commands=spec.checkpoints[0].verification,
+        repair_acceptor=_commit_late_repair(env, []),
+    )
+
+    reviewer_decisions = [
+        decision for decision in decisions if decision.role is AgentRole.REVIEWER
+    ]
+    assert [decision.selected_profile for decision in reviewer_decisions] == [
+        ComputeProfile.CRITICAL,
+        ComputeProfile.CRITICAL,
+    ]
+    assert reviewer_decisions[0].escalation_reasons == (
+        RoutingEscalationReason.DIRECT_UPSTREAM_REPAIR_PACKET,
+    )
+    assert reviewer_decisions[1].escalation_reasons == (
+        RoutingEscalationReason.REPEAT_REVIEW,
+    )
 
 
 def test_v2_seeded_verification_episode_escalates_repair_not_first_review(

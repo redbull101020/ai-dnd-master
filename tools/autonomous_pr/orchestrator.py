@@ -1772,6 +1772,7 @@ def _execute_v2_late_repair(
         history_sink,
     )
     verification_failure = initial_verification_failure
+    reviewer_upstream_packet = initial_packet
 
     while True:
         before = repository.capture_branch_head(config.repo)
@@ -1796,6 +1797,8 @@ def _execute_v2_late_repair(
                 initial_verification_rejection_count
             ),
         )
+        candidate_upstream_packet = reviewer_upstream_packet
+        reviewer_upstream_packet = None
         repository.verify_branch_head_unchanged(
             config.repo, before, context=f"{gate_id} implementer repair"
         )
@@ -1864,7 +1867,7 @@ def _execute_v2_late_repair(
             context=f"{gate_id} review",
             work_kind=AgentWorkKind.IMPLEMENTATION_REPAIR_REVIEW,
             history=history,
-            direct_upstream_repair_packet=initial_packet,
+            direct_upstream_repair_packet=candidate_upstream_packet,
             seed_verification_rejection_count=(
                 initial_verification_rejection_count
             ),
