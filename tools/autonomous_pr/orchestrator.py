@@ -2399,7 +2399,11 @@ def _format_validated_v2_closure_evidence(
     pr_number: str,
     expected_published_head: str,
 ) -> str:
-    """Validate and compact the authoritative prospective-closure evidence."""
+    """Validate and freshly format authoritative prospective-closure evidence.
+
+    The returned JSON is an ephemeral handoff projection of existing typed
+    evidence, never persisted or reused as mutable cross-gate state.
+    """
 
     spec = execution_target.spec
     evidence = pre_closure.evidence
