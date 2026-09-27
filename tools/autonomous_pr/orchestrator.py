@@ -2498,6 +2498,7 @@ def _build_v2_closure_prompt(
     execution_target: ExecutionTarget,
     pre_closure: V2PreClosureExecutionResult,
     pr_number: str,
+    closure_evidence: str,
     upstream_packet: RepairPacket | None,
     closure_gate_packet: RepairPacket | None,
 ) -> str:
@@ -2521,6 +2522,16 @@ def _build_v2_closure_prompt(
         f"DRAFT_PR_NUMBER: {pr_number}\n"
         f"ACCEPTED_IMPLEMENTATION_BASE: {cumulative.base_identity}\n"
         f"ACCEPTED_IMPLEMENTATION_HEAD: {cumulative.reviewed_head_sha}\n"
+        "AUTHORITATIVE_CLOSURE_EVIDENCE_JSON:\n"
+        f"{closure_evidence}"
+        "EVIDENCE_USAGE_CONSTRAINTS:\n"
+        "The supplied structured evidence is the only authoritative source for "
+        "verification claims in Task Closure and Development Log prose. Do not "
+        "rerun verification merely to write closure prose, invent test counts, "
+        "derive verification claims from your own self-check, or present a "
+        "subset of the recorded commands as the complete verification story. "
+        "A concise factual summary by verification category is permitted only "
+        "when every claim follows completely from the supplied evidence.\n"
         f"ACCEPTED_IMPLEMENTATION_PATCH:\n{cumulative.review_patch.diff_text}\n"
         "UPSTREAM_REPAIR_CONTEXT (source only; not a previous Closure Review):\n"
         f"{_repair_packet_json(upstream_packet)}\n"
@@ -2540,6 +2551,7 @@ def _build_v2_closure_prompt(
 def _build_v2_closure_review_input(
     execution_target: ExecutionTarget,
     diff_text: str,
+    closure_evidence: str,
     history: GateHistory,
 ) -> str:
     protocol = _v2_designated_review_protocol(
@@ -2560,6 +2572,8 @@ def _build_v2_closure_review_input(
         f"REVIEW_ITERATION: {history.review_iteration + 1}\n"
         "ROLE: Review only the canonical prospective Task Closure diff. "
         f"{protocol}{contract}"
+        "AUTHORITATIVE_CLOSURE_EVIDENCE_JSON:\n"
+        f"{closure_evidence}"
         f"CURRENT_PATCH:\n{diff_text}\n"
     )
     if history.latest_valid_repair_packet is not None:
@@ -2608,7 +2622,7 @@ def _prepare_v2_unpublished_closure(
         history_sink,
     )
     while True:
-        _format_validated_v2_closure_evidence(
+        closure_evidence = _format_validated_v2_closure_evidence(
             execution_target,
             pre_closure,
             pr_number=pr_number,
@@ -2619,6 +2633,7 @@ def _prepare_v2_unpublished_closure(
             execution_target,
             pre_closure,
             pr_number,
+            closure_evidence,
             upstream_packet,
             history.latest_valid_repair_packet,
         )
@@ -2662,14 +2677,14 @@ def _prepare_v2_unpublished_closure(
         identity = _candidate_identity(patch.diff_text)
         if identity in history.rejected_candidate_identities:
             raise _Blocked("Task Closure repair reproduced a rejected candidate")
-        _format_validated_v2_closure_evidence(
+        closure_evidence = _format_validated_v2_closure_evidence(
             execution_target,
             pre_closure,
             pr_number=pr_number,
             expected_published_head=expected_published_head,
         )
         review_input = _build_v2_closure_review_input(
-            execution_target, patch.diff_text, history
+            execution_target, patch.diff_text, closure_evidence, history
         )
         review = _run_routed_v2_designated_review(
             config,

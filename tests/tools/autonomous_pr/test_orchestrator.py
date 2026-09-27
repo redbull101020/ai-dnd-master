@@ -2589,7 +2589,7 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
         spec, "late-repair", patch, verification, history
     )
     closure_prompt = orch_module._build_v2_closure_review_input(
-        execution_target, "closure diff", history
+        execution_target, "closure diff", "{}\n", history
     )
     mode_c_prompt = orch_module._build_v2_mode_c_review_input(
         execution_target, candidate, patch, history
@@ -2714,10 +2714,10 @@ def test_v2_candidate_changing_handoffs_require_internal_conformance_pass() -> N
         "repository facts",
     )
     initial_closure = orch_module._build_v2_closure_prompt(
-        target, pre_closure, "108", None, None
+        target, pre_closure, "108", "{}\n", None, None
     )
     closure_repair = orch_module._build_v2_closure_prompt(
-        target, pre_closure, "108", None, packet
+        target, pre_closure, "108", "{}\n", None, packet
     )
 
     for prompt in (
@@ -4316,6 +4316,14 @@ def test_v2_closure_evidence_is_revalidated_before_reviewer_invocation(
     assert reviewer_invocations == []
 
 
+def _closure_evidence_from_prompt(prompt: str) -> tuple[str, dict[str, object]]:
+    marker = "AUTHORITATIVE_CLOSURE_EVIDENCE_JSON:\n"
+    payload = prompt.split(marker, 1)[1]
+    parsed, end = json.JSONDecoder().raw_decode(payload)
+    assert isinstance(parsed, dict)
+    return payload[:end] + "\n", parsed
+
+
 def _install_cp4_agents(
     env: Env,
     monkeypatch: pytest.MonkeyPatch,
@@ -4410,7 +4418,7 @@ def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_c
     target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
         env, spec
     )
-    _, reviewer_prompts = _install_cp4_agents(
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
         env, monkeypatch, [_v2_approved(), _v2_approved()]
     )
     sequenced_reviewer = orch_module.run_structured_reviewer
@@ -4464,6 +4472,60 @@ def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_c
     assert result.closure_candidate.published_predecessor_sha == implementation_head
     assert mode_c_remote_heads == [implementation_head]
     assert ci_remote_heads == [result.closure_candidate.candidate_head_sha]
+    closure_implementer_prompt = next(
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_GATE: prospective Task Closure" in prompt
+    )
+    closure_reviewer_prompt = next(
+        prompt
+        for prompt in reviewer_prompts
+        if "prospective Task Closure review" in prompt
+    )
+    implementer_evidence, compact = _closure_evidence_from_prompt(
+        closure_implementer_prompt
+    )
+    reviewer_evidence, reviewer_compact = _closure_evidence_from_prompt(
+        closure_reviewer_prompt
+    )
+    cumulative = pre_closure.evidence.cumulative_review
+    assert cumulative is not None
+    assert implementer_evidence == reviewer_evidence
+    assert compact == reviewer_compact
+    assert compact["draft_pr_number"] == "1"
+    assert compact["accepted_implementation"] == {
+        "base_identity": pre_closure.evidence.base_identity,
+        "head_sha": implementation_head,
+    }
+    assert compact["full_verification"] == {
+        "commands": [
+            {"argv": list(command), "passed": True, "returncode": 0}
+            for command in spec.full_verification
+        ],
+        "overall_passed": True,
+        "verified_head_sha": implementation_head,
+    }
+    assert compact["cumulative_review"] == {
+        "accepted_identity": cumulative.candidate_identity.digest,
+        "base_identity": pre_closure.evidence.base_identity,
+        "review_iteration": cumulative.review_iteration,
+        "reviewed_head_sha": implementation_head,
+    }
+    implementation_patch = cumulative.review_patch.diff_text
+    assert f"ACCEPTED_IMPLEMENTATION_PATCH:\n{implementation_patch}\n" in (
+        closure_implementer_prompt
+    )
+    assert implementation_patch not in closure_reviewer_prompt
+    assert "CURRENT_PATCH:\ndiff --git a/docs/" in closure_reviewer_prompt
+    assert "Do not rerun verification merely to write closure prose" in (
+        closure_implementer_prompt
+    )
+    assert "invent test counts" in closure_implementer_prompt
+    assert "derive verification claims from your own self-check" in (
+        closure_implementer_prompt
+    )
+    assert "subset of the recorded commands" in closure_implementer_prompt
+    assert "Do not repeat the full implementation review" in closure_reviewer_prompt
     mode_c_prompt = next(
         prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
     )
@@ -4673,7 +4735,7 @@ def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
     target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
     implementer_profiles: list[ComputeProfile] = []
     reviewer_profiles: list[ComputeProfile] = []
-    _, reviewer_prompts = _install_cp4_agents(
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
         env,
         monkeypatch,
         [
@@ -4694,11 +4756,22 @@ def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
     )
 
     assert result.completed
+    closure_implementer_prompts = [
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_GATE: prospective Task Closure" in prompt
+    ]
     closure_reviews = [
         prompt
         for prompt in reviewer_prompts
         if "prospective Task Closure review" in prompt
     ]
+    evidence_blocks = [
+        _closure_evidence_from_prompt(prompt)[0]
+        for prompt in (*closure_implementer_prompts, *closure_reviews)
+    ]
+    assert len(closure_implementer_prompts) == 2
+    assert len(set(evidence_blocks)) == 1
     assert len(closure_reviews) == 2
     assert "PREVIOUS_REVIEWER_FINDINGS" not in closure_reviews[0]
     assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" not in closure_reviews[0]
@@ -4869,6 +4942,23 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
     )
     assert result.closure_candidate is not None
     assert result.closure_candidate.published_predecessor_sha != implementation_head
+    closure_prompts = [
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_GATE: prospective Task Closure" in prompt
+    ]
+    assert len(closure_prompts) == 2
+    old_compact = _closure_evidence_from_prompt(closure_prompts[0])[1]
+    new_compact = _closure_evidence_from_prompt(closure_prompts[1])[1]
+    old_implementation = old_compact["accepted_implementation"]
+    new_implementation = new_compact["accepted_implementation"]
+    assert isinstance(old_implementation, dict)
+    assert isinstance(new_implementation, dict)
+    assert old_implementation["head_sha"] == implementation_head
+    assert new_implementation["head_sha"] == (
+        result.pre_closure_result.evidence.cumulative_review.reviewed_head_sha
+    )
+    assert new_implementation["head_sha"] != old_implementation["head_sha"]
 
 
 def test_v2_closure_implementation_cr_is_recorded_before_repair_transition(

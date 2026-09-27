@@ -1303,6 +1303,15 @@ task/spec, actual draft PR number, accepted base/HEAD, per-command original
 argv/returncode/pass facts, and cumulative-review identity/iteration; it is not
 a persisted lifecycle schema and excludes successful stdout/stderr, parsed
 test counts, runtime interpreter materialization, and provider/model identity.
+That freshly recomputed representation is handed unchanged to both the Closure
+implementer and the fresh Closure reviewer. The implementer additionally keeps
+the accepted implementation patch as the factual delivery-summary source; the
+reviewer receives only the exact prospective closure diff as `CURRENT_PATCH`
+plus the compact evidence and therefore does not repeat the accepted full
+implementation review. Closure-only repair revalidates and recomputes the same
+evidence, while an implementation-affecting repair must complete conservative
+replay and produce new Full Verification/cumulative evidence before another
+closure handoff is built.
 
 **Closure candidate as a local commit.** After closure review returns
 `APPROVED`, the orchestrator creates a local closure commit. That commit
