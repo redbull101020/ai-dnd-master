@@ -412,6 +412,164 @@ def _default_config(
     )
 
 
+def test_verification_exact_python_uses_harness_interpreter_and_preserves_evidence(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("python", "-m", "pytest", "tests/path with spaces.py", "-q")
+    invocations: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        invocations.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="passed", stderr="")
+
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert invocations == [
+        (
+            [sys.executable, *original[1:]],
+            {
+                "cwd": env.work,
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "timeout": config.verification_timeout_seconds,
+                "check": False,
+            },
+        )
+    ]
+    assert result.command == original
+    assert result.passed
+    assert original == ("python", "-m", "pytest", "tests/path with spaces.py", "-q")
+    formatted = orch_module._format_verification(
+        VerificationEvidence(commands=(result,), passed=True, head_sha="head-sha")
+    )
+    assert "python -m pytest tests/path with spaces.py -q" in formatted
+    assert sys.executable not in formatted
+
+
+@pytest.mark.parametrize(
+    "executable",
+    ("python3", "python.exe", "py", str(Path(sys.executable).resolve()), "git"),
+)
+def test_verification_noncanonical_executables_are_not_rewritten(
+    env: Env, monkeypatch: pytest.MonkeyPatch, executable: str
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = (executable, "unchanged", "tail")
+    invoked: list[list[str]] = []
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        invoked.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert invoked == [list(original)]
+    assert result.command == original
+
+
+@pytest.mark.parametrize("startup_error", (FileNotFoundError, PermissionError))
+def test_verification_harness_interpreter_startup_failure_has_no_fallback(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    startup_error: type[OSError],
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("python", "-m", "pytest")
+    attempted: list[tuple[list[str], dict[str, object]]] = []
+    missing_interpreter = str(env.scratch / "missing-python")
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        attempted.append((argv, kwargs))
+        raise startup_error("unusable harness interpreter")
+
+    monkeypatch.setattr(orch_module.sys, "executable", missing_interpreter)
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert len(attempted) == 1
+    assert attempted[0][0] == [missing_interpreter, "-m", "pytest"]
+    assert "env" not in attempted[0][1]
+    assert "shell" not in attempted[0][1]
+    assert result.command == original
+    assert result.returncode == -1
+    assert not result.passed
+
+
+def test_checkpoint_and_full_verification_share_python_materialization(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    checkpoint_command = ("python", "-c", "print('checkpoint')")
+    full_command = ("python", "-c", "print('full')")
+    base_spec = _v2_spec()
+    spec = dataclasses.replace(
+        base_spec,
+        checkpoints=(
+            dataclasses.replace(
+                base_spec.checkpoints[0], verification=(checkpoint_command,)
+            ),
+        ),
+        full_verification=(full_command,),
+    )
+    runtime_commands: list[list[str]] = []
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        runtime_commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    fingerprint = repository.RepositoryFingerprint(
+        branch="delivery", head_sha="head-sha", content_digest="content-digest"
+    )
+    monkeypatch.setattr(repository, "capture_fingerprint", lambda repo: fingerprint)
+    monkeypatch.setattr(
+        repository, "verify_fingerprint_unchanged", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    checkpoint_evidence = orch_module._run_verification_commands(
+        config, spec.checkpoints[0].verification
+    )
+    full_evidence = orch_module._run_verification_commands(
+        config, spec.full_verification
+    )
+
+    assert runtime_commands == [
+        [sys.executable, *checkpoint_command[1:]],
+        [sys.executable, *full_command[1:]],
+    ]
+    assert checkpoint_evidence.commands[0].command == checkpoint_command
+    assert full_evidence.commands[0].command == full_command
+
+
 @dataclass
 class PublicDispatchEnv:
     origin: Path
@@ -2431,7 +2589,7 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
         spec, "late-repair", patch, verification, history
     )
     closure_prompt = orch_module._build_v2_closure_review_input(
-        execution_target, "closure diff", history
+        execution_target, "closure diff", "{}\n", history
     )
     mode_c_prompt = orch_module._build_v2_mode_c_review_input(
         execution_target, candidate, patch, history
@@ -2556,10 +2714,10 @@ def test_v2_candidate_changing_handoffs_require_internal_conformance_pass() -> N
         "repository facts",
     )
     initial_closure = orch_module._build_v2_closure_prompt(
-        target, pre_closure, "108", None, None
+        target, pre_closure, "108", "{}\n", None, None
     )
     closure_repair = orch_module._build_v2_closure_prompt(
-        target, pre_closure, "108", None, packet
+        target, pre_closure, "108", "{}\n", None, packet
     )
 
     for prompt in (
@@ -3851,8 +4009,19 @@ def _prepared_cp4_context(
         repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
         base_sha,
     )
-    verification = dataclasses.replace(
-        _v2_verification(True), head_sha=implementation_head
+    verification = VerificationEvidence(
+        commands=tuple(
+            VerificationCommandResult(
+                command=command,
+                returncode=0,
+                stdout="successful output is not closure evidence",
+                stderr="",
+                passed=True,
+            )
+            for command in spec.full_verification
+        ),
+        passed=True,
+        head_sha=implementation_head,
     )
     evidence = orch_module.V2ImplementationEvidence(
         spec_identity=spec.digest,
@@ -3889,6 +4058,270 @@ def _prepared_cp4_context(
         replay_histories=(),
     )
     return _cp3_target(base_sha, spec), checkpoint_result, pre_closure, implementation_head
+
+
+def _corrupt_cp4_evidence(
+    pre_closure: orch_module.V2PreClosureExecutionResult, case: str
+) -> orch_module.V2PreClosureExecutionResult:
+    evidence = pre_closure.evidence
+    full = evidence.full_verification
+    cumulative = evidence.cumulative_review
+    assert full is not None and cumulative is not None
+    if case == "incomplete":
+        return dataclasses.replace(pre_closure, completed=False)
+    if case == "missing_full":
+        return dataclasses.replace(
+            pre_closure, evidence=dataclasses.replace(evidence, full_verification=None)
+        )
+    if case == "missing_cumulative":
+        return dataclasses.replace(
+            pre_closure, evidence=dataclasses.replace(evidence, cumulative_review=None)
+        )
+    if case == "failed_full":
+        failed_command = dataclasses.replace(
+            full.verification.commands[0], returncode=1, passed=False
+        )
+        failed_verification = dataclasses.replace(
+            full.verification,
+            commands=(failed_command, *full.verification.commands[1:]),
+            passed=False,
+        )
+        replacement = dataclasses.replace(full, verification=failed_verification)
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "wrong_spec":
+        replacement = dataclasses.replace(full, spec_identity="wrong-spec")
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "wrong_base":
+        replacement = dataclasses.replace(full, base_identity="wrong-base")
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "stale_full_head":
+        stale_head = "f" * 40
+        replacement = dataclasses.replace(
+            full,
+            candidate_identity=orch_module._committed_candidate_identity(stale_head),
+            head_sha=stale_head,
+            verification=dataclasses.replace(
+                full.verification, head_sha=stale_head
+            ),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "nested_head":
+        replacement = dataclasses.replace(
+            full,
+            verification=dataclasses.replace(
+                full.verification, head_sha="e" * 40
+            ),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "cumulative_head":
+        replacement = dataclasses.replace(
+            cumulative,
+            reviewed_head_sha="d" * 40,
+            review_patch=dataclasses.replace(
+                cumulative.review_patch, head_sha="d" * 40
+            ),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, cumulative_review=replacement),
+        )
+    if case == "wrong_full_candidate":
+        replacement = dataclasses.replace(
+            full, candidate_identity=CandidateIdentity("wrong-full-candidate")
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "wrong_cumulative_candidate":
+        replacement = dataclasses.replace(
+            cumulative,
+            candidate_identity=CandidateIdentity("wrong-cumulative-candidate"),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, cumulative_review=replacement),
+        )
+    raise AssertionError(f"unknown evidence corruption case: {case}")
+
+
+def test_v2_validated_closure_evidence_is_compact_original_argv_only(env: Env) -> None:
+    approved_commands = (
+        ("python", "-m", "pytest", "tests/tools/autonomous_pr"),
+        ("git", "diff", "--check"),
+    )
+    spec = dataclasses.replace(_cp3_spec(), full_verification=approved_commands)
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+
+    formatted = orch_module._format_validated_v2_closure_evidence(
+        target,
+        pre_closure,
+        pr_number="123",
+        expected_published_head=implementation_head,
+    )
+    compact = json.loads(formatted)
+
+    assert compact == {
+        "accepted_implementation": {
+            "base_identity": pre_closure.evidence.base_identity,
+            "head_sha": implementation_head,
+        },
+        "cumulative_review": {
+            "accepted_identity": (
+                pre_closure.evidence.cumulative_review.candidate_identity.digest
+            ),
+            "base_identity": pre_closure.evidence.base_identity,
+            "review_iteration": 1,
+            "reviewed_head_sha": implementation_head,
+        },
+        "draft_pr_number": "123",
+        "full_verification": {
+            "commands": [
+                {"argv": list(command), "passed": True, "returncode": 0}
+                for command in approved_commands
+            ],
+            "overall_passed": True,
+            "verified_head_sha": implementation_head,
+        },
+        "selected_task": {
+            "spec_identity": spec.digest,
+            "spec_path": spec.path,
+            "task_id": spec.task_id,
+        },
+    }
+    assert sys.executable not in formatted
+    assert "successful output is not closure evidence" not in formatted
+    assert "stdout" not in formatted and "stderr" not in formatted
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "incomplete",
+        "missing_full",
+        "missing_cumulative",
+        "failed_full",
+        "wrong_spec",
+        "wrong_base",
+        "stale_full_head",
+        "nested_head",
+        "cumulative_head",
+        "expected_head",
+        "wrong_full_candidate",
+        "wrong_cumulative_candidate",
+    ),
+)
+def test_v2_closure_evidence_inconsistency_fails_closed(
+    env: Env, case: str
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    expected_head = implementation_head
+    if case == "expected_head":
+        expected_head = "c" * 40
+    else:
+        pre_closure = _corrupt_cp4_evidence(pre_closure, case)
+
+    with pytest.raises(orch_module._Blocked):
+        orch_module._format_validated_v2_closure_evidence(
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=expected_head,
+        )
+
+
+def test_v2_invalid_closure_evidence_blocks_before_agent_invocation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    pre_closure = _corrupt_cp4_evidence(pre_closure, "missing_full")
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_implementer",
+        lambda *args, **kwargs: invoked.append("implementer"),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_designated_review",
+        lambda *args, **kwargs: invoked.append("reviewer"),
+    )
+
+    with pytest.raises(orch_module._Blocked, match="Full Verification evidence"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline="unused because evidence validation fails first",
+        )
+
+    assert invoked == []
+
+
+def test_v2_closure_evidence_is_revalidated_before_reviewer_invocation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    _install_cp4_agents(env, monkeypatch, [])
+    routed_implementer = orch_module._run_routed_v2_implementer
+    reviewer_invocations: list[str] = []
+
+    def invalidate_after_implementer(*args: object, **kwargs: object) -> object:
+        result = routed_implementer(*args, **kwargs)  # type: ignore[arg-type]
+        pre_closure.evidence.full_verification = None
+        return result
+
+    monkeypatch.setattr(
+        orch_module, "_run_routed_v2_implementer", invalidate_after_implementer
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_designated_review",
+        lambda *args, **kwargs: reviewer_invocations.append("reviewer"),
+    )
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+
+    with pytest.raises(orch_module._Blocked, match="Full Verification evidence"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+        )
+
+    assert reviewer_invocations == []
+
+
+def _closure_evidence_from_prompt(prompt: str) -> tuple[str, dict[str, object]]:
+    marker = "AUTHORITATIVE_CLOSURE_EVIDENCE_JSON:\n"
+    payload = prompt.split(marker, 1)[1]
+    parsed, end = json.JSONDecoder().raw_decode(payload)
+    assert isinstance(parsed, dict)
+    return payload[:end] + "\n", parsed
 
 
 def _install_cp4_agents(
@@ -3985,7 +4418,7 @@ def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_c
     target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
         env, spec
     )
-    _, reviewer_prompts = _install_cp4_agents(
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
         env, monkeypatch, [_v2_approved(), _v2_approved()]
     )
     sequenced_reviewer = orch_module.run_structured_reviewer
@@ -4039,6 +4472,60 @@ def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_c
     assert result.closure_candidate.published_predecessor_sha == implementation_head
     assert mode_c_remote_heads == [implementation_head]
     assert ci_remote_heads == [result.closure_candidate.candidate_head_sha]
+    closure_implementer_prompt = next(
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_GATE: prospective Task Closure" in prompt
+    )
+    closure_reviewer_prompt = next(
+        prompt
+        for prompt in reviewer_prompts
+        if "prospective Task Closure review" in prompt
+    )
+    implementer_evidence, compact = _closure_evidence_from_prompt(
+        closure_implementer_prompt
+    )
+    reviewer_evidence, reviewer_compact = _closure_evidence_from_prompt(
+        closure_reviewer_prompt
+    )
+    cumulative = pre_closure.evidence.cumulative_review
+    assert cumulative is not None
+    assert implementer_evidence == reviewer_evidence
+    assert compact == reviewer_compact
+    assert compact["draft_pr_number"] == "1"
+    assert compact["accepted_implementation"] == {
+        "base_identity": pre_closure.evidence.base_identity,
+        "head_sha": implementation_head,
+    }
+    assert compact["full_verification"] == {
+        "commands": [
+            {"argv": list(command), "passed": True, "returncode": 0}
+            for command in spec.full_verification
+        ],
+        "overall_passed": True,
+        "verified_head_sha": implementation_head,
+    }
+    assert compact["cumulative_review"] == {
+        "accepted_identity": cumulative.candidate_identity.digest,
+        "base_identity": pre_closure.evidence.base_identity,
+        "review_iteration": cumulative.review_iteration,
+        "reviewed_head_sha": implementation_head,
+    }
+    implementation_patch = cumulative.review_patch.diff_text
+    assert f"ACCEPTED_IMPLEMENTATION_PATCH:\n{implementation_patch}\n" in (
+        closure_implementer_prompt
+    )
+    assert implementation_patch not in closure_reviewer_prompt
+    assert "CURRENT_PATCH:\ndiff --git a/docs/" in closure_reviewer_prompt
+    assert "Do not rerun verification merely to write closure prose" in (
+        closure_implementer_prompt
+    )
+    assert "invent test counts" in closure_implementer_prompt
+    assert "derive verification claims from your own self-check" in (
+        closure_implementer_prompt
+    )
+    assert "subset of the recorded commands" in closure_implementer_prompt
+    assert "Do not repeat the full implementation review" in closure_reviewer_prompt
     mode_c_prompt = next(
         prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
     )
@@ -4248,7 +4735,7 @@ def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
     target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
     implementer_profiles: list[ComputeProfile] = []
     reviewer_profiles: list[ComputeProfile] = []
-    _, reviewer_prompts = _install_cp4_agents(
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
         env,
         monkeypatch,
         [
@@ -4269,11 +4756,22 @@ def test_v2_closure_review_repair_handoff_contains_gate_local_delta_only(
     )
 
     assert result.completed
+    closure_implementer_prompts = [
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_GATE: prospective Task Closure" in prompt
+    ]
     closure_reviews = [
         prompt
         for prompt in reviewer_prompts
         if "prospective Task Closure review" in prompt
     ]
+    evidence_blocks = [
+        _closure_evidence_from_prompt(prompt)[0]
+        for prompt in (*closure_implementer_prompts, *closure_reviews)
+    ]
+    assert len(closure_implementer_prompts) == 2
+    assert len(set(evidence_blocks)) == 1
     assert len(closure_reviews) == 2
     assert "PREVIOUS_REVIEWER_FINDINGS" not in closure_reviews[0]
     assert "REPAIR_DELTA_SINCE_LAST_REVIEWED_CANDIDATE" not in closure_reviews[0]
@@ -4444,6 +4942,23 @@ def test_v2_closure_review_implementation_repair_uses_cp3_replay(
     )
     assert result.closure_candidate is not None
     assert result.closure_candidate.published_predecessor_sha != implementation_head
+    closure_prompts = [
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_GATE: prospective Task Closure" in prompt
+    ]
+    assert len(closure_prompts) == 2
+    old_compact = _closure_evidence_from_prompt(closure_prompts[0])[1]
+    new_compact = _closure_evidence_from_prompt(closure_prompts[1])[1]
+    old_implementation = old_compact["accepted_implementation"]
+    new_implementation = new_compact["accepted_implementation"]
+    assert isinstance(old_implementation, dict)
+    assert isinstance(new_implementation, dict)
+    assert old_implementation["head_sha"] == implementation_head
+    assert new_implementation["head_sha"] == (
+        result.pre_closure_result.evidence.cumulative_review.reviewed_head_sha
+    )
+    assert new_implementation["head_sha"] != old_implementation["head_sha"]
 
 
 def test_v2_closure_implementation_cr_is_recorded_before_repair_transition(

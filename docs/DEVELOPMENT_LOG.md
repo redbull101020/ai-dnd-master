@@ -7564,3 +7564,18 @@ workflow verdicts, Mode C, CI, or human-only merge boundaries. Verification:
 tooling tests — 520 passed; focused routing/orchestrator tests — 121 passed;
 mypy for `tools/autonomous_pr` — 10 source files clean; `git diff --check`
 clean.
+
+## 2026-09-27 — TSK-0033: Verification runtime binding and closure evidence handoff (delivery summary)
+
+Delivered in draft PR #112 at implementation HEAD
+`572c99469c7e3544d8b00bbde2eed9dfde8491d1`: exact verification token
+`python` now executes through the current harness interpreter while approved
+argv remains the evidence identity, and prospective Task Closure now receives
+deterministically validated compact Full Verification and cumulative-review
+evidence without expanding Closure Review back to implementation review.
+Updated the operational harness documentation; gameplay, dependencies,
+routing, verdict grammar, and authority remain unchanged. Verification passed:
+`python -m pytest tests/tools/autonomous_pr`; `python -m pytest
+tests/architecture`; `python -m pytest`; `python -m mypy src/dnd_engine
+tools/autonomous_pr`; and `git diff --check`. A repeat empirical TSK-0032 pilot
+remains a separate post-merge validation action.

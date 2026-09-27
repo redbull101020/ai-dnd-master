@@ -38,7 +38,10 @@ Layout the parser accepts (the §23 skeleton, made exact):
   Each decodes to a non-empty ``tuple[str, ...]`` whose first element is
   neither empty nor whitespace-only and in which no element contains a NUL
   character. A shell command string, prose, or an empty list is rejected;
-  nothing here uses ``shell=True``, variable expansion, or ``shlex``.
+  nothing here uses ``shell=True``, variable expansion, or ``shlex``. Parsing
+  preserves every literal token, including a first token ``"python"``;
+  execution-only binding of that exact token to the harness interpreter belongs
+  to the orchestrator subprocess boundary, not this representation or parser.
 - Unresolved markers (``TBD``, ``TODO``, ``FIXME``, ``XXX``, ``OPEN DECISION``,
   ``OPEN QUESTION``, and the template placeholders ``<title>``/``<name>``)
   and the lifecycle labels are matched case-insensitively in prose, never

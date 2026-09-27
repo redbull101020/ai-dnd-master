@@ -721,6 +721,18 @@ in execution order and declares:
 - **Verification** — the deterministic checks that must pass for it;
 - **Review focus** — where the reviewer is asked to look first.
 
+Verification commands remain provider-neutral shell-free argv arrays. At the
+verification subprocess boundary only, an exact first token `"python"` is
+materialized as the current harness `sys.executable`; every remaining argv
+element is unchanged. The approved argv and recorded evidence retain the
+original `"python"` identity: the execution-only absolute interpreter path
+never replaces it in the Task Execution Spec or verification evidence. No
+other executable token (including `python3`, `python.exe`, `py`, or an explicit
+path) is normalized, and there is no PATH mutation, executable discovery, or
+fallback interpreter chain. An OS-level failure to start the materialized
+interpreter produces the existing failed verification result after exactly one
+attempt and therefore fails closed without retrying another executable.
+
 Checkpoints are steps inside one mergeable task. They have no `TSK-*` ID and
 no status of their own. As `AGENTS.md` ("Working method") requires, they are
 drawn along independent review-risk boundaries rather than mechanically by
@@ -1273,12 +1285,38 @@ The operational v2 order is:
 ```text
 accepted implementation
 → draft PR
+→ deterministic closure-evidence consistency validation
 → prepare prospective Task Closure
 → closure review APPROVED
 → create the local closure commit (the unpublished closure candidate)
 → fresh origin/main revalidation
 → Mode C
 ```
+
+Before any prospective-closure implementer or reviewer invocation, the
+orchestrator deterministically validates that successful Full Verification and
+the accepted cumulative review belong to the fixed spec, one accepted base and
+the exact expected published implementation HEAD. It also checks the nested
+verified HEAD, candidate identities, cumulative patch identity and original
+Full Verification argv/results. Missing, failed, stale, or inconsistent
+evidence fails closed before an LLM can infer freshness. The same validation
+produces one compact in-memory representation containing the selected
+task/spec, actual draft PR number, accepted base/HEAD, per-command original
+argv/returncode/pass facts, and cumulative-review identity/iteration; it is not
+a persisted lifecycle schema and excludes successful stdout/stderr, parsed
+test counts, runtime interpreter materialization, and provider/model identity.
+That freshly recomputed representation is handed unchanged to both the Closure
+implementer and the fresh Closure reviewer. The implementer additionally keeps
+the accepted implementation patch as the factual delivery-summary source; the
+reviewer receives only the exact prospective closure diff as `CURRENT_PATCH`
+plus the compact evidence; the full accepted implementation patch is never
+included in that reviewer handoff, and Closure Review does not repeat the
+pre-closure cumulative implementation review. Closure-only repair may reuse
+the still-current typed evidence only after deterministic revalidation and
+fresh formatting. An implementation-affecting repair invalidates the stale
+downstream Full Verification and cumulative-review evidence, completes the
+existing conservative replay, and produces new Full Verification and a new
+accepted cumulative review before another closure handoff is built.
 
 **Closure candidate as a local commit.** After closure review returns
 `APPROVED`, the orchestrator creates a local closure commit. That commit
