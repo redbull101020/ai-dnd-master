@@ -2392,6 +2392,108 @@ def _v2_repair_is_proven_closure_only(packet: RepairPacket) -> bool:
     return True
 
 
+def _format_validated_v2_closure_evidence(
+    execution_target: ExecutionTarget,
+    pre_closure: V2PreClosureExecutionResult,
+    *,
+    pr_number: str,
+    expected_published_head: str,
+) -> str:
+    """Validate and compact the authoritative prospective-closure evidence."""
+
+    spec = execution_target.spec
+    evidence = pre_closure.evidence
+    if not pre_closure.completed:
+        raise _Blocked("completed pre-closure evidence is required for Task Closure")
+    if execution_target.task.task_id != spec.task_id:
+        raise _Blocked("selected task identity differs from the fixed Task Execution Spec")
+    if evidence.spec_identity != spec.digest:
+        raise _Blocked("pre-closure evidence belongs to another fixed spec")
+    full = evidence.full_verification
+    if full is None:
+        raise _Blocked("Full Verification evidence is required for Task Closure")
+    cumulative = evidence.cumulative_review
+    if cumulative is None:
+        raise _Blocked("accepted cumulative-review evidence is required for Task Closure")
+    if full.spec_identity != spec.digest or cumulative.spec_identity != spec.digest:
+        raise _Blocked("closure evidence contains a mismatched fixed spec identity")
+    if (
+        full.base_identity != evidence.base_identity
+        or cumulative.base_identity != evidence.base_identity
+        or cumulative.review_patch.base_sha != evidence.base_identity
+    ):
+        raise _Blocked("closure evidence contains inconsistent accepted base identities")
+    if not full.verification.passed:
+        raise _Blocked("Full Verification evidence did not pass")
+    if full.head_sha != full.verification.head_sha:
+        raise _Blocked("Full Verification outer and nested verified HEADs differ")
+    if full.head_sha != cumulative.reviewed_head_sha:
+        raise _Blocked(
+            "Full Verification does not belong to the accepted reviewed implementation HEAD"
+        )
+    if cumulative.reviewed_head_sha != expected_published_head:
+        raise _Blocked(
+            "expected published implementation HEAD differs from accepted reviewed HEAD"
+        )
+    if cumulative.review_patch.head_sha != cumulative.reviewed_head_sha:
+        raise _Blocked("cumulative-review patch belongs to another implementation HEAD")
+    if full.candidate_identity != _committed_candidate_identity(full.head_sha):
+        raise _Blocked("Full Verification evidence belongs to another candidate")
+    cumulative_patch_identity = _candidate_identity(cumulative.review_patch.diff_text)
+    if (
+        cumulative.review_patch.purpose
+        is not repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW
+        or cumulative.review_patch.digest != cumulative_patch_identity.digest
+        or cumulative.candidate_identity != cumulative_patch_identity
+    ):
+        raise _Blocked("cumulative-review evidence belongs to another candidate")
+    if cumulative.review_iteration < 1:
+        raise _Blocked("cumulative-review evidence has no accepted review iteration")
+    if tuple(result.command for result in full.verification.commands) != (
+        spec.full_verification
+    ):
+        raise _Blocked("Full Verification commands differ from the fixed spec")
+    if any(
+        not result.passed or result.returncode != 0
+        for result in full.verification.commands
+    ):
+        raise _Blocked("Full Verification contains an unsuccessful command result")
+    if not pr_number.strip():
+        raise _Blocked("actual draft PR number is required for Task Closure evidence")
+
+    compact = {
+        "accepted_implementation": {
+            "base_identity": evidence.base_identity,
+            "head_sha": cumulative.reviewed_head_sha,
+        },
+        "cumulative_review": {
+            "accepted_identity": cumulative.candidate_identity.digest,
+            "base_identity": cumulative.base_identity,
+            "review_iteration": cumulative.review_iteration,
+            "reviewed_head_sha": cumulative.reviewed_head_sha,
+        },
+        "draft_pr_number": pr_number,
+        "full_verification": {
+            "commands": [
+                {
+                    "argv": list(result.command),
+                    "passed": result.passed,
+                    "returncode": result.returncode,
+                }
+                for result in full.verification.commands
+            ],
+            "overall_passed": full.verification.passed,
+            "verified_head_sha": full.head_sha,
+        },
+        "selected_task": {
+            "spec_identity": spec.digest,
+            "spec_path": spec.path,
+            "task_id": execution_target.task.task_id,
+        },
+    }
+    return json.dumps(compact, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+
 def _build_v2_closure_prompt(
     execution_target: ExecutionTarget,
     pre_closure: V2PreClosureExecutionResult,
@@ -2506,6 +2608,12 @@ def _prepare_v2_unpublished_closure(
         history_sink,
     )
     while True:
+        _format_validated_v2_closure_evidence(
+            execution_target,
+            pre_closure,
+            pr_number=pr_number,
+            expected_published_head=expected_published_head,
+        )
         before = repository.capture_branch_head(config.repo)
         prompt = _build_v2_closure_prompt(
             execution_target,
@@ -2554,6 +2662,12 @@ def _prepare_v2_unpublished_closure(
         identity = _candidate_identity(patch.diff_text)
         if identity in history.rejected_candidate_identities:
             raise _Blocked("Task Closure repair reproduced a rejected candidate")
+        _format_validated_v2_closure_evidence(
+            execution_target,
+            pre_closure,
+            pr_number=pr_number,
+            expected_published_head=expected_published_head,
+        )
         review_input = _build_v2_closure_review_input(
             execution_target, patch.diff_text, history
         )

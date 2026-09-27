@@ -1283,12 +1283,26 @@ The operational v2 order is:
 ```text
 accepted implementation
 → draft PR
+→ deterministic closure-evidence consistency validation
 → prepare prospective Task Closure
 → closure review APPROVED
 → create the local closure commit (the unpublished closure candidate)
 → fresh origin/main revalidation
 → Mode C
 ```
+
+Before any prospective-closure implementer or reviewer invocation, the
+orchestrator deterministically validates that successful Full Verification and
+the accepted cumulative review belong to the fixed spec, one accepted base and
+the exact expected published implementation HEAD. It also checks the nested
+verified HEAD, candidate identities, cumulative patch identity and original
+Full Verification argv/results. Missing, failed, stale, or inconsistent
+evidence fails closed before an LLM can infer freshness. The same validation
+produces one compact in-memory representation containing the selected
+task/spec, actual draft PR number, accepted base/HEAD, per-command original
+argv/returncode/pass facts, and cumulative-review identity/iteration; it is not
+a persisted lifecycle schema and excludes successful stdout/stderr, parsed
+test counts, runtime interpreter materialization, and provider/model identity.
 
 **Closure candidate as a local commit.** After closure review returns
 `APPROVED`, the orchestrator creates a local closure commit. That commit

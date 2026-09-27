@@ -4009,8 +4009,19 @@ def _prepared_cp4_context(
         repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW,
         base_sha,
     )
-    verification = dataclasses.replace(
-        _v2_verification(True), head_sha=implementation_head
+    verification = VerificationEvidence(
+        commands=tuple(
+            VerificationCommandResult(
+                command=command,
+                returncode=0,
+                stdout="successful output is not closure evidence",
+                stderr="",
+                passed=True,
+            )
+            for command in spec.full_verification
+        ),
+        passed=True,
+        head_sha=implementation_head,
     )
     evidence = orch_module.V2ImplementationEvidence(
         spec_identity=spec.digest,
@@ -4047,6 +4058,262 @@ def _prepared_cp4_context(
         replay_histories=(),
     )
     return _cp3_target(base_sha, spec), checkpoint_result, pre_closure, implementation_head
+
+
+def _corrupt_cp4_evidence(
+    pre_closure: orch_module.V2PreClosureExecutionResult, case: str
+) -> orch_module.V2PreClosureExecutionResult:
+    evidence = pre_closure.evidence
+    full = evidence.full_verification
+    cumulative = evidence.cumulative_review
+    assert full is not None and cumulative is not None
+    if case == "incomplete":
+        return dataclasses.replace(pre_closure, completed=False)
+    if case == "missing_full":
+        return dataclasses.replace(
+            pre_closure, evidence=dataclasses.replace(evidence, full_verification=None)
+        )
+    if case == "missing_cumulative":
+        return dataclasses.replace(
+            pre_closure, evidence=dataclasses.replace(evidence, cumulative_review=None)
+        )
+    if case == "failed_full":
+        failed_command = dataclasses.replace(
+            full.verification.commands[0], returncode=1, passed=False
+        )
+        failed_verification = dataclasses.replace(
+            full.verification,
+            commands=(failed_command, *full.verification.commands[1:]),
+            passed=False,
+        )
+        replacement = dataclasses.replace(full, verification=failed_verification)
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "wrong_spec":
+        replacement = dataclasses.replace(full, spec_identity="wrong-spec")
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "wrong_base":
+        replacement = dataclasses.replace(full, base_identity="wrong-base")
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "stale_full_head":
+        stale_head = "f" * 40
+        replacement = dataclasses.replace(
+            full,
+            candidate_identity=orch_module._committed_candidate_identity(stale_head),
+            head_sha=stale_head,
+            verification=dataclasses.replace(
+                full.verification, head_sha=stale_head
+            ),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "nested_head":
+        replacement = dataclasses.replace(
+            full,
+            verification=dataclasses.replace(
+                full.verification, head_sha="e" * 40
+            ),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "cumulative_head":
+        replacement = dataclasses.replace(
+            cumulative,
+            reviewed_head_sha="d" * 40,
+            review_patch=dataclasses.replace(
+                cumulative.review_patch, head_sha="d" * 40
+            ),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, cumulative_review=replacement),
+        )
+    if case == "wrong_full_candidate":
+        replacement = dataclasses.replace(
+            full, candidate_identity=CandidateIdentity("wrong-full-candidate")
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, full_verification=replacement),
+        )
+    if case == "wrong_cumulative_candidate":
+        replacement = dataclasses.replace(
+            cumulative,
+            candidate_identity=CandidateIdentity("wrong-cumulative-candidate"),
+        )
+        return dataclasses.replace(
+            pre_closure,
+            evidence=dataclasses.replace(evidence, cumulative_review=replacement),
+        )
+    raise AssertionError(f"unknown evidence corruption case: {case}")
+
+
+def test_v2_validated_closure_evidence_is_compact_original_argv_only(env: Env) -> None:
+    approved_commands = (
+        ("python", "-m", "pytest", "tests/tools/autonomous_pr"),
+        ("git", "diff", "--check"),
+    )
+    spec = dataclasses.replace(_cp3_spec(), full_verification=approved_commands)
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+
+    formatted = orch_module._format_validated_v2_closure_evidence(
+        target,
+        pre_closure,
+        pr_number="123",
+        expected_published_head=implementation_head,
+    )
+    compact = json.loads(formatted)
+
+    assert compact == {
+        "accepted_implementation": {
+            "base_identity": pre_closure.evidence.base_identity,
+            "head_sha": implementation_head,
+        },
+        "cumulative_review": {
+            "accepted_identity": (
+                pre_closure.evidence.cumulative_review.candidate_identity.digest
+            ),
+            "base_identity": pre_closure.evidence.base_identity,
+            "review_iteration": 1,
+            "reviewed_head_sha": implementation_head,
+        },
+        "draft_pr_number": "123",
+        "full_verification": {
+            "commands": [
+                {"argv": list(command), "passed": True, "returncode": 0}
+                for command in approved_commands
+            ],
+            "overall_passed": True,
+            "verified_head_sha": implementation_head,
+        },
+        "selected_task": {
+            "spec_identity": spec.digest,
+            "spec_path": spec.path,
+            "task_id": spec.task_id,
+        },
+    }
+    assert sys.executable not in formatted
+    assert "successful output is not closure evidence" not in formatted
+    assert "stdout" not in formatted and "stderr" not in formatted
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "incomplete",
+        "missing_full",
+        "missing_cumulative",
+        "failed_full",
+        "wrong_spec",
+        "wrong_base",
+        "stale_full_head",
+        "nested_head",
+        "cumulative_head",
+        "expected_head",
+        "wrong_full_candidate",
+        "wrong_cumulative_candidate",
+    ),
+)
+def test_v2_closure_evidence_inconsistency_fails_closed(
+    env: Env, case: str
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    expected_head = implementation_head
+    if case == "expected_head":
+        expected_head = "c" * 40
+    else:
+        pre_closure = _corrupt_cp4_evidence(pre_closure, case)
+
+    with pytest.raises(orch_module._Blocked):
+        orch_module._format_validated_v2_closure_evidence(
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=expected_head,
+        )
+
+
+def test_v2_invalid_closure_evidence_blocks_before_agent_invocation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    pre_closure = _corrupt_cp4_evidence(pre_closure, "missing_full")
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_implementer",
+        lambda *args, **kwargs: invoked.append("implementer"),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_designated_review",
+        lambda *args, **kwargs: invoked.append("reviewer"),
+    )
+
+    with pytest.raises(orch_module._Blocked, match="Full Verification evidence"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline="unused because evidence validation fails first",
+        )
+
+    assert invoked == []
+
+
+def test_v2_closure_evidence_is_revalidated_before_reviewer_invocation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    _install_cp4_agents(env, monkeypatch, [])
+    routed_implementer = orch_module._run_routed_v2_implementer
+    reviewer_invocations: list[str] = []
+
+    def invalidate_after_implementer(*args: object, **kwargs: object) -> object:
+        result = routed_implementer(*args, **kwargs)  # type: ignore[arg-type]
+        pre_closure.evidence.full_verification = None
+        return result
+
+    monkeypatch.setattr(
+        orch_module, "_run_routed_v2_implementer", invalidate_after_implementer
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_designated_review",
+        lambda *args, **kwargs: reviewer_invocations.append("reviewer"),
+    )
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+
+    with pytest.raises(orch_module._Blocked, match="Full Verification evidence"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+        )
+
+    assert reviewer_invocations == []
 
 
 def _install_cp4_agents(
