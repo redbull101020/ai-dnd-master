@@ -21,6 +21,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -3154,9 +3155,11 @@ def _require_no_task_md_in_ordinary_checkpoint(touched: tuple[str, ...]) -> None
 def _run_verification_commands(
     config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
 ) -> VerificationEvidence:
-    """Run exactly the supplied shell-free argv commands.
+    """Run the supplied shell-free argv commands with canonical Python binding.
 
     Every caller supplies commands from the accepted Task Execution Spec.
+    The exact first token ``python`` is materialized only at the subprocess
+    boundary; recorded evidence retains each original approved argv.
     """
 
     if not commands or any(not command for command in commands):
@@ -3183,9 +3186,12 @@ def _run_verification_commands(
 def _run_one_verification_command(
     config: OrchestratorConfig, command: tuple[str, ...]
 ) -> VerificationCommandResult:
+    runtime_command = (
+        [sys.executable, *command[1:]] if command[0] == "python" else list(command)
+    )
     try:
         completed = subprocess.run(
-            list(command),
+            runtime_command,
             cwd=config.repo,
             capture_output=True,
             text=True,
@@ -3193,7 +3199,7 @@ def _run_one_verification_command(
             timeout=config.verification_timeout_seconds,
             check=False,
         )
-    except FileNotFoundError as exc:
+    except OSError as exc:
         return VerificationCommandResult(
             command=command, returncode=-1, stdout="", stderr=str(exc), passed=False
         )

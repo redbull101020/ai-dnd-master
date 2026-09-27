@@ -412,6 +412,164 @@ def _default_config(
     )
 
 
+def test_verification_exact_python_uses_harness_interpreter_and_preserves_evidence(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("python", "-m", "pytest", "tests/path with spaces.py", "-q")
+    invocations: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        invocations.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="passed", stderr="")
+
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert invocations == [
+        (
+            [sys.executable, *original[1:]],
+            {
+                "cwd": env.work,
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "timeout": config.verification_timeout_seconds,
+                "check": False,
+            },
+        )
+    ]
+    assert result.command == original
+    assert result.passed
+    assert original == ("python", "-m", "pytest", "tests/path with spaces.py", "-q")
+    formatted = orch_module._format_verification(
+        VerificationEvidence(commands=(result,), passed=True, head_sha="head-sha")
+    )
+    assert "python -m pytest tests/path with spaces.py -q" in formatted
+    assert sys.executable not in formatted
+
+
+@pytest.mark.parametrize(
+    "executable",
+    ("python3", "python.exe", "py", str(Path(sys.executable).resolve()), "git"),
+)
+def test_verification_noncanonical_executables_are_not_rewritten(
+    env: Env, monkeypatch: pytest.MonkeyPatch, executable: str
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = (executable, "unchanged", "tail")
+    invoked: list[list[str]] = []
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        invoked.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert invoked == [list(original)]
+    assert result.command == original
+
+
+@pytest.mark.parametrize("startup_error", (FileNotFoundError, PermissionError))
+def test_verification_harness_interpreter_startup_failure_has_no_fallback(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    startup_error: type[OSError],
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("python", "-m", "pytest")
+    attempted: list[tuple[list[str], dict[str, object]]] = []
+    missing_interpreter = str(env.scratch / "missing-python")
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        attempted.append((argv, kwargs))
+        raise startup_error("unusable harness interpreter")
+
+    monkeypatch.setattr(orch_module.sys, "executable", missing_interpreter)
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert len(attempted) == 1
+    assert attempted[0][0] == [missing_interpreter, "-m", "pytest"]
+    assert "env" not in attempted[0][1]
+    assert "shell" not in attempted[0][1]
+    assert result.command == original
+    assert result.returncode == -1
+    assert not result.passed
+
+
+def test_checkpoint_and_full_verification_share_python_materialization(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    checkpoint_command = ("python", "-c", "print('checkpoint')")
+    full_command = ("python", "-c", "print('full')")
+    base_spec = _v2_spec()
+    spec = dataclasses.replace(
+        base_spec,
+        checkpoints=(
+            dataclasses.replace(
+                base_spec.checkpoints[0], verification=(checkpoint_command,)
+            ),
+        ),
+        full_verification=(full_command,),
+    )
+    runtime_commands: list[list[str]] = []
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        runtime_commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    fingerprint = repository.RepositoryFingerprint(
+        branch="delivery", head_sha="head-sha", content_digest="content-digest"
+    )
+    monkeypatch.setattr(repository, "capture_fingerprint", lambda repo: fingerprint)
+    monkeypatch.setattr(
+        repository, "verify_fingerprint_unchanged", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    checkpoint_evidence = orch_module._run_verification_commands(
+        config, spec.checkpoints[0].verification
+    )
+    full_evidence = orch_module._run_verification_commands(
+        config, spec.full_verification
+    )
+
+    assert runtime_commands == [
+        [sys.executable, *checkpoint_command[1:]],
+        [sys.executable, *full_command[1:]],
+    ]
+    assert checkpoint_evidence.commands[0].command == checkpoint_command
+    assert full_evidence.commands[0].command == full_command
+
+
 @dataclass
 class PublicDispatchEnv:
     origin: Path

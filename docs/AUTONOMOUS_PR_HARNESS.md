@@ -721,6 +721,16 @@ in execution order and declares:
 - **Verification** — the deterministic checks that must pass for it;
 - **Review focus** — where the reviewer is asked to look first.
 
+Verification commands remain provider-neutral shell-free argv arrays. At the
+verification subprocess boundary only, an exact first token `"python"` is
+materialized as the current harness `sys.executable`; every remaining argv
+element is unchanged. The approved argv and recorded evidence retain the
+original `"python"` identity. No other executable token (including `python3`,
+`python.exe`, `py`, or an explicit path) is normalized, and there is no PATH
+mutation, executable discovery, or fallback interpreter chain. An OS-level
+failure to start the materialized interpreter follows the existing failed
+verification-result path after exactly one attempt.
+
 Checkpoints are steps inside one mergeable task. They have no `TSK-*` ID and
 no status of their own. As `AGENTS.md` ("Working method") requires, they are
 drawn along independent review-risk boundaries rather than mechanically by
