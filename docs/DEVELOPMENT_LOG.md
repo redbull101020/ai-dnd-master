@@ -7579,3 +7579,17 @@ routing, verdict grammar, and authority remain unchanged. Verification passed:
 tests/architecture`; `python -m pytest`; `python -m mypy src/dnd_engine
 tools/autonomous_pr`; and `git diff --check`. A repeat empirical TSK-0032 pilot
 remains a separate post-merge validation action.
+
+## 2026-09-28 — TSK-0034: Mode C authoritative evidence handoff and replay freshness (delivery summary)
+
+Delivered in draft PR #114: initial and replayed Mode C now receive
+authoritative accepted Full Verification and cumulative-review evidence from
+typed orchestration state. The historical implementation base remains distinct
+from the fresh Mode C audit base, while each candidate predecessor is bound to
+the exact verified and cumulatively reviewed implementation HEAD; the same
+provenance is carried into post-publication re-audit. Verification passed:
+tooling tests — 568 passed; architecture tests — 19 passed; full pytest — 2866
+passed; mypy — 133 source files clean; `git diff --check` clean. Authority,
+routing, gameplay, and the existing post-publication candidate-changing repair
+limitation were not expanded. A third production TSK-0032 pilot remains a
+separate post-merge validation action.
