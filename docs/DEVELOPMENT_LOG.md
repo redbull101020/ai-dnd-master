@@ -7593,3 +7593,14 @@ passed; mypy — 133 source files clean; `git diff --check` clean. Authority,
 routing, gameplay, and the existing post-publication candidate-changing repair
 limitation were not expanded. A third production TSK-0032 pilot remains a
 separate post-merge validation action.
+
+## 2026-09-28 — TSK-0032: Remove retained terminal task specs (delivery summary)
+
+Delivered in draft PR #115 at implementation HEAD
+`00643129ec571b8e12ea1bfcc24dc90c261f9c9a`: removed the retained standalone
+specs for terminal Done tasks TSK-0029, TSK-0030, and TSK-0031 while preserving
+their permanent terminal-registry facts and the nonterminal task specs. No
+task-governance, tooling, test, gameplay, or architecture contract changed.
+Verification passed for the task-tracker test, the full autonomous-PR tooling
+suite, the full architecture suite, full repository pytest, mypy for
+`src/dnd_engine` and `tools/autonomous_pr`, and `git diff --check`.
