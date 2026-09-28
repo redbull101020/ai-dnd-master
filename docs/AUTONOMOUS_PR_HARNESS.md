@@ -190,6 +190,9 @@ appropriate phase, not only as conversational context:
 - repository context: base ref/SHA, delivery branch name, current head SHA;
 - deterministic verification evidence (which checks ran, and their
   pass/fail result);
+- for each Mode C transition, the accepted Full Verification and cumulative-
+  review provenance carried from typed in-memory orchestration state, including
+  its historical implementation base/HEAD and the current audit base;
 - the exact `review.patch` handed to the reviewer for a given checkpoint;
 - the reviewer's verdict and any findings (§7);
 - Task Closure context, when the run reaches that phase (§18.1 inputs:
@@ -1318,6 +1321,25 @@ downstream Full Verification and cumulative-review evidence, completes the
 existing conservative replay, and produces new Full Verification and a new
 accepted cumulative review before another closure handoff is built.
 
+Before every Mode C reviewer invocation, including a rebuilt pre-publication
+candidate and a post-publication replay, the orchestrator freshly validates and
+projects the accepted Full Verification and cumulative-review provenance from
+typed in-memory state. The nested evidence's historical accepted implementation
+base and the fresh Mode C audit base have different roles and need not be equal:
+after successful unrelated `origin/main` revalidation, the former may remain
+`A` while the latter becomes `B`. The exact candidate's
+`published_predecessor_sha` must still equal the Full Verification HEAD, its
+nested verified HEAD, and the cumulative reviewed implementation HEAD. The
+compact projection is ephemeral and rebuilt for each invocation; no earlier
+Closure or Mode C prompt string is authoritative state. It includes the actual
+draft PR context and original verification argv/result facts, but no successful
+stdout/stderr, machine-specific interpreter path, parsed test counts, raw agent
+output, or provider/model identity. The accepted provenance proves prerequisite
+identity and freshness facts but never replaces the fresh independent Mode C
+material review. Mode C receives no duplicate accepted-implementation patch:
+its exact `CURRENT_PATCH` remains the final cumulative implementation plus Task
+Closure patch from the current audit base to the exact candidate HEAD.
+
 **Closure candidate as a local commit.** After closure review returns
 `APPROVED`, the orchestrator creates a local closure commit. That commit
 becomes the new `HEAD`, and it is not pushed before Mode C approves it. Mode C
@@ -1463,6 +1485,13 @@ future task.
 
 A rebuilt Mode C that approves the same published candidate needs no repair and
 does not by itself stop the run.
+
+That post-publication rebuild carries the same historical accepted Full
+Verification/cumulative-review provenance for the unchanged exact published
+candidate, while constructing a fresh `FINAL_CUMULATIVE_AUDIT` patch and Mode C
+projection from the newly revalidated current audit base. It repeats the same
+candidate-predecessor/verified-HEAD validation as initial Mode C and then
+replays required CI under the existing ordering.
 
 A post-publication repair, once implemented, follows the evidence-invalidation
 and replay rule of §33 and never weakens a gate to make a check pass.

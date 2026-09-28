@@ -2794,7 +2794,7 @@ def _build_v2_mode_c_review_input(
     candidate: repository.UnpublishedCommitCandidate,
     patch: repository.ReviewPatch,
     history: GateHistory,
-    mode_c_evidence: str | None = None,
+    mode_c_evidence: str,
 ) -> str:
     protocol = _v2_designated_review_protocol(
         "MODE_C_FINAL_CUMULATIVE_AUDIT",
@@ -2819,15 +2819,14 @@ def _build_v2_mode_c_review_input(
         f"CANDIDATE_HEAD_SHA: {candidate.candidate_head_sha}\n"
         f"CANDIDATE_TREE_SHA: {candidate.tree_sha}\n"
     )
-    if mode_c_evidence is not None:
-        text += (
-            "Accepted Full Verification and cumulative-review facts establish "
-            "provenance and prerequisites only. They do not replace a fresh, "
-            "independent Mode C material review of the entire final cumulative "
-            "candidate.\n"
-            "AUTHORITATIVE_MODE_C_EVIDENCE_JSON:\n"
-            f"{mode_c_evidence}"
-        )
+    text += (
+        "Accepted Full Verification and cumulative-review facts establish "
+        "provenance and prerequisites only. They do not replace a fresh, "
+        "independent Mode C material review of the entire final cumulative "
+        "candidate.\n"
+        "AUTHORITATIVE_MODE_C_EVIDENCE_JSON:\n"
+        f"{mode_c_evidence}"
+    )
     text += f"CURRENT_PATCH:\n{patch.diff_text}\n"
     if history.latest_valid_repair_packet is not None:
         text += (
@@ -2851,7 +2850,7 @@ def _format_validated_v2_mode_c_evidence(
     candidate: repository.UnpublishedCommitCandidate,
     patch: repository.ReviewPatch,
 ) -> str:
-    """Validate and freshly project authoritative initial Mode C evidence."""
+    """Validate and freshly project authoritative Mode C evidence."""
 
     accepted = _validate_v2_accepted_implementation(execution_target, evidence)
     full = accepted.full_verification
@@ -2925,9 +2924,9 @@ def _review_v2_mode_c_candidate(
     base_sha: str,
     history: GateHistory,
     *,
+    accepted_evidence: V2ImplementationEvidence,
+    pr_number: str,
     published: bool = False,
-    accepted_evidence: V2ImplementationEvidence | None = None,
-    pr_number: str | None = None,
 ) -> tuple[StructuredReviewResult, repository.ReviewPatch]:
     if published:
         repository.verify_published_commit_candidate(
@@ -2946,21 +2945,14 @@ def _review_v2_mode_c_candidate(
     patch = repository.build_cumulative_patch_from_base(
         config.repo, repository.ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
     )
-    mode_c_evidence: str | None = None
-    if accepted_evidence is not None or pr_number is not None:
-        if accepted_evidence is None or pr_number is None:
-            raise _Blocked(
-                "initial Mode C requires both accepted implementation evidence "
-                "and the actual draft PR number"
-            )
-        mode_c_evidence = _format_validated_v2_mode_c_evidence(
-            execution_target,
-            accepted_evidence,
-            pr_number=pr_number,
-            mode_c_audit_base=base_sha,
-            candidate=candidate,
-            patch=patch,
-        )
+    mode_c_evidence = _format_validated_v2_mode_c_evidence(
+        execution_target,
+        accepted_evidence,
+        pr_number=pr_number,
+        mode_c_audit_base=base_sha,
+        candidate=candidate,
+        patch=patch,
+    )
     review_input = _build_v2_mode_c_review_input(
         execution_target, candidate, patch, history, mode_c_evidence
     )
@@ -3008,6 +3000,7 @@ def _stabilize_v2_published_candidate(
     candidate: repository.UnpublishedCommitCandidate,
     pr_number: str,
     initial_base_sha: str,
+    accepted_evidence: V2ImplementationEvidence,
     closure_baseline: _V2ClosureMaterialBaseline,
     set_phase: Callable[[Phase], None],
     history_sink: list[GateHistory] | None = None,
@@ -3047,6 +3040,8 @@ def _stabilize_v2_published_candidate(
                 candidate,
                 base_sha,
                 history,
+                accepted_evidence=accepted_evidence,
+                pr_number=pr_number,
                 published=True,
             )
             set_phase(Phase.ORIGIN_MAIN_REVALIDATION)
@@ -3343,6 +3338,7 @@ def execute_v2_unpublished_closure(
                         candidate,
                         pr_number,
                         base_sha,
+                        current_pre_closure.evidence,
                         closure_baseline,
                         set_phase,
                         history_sink=history_sink,

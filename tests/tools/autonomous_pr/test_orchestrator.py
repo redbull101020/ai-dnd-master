@@ -4966,9 +4966,13 @@ def test_v2_unrelated_origin_movement_revalidates_and_allows_mode_c(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spec = _cp3_spec()
-    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    target, checkpoints, pre_closure, implementation_head = _prepared_cp4_context(
+        env, spec
+    )
     _mock_cp3_revalidated_target(monkeypatch, target)
-    _install_cp4_agents(env, monkeypatch, [_v2_approved(), _v2_approved()])
+    _, reviewer_prompts = _install_cp4_agents(
+        env, monkeypatch, [_v2_approved(), _v2_approved()]
+    )
     sequenced_reviewer = orch_module.run_structured_reviewer
     moved_sha: str | None = None
 
@@ -4997,6 +5001,24 @@ def test_v2_unrelated_origin_movement_revalidates_and_allows_mode_c(
     assert moved_sha is not None
     assert result.mode_c_evidence is not None
     assert result.mode_c_evidence.base_sha == moved_sha
+    mode_c_prompt = next(
+        prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
+    )
+    compact = _mode_c_evidence_from_prompt(mode_c_prompt)
+    assert compact["accepted_implementation"] == {
+        "base_identity": target.base_sha,
+        "head_sha": implementation_head,
+    }
+    assert compact["mode_c_audit_base"] == moved_sha
+    assert compact["candidate"] == {
+        "published_predecessor_sha": implementation_head,
+    }
+    assert f"BASE_SHA: {moved_sha}\n" in mode_c_prompt
+    assert result.mode_c_evidence.review_patch.base_sha == moved_sha
+    assert (
+        f"CURRENT_PATCH:\n{result.mode_c_evidence.review_patch.diff_text}\n"
+        in mode_c_prompt
+    )
 
 
 def test_v2_mode_c_closure_only_repair_replaces_local_candidate_without_rewrite(
@@ -5016,6 +5038,37 @@ def test_v2_mode_c_closure_only_repair_replaces_local_candidate_without_rewrite(
             _v2_approved(),
         ],
     )
+    projected_candidates: list[
+        tuple[str, str, orch_module.V2ImplementationEvidence]
+    ] = []
+    real_formatter = orch_module._format_validated_v2_mode_c_evidence
+
+    def observe_fresh_projection(
+        execution_target: ExecutionTarget,
+        evidence: orch_module.V2ImplementationEvidence,
+        *,
+        pr_number: str,
+        mode_c_audit_base: str,
+        candidate: repository.UnpublishedCommitCandidate,
+        patch: repository.ReviewPatch,
+    ) -> str:
+        projected_candidates.append(
+            (candidate.candidate_head_sha, candidate.published_predecessor_sha, evidence)
+        )
+        return real_formatter(
+            execution_target,
+            evidence,
+            pr_number=pr_number,
+            mode_c_audit_base=mode_c_audit_base,
+            candidate=candidate,
+            patch=patch,
+        )
+
+    monkeypatch.setattr(
+        orch_module,
+        "_format_validated_v2_mode_c_evidence",
+        observe_fresh_projection,
+    )
 
     result = orch_module.execute_v2_unpublished_closure(
         _cp3_config(env),
@@ -5029,6 +5082,13 @@ def test_v2_mode_c_closure_only_repair_replaces_local_candidate_without_rewrite(
     assert len([p for p in implementer_prompts if "prospective Task Closure" in p]) == 2
     assert result.closure_candidate is not None
     assert result.closure_candidate.published_predecessor_sha == implementation_head
+    assert len(projected_candidates) == 2
+    assert projected_candidates[0][0] != projected_candidates[1][0]
+    assert [item[1] for item in projected_candidates] == [
+        implementation_head,
+        implementation_head,
+    ]
+    assert all(item[2] is pre_closure.evidence for item in projected_candidates)
     assert _run_git(["rev-list", "--count", f"{implementation_head}..HEAD"], cwd=env.work).strip() == "1"
     closure_reviews = [
         prompt
@@ -5355,6 +5415,33 @@ def test_v2_mode_c_missing_paths_uses_implementation_repair_and_cp3_replay(
     assert result.closure_candidate is not None
     assert result.closure_candidate.published_predecessor_sha != implementation_head
     assert sum("FINAL_CUMULATIVE_AUDIT" in p for p in reviewer_prompts) == 2
+    mode_c_compacts = [
+        _mode_c_evidence_from_prompt(prompt)
+        for prompt in reviewer_prompts
+        if "FINAL_CUMULATIVE_AUDIT" in prompt
+    ]
+    old_accepted = mode_c_compacts[0]["accepted_implementation"]
+    new_accepted = mode_c_compacts[1]["accepted_implementation"]
+    assert isinstance(old_accepted, dict) and isinstance(new_accepted, dict)
+    assert old_accepted["head_sha"] == implementation_head
+    new_full = result.pre_closure_result.evidence.full_verification
+    new_cumulative = result.pre_closure_result.evidence.cumulative_review
+    assert new_full is not None and new_cumulative is not None
+    assert new_full.head_sha != implementation_head
+    assert new_full.head_sha == new_full.verification.head_sha
+    assert new_full.head_sha == new_cumulative.reviewed_head_sha
+    assert new_accepted["head_sha"] == new_full.head_sha
+    assert result.closure_candidate.published_predecessor_sha == new_full.head_sha
+    assert result.mode_c_evidence is not None
+    with pytest.raises(orch_module._Blocked, match="candidate predecessor"):
+        orch_module._format_validated_v2_mode_c_evidence(
+            target,
+            pre_closure.evidence,
+            pr_number="1",
+            mode_c_audit_base=result.mode_c_evidence.base_sha,
+            candidate=result.closure_candidate,
+            patch=result.mode_c_evidence.review_patch,
+        )
 
 
 def test_preclosure_repair_evidence_is_used_by_later_mode_c_repair(
@@ -5536,7 +5623,7 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
     _mock_cp3_revalidated_target(monkeypatch, target)
     reviewer_profiles: list[ComputeProfile] = []
-    _install_cp4_agents(
+    _, reviewer_prompts = _install_cp4_agents(
         env,
         monkeypatch,
         [_v2_approved(), _v2_approved(), _v2_approved()],
@@ -5574,6 +5661,37 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     assert moved_sha is not None
     assert result.mode_c_evidence is not None
     assert result.mode_c_evidence.base_sha == moved_sha
+    assert result.closure_candidate is not None
+    mode_c_prompts = [
+        prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
+    ]
+    assert len(mode_c_prompts) == 2
+    initial_compact, replay_compact = map(
+        _mode_c_evidence_from_prompt, mode_c_prompts
+    )
+    for compact in (initial_compact, replay_compact):
+        assert compact["accepted_implementation"] == {
+            "base_identity": target.base_sha,
+            "head_sha": result.closure_candidate.published_predecessor_sha,
+        }
+        assert compact["candidate"] == {
+            "published_predecessor_sha": (
+                result.closure_candidate.published_predecessor_sha
+            ),
+        }
+    assert initial_compact["mode_c_audit_base"] == target.base_sha
+    assert replay_compact["mode_c_audit_base"] == moved_sha
+    assert f"BASE_SHA: {moved_sha}\n" in mode_c_prompts[1]
+    assert f"CANDIDATE_HEAD_SHA: {result.closure_candidate.candidate_head_sha}" in (
+        mode_c_prompts[0]
+    )
+    assert f"CANDIDATE_HEAD_SHA: {result.closure_candidate.candidate_head_sha}" in (
+        mode_c_prompts[1]
+    )
+    assert (
+        f"CURRENT_PATCH:\n{result.mode_c_evidence.review_patch.diff_text}\n"
+        in mode_c_prompts[1]
+    )
     post_publication = [
         attempt
         for context, attempt in recorded
@@ -5582,6 +5700,7 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     assert len(post_publication) == 1
     assert post_publication[0].reviewer_verdict is ReviewVerdict.APPROVED
     assert post_publication[0].findings == ()
+    assert post_publication[0].verification is None
     post_publication_metrics = [
         metric
         for metric in orch_module._summarize_v2_review_histories(histories)
@@ -5603,7 +5722,7 @@ def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
     target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
     _mock_cp3_revalidated_target(monkeypatch, target)
     review = _v2_changes("post-publication binding defect")
-    _install_cp4_agents(
+    _, reviewer_prompts = _install_cp4_agents(
         env, monkeypatch, [_v2_approved(), _v2_approved(), review]
     )
     recorded = _capture_recorded_review_attempts(monkeypatch)
@@ -5634,6 +5753,13 @@ def test_v2_post_publication_mode_c_cr_is_recorded_before_terminal_limitation(
 
     assert not result.completed and result.published
     assert "candidate-changing repair" in (result.blocked_reason or "")
+    post_publication_prompt = [
+        prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
+    ][-1]
+    assert "AUTHORITATIVE_MODE_C_EVIDENCE_JSON:" in post_publication_prompt
+    assert _mode_c_evidence_from_prompt(post_publication_prompt)[
+        "accepted_implementation"
+    ]["base_identity"] == target.base_sha
     post_publication = [
         attempt
         for context, attempt in recorded
