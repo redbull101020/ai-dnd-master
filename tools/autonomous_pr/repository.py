@@ -1592,6 +1592,16 @@ _SUCCESSFUL_CHECK_BUCKETS = frozenset({"pass", "skipping"})
 # ambiguous/inconsistent-result handling below, which fails closed.
 _NO_REQUIRED_CHECKS_MARKER = "no required checks"
 
+# gh's distinct check-registration diagnostic. Unlike the existing
+# positively recognized empty-required-set marker above, this means that
+# GitHub has not reported any check contexts yet and is therefore only a
+# transient observation. Match the complete stripped stderr diagnostic so
+# unrelated prose containing the words "no checks" can never acquire this
+# meaning accidentally. The branch name is deliberately variable.
+_NO_CHECKS_REPORTED_PATTERN = re.compile(
+    r"no checks reported on the '[^'\r\n]+' branch", re.IGNORECASE
+)
+
 # A small defensive guard against misclassifying a genuine tool/auth/
 # network error that happens to also mention "no required checks" in
 # passing -- gh's own message for this condition is never also an
@@ -1620,6 +1630,11 @@ class RequiredChecksResult:
     the actual parsed checks, exactly as before this distinction existed.
     When ``no_required_checks`` is ``True``, ``checks`` is always empty.
 
+    ``no_checks_reported=True`` is the distinct transient GitHub state in
+    which no check contexts have been registered for the branch yet. It is
+    never equivalent to an empty required set. The two special states are
+    mutually exclusive, and either one requires an empty ``checks`` list.
+
     ``returncode`` retains ``gh``'s own validated exit code (``0``, ``1``,
     or ``8``) so the caller can key its accept/reject decision off gh's
     own already-computed, already-consistency-checked outcome rather than
@@ -1632,6 +1647,15 @@ class RequiredChecksResult:
     checks: list[dict[str, Any]]
     no_required_checks: bool
     returncode: int
+    no_checks_reported: bool = False
+
+    def __post_init__(self) -> None:
+        if self.no_required_checks and self.no_checks_reported:
+            raise ValueError(
+                "no_required_checks and no_checks_reported are mutually exclusive"
+            )
+        if (self.no_required_checks or self.no_checks_reported) and self.checks:
+            raise ValueError("a special required-check state requires checks == []")
 
 
 def _run_gh_pr_checks_required(
@@ -1697,12 +1721,41 @@ def _try_parse_checks_json(stdout: str) -> list[dict[str, Any]] | None:
     return parsed
 
 
+def _is_malformed_nonempty_checks_array(stdout: str) -> bool:
+    """Whether stdout is a non-empty checks array rejected by validation.
+
+    This distinguishes malformed real-check evidence from the empty/absent
+    output on which gh emits its special stderr diagnostics. A malformed
+    object or unknown bucket must remain an error even if stderr also happens
+    to contain recognized special-state wording.
+    """
+
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, list) and bool(parsed)
+
+
 def _looks_like_no_required_checks_stderr(stderr: str) -> bool:
     lowered = stderr.lower()
     if _NO_REQUIRED_CHECKS_MARKER not in lowered:
         return False
-    return not any(
-        marker in lowered for marker in _ERROR_MARKERS_THAT_OVERRIDE_NO_REQUIRED_CHECKS
+    return not _contains_required_checks_error_marker(lowered)
+
+
+def _looks_like_no_checks_reported_stderr(stderr: str) -> bool:
+    stripped = stderr.strip()
+    lowered = stripped.lower()
+    if _contains_required_checks_error_marker(lowered):
+        return False
+    return _NO_CHECKS_REPORTED_PATTERN.fullmatch(stripped) is not None
+
+
+def _contains_required_checks_error_marker(lowered_stderr: str) -> bool:
+    return any(
+        marker in lowered_stderr
+        for marker in _ERROR_MARKERS_THAT_OVERRIDE_NO_REQUIRED_CHECKS
     )
 
 
@@ -1710,7 +1763,8 @@ def pr_required_checks(
     repo: Path, pr_number: str, *, gh_command: Sequence[str] = _DEFAULT_GH_COMMAND
 ) -> RequiredChecksResult:
     """``gh pr checks <number> --required --json name,state,bucket``,
-    distinguishing "no required checks configured" from every other
+    distinguishing real checks, "no required checks configured", and the
+    transient "no checks reported" registration state from every other
     outcome.
 
     Used for the required-CI gate and CI-driven repair/replay decisions
@@ -1739,9 +1793,8 @@ def pr_required_checks(
     with ``bucket: "fail"`` still counts as a real, failing required
     check. Only when stdout is *not* valid, well-formed, non-empty checks
     JSON does this function even look at ``stderr`` for the positively
-    recognized "no required checks configured" diagnostic
-    (:func:`_looks_like_no_required_checks_stderr`) — never at stdout for
-    that purpose.
+    recognized special-state diagnostics — never at stdout for that
+    purpose.
 
     Exit-code handling:
 
@@ -1762,6 +1815,10 @@ def pr_required_checks(
       required status checks at all — returns
       ``RequiredChecksResult(checks=[], no_required_checks=True,
       returncode=1)``.
+    - the same undecidable stdout/exit-``1`` boundary with stderr exactly
+      matching gh's distinct ``no checks reported on the '<branch>'
+      branch`` diagnostic returns ``no_checks_reported=True``. This is a
+      transient fact, never an empty-required-set success.
     - anything else (an unrecognized exit code, a missing ``gh``, a
       timeout, malformed/empty output with no recognized "no required
       checks" diagnostic, or a malformed individual check object —
@@ -1822,15 +1879,29 @@ def pr_required_checks(
     # now consider the positively recognized "no required checks
     # configured" diagnostic -- and only from stderr, a genuine
     # non-check-result channel, never from stdout/parsed check content.
+    if _is_malformed_nonempty_checks_array(result.stdout):
+        raise RepositoryError(
+            "gh pr checks --required --json returned a non-empty checks array "
+            "containing a malformed check object or unknown bucket: "
+            f"{result.stdout!r}"
+        )
     if result.returncode == 1 and _looks_like_no_required_checks_stderr(result.stderr):
         return RequiredChecksResult(
             checks=[], no_required_checks=True, returncode=result.returncode
+        )
+    if result.returncode == 1 and _looks_like_no_checks_reported_stderr(result.stderr):
+        return RequiredChecksResult(
+            checks=[],
+            no_required_checks=False,
+            returncode=result.returncode,
+            no_checks_reported=True,
         )
 
     raise RepositoryError(
         f"gh pr checks --required --json output (exit {result.returncode}) "
         "was not valid, well-formed, non-empty checks JSON, and no "
-        "recognized 'no required checks' diagnostic was present either: "
+        "recognized 'no required checks' or exact 'no checks reported' "
+        "diagnostic was present either: "
         f"stdout={result.stdout!r} stderr={result.stderr.strip()!r}"
     )
 
@@ -1851,12 +1922,17 @@ def pr_checks_json(
     """
 
     result = pr_required_checks(repo, pr_number, gh_command=gh_command)
-    if result.no_required_checks:
+    if result.no_required_checks or result.no_checks_reported:
+        state_name = (
+            "no_required_checks"
+            if result.no_required_checks
+            else "no_checks_reported"
+        )
         raise RepositoryError(
-            "gh reported no required checks configured for this PR; "
+            f"gh reported special required-check state {state_name} for this PR; "
             "pr_checks_json has no way to represent that distinctly from "
             "an ambiguous/empty result -- call pr_required_checks directly "
-            "to observe RequiredChecksResult.no_required_checks"
+            "to observe RequiredChecksResult"
         )
     return result.checks
 

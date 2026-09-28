@@ -1482,7 +1482,198 @@ def test_pr_required_checks_recognizes_no_required_checks_configured(
     )
 
     assert result.no_required_checks is True
+    assert result.no_checks_reported is False
     assert result.checks == []
+
+
+def test_required_checks_result_special_states_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        repo_module.RequiredChecksResult(
+            checks=[],
+            no_required_checks=True,
+            returncode=1,
+            no_checks_reported=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("no_required_checks", "no_checks_reported"),
+    [(True, False), (False, True)],
+)
+def test_required_checks_result_special_state_requires_empty_checks(
+    no_required_checks: bool, no_checks_reported: bool
+) -> None:
+    with pytest.raises(ValueError, match=r"checks == \[\]"):
+        repo_module.RequiredChecksResult(
+            checks=[{"name": "build", "state": "SUCCESS", "bucket": "pass"}],
+            no_required_checks=no_required_checks,
+            returncode=1,
+            no_checks_reported=no_checks_reported,
+        )
+
+
+def test_pr_required_checks_recognizes_no_checks_reported_as_transient(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    sys.stderr.write(\"no checks reported on the 'feature/ci' branch\\n\")\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert result.no_required_checks is False
+    assert result.no_checks_reported is True
+    assert result.checks == []
+    assert result.returncode == 1
+
+
+def test_pr_required_checks_non_empty_json_precedes_no_checks_diagnostic(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    body = json.dumps([{"name": "build", "state": "SUCCESS", "bucket": "pass"}])
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        f"    sys.stdout.write({body!r})\n"
+        "    sys.stderr.write(\"no checks reported on the 'feature/ci' branch\\n\")\n"
+        "    sys.exit(0)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    result = repo_module.pr_required_checks(
+        work, "1", gh_command=(sys.executable, "-c", fake_gh)
+    )
+
+    assert result.checks == [
+        {"name": "build", "state": "SUCCESS", "bucket": "pass"}
+    ]
+    assert result.no_required_checks is False
+    assert result.no_checks_reported is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        json.dumps([{"bucket": "pass"}]),
+        json.dumps(
+            [{"name": "build", "state": "SOMETHING", "bucket": "unknown"}]
+        ),
+    ],
+)
+def test_pr_required_checks_malformed_json_precedes_special_diagnostic(
+    git_env: GitEnv, body: str
+) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        f"    sys.stdout.write({body!r})\n"
+        "    sys.stderr.write(\"no checks reported on the 'feature/ci' branch\\n\")\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError, match="malformed check object"):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "there are no checks available yet",
+        "checks were not reported by an unrelated system",
+        "prefix: no checks reported on the 'feature/ci' branch",
+        "no checks reported on the feature/ci branch",
+    ],
+)
+def test_pr_required_checks_rejects_broad_or_unrelated_checks_wording(
+    git_env: GitEnv, stderr: str
+) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        f"    sys.stderr.write({stderr!r})\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError):
+        repo_module.pr_required_checks(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
+
+
+@pytest.mark.parametrize(
+    "error_text",
+    [
+        "authentication failed",
+        "HTTP 502 failure",
+        "could not resolve host github.com",
+        "connection refused",
+        "rate limit exceeded",
+    ],
+)
+def test_pr_required_checks_errors_override_no_checks_diagnostics(
+    git_env: GitEnv, error_text: str
+) -> None:
+    work = git_env.work
+    diagnostics = (
+        "no required checks reported on the 'feature/ci' branch",
+        "no checks reported on the 'feature/ci' branch",
+    )
+    for diagnostic in diagnostics:
+        stderr = f"{diagnostic}: {error_text}"
+        fake_gh = (
+            "import sys\n"
+            "args = sys.argv[1:]\n"
+            "if args[:2] == ['pr', 'checks']:\n"
+            f"    sys.stderr.write({stderr!r})\n"
+            "    sys.exit(1)\n"
+            "else:\n"
+            "    raise SystemExit(1)\n"
+        )
+
+        with pytest.raises(RepositoryError):
+            repo_module.pr_required_checks(
+                work, "1", gh_command=(sys.executable, "-c", fake_gh)
+            )
+
+
+def test_pr_checks_json_refuses_no_checks_reported(git_env: GitEnv) -> None:
+    work = git_env.work
+    fake_gh = (
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['pr', 'checks']:\n"
+        "    sys.stderr.write(\"no checks reported on the 'feature/ci' branch\\n\")\n"
+        "    sys.exit(1)\n"
+        "else:\n"
+        "    raise SystemExit(1)\n"
+    )
+
+    with pytest.raises(RepositoryError, match="no_checks_reported"):
+        repo_module.pr_checks_json(
+            work, "1", gh_command=(sys.executable, "-c", fake_gh)
+        )
 
 
 def test_pr_required_checks_exit_1_auth_error_raises(git_env: GitEnv) -> None:
