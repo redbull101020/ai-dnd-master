@@ -296,6 +296,16 @@ class V2ImplementationEvidence:
 
 
 @dataclass(frozen=True)
+class _ValidatedV2AcceptedImplementation:
+    """Immutable accepted-implementation facts shared by late gates."""
+
+    historical_base_identity: str
+    accepted_head_sha: str
+    full_verification: V2FullVerificationEvidence
+    cumulative_review: V2CumulativeReviewEvidence
+
+
+@dataclass(frozen=True)
 class V2PreClosureExecutionResult:
     """Outcome of CP-3 through accepted pre-closure cumulative review."""
 
@@ -2409,59 +2419,15 @@ def _format_validated_v2_closure_evidence(
     evidence = pre_closure.evidence
     if not pre_closure.completed:
         raise _Blocked("completed pre-closure evidence is required for Task Closure")
-    if execution_target.task.task_id != spec.task_id:
-        raise _Blocked("selected task identity differs from the fixed Task Execution Spec")
-    if evidence.spec_identity != spec.digest:
-        raise _Blocked("pre-closure evidence belongs to another fixed spec")
-    full = evidence.full_verification
-    if full is None:
-        raise _Blocked("Full Verification evidence is required for Task Closure")
-    cumulative = evidence.cumulative_review
-    if cumulative is None:
-        raise _Blocked("accepted cumulative-review evidence is required for Task Closure")
-    if full.spec_identity != spec.digest or cumulative.spec_identity != spec.digest:
-        raise _Blocked("closure evidence contains a mismatched fixed spec identity")
-    if (
-        full.base_identity != evidence.base_identity
-        or cumulative.base_identity != evidence.base_identity
-        or cumulative.review_patch.base_sha != evidence.base_identity
-    ):
+    accepted = _validate_v2_accepted_implementation(execution_target, evidence)
+    full = accepted.full_verification
+    cumulative = accepted.cumulative_review
+    if evidence.base_identity != accepted.historical_base_identity:
         raise _Blocked("closure evidence contains inconsistent accepted base identities")
-    if not full.verification.passed:
-        raise _Blocked("Full Verification evidence did not pass")
-    if full.head_sha != full.verification.head_sha:
-        raise _Blocked("Full Verification outer and nested verified HEADs differ")
-    if full.head_sha != cumulative.reviewed_head_sha:
-        raise _Blocked(
-            "Full Verification does not belong to the accepted reviewed implementation HEAD"
-        )
-    if cumulative.reviewed_head_sha != expected_published_head:
+    if accepted.accepted_head_sha != expected_published_head:
         raise _Blocked(
             "expected published implementation HEAD differs from accepted reviewed HEAD"
         )
-    if cumulative.review_patch.head_sha != cumulative.reviewed_head_sha:
-        raise _Blocked("cumulative-review patch belongs to another implementation HEAD")
-    if full.candidate_identity != _committed_candidate_identity(full.head_sha):
-        raise _Blocked("Full Verification evidence belongs to another candidate")
-    cumulative_patch_identity = _candidate_identity(cumulative.review_patch.diff_text)
-    if (
-        cumulative.review_patch.purpose
-        is not repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW
-        or cumulative.review_patch.digest != cumulative_patch_identity.digest
-        or cumulative.candidate_identity != cumulative_patch_identity
-    ):
-        raise _Blocked("cumulative-review evidence belongs to another candidate")
-    if cumulative.review_iteration < 1:
-        raise _Blocked("cumulative-review evidence has no accepted review iteration")
-    if tuple(result.command for result in full.verification.commands) != (
-        spec.full_verification
-    ):
-        raise _Blocked("Full Verification commands differ from the fixed spec")
-    if any(
-        not result.passed or result.returncode != 0
-        for result in full.verification.commands
-    ):
-        raise _Blocked("Full Verification contains an unsuccessful command result")
     if not pr_number.strip():
         raise _Blocked("actual draft PR number is required for Task Closure evidence")
 
@@ -2496,6 +2462,76 @@ def _format_validated_v2_closure_evidence(
         },
     }
     return json.dumps(compact, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+
+def _validate_v2_accepted_implementation(
+    execution_target: ExecutionTarget,
+    evidence: V2ImplementationEvidence,
+) -> _ValidatedV2AcceptedImplementation:
+    """Validate immutable Full Verification and cumulative-review facts.
+
+    The mutable outer ``evidence.base_identity`` is deliberately excluded:
+    Mode C may run after an allowed ``origin/main`` movement while the nested
+    accepted-implementation facts still describe their historical base.
+    """
+
+    spec = execution_target.spec
+    if execution_target.task.task_id != spec.task_id:
+        raise _Blocked("selected task identity differs from the fixed Task Execution Spec")
+    if evidence.spec_identity != spec.digest:
+        raise _Blocked("pre-closure evidence belongs to another fixed spec")
+    full = evidence.full_verification
+    if full is None:
+        raise _Blocked("Full Verification evidence is required")
+    cumulative = evidence.cumulative_review
+    if cumulative is None:
+        raise _Blocked("accepted cumulative-review evidence is required")
+    if full.spec_identity != spec.digest or cumulative.spec_identity != spec.digest:
+        raise _Blocked("accepted implementation evidence has a mismatched fixed spec")
+    if (
+        full.base_identity != cumulative.base_identity
+        or cumulative.review_patch.base_sha != full.base_identity
+    ):
+        raise _Blocked(
+            "accepted implementation evidence contains inconsistent historical bases"
+        )
+    if not full.verification.passed:
+        raise _Blocked("Full Verification evidence did not pass")
+    if full.head_sha != full.verification.head_sha:
+        raise _Blocked("Full Verification outer and nested verified HEADs differ")
+    if full.head_sha != cumulative.reviewed_head_sha:
+        raise _Blocked(
+            "Full Verification does not belong to the accepted reviewed implementation HEAD"
+        )
+    if cumulative.review_patch.head_sha != cumulative.reviewed_head_sha:
+        raise _Blocked("cumulative-review patch belongs to another implementation HEAD")
+    if full.candidate_identity != _committed_candidate_identity(full.head_sha):
+        raise _Blocked("Full Verification evidence belongs to another candidate")
+    cumulative_patch_identity = _candidate_identity(cumulative.review_patch.diff_text)
+    if (
+        cumulative.review_patch.purpose
+        is not repository.ReviewPurpose.PRE_CLOSURE_CUMULATIVE_REVIEW
+        or cumulative.review_patch.digest != cumulative_patch_identity.digest
+        or cumulative.candidate_identity != cumulative_patch_identity
+    ):
+        raise _Blocked("cumulative-review evidence belongs to another candidate")
+    if cumulative.review_iteration < 1:
+        raise _Blocked("cumulative-review evidence has no accepted review iteration")
+    if tuple(result.command for result in full.verification.commands) != (
+        spec.full_verification
+    ):
+        raise _Blocked("Full Verification commands differ from the fixed spec")
+    if any(
+        not result.passed or result.returncode != 0
+        for result in full.verification.commands
+    ):
+        raise _Blocked("Full Verification contains an unsuccessful command result")
+    return _ValidatedV2AcceptedImplementation(
+        historical_base_identity=full.base_identity,
+        accepted_head_sha=full.head_sha,
+        full_verification=full,
+        cumulative_review=cumulative,
+    )
 
 
 def _build_v2_closure_prompt(
@@ -2758,6 +2794,7 @@ def _build_v2_mode_c_review_input(
     candidate: repository.UnpublishedCommitCandidate,
     patch: repository.ReviewPatch,
     history: GateHistory,
+    mode_c_evidence: str | None = None,
 ) -> str:
     protocol = _v2_designated_review_protocol(
         "MODE_C_FINAL_CUMULATIVE_AUDIT",
@@ -2781,8 +2818,17 @@ def _build_v2_mode_c_review_input(
         f"BASE_SHA: {patch.base_sha}\n"
         f"CANDIDATE_HEAD_SHA: {candidate.candidate_head_sha}\n"
         f"CANDIDATE_TREE_SHA: {candidate.tree_sha}\n"
-        f"CURRENT_PATCH:\n{patch.diff_text}\n"
     )
+    if mode_c_evidence is not None:
+        text += (
+            "Accepted Full Verification and cumulative-review facts establish "
+            "provenance and prerequisites only. They do not replace a fresh, "
+            "independent Mode C material review of the entire final cumulative "
+            "candidate.\n"
+            "AUTHORITATIVE_MODE_C_EVIDENCE_JSON:\n"
+            f"{mode_c_evidence}"
+        )
+    text += f"CURRENT_PATCH:\n{patch.diff_text}\n"
     if history.latest_valid_repair_packet is not None:
         text += (
             "PREVIOUS_REVIEWER_FINDINGS:\n"
@@ -2796,6 +2842,82 @@ def _build_v2_mode_c_review_input(
     return text
 
 
+def _format_validated_v2_mode_c_evidence(
+    execution_target: ExecutionTarget,
+    evidence: V2ImplementationEvidence,
+    *,
+    pr_number: str,
+    mode_c_audit_base: str,
+    candidate: repository.UnpublishedCommitCandidate,
+    patch: repository.ReviewPatch,
+) -> str:
+    """Validate and freshly project authoritative initial Mode C evidence."""
+
+    accepted = _validate_v2_accepted_implementation(execution_target, evidence)
+    full = accepted.full_verification
+    cumulative = accepted.cumulative_review
+    if not pr_number.strip():
+        raise _Blocked("actual draft PR number is required for Mode C evidence")
+    if candidate.published_predecessor_sha != accepted.accepted_head_sha:
+        raise _Blocked(
+            "Mode C candidate predecessor differs from the accepted implementation HEAD"
+        )
+    if (
+        candidate.published_predecessor_sha != full.verification.head_sha
+        or candidate.published_predecessor_sha != cumulative.reviewed_head_sha
+    ):
+        raise _Blocked(
+            "Mode C candidate predecessor is inconsistent with verified implementation evidence"
+        )
+    patch_identity = _candidate_identity(patch.diff_text)
+    if patch.purpose is not repository.ReviewPurpose.FINAL_CUMULATIVE_AUDIT:
+        raise _Blocked("Mode C requires a FINAL_CUMULATIVE_AUDIT patch")
+    if patch.base_sha != mode_c_audit_base:
+        raise _Blocked("Mode C patch base differs from the current audit base")
+    if patch.head_sha != candidate.candidate_head_sha:
+        raise _Blocked("Mode C patch HEAD differs from the exact closure candidate")
+    if patch.branch != candidate.branch:
+        raise _Blocked("Mode C patch branch differs from the exact closure candidate")
+    if patch.digest != patch_identity.digest:
+        raise _Blocked("Mode C patch digest differs from its exact diff content")
+
+    compact = {
+        "accepted_implementation": {
+            "base_identity": accepted.historical_base_identity,
+            "head_sha": accepted.accepted_head_sha,
+        },
+        "candidate": {
+            "published_predecessor_sha": candidate.published_predecessor_sha,
+        },
+        "cumulative_review": {
+            "accepted_identity": cumulative.candidate_identity.digest,
+            "base_identity": cumulative.base_identity,
+            "review_iteration": cumulative.review_iteration,
+            "reviewed_head_sha": cumulative.reviewed_head_sha,
+        },
+        "draft_pr_number": pr_number,
+        "full_verification": {
+            "commands": [
+                {
+                    "argv": list(result.command),
+                    "passed": result.passed,
+                    "returncode": result.returncode,
+                }
+                for result in full.verification.commands
+            ],
+            "overall_passed": full.verification.passed,
+            "verified_head_sha": full.head_sha,
+        },
+        "mode_c_audit_base": mode_c_audit_base,
+        "selected_task": {
+            "spec_identity": execution_target.spec.digest,
+            "spec_path": execution_target.spec.path,
+            "task_id": execution_target.task.task_id,
+        },
+    }
+    return json.dumps(compact, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+
 def _review_v2_mode_c_candidate(
     config: OrchestratorConfig,
     execution_target: ExecutionTarget,
@@ -2804,6 +2926,8 @@ def _review_v2_mode_c_candidate(
     history: GateHistory,
     *,
     published: bool = False,
+    accepted_evidence: V2ImplementationEvidence | None = None,
+    pr_number: str | None = None,
 ) -> tuple[StructuredReviewResult, repository.ReviewPatch]:
     if published:
         repository.verify_published_commit_candidate(
@@ -2822,8 +2946,23 @@ def _review_v2_mode_c_candidate(
     patch = repository.build_cumulative_patch_from_base(
         config.repo, repository.ReviewPurpose.FINAL_CUMULATIVE_AUDIT, base_sha
     )
+    mode_c_evidence: str | None = None
+    if accepted_evidence is not None or pr_number is not None:
+        if accepted_evidence is None or pr_number is None:
+            raise _Blocked(
+                "initial Mode C requires both accepted implementation evidence "
+                "and the actual draft PR number"
+            )
+        mode_c_evidence = _format_validated_v2_mode_c_evidence(
+            execution_target,
+            accepted_evidence,
+            pr_number=pr_number,
+            mode_c_audit_base=base_sha,
+            candidate=candidate,
+            patch=patch,
+        )
     review_input = _build_v2_mode_c_review_input(
-        execution_target, candidate, patch, history
+        execution_target, candidate, patch, history, mode_c_evidence
     )
     review = _run_routed_v2_designated_review(
         config,
@@ -3130,7 +3269,13 @@ def execute_v2_unpublished_closure(
                     )
                 terminal_phase = Phase.MODE_C_FINAL_AUDIT
                 review, patch = _review_v2_mode_c_candidate(
-                    config, execution_target, candidate, base_sha, mode_history
+                    config,
+                    execution_target,
+                    candidate,
+                    base_sha,
+                    mode_history,
+                    accepted_evidence=current_pre_closure.evidence,
+                    pr_number=pr_number,
                 )
                 terminal_phase = Phase.ORIGIN_MAIN_REVALIDATION
                 post_target, moved_after_review = _revalidate_v2_execution_target(

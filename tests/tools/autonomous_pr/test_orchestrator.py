@@ -2592,7 +2592,7 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
         execution_target, "closure diff", "{}\n", history
     )
     mode_c_prompt = orch_module._build_v2_mode_c_review_input(
-        execution_target, candidate, patch, history
+        execution_target, candidate, patch, history, "{}\n"
     )
 
     prompts = (
@@ -2654,6 +2654,8 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
     assert "complete applicable Task Execution Spec" in mode_c_prompt
     assert "every checkpoint, Full verification" in mode_c_prompt
     assert "closure/governance boundaries" in mode_c_prompt
+    assert "AUTHORITATIVE_MODE_C_EVIDENCE_JSON:\n{}\n" in mode_c_prompt
+    assert "do not replace a fresh, independent Mode C material review" in mode_c_prompt
 
 
 def test_v2_candidate_changing_handoffs_require_internal_conformance_pass() -> None:
@@ -4209,6 +4211,302 @@ def test_v2_validated_closure_evidence_is_compact_original_argv_only(env: Env) -
     assert "stdout" not in formatted and "stderr" not in formatted
 
 
+def _mode_c_projection_context(
+    env: Env,
+    spec: TaskExecutionSpec,
+) -> tuple[
+    ExecutionTarget,
+    orch_module.V2ImplementationEvidence,
+    repository.UnpublishedCommitCandidate,
+    repository.ReviewPatch,
+    str,
+]:
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    audit_base = "a" * 40
+    candidate = repository.UnpublishedCommitCandidate(
+        branch="delivery",
+        published_predecessor_sha=implementation_head,
+        candidate_head_sha="c" * 40,
+        tree_sha="t" * 40,
+    )
+    diff_text = "final cumulative implementation and closure diff\n"
+    patch = repository.ReviewPatch(
+        purpose=repository.ReviewPurpose.FINAL_CUMULATIVE_AUDIT,
+        range_description="origin/main...HEAD",
+        base_sha=audit_base,
+        head_sha=candidate.candidate_head_sha,
+        branch=candidate.branch,
+        diff_text=diff_text,
+        digest=orch_module._candidate_identity(diff_text).digest,
+    )
+    evidence = dataclasses.replace(pre_closure.evidence, base_identity=audit_base)
+    return target, evidence, candidate, patch, audit_base
+
+
+def test_v2_validated_mode_c_evidence_is_compact_and_keeps_two_bases(
+    env: Env,
+) -> None:
+    approved_commands = (
+        ("python", "-m", "pytest", "tests/tools/autonomous_pr"),
+        ("git", "diff", "--check"),
+    )
+    spec = dataclasses.replace(_cp3_spec(), full_verification=approved_commands)
+    target, evidence, candidate, patch, audit_base = _mode_c_projection_context(
+        env, spec
+    )
+    full = evidence.full_verification
+    cumulative = evidence.cumulative_review
+    assert full is not None and cumulative is not None
+    assert evidence.base_identity == audit_base
+    assert full.base_identity != audit_base
+
+    formatted = orch_module._format_validated_v2_mode_c_evidence(
+        target,
+        evidence,
+        pr_number="123",
+        mode_c_audit_base=audit_base,
+        candidate=candidate,
+        patch=patch,
+    )
+    compact = json.loads(formatted)
+
+    assert compact == {
+        "accepted_implementation": {
+            "base_identity": full.base_identity,
+            "head_sha": full.head_sha,
+        },
+        "candidate": {
+            "published_predecessor_sha": candidate.published_predecessor_sha,
+        },
+        "cumulative_review": {
+            "accepted_identity": cumulative.candidate_identity.digest,
+            "base_identity": cumulative.base_identity,
+            "review_iteration": cumulative.review_iteration,
+            "reviewed_head_sha": cumulative.reviewed_head_sha,
+        },
+        "draft_pr_number": "123",
+        "full_verification": {
+            "commands": [
+                {"argv": list(command), "passed": True, "returncode": 0}
+                for command in approved_commands
+            ],
+            "overall_passed": True,
+            "verified_head_sha": full.head_sha,
+        },
+        "mode_c_audit_base": audit_base,
+        "selected_task": {
+            "spec_identity": spec.digest,
+            "spec_path": spec.path,
+            "task_id": spec.task_id,
+        },
+    }
+    assert sys.executable not in formatted
+    assert "successful output is not closure evidence" not in formatted
+    for excluded in ("stdout", "stderr", "test_count", "provider", "model"):
+        assert excluded not in formatted
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "missing_full",
+        "missing_cumulative",
+        "failed_full",
+        "outer_spec",
+        "wrong_spec",
+        "wrong_base",
+        "nested_head",
+        "cumulative_head",
+        "wrong_commands",
+        "unsuccessful_command",
+        "wrong_full_candidate",
+        "wrong_cumulative_candidate",
+        "wrong_cumulative_purpose",
+        "wrong_cumulative_patch_head",
+        "wrong_cumulative_digest",
+        "missing_review_iteration",
+        "candidate_predecessor",
+        "empty_pr_number",
+        "mode_c_patch_base",
+        "mode_c_patch_head",
+        "mode_c_patch_branch",
+        "mode_c_patch_digest",
+    ),
+)
+def test_v2_mode_c_evidence_inconsistency_fails_closed(
+    env: Env, case: str
+) -> None:
+    spec = _cp3_spec()
+    target, evidence, candidate, patch, audit_base = _mode_c_projection_context(
+        env, spec
+    )
+    full = evidence.full_verification
+    cumulative = evidence.cumulative_review
+    assert full is not None and cumulative is not None
+    pr_number = "1"
+
+    if case in {
+        "missing_full",
+        "missing_cumulative",
+        "failed_full",
+        "wrong_spec",
+        "wrong_base",
+        "nested_head",
+        "cumulative_head",
+        "wrong_full_candidate",
+        "wrong_cumulative_candidate",
+    }:
+        corrupted = _corrupt_cp4_evidence(
+            orch_module.V2PreClosureExecutionResult(
+                completed=True,
+                evidence=evidence,
+                cumulative_history=GateHistory(
+                    context=GateContext(
+                        gate_id="test",
+                        spec_identity=spec.digest,
+                        accepted_base_context_identity=audit_base,
+                    )
+                ),
+                replay_histories=(),
+            ),
+            case,
+        )
+        evidence = corrupted.evidence
+    elif case == "outer_spec":
+        evidence = dataclasses.replace(evidence, spec_identity="wrong-spec")
+    elif case == "wrong_commands":
+        changed = dataclasses.replace(
+            full.verification.commands[0], command=("python", "-m", "pytest", "other")
+        )
+        evidence = dataclasses.replace(
+            evidence,
+            full_verification=dataclasses.replace(
+                full,
+                verification=dataclasses.replace(
+                    full.verification,
+                    commands=(changed, *full.verification.commands[1:]),
+                ),
+            ),
+        )
+    elif case == "unsuccessful_command":
+        changed = dataclasses.replace(
+            full.verification.commands[0], returncode=1, passed=False
+        )
+        evidence = dataclasses.replace(
+            evidence,
+            full_verification=dataclasses.replace(
+                full,
+                verification=dataclasses.replace(
+                    full.verification,
+                    commands=(changed, *full.verification.commands[1:]),
+                    passed=True,
+                ),
+            ),
+        )
+    elif case == "wrong_cumulative_purpose":
+        evidence = dataclasses.replace(
+            evidence,
+            cumulative_review=dataclasses.replace(
+                cumulative,
+                review_patch=dataclasses.replace(
+                    cumulative.review_patch,
+                    purpose=repository.ReviewPurpose.FINAL_CUMULATIVE_AUDIT,
+                ),
+            ),
+        )
+    elif case == "wrong_cumulative_patch_head":
+        evidence = dataclasses.replace(
+            evidence,
+            cumulative_review=dataclasses.replace(
+                cumulative,
+                review_patch=dataclasses.replace(
+                    cumulative.review_patch, head_sha="d" * 40
+                ),
+            ),
+        )
+    elif case == "wrong_cumulative_digest":
+        evidence = dataclasses.replace(
+            evidence,
+            cumulative_review=dataclasses.replace(
+                cumulative,
+                review_patch=dataclasses.replace(
+                    cumulative.review_patch, digest="wrong-digest"
+                ),
+            ),
+        )
+    elif case == "missing_review_iteration":
+        evidence = dataclasses.replace(
+            evidence,
+            cumulative_review=dataclasses.replace(cumulative, review_iteration=0),
+        )
+    elif case == "candidate_predecessor":
+        candidate = dataclasses.replace(candidate, published_predecessor_sha="d" * 40)
+    elif case == "empty_pr_number":
+        pr_number = "  "
+    elif case == "mode_c_patch_base":
+        patch = dataclasses.replace(patch, base_sha="d" * 40)
+    elif case == "mode_c_patch_head":
+        patch = dataclasses.replace(patch, head_sha="d" * 40)
+    elif case == "mode_c_patch_branch":
+        patch = dataclasses.replace(patch, branch="other-delivery")
+    elif case == "mode_c_patch_digest":
+        patch = dataclasses.replace(patch, digest="wrong-digest")
+    else:
+        raise AssertionError(case)
+
+    with pytest.raises(orch_module._Blocked):
+        orch_module._format_validated_v2_mode_c_evidence(
+            target,
+            evidence,
+            pr_number=pr_number,
+            mode_c_audit_base=audit_base,
+            candidate=candidate,
+            patch=patch,
+        )
+
+
+def test_v2_invalid_mode_c_evidence_blocks_before_reviewer_invocation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, evidence, candidate, patch, audit_base = _mode_c_projection_context(
+        env, spec
+    )
+    evidence = dataclasses.replace(evidence, full_verification=None)
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        repository, "verify_unpublished_commit_candidate", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        repository, "build_cumulative_patch_from_base", lambda *args, **kwargs: patch
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_designated_review",
+        lambda *args, **kwargs: invoked.append("reviewer"),
+    )
+    history = GateHistory(
+        context=GateContext(
+            gate_id="mode-c-final-cumulative-audit",
+            spec_identity=spec.digest,
+            accepted_base_context_identity=candidate.published_predecessor_sha,
+        )
+    )
+
+    with pytest.raises(orch_module._Blocked, match="Full Verification evidence"):
+        orch_module._review_v2_mode_c_candidate(
+            _cp3_config(env),
+            target,
+            candidate,
+            audit_base,
+            history,
+            accepted_evidence=evidence,
+            pr_number="1",
+        )
+
+    assert invoked == []
+
+
 @pytest.mark.parametrize(
     "case",
     (
@@ -4322,6 +4620,14 @@ def _closure_evidence_from_prompt(prompt: str) -> tuple[str, dict[str, object]]:
     parsed, end = json.JSONDecoder().raw_decode(payload)
     assert isinstance(parsed, dict)
     return payload[:end] + "\n", parsed
+
+
+def _mode_c_evidence_from_prompt(prompt: str) -> dict[str, object]:
+    marker = "AUTHORITATIVE_MODE_C_EVIDENCE_JSON:\n"
+    payload = prompt.split(marker, 1)[1]
+    parsed, _ = json.JSONDecoder().raw_decode(payload)
+    assert isinstance(parsed, dict)
+    return parsed
 
 
 def _install_cp4_agents(
@@ -4530,6 +4836,20 @@ def test_v2_mode_c_reviews_local_closure_then_publishes_exact_candidate_before_c
         prompt for prompt in reviewer_prompts if "FINAL_CUMULATIVE_AUDIT" in prompt
     )
     assert result.closure_candidate.candidate_head_sha in mode_c_prompt
+    mode_c_compact = _mode_c_evidence_from_prompt(mode_c_prompt)
+    assert mode_c_compact["draft_pr_number"] == "1"
+    assert mode_c_compact["candidate"] == {
+        "published_predecessor_sha": implementation_head,
+    }
+    assert mode_c_compact["mode_c_audit_base"] == result.mode_c_evidence.base_sha
+    assert mode_c_compact["accepted_implementation"] == {
+        "base_identity": pre_closure.evidence.full_verification.base_identity,
+        "head_sha": implementation_head,
+    }
+    assert "Accepted Full Verification and cumulative-review facts establish" in (
+        mode_c_prompt
+    )
+    assert "fresh, independent Mode C material review" in mode_c_prompt
     assert (env.work / "review.patch").read_bytes() == (
         result.mode_c_evidence.review_patch.diff_text.encode("utf-8")
     )
