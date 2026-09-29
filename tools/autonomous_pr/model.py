@@ -274,6 +274,7 @@ class GateAttempt:
     findings: tuple[RepairFinding, ...] = ()
     repair_packet: RepairPacket | None = None
     repair_delta_digest: str | None = None
+    blocked_rationale: BlockedReviewRationale | None = None
 
 
 @dataclass
@@ -525,6 +526,16 @@ class ReviewGateMetrics:
 
 
 @dataclass(frozen=True)
+class BlockedReviewDiagnostic:
+    """One recorded explicit reviewer BLOCKED fact projected for reporting."""
+
+    gate_id: str
+    review_iteration: int
+    candidate_identity: CandidateIdentity
+    rationale: BlockedReviewRationale
+
+
+@dataclass(frozen=True)
 class RunResult:
     """The outcome of one orchestrator run, returned to the CLI caller.
 
@@ -553,6 +564,9 @@ class RunResult:
     ``routing_decisions`` is the append-only, provider-neutral sequence of
     agent routing decisions actually made during this run. It is recorded
     before each selected subprocess invocation and is diagnostic-only.
+
+    ``blocked_reviews`` is an ordered diagnostic-only projection of valid
+    explicit ``BLOCKED`` attempts retained in the run's gate histories.
     """
 
     task_id: str | None
@@ -569,3 +583,4 @@ class RunResult:
     no_work_reasons: tuple[TaskSelectionReason, ...] = ()
     review_metrics: tuple[ReviewGateMetrics, ...] = ()
     routing_decisions: tuple[RoutingDecisionRecord, ...] = ()
+    blocked_reviews: tuple[BlockedReviewDiagnostic, ...] = ()

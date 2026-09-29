@@ -21,6 +21,7 @@ from tools.autonomous_pr.model import (
     AgentRole,
     AgentWorkKind,
     ApprovedTaskDocument,
+    BlockedReviewRationale,
     CandidateIdentity,
     CandidateRejectionBasis,
     ComputeProfile,
@@ -35,6 +36,7 @@ from tools.autonomous_pr.model import (
     Phase,
     RepairFinding,
     RepairPacket,
+    ReviewBlockerKind,
     ReviewVerdict,
     RunOutcome,
     RunResult,
@@ -1003,10 +1005,202 @@ def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
     assert metric.gate_id == "CP-1"
     assert metric.review_iterations == 1
     assert metric.findings_per_review == (0,)
+    assert metric.binding_bases_per_review == ((),)
     assert metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
+    assert len(result.blocked_reviews) == 1
+    diagnostic = result.blocked_reviews[0]
+    assert diagnostic.gate_id == "CP-1"
+    assert diagnostic.review_iteration == 1
+    assert diagnostic.rationale.blocker_kind is ReviewBlockerKind.MISSING_SCOPE
+    assert diagnostic.rationale.binding_bases == ("task:scope",)
     assert [decision.sequence for decision in result.routing_decisions] == [1, 2]
     assert result.routing_decisions[-1].role is AgentRole.REVIEWER
     assert result.routing_decisions[-1].work_kind is AgentWorkKind.CHECKPOINT_REVIEW
+
+
+@pytest.mark.parametrize(
+    ("prompt_marker", "expected_gate", "expected_phase"),
+    [
+        (
+            "REVIEW_PURPOSE: PRE_CLOSURE_CUMULATIVE_REVIEW",
+            "pre-closure-cumulative-review",
+            Phase.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        ),
+        (
+            "GATE_APPLICABILITY: PROSPECTIVE_TASK_CLOSURE",
+            "prospective-task-closure",
+            Phase.CLOSURE_REVIEW,
+        ),
+        (
+            "REVIEW_PURPOSE: FINAL_CUMULATIVE_AUDIT",
+            "mode-c-final-cumulative-audit",
+            Phase.MODE_C_FINAL_AUDIT,
+        ),
+    ],
+)
+def test_public_run_preserves_blocked_rationale_from_late_operational_gates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt_marker: str,
+    expected_gate: str,
+    expected_phase: Phase,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    blocked = _v2_explicit_blocked("late gate blocked")
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+
+    def reviewer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        return blocked if prompt_marker in prompt else _v2_approved()
+
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", reviewer)
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is expected_phase
+    assert len(result.blocked_reviews) == 1
+    diagnostic = result.blocked_reviews[0]
+    assert diagnostic.gate_id == expected_gate
+    assert diagnostic.review_iteration == 1
+    assert diagnostic.rationale is blocked.blocked_rationale
+    blocked_attempts = [
+        attempt
+        for _, attempt in recorded
+        if attempt.reviewer_verdict is ReviewVerdict.BLOCKED
+    ]
+    assert len(blocked_attempts) == 1
+    assert diagnostic.candidate_identity == blocked_attempts[0].candidate_identity
+    assert blocked_attempts[0].blocked_rationale is blocked.blocked_rationale
+    assert not blocked_attempts[0].rejected
+    assert blocked_attempts[0].rejection_basis is None
+    assert blocked_attempts[0].findings == ()
+    assert blocked_attempts[0].repair_packet is None
+    metric = next(
+        metric for metric in result.review_metrics if metric.gate_id == expected_gate
+    )
+    assert metric.findings_per_review == (0,)
+    assert metric.binding_bases_per_review == ((),)
+    if expected_gate == "mode-c-final-cumulative-audit":
+        assert result.delivery_branch is not None
+        assert result.head_sha != repository.remote_branch_sha(
+            env.work, result.delivery_branch
+        )
+
+
+def test_public_run_discards_stale_explicit_blocked_before_canonical_recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    blocked = _v2_explicit_blocked("stale cumulative review blocked")
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    cumulative_reviews = 0
+
+    def reviewer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        nonlocal cumulative_reviews
+        if "REVIEW_PURPOSE: PRE_CLOSURE_CUMULATIVE_REVIEW" in prompt:
+            cumulative_reviews += 1
+            if cumulative_reviews == 1:
+                path = env.seed / "unrelated.txt"
+                path.write_text("move after stale review\n", encoding="utf-8")
+                _commit_and_push_main(
+                    env.seed, "move after stale review", "unrelated.txt"
+                )
+                return blocked
+        return _v2_approved()
+
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", reviewer)
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.STOP
+    assert cumulative_reviews == 2
+    assert result.blocked_reviews == ()
+    assert not any(
+        attempt.reviewer_verdict is ReviewVerdict.BLOCKED
+        for _, attempt in recorded
+    )
+    cumulative_metrics = [
+        metric
+        for metric in result.review_metrics
+        if metric.gate_id == "pre-closure-cumulative-review"
+    ]
+    assert len(cumulative_metrics) == 1
+    assert cumulative_metrics[0].review_iterations == 1
+    assert cumulative_metrics[0].last_reviewer_verdict is ReviewVerdict.APPROVED
+
+
+def test_public_run_preserves_post_publication_mode_c_blocked_rationale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    blocked = _v2_explicit_blocked("post-publication Mode C blocked")
+    recorded = _capture_recorded_review_attempts(monkeypatch)
+    mode_c_reviews = 0
+
+    def reviewer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        nonlocal mode_c_reviews
+        if "REVIEW_PURPOSE: FINAL_CUMULATIVE_AUDIT" in prompt:
+            mode_c_reviews += 1
+            if mode_c_reviews == 2:
+                return blocked
+        return _v2_approved()
+
+    real_checks = repository.pr_required_checks
+    checks_count = 0
+
+    def checks_then_move_main(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        nonlocal checks_count
+        checks_count += 1
+        result = real_checks(repo, pr_number, gh_command=gh_command)
+        if checks_count == 1:
+            path = env.seed / "unrelated.txt"
+            path.write_text("post-publication main movement\n", encoding="utf-8")
+            _commit_and_push_main(
+                env.seed, "post-publication main movement", "unrelated.txt"
+            )
+        return result
+
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", reviewer)
+    monkeypatch.setattr(repository, "pr_required_checks", checks_then_move_main)
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.MODE_C_FINAL_AUDIT
+    assert mode_c_reviews == 2
+    assert checks_count == 1
+    assert len(result.blocked_reviews) == 1
+    diagnostic = result.blocked_reviews[0]
+    assert diagnostic.gate_id == "post-publication-mode-c-replay"
+    assert diagnostic.review_iteration == 1
+    assert diagnostic.rationale is blocked.blocked_rationale
+    blocked_attempts = [
+        attempt
+        for context, attempt in recorded
+        if context.gate_id == "post-publication-mode-c-replay"
+        and attempt.reviewer_verdict is ReviewVerdict.BLOCKED
+    ]
+    assert len(blocked_attempts) == 1
+    assert diagnostic.candidate_identity == blocked_attempts[0].candidate_identity
+    assert result.delivery_branch is not None
+    assert result.head_sha == repository.remote_branch_sha(
+        env.work, result.delivery_branch
+    )
+    mode_c_decisions = [
+        decision
+        for decision in result.routing_decisions
+        if decision.work_kind is AgentWorkKind.MODE_C_REVIEW
+    ]
+    assert len(mode_c_decisions) == 2
+    assert result.routing_decisions[-1].work_kind is AgentWorkKind.MODE_C_REVIEW
 
 
 def test_public_runs_reset_routing_sequence_and_record_failed_agent_invocation(
@@ -1089,6 +1283,7 @@ def test_public_next_no_work_stops_before_branch_agents_or_pr(tmp_path: Path) ->
     assert result.no_work_reasons[0].task_id == _TASK_ID
     assert result.review_metrics == ()
     assert result.routing_decisions == ()
+    assert result.blocked_reviews == ()
     assert _run_git(["branch", "--show-current"], cwd=work).strip() == "main"
     assert _run_git(["rev-parse", "HEAD"], cwd=work).strip() == initial_head
     assert _run_git(["status", "--porcelain"], cwd=work) == ""
@@ -2129,6 +2324,17 @@ def _diagnosis() -> NonConvergenceDiagnosis:
     )
 
 
+def _blocked_rationale() -> BlockedReviewRationale:
+    return BlockedReviewRationale(
+        binding_bases=("task:scope", "repo:AGENTS.md review authority"),
+        blocker_kind=ReviewBlockerKind.MISSING_DECISION,
+        problem="Two binding requirements require an absent decision.",
+        evidence_reference="Task Scope and AGENTS.md review authority",
+        blocking_gap="The fixed contract does not choose either behavior.",
+        required_resolution="Refine and approve the task contract.",
+    )
+
+
 def _v2_approved() -> StructuredReviewResult:
     return StructuredReviewResult(
         verdict=ReviewVerdict.APPROVED,
@@ -2167,6 +2373,7 @@ def _v2_explicit_blocked(reason: str) -> StructuredReviewResult:
         raw_output="BLOCKED\n",
         blocked_reason=reason,
         verdict_is_explicit=True,
+        blocked_rationale=_blocked_rationale(),
     )
 
 
@@ -2934,7 +3141,14 @@ def test_v2_review_gate_metrics_are_pure_deterministic_history_derivatives() -> 
     )
     blocked_metric = orch_module._summarize_v2_gate_history(blocked)
     assert blocked_metric.findings_per_review == (1, 0)
+    assert blocked_metric.binding_bases_per_review == ((basis_a,), ())
     assert blocked_metric.last_reviewer_verdict is ReviewVerdict.BLOCKED
+    blocked_diagnostics = orch_module._summarize_v2_blocked_reviews([blocked])
+    assert len(blocked_diagnostics) == 1
+    assert blocked_diagnostics[0].gate_id == "blocked-gate"
+    assert blocked_diagnostics[0].review_iteration == 2
+    assert blocked_diagnostics[0].candidate_identity == CandidateIdentity("candidate-2")
+    assert blocked_diagnostics[0].rationale == _blocked_rationale()
 
     duplicate_in_one_packet = history("duplicate-basis-packet")
     _record_metric_review(
@@ -2956,6 +3170,48 @@ def test_v2_review_gate_metrics_are_pure_deterministic_history_derivatives() -> 
         "shared-gate",
     ]
     assert orch_module._summarize_v2_review_histories([history("no-review")]) == ()
+
+
+def test_v2_blocked_review_diagnostics_preserve_history_and_attempt_order() -> None:
+    def history(gate_id: str) -> GateHistory:
+        return GateHistory(
+            context=GateContext(
+                gate_id=gate_id,
+                spec_identity="spec",
+                accepted_base_context_identity="base",
+            )
+        )
+
+    first = history("first-gate")
+    ignored = history("ignored-gate")
+    second = history("second-gate")
+    _record_metric_review(first, _v2_explicit_blocked("first"), "candidate-1")
+    ignored.attempts.append(
+        GateAttempt(
+            candidate_identity=CandidateIdentity("synthetic"),
+            candidate_state="synthetic",
+            verification=None,
+            rejected=False,
+            rejection_basis=None,
+            review_iteration=None,
+            reviewer_verdict=None,
+        )
+    )
+    _record_metric_review(second, _v2_explicit_blocked("second"), "candidate-2")
+
+    diagnostics = orch_module._summarize_v2_blocked_reviews(
+        [first, ignored, second]
+    )
+
+    assert [diagnostic.gate_id for diagnostic in diagnostics] == [
+        "first-gate",
+        "second-gate",
+    ]
+    assert [diagnostic.review_iteration for diagnostic in diagnostics] == [1, 1]
+    assert [diagnostic.candidate_identity for diagnostic in diagnostics] == [
+        CandidateIdentity("candidate-1"),
+        CandidateIdentity("candidate-2"),
+    ]
 
 
 def test_v2_checkpoint_second_change_requires_non_convergence_diagnosis(

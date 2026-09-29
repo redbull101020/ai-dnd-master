@@ -39,6 +39,7 @@ from .model import (
     AgentRole,
     AgentWorkKind,
     ApprovedTaskDocument,
+    BlockedReviewDiagnostic,
     CandidateIdentity,
     CandidateRejectionBasis,
     ExecutionCheckpoint,
@@ -508,10 +509,19 @@ def _record_v2_interpreted_review_attempt(
         rejected = True
         rejection_basis = CandidateRejectionBasis.CHANGES_REQUESTED
         findings = packet.findings
+        blocked_rationale = None
+    elif review.verdict is ReviewVerdict.BLOCKED:
+        if review.blocked_rationale is None:
+            raise AssertionError("explicit BLOCKED has no blocked rationale")
+        rejected = False
+        rejection_basis = None
+        findings = ()
+        blocked_rationale = review.blocked_rationale
     else:
         rejected = False
         rejection_basis = None
         findings = ()
+        blocked_rationale = None
 
     history.attempts.append(
         GateAttempt(
@@ -525,6 +535,7 @@ def _record_v2_interpreted_review_attempt(
             findings=findings,
             repair_packet=packet,
             repair_delta_digest=repair_delta_digest,
+            blocked_rationale=blocked_rationale,
         )
     )
     return review_iteration
@@ -593,6 +604,31 @@ def _summarize_v2_review_histories(
 ) -> tuple[ReviewGateMetrics, ...]:
     metrics = tuple(_summarize_v2_gate_history(history) for history in histories)
     return tuple(metric for metric in metrics if metric.review_iterations > 0)
+
+
+def _summarize_v2_blocked_reviews(
+    histories: list[GateHistory],
+) -> tuple[BlockedReviewDiagnostic, ...]:
+    """Project only canonical explicit BLOCKED attempts in occurrence order."""
+
+    diagnostics: list[BlockedReviewDiagnostic] = []
+    for history in histories:
+        for attempt in history.attempts:
+            if (
+                attempt.reviewer_verdict is not ReviewVerdict.BLOCKED
+                or attempt.review_iteration is None
+                or attempt.blocked_rationale is None
+            ):
+                continue
+            diagnostics.append(
+                BlockedReviewDiagnostic(
+                    gate_id=history.context.gate_id,
+                    review_iteration=attempt.review_iteration,
+                    candidate_identity=attempt.candidate_identity,
+                    rationale=attempt.blocked_rationale,
+                )
+            )
+    return tuple(diagnostics)
 
 
 def _retain_v2_gate_history(
@@ -863,6 +899,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_digest=spec_digest,
             review_metrics=_summarize_v2_review_histories(review_histories),
             routing_decisions=tuple(routing_decisions),
+            blocked_reviews=_summarize_v2_blocked_reviews(review_histories),
         )
     except (_Blocked, RepositoryError) as exc:
         return RunResult(
@@ -879,6 +916,7 @@ def run(config: OrchestratorConfig) -> RunResult:
             spec_digest=spec_digest,
             review_metrics=_summarize_v2_review_histories(review_histories),
             routing_decisions=tuple(routing_decisions),
+            blocked_reviews=_summarize_v2_blocked_reviews(review_histories),
         )
 def _v2_commit_message(task_id: str, gate_id: str) -> str:
     """Return a deterministic, gate-labelled message for accepted v2 work."""
