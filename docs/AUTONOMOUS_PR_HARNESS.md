@@ -868,8 +868,10 @@ does not select another task or perform automatic cleanup.
 The reviewer returns exactly one of `APPROVED`, `CHANGES_REQUESTED`, or
 `BLOCKED`, as in v1 (§7). The set is unchanged.
 
-- **Terminal `BLOCKED`.** An explicit `BLOCKED` verdict ends the run. So does
-  a missing, malformed, ambiguous, or unrecognized verdict, and a reviewer
+- **Terminal `BLOCKED`.** A valid explicit `BLOCKED` verdict ends the run and
+  requires the bounded structured rationale defined below. A missing or
+  malformed rationale is a fail-closed non-explicit `BLOCKED`, as is a
+  missing, malformed, ambiguous, or unrecognized verdict or a reviewer
   timeout, crash, or execution error. None of these ever starts a repair
   episode, and none is upgraded to `APPROVED`.
 - **`APPROVED`.** The current review gate passes and the orchestrator may
@@ -884,6 +886,28 @@ The reviewer returns exactly one of `APPROVED`, `CHANGES_REQUESTED`, or
   architecture contract, dependency, or other information not supplied by
   the fixed approved contract. It is not a substitute for a repairable
   finding.
+
+A valid explicit `BLOCKED` has exactly one following JSON object with exactly
+these required fields: `binding_bases`, `blocker_kind`, `problem`,
+`evidence_reference`, `blocking_gap`, and `required_resolution`. The closed
+`blocker_kind` taxonomy is `missing_decision`, `missing_scope`,
+`missing_architecture_contract`, `missing_dependency`, and
+`missing_information`.
+
+`binding_bases` is an ordered list of 1..8 unique strings. Every entry is
+non-empty, already trimmed, single-line, at most 512 characters, and valid
+under the provider-neutral binding-basis grammar below. `problem`,
+`blocking_gap`, and `required_resolution` are each non-empty, already trimmed,
+single-line, and at most 1024 characters; `evidence_reference` has the same
+requirements with a 512-character limit and is a concise locator or
+description, not an evidence-body copy. Validation never normalizes whitespace.
+Missing or unknown fields, duplicate JSON keys, wrong types, duplicate or
+invalid bases, invalid taxonomy values, and empty, untrimmed, multiline, or
+oversized text make the rationale malformed and therefore non-explicit.
+
+`BlockedReviewRationale` is terminal diagnostic evidence, not a
+`RepairFinding` or `RepairPacket`. It never starts repair, retry, or candidate
+rejection and does not change routing, convergence, or phase transitions.
 
 A repair packet holds one or more findings. Each finding has at least these
 required fields, and they are part of the repair handoff contract, not an
@@ -1118,6 +1142,11 @@ record also hold the review iteration, the reviewer verdict, and the findings.
 An attempt rejected by verification has none of the three, and no synthetic
 verdict stands in for them.
 
+For a valid explicit reviewer `BLOCKED`, `GateAttempt` also stores the typed
+`BlockedReviewRationale`. That attempt has no findings or repair packet, is not
+marked rejected, and has no rejection basis. Malformed reviewer output and
+orchestrator-owned blockers never receive synthetic rationale.
+
 The full history serves audit, diagnostics, and cycle detection (§28). It
 lives in the run's in-memory state (§9, §11); this section introduces no
 persisted store.
@@ -1173,6 +1202,31 @@ and never emits prompts, patches, secrets, hidden reasoning, or full evidence.
 These diagnostics are a pure read-only projection of existing in-memory
 history. They add no persistence or timestamps and are never input to verdict,
 retry, no-progress, replay, phase-transition, or merge-readiness decisions.
+
+### Explicit-BLOCKED diagnostics
+
+The orchestrator derives one immutable `BlockedReviewDiagnostic` for every
+valid explicit `BLOCKED` attempt retained in `GateHistory`, preserving history
+and attempt occurrence order. It contains the gate ID, actual review iteration,
+exact candidate identity, and typed rationale. `RunResult.blocked_reviews` is
+the default-empty ordered tuple of those diagnostics. A syntactically valid
+review invalidated by freshness or revalidation before canonical
+`GateAttempt` recording is discarded and cannot become terminal diagnostic
+evidence.
+
+The CLI emits one compact deterministic `review_blocked_json: ` line per
+diagnostic. It manually projects exactly `gate_id`, `review_iteration`,
+`candidate_digest`, `binding_bases`, `blocker_kind`, `problem`,
+`evidence_reference`, `blocking_gap`, and `required_resolution`, where
+`candidate_digest` is the exact `CandidateIdentity.digest`. Keys are sorted and
+compact JSON separators are used. The existing generic `blocked_reason`
+remains a separate control-level line.
+
+This projection is diagnostic-only and has no control-flow ownership. It does
+not serialize `StructuredReviewResult`, `GateAttempt`, or other internal
+objects wholesale and never projects raw reviewer output, stdout/stderr,
+prompts, patches, the Task Execution Spec, Mode C evidence bodies, argv,
+model/provider arguments, environment, credentials, or hidden reasoning.
 
 ---
 
