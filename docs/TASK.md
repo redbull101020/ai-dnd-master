@@ -193,3 +193,4 @@ Concrete known constraints.
 | `TSK-0033` | `Done` | PR #112 | Harden AUTONOMOUS_PR verification runtime binding and prospective closure evidence handoff |
 | `TSK-0034` | `Done` | PR #114 | Harden AUTONOMOUS_PR Mode C authoritative evidence handoff and replay freshness |
 | `TSK-0035` | `Done` | PR #116 | Stabilize AUTONOMOUS_PR required-CI observation across check registration and pending states |
+| `TSK-0036` | `Done` | PR #118 | Preserve bounded structured rationale for explicit AUTONOMOUS_PR reviewer BLOCKED verdicts |

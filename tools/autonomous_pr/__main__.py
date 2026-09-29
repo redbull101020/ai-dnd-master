@@ -261,6 +261,23 @@ def _report(result: RunResult) -> None:
             "review_metric_json: "
             + json.dumps(payload, sort_keys=True, separators=(",", ":"))
         )
+    for diagnostic in result.blocked_reviews:
+        rationale = diagnostic.rationale
+        payload = {
+            "binding_bases": rationale.binding_bases,
+            "blocker_kind": rationale.blocker_kind.value,
+            "blocking_gap": rationale.blocking_gap,
+            "candidate_digest": diagnostic.candidate_identity.digest,
+            "evidence_reference": rationale.evidence_reference,
+            "gate_id": diagnostic.gate_id,
+            "problem": rationale.problem,
+            "required_resolution": rationale.required_resolution,
+            "review_iteration": diagnostic.review_iteration,
+        }
+        print(
+            "review_blocked_json: "
+            + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        )
     for decision in result.routing_decisions:
         payload = {
             "baseline_profile": decision.baseline_profile.value,

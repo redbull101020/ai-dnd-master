@@ -1,3 +1,4 @@
+import json
 from argparse import Namespace
 from pathlib import Path
 
@@ -8,8 +9,12 @@ from tools.autonomous_pr.__main__ import _build_config, _parse_args
 from tools.autonomous_pr.model import (
     AgentRole,
     AgentWorkKind,
+    BlockedReviewDiagnostic,
+    BlockedReviewRationale,
+    CandidateIdentity,
     ComputeProfile,
     Phase,
+    ReviewBlockerKind,
     ReviewGateMetrics,
     ReviewVerdict,
     RunOutcome,
@@ -17,6 +22,19 @@ from tools.autonomous_pr.model import (
     RoutingDecisionRecord,
     RoutingEscalationReason,
 )
+
+
+_BLOCKED_DIAGNOSTIC_KEYS = {
+    "binding_bases",
+    "blocker_kind",
+    "blocking_gap",
+    "candidate_digest",
+    "evidence_reference",
+    "gate_id",
+    "problem",
+    "required_resolution",
+    "review_iteration",
+}
 
 
 def _argv(*extra: str) -> list[str]:
@@ -199,6 +217,155 @@ def test_cli_reports_review_metrics_as_deterministic_json_lines(
         '"new_binding_bases_after_first_review":[],"repeated_binding_bases":[],'
         '"review_iterations":2,"verification_rejection_count":1}'
     ]
+
+
+def test_cli_reports_blocked_reviews_as_ordered_deterministic_json_lines(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    first = BlockedReviewDiagnostic(
+        gate_id="CP-1",
+        review_iteration=2,
+        candidate_identity=CandidateIdentity("candidate-one"),
+        rationale=BlockedReviewRationale(
+            binding_bases=("task:scope", "repo:AGENTS.md review authority"),
+            blocker_kind=ReviewBlockerKind.MISSING_DECISION,
+            problem="Two requirements need a decision.",
+            evidence_reference="Task Scope and repository authority",
+            blocking_gap="The fixed contract does not choose a behavior.",
+            required_resolution="Approve one behavior.",
+        ),
+    )
+    second = BlockedReviewDiagnostic(
+        gate_id="mode-c-final-cumulative-audit",
+        review_iteration=1,
+        candidate_identity=CandidateIdentity("candidate-two"),
+        rationale=BlockedReviewRationale(
+            binding_bases=("task:acceptance_criteria",),
+            blocker_kind=ReviewBlockerKind.MISSING_INFORMATION,
+            problem="Required evidence is absent.",
+            evidence_reference="Acceptance criteria evidence list",
+            blocking_gap="The supplied evidence cannot establish the requirement.",
+            required_resolution="Supply the required evidence.",
+        ),
+    )
+    result = RunResult(
+        task_id="TSK-9001",
+        phase=Phase.MODE_C_FINAL_AUDIT,
+        outcome=RunOutcome.BLOCKED,
+        delivery_branch="delivery",
+        head_sha="a" * 40,
+        blocked_reason="review blocked",
+        blocked_reviews=(first, second),
+    )
+
+    main_module._report(result)
+
+    diagnostic_lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("review_blocked_json: ")
+    ]
+    assert diagnostic_lines == [
+        'review_blocked_json: {"binding_bases":["task:scope",'
+        '"repo:AGENTS.md review authority"],"blocker_kind":"missing_decision",'
+        '"blocking_gap":"The fixed contract does not choose a behavior.",'
+        '"candidate_digest":"candidate-one","evidence_reference":'
+        '"Task Scope and repository authority","gate_id":"CP-1","problem":'
+        '"Two requirements need a decision.","required_resolution":'
+        '"Approve one behavior.","review_iteration":2}',
+        'review_blocked_json: {"binding_bases":["task:acceptance_criteria"],'
+        '"blocker_kind":"missing_information","blocking_gap":'
+        '"The supplied evidence cannot establish the requirement.",'
+        '"candidate_digest":"candidate-two","evidence_reference":'
+        '"Acceptance criteria evidence list","gate_id":'
+        '"mode-c-final-cumulative-audit","problem":"Required evidence is absent.",'
+        '"required_resolution":"Supply the required evidence.",'
+        '"review_iteration":1}',
+    ]
+    payloads = [json.loads(line.partition(": ")[2]) for line in diagnostic_lines]
+    assert [set(payload) for payload in payloads] == [
+        _BLOCKED_DIAGNOSTIC_KEYS,
+        _BLOCKED_DIAGNOSTIC_KEYS,
+    ]
+    assert [payload["candidate_digest"] for payload in payloads] == [
+        "candidate-one",
+        "candidate-two",
+    ]
+
+
+def test_cli_emits_no_blocked_review_line_without_diagnostics(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = RunResult(
+        task_id="TSK-9001",
+        phase=Phase.PREFLIGHT,
+        outcome=RunOutcome.BLOCKED,
+        delivery_branch=None,
+        head_sha=None,
+        blocked_reason="pre-review failure",
+    )
+
+    main_module._report(result)
+
+    assert not any(
+        line.startswith("review_blocked_json: ")
+        for line in capsys.readouterr().out.splitlines()
+    )
+
+
+def test_cli_blocked_review_channel_projects_only_the_exact_allowlist(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    diagnostic = BlockedReviewDiagnostic(
+        gate_id="CP-3",
+        review_iteration=1,
+        candidate_identity=CandidateIdentity("safe-digest"),
+        rationale=BlockedReviewRationale(
+            binding_bases=("checkpoint:CP-3:verification",),
+            blocker_kind=ReviewBlockerKind.MISSING_DEPENDENCY,
+            problem="A required dependency is unavailable.",
+            evidence_reference="CP-3 verification result",
+            blocking_gap="Verification cannot run without the dependency.",
+            required_resolution="Provide the approved dependency.",
+        ),
+    )
+    result = RunResult(
+        task_id="TSK-9001",
+        phase=Phase.CHECKPOINT_REVIEW,
+        outcome=RunOutcome.BLOCKED,
+        delivery_branch="delivery",
+        head_sha="a" * 40,
+        blocked_reason=(
+            "RAW_OUTPUT STDOUT STDERR CURRENT_PATCH FULL_PROMPT ARGV ENVIRONMENT "
+            "CREDENTIALS MODEL PROVIDER HIDDEN_REASONING MODE_C_EVIDENCE"
+        ),
+        spec_source_sha="spec-source-secret",
+        spec_path="task-execution-spec-secret",
+        spec_digest="spec-digest-secret",
+        blocked_reviews=(diagnostic,),
+    )
+
+    main_module._report(result)
+
+    diagnostic_lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("review_blocked_json: ")
+    ]
+    assert len(diagnostic_lines) == 1
+    payload = json.loads(diagnostic_lines[0].partition(": ")[2])
+    assert set(payload) == _BLOCKED_DIAGNOSTIC_KEYS
+    assert payload == {
+        "binding_bases": ["checkpoint:CP-3:verification"],
+        "blocker_kind": "missing_dependency",
+        "blocking_gap": "Verification cannot run without the dependency.",
+        "candidate_digest": "safe-digest",
+        "evidence_reference": "CP-3 verification result",
+        "gate_id": "CP-3",
+        "problem": "A required dependency is unavailable.",
+        "required_resolution": "Provide the approved dependency.",
+        "review_iteration": 1,
+    }
 
 
 def test_cli_reports_routing_decisions_as_safe_deterministic_json_lines(

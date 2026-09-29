@@ -12,7 +12,12 @@ from tools.autonomous_pr.agents import (
     run_implementer,
     run_structured_reviewer,
 )
-from tools.autonomous_pr.model import AgentRole, ComputeProfile, ReviewVerdict
+from tools.autonomous_pr.model import (
+    AgentRole,
+    ComputeProfile,
+    ReviewBlockerKind,
+    ReviewVerdict,
+)
 
 
 def _profile_args(role: AgentRole) -> dict[ComputeProfile, tuple[str, ...]]:
@@ -212,6 +217,216 @@ def _repair_packet_json(*, diagnosis: bool = False) -> str:
     return json.dumps(packet)
 
 
+def _blocked_rationale(
+    *, blocker_kind: str = "missing_decision"
+) -> dict[str, object]:
+    return {
+        "binding_bases": ["task:scope", "repo:docs/TASK.md#task-authority"],
+        "blocker_kind": blocker_kind,
+        "problem": "Two binding requirements require an absent decision.",
+        "evidence_reference": "Task Scope and repository task authority",
+        "blocking_gap": "The fixed contract does not choose either behavior.",
+        "required_resolution": "Approve one behavior in a refined task spec.",
+    }
+
+
+def _blocked_output(payload: dict[str, object] | None = None) -> str:
+    rationale = _blocked_rationale() if payload is None else payload
+    return f"BLOCKED\n{json.dumps(rationale)}\n"
+
+
+def test_review_blocker_kind_is_exact_closed_set() -> None:
+    assert {verdict.value for verdict in ReviewVerdict} == {
+        "APPROVED",
+        "CHANGES_REQUESTED",
+        "BLOCKED",
+    }
+    assert {kind.value for kind in ReviewBlockerKind} == {
+        "missing_decision",
+        "missing_scope",
+        "missing_architecture_contract",
+        "missing_dependency",
+        "missing_information",
+    }
+
+
+def test_parse_structured_reviewer_output_preserves_approved_semantics() -> None:
+    result = parse_structured_reviewer_output("APPROVED\nexisting trailing notes\n")
+
+    assert result.verdict is ReviewVerdict.APPROVED
+    assert result.verdict_is_explicit
+    assert result.repair_packet is None
+    assert result.blocked_rationale is None
+    assert result.blocked_reason is None
+
+
+@pytest.mark.parametrize("blocker_kind", [kind.value for kind in ReviewBlockerKind])
+def test_parse_structured_reviewer_output_accepts_bounded_blocked_rationale(
+    blocker_kind: str,
+) -> None:
+    result = parse_structured_reviewer_output(
+        _blocked_output(_blocked_rationale(blocker_kind=blocker_kind))
+    )
+
+    assert result.verdict is ReviewVerdict.BLOCKED
+    assert result.verdict_is_explicit
+    assert result.repair_packet is None
+    assert result.blocked_reason == "designated reviewer returned BLOCKED"
+    assert result.blocked_rationale is not None
+    assert result.blocked_rationale.blocker_kind is ReviewBlockerKind(blocker_kind)
+    assert result.blocked_rationale.binding_bases == (
+        "task:scope",
+        "repo:docs/TASK.md#task-authority",
+    )
+
+
+@pytest.mark.parametrize(
+    ("output", "reason_fragment"),
+    [
+        ("BLOCKED\n", "missing rationale"),
+        ("BLOCKED\n{not-json}\n", "invalid JSON"),
+        ("BLOCKED\n[]\n", "one JSON object"),
+        (
+            'BLOCKED\n{"binding_bases": [], "binding_bases": []}\n',
+            "duplicate JSON key",
+        ),
+        (" BLOCKED \n{}\n", "verdict line is not exact"),
+    ],
+)
+def test_parse_structured_reviewer_output_blocks_invalid_blocked_envelope(
+    output: str, reason_fragment: str
+) -> None:
+    result = parse_structured_reviewer_output(output)
+
+    assert result.verdict is ReviewVerdict.BLOCKED
+    assert not result.verdict_is_explicit
+    assert result.blocked_rationale is None
+    assert reason_fragment in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown"])
+def test_parse_structured_reviewer_output_requires_exact_blocked_keys(
+    mutation: str,
+) -> None:
+    payload = _blocked_rationale()
+    if mutation == "missing":
+        del payload["problem"]
+    else:
+        payload["unknown"] = "SENSITIVE_REVIEWER_VALUE"
+
+    result = parse_structured_reviewer_output(_blocked_output(payload))
+
+    assert not result.verdict_is_explicit
+    assert result.blocked_rationale is None
+    assert "invalid top-level keys" in (result.blocked_reason or "")
+    assert "SENSITIVE_REVIEWER_VALUE" not in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason_fragment"),
+    [
+        ("binding_bases", "task:scope", "invalid binding_bases type"),
+        ("blocker_kind", 7, "invalid blocker_kind type"),
+        ("problem", 7, "invalid problem type"),
+        ("evidence_reference", [], "invalid evidence_reference type"),
+        ("blocking_gap", {}, "invalid blocking_gap type"),
+        ("required_resolution", None, "invalid required_resolution type"),
+    ],
+)
+def test_parse_structured_reviewer_output_blocks_wrong_blocked_json_types(
+    field: str, value: object, reason_fragment: str
+) -> None:
+    payload = _blocked_rationale()
+    payload[field] = value
+
+    result = parse_structured_reviewer_output(_blocked_output(payload))
+
+    assert not result.verdict_is_explicit
+    assert result.blocked_rationale is None
+    assert reason_fragment in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("binding_bases", "reason_fragment"),
+    [
+        ([], "invalid binding_bases count"),
+        (["task:scope"] * 9, "invalid binding_bases count"),
+        (["task:scope", "task:scope"], "duplicate binding basis"),
+        (["task:review_focus"], "invalid binding basis"),
+        ([""], "invalid binding_bases entry whitespace"),
+        ([" task:scope"], "invalid binding_bases entry whitespace"),
+        (["task:scope "], "invalid binding_bases entry whitespace"),
+        (["repo:line\nbreak"], "invalid binding_bases entry line structure"),
+        (["repo:" + "x" * 508], "oversized binding_bases entry"),
+    ],
+)
+def test_parse_structured_reviewer_output_validates_blocked_binding_bases(
+    binding_bases: list[str], reason_fragment: str
+) -> None:
+    payload = _blocked_rationale()
+    payload["binding_bases"] = binding_bases
+
+    result = parse_structured_reviewer_output(_blocked_output(payload))
+
+    assert not result.verdict_is_explicit
+    assert result.blocked_rationale is None
+    assert reason_fragment in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason_fragment"),
+    [
+        ("problem", " leading", "invalid problem whitespace"),
+        ("problem", "trailing ", "invalid problem whitespace"),
+        ("evidence_reference", "line\nbreak", "line structure"),
+        ("blocking_gap", "x" * 1025, "oversized blocking_gap"),
+        ("evidence_reference", "x" * 513, "oversized evidence_reference"),
+        ("required_resolution", "x" * 1025, "oversized required_resolution"),
+        ("problem", "x" * 1025, "oversized problem"),
+    ],
+)
+def test_parse_structured_reviewer_output_validates_blocked_prose(
+    field: str, value: str, reason_fragment: str
+) -> None:
+    payload = _blocked_rationale()
+    payload[field] = value
+
+    result = parse_structured_reviewer_output(_blocked_output(payload))
+
+    assert not result.verdict_is_explicit
+    assert result.blocked_rationale is None
+    assert reason_fragment in (result.blocked_reason or "")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("problem", "evidence_reference", "blocking_gap", "required_resolution"),
+)
+@pytest.mark.parametrize("value", ("", " leading", "trailing ", "line\nbreak"))
+def test_parse_structured_reviewer_output_does_not_normalize_blocked_prose(
+    field: str, value: str
+) -> None:
+    payload = _blocked_rationale()
+    payload[field] = value
+
+    result = parse_structured_reviewer_output(_blocked_output(payload))
+
+    assert not result.verdict_is_explicit
+    assert result.blocked_rationale is None
+    assert "malformed BLOCKED rationale" in (result.blocked_reason or "")
+
+
+def test_parse_structured_reviewer_output_blocks_unknown_blocker_kind_without_echo() -> None:
+    payload = _blocked_rationale(blocker_kind="SENSITIVE_REVIEWER_VALUE")
+
+    result = parse_structured_reviewer_output(_blocked_output(payload))
+
+    assert not result.verdict_is_explicit
+    assert result.blocked_rationale is None
+    assert result.blocked_reason == "malformed BLOCKED rationale: unknown blocker_kind"
+    assert "SENSITIVE_REVIEWER_VALUE" not in result.blocked_reason
+
+
 def test_parse_structured_reviewer_output_accepts_complete_repair_packet() -> None:
     result = parse_structured_reviewer_output(
         f"CHANGES_REQUESTED\n{_repair_packet_json(diagnosis=True)}\n"
@@ -353,7 +568,7 @@ def test_parse_structured_reviewer_output_blocks_missing_or_ambiguous_verdict() 
 
 def test_run_structured_reviewer_non_zero_exit_is_terminal_blocked() -> None:
     spec = _python_reviewer(
-        f"print('CHANGES_REQUESTED'); print({_repair_packet_json()!r}); "
+        f"print({_blocked_output()!r}); "
         "raise SystemExit(2)"
     )
 
@@ -361,17 +576,22 @@ def test_run_structured_reviewer_non_zero_exit_is_terminal_blocked() -> None:
 
     assert result.verdict is ReviewVerdict.BLOCKED
     assert result.repair_packet is None
+    assert result.blocked_rationale is None
+    assert not result.verdict_is_explicit
     assert "status 2" in (result.blocked_reason or "")
 
 
 def test_run_structured_reviewer_timeout_is_terminal_blocked() -> None:
     spec = _python_reviewer(
-        "import time; time.sleep(5); print('APPROVED')", timeout_seconds=0.2
+        f"import time; print({_blocked_output()!r}, flush=True); time.sleep(5)",
+        timeout_seconds=0.2,
     )
 
     result = run_structured_reviewer(spec, "bounded handoff")
 
     assert result.verdict is ReviewVerdict.BLOCKED
+    assert result.blocked_rationale is None
+    assert not result.verdict_is_explicit
     assert "timed out" in (result.blocked_reason or "")
 
 
@@ -385,6 +605,8 @@ def test_run_structured_reviewer_launch_failure_is_terminal_blocked() -> None:
     result = run_structured_reviewer(spec, "bounded handoff")
 
     assert result.verdict is ReviewVerdict.BLOCKED
+    assert result.blocked_rationale is None
+    assert not result.verdict_is_explicit
     assert "failed to execute" in (result.blocked_reason or "")
 
 

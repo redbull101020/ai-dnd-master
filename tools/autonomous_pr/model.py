@@ -68,6 +68,16 @@ class ReviewVerdict(Enum):
     BLOCKED = "BLOCKED"
 
 
+class ReviewBlockerKind(Enum):
+    """Closed, provider-neutral reasons an explicit review cannot continue."""
+
+    MISSING_DECISION = "missing_decision"
+    MISSING_SCOPE = "missing_scope"
+    MISSING_ARCHITECTURE_CONTRACT = "missing_architecture_contract"
+    MISSING_DEPENDENCY = "missing_dependency"
+    MISSING_INFORMATION = "missing_information"
+
+
 class CandidateRejectionBasis(Enum):
     """Why one v2 gate candidate became ineligible for another review."""
 
@@ -173,6 +183,18 @@ class RepairPacket:
 
 
 @dataclass(frozen=True)
+class BlockedReviewRationale:
+    """Bounded diagnostic evidence for one valid explicit ``BLOCKED``."""
+
+    binding_bases: tuple[str, ...]
+    blocker_kind: ReviewBlockerKind
+    problem: str
+    evidence_reference: str
+    blocking_gap: str
+    required_resolution: str
+
+
+@dataclass(frozen=True)
 class StructuredReviewResult:
     """One v2 reviewer result after verdict and repair-packet validation."""
 
@@ -181,6 +203,7 @@ class StructuredReviewResult:
     raw_output: str
     blocked_reason: str | None = None
     verdict_is_explicit: bool = False
+    blocked_rationale: BlockedReviewRationale | None = None
 
 
 @dataclass(frozen=True)
@@ -251,6 +274,7 @@ class GateAttempt:
     findings: tuple[RepairFinding, ...] = ()
     repair_packet: RepairPacket | None = None
     repair_delta_digest: str | None = None
+    blocked_rationale: BlockedReviewRationale | None = None
 
 
 @dataclass
@@ -502,6 +526,16 @@ class ReviewGateMetrics:
 
 
 @dataclass(frozen=True)
+class BlockedReviewDiagnostic:
+    """One recorded explicit reviewer BLOCKED fact projected for reporting."""
+
+    gate_id: str
+    review_iteration: int
+    candidate_identity: CandidateIdentity
+    rationale: BlockedReviewRationale
+
+
+@dataclass(frozen=True)
 class RunResult:
     """The outcome of one orchestrator run, returned to the CLI caller.
 
@@ -530,6 +564,9 @@ class RunResult:
     ``routing_decisions`` is the append-only, provider-neutral sequence of
     agent routing decisions actually made during this run. It is recorded
     before each selected subprocess invocation and is diagnostic-only.
+
+    ``blocked_reviews`` is an ordered diagnostic-only projection of valid
+    explicit ``BLOCKED`` attempts retained in the run's gate histories.
     """
 
     task_id: str | None
@@ -546,3 +583,4 @@ class RunResult:
     no_work_reasons: tuple[TaskSelectionReason, ...] = ()
     review_metrics: tuple[ReviewGateMetrics, ...] = ()
     routing_decisions: tuple[RoutingDecisionRecord, ...] = ()
+    blocked_reviews: tuple[BlockedReviewDiagnostic, ...] = ()
