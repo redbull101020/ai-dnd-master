@@ -7608,3 +7608,17 @@ tests — 19 passed; full pytest — 2901 passed; mypy — 133 source files clea
 and the post-publication candidate-changing repair limitation remain
 unchanged. The next fresh production TSK-0032 pilot remains a separate
 post-merge empirical validation action.
+
+## 2026-09-29 — TSK-0036: Bounded explicit-BLOCKED rationale (delivery summary)
+
+Delivered in draft PR #118: valid explicit reviewer `BLOCKED` results now
+carry a strict bounded structured rationale, retain it through `GateHistory`
+and terminal `RunResult` diagnostics, and expose it through an allowlisted
+deterministic CLI projection without raw reviewer transcripts or
+invocation-sensitive data. Reviewer verdict, repair, routing, publication,
+Mode C, and required-CI semantics remain unchanged, and the operational
+Harness documentation is synchronized. Verification passed with `python -m
+pytest tests/tools/autonomous_pr`, `python -m pytest tests/architecture`,
+`python -m pytest`, `python -m mypy src/dnd_engine tools/autonomous_pr`, and
+`git diff --check`. The fifth production TSK-0032 pilot remains a separate
+post-merge empirical validation action.
