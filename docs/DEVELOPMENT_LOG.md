@@ -7622,3 +7622,16 @@ pytest tests/tools/autonomous_pr`, `python -m pytest tests/architecture`,
 `python -m pytest`, `python -m mypy src/dnd_engine tools/autonomous_pr`, and
 `git diff --check`. The fifth production TSK-0032 pilot remains a separate
 post-merge empirical validation action.
+
+## 2026-09-29 — TSK-0032: Remove retained terminal task specs (delivery summary)
+
+Delivered in draft PR #119: removed the retained standalone specs for terminal
+Done tasks TSK-0029, TSK-0030, and TSK-0031 while preserving their permanent
+terminal-registry facts, the open TSK-0023 draft, and the selected TSK-0032
+spec. Existing task and catalog semantics continue to accept missing terminal
+specs and satisfy TSK-0032's dependency on Done TSK-0031 from the registry;
+gameplay, tooling, tests, and governance contracts were unchanged. Verification
+passed with `python -m pytest tests/architecture/test_task_tracker.py`, `python
+-m pytest tests/tools/autonomous_pr`, `python -m pytest tests/architecture`,
+`python -m pytest`, `python -m mypy src/dnd_engine tools/autonomous_pr`, and
+`git diff --check`.
