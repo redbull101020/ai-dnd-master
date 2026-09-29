@@ -49,6 +49,23 @@ def test_cli_builds_v2_config_without_runtime_plan_or_verification_selectors() -
     assert not hasattr(config, "max_repairs")
 
 
+def test_cli_required_ci_timeout_has_independent_default_and_custom_value() -> None:
+    default_config = _build_config(_parse_args(_argv()))
+    custom_config = _build_config(
+        _parse_args(_argv("--required-ci-timeout-seconds", "42.5"))
+    )
+
+    assert default_config.required_ci_timeout_seconds == 600.0
+    assert custom_config.required_ci_timeout_seconds == 42.5
+    assert custom_config.verification_timeout_seconds == 600.0
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_cli_rejects_non_positive_required_ci_timeout(value: str) -> None:
+    with pytest.raises(ValueError, match="required_ci_timeout_seconds must be > 0"):
+        _build_config(_parse_args(_argv("--required-ci-timeout-seconds", value)))
+
+
 def test_cli_composes_common_and_profile_specific_argv() -> None:
     config = _build_config(
         _parse_args(
@@ -113,6 +130,7 @@ def test_cli_keeps_capability_assertions_fail_closed() -> None:
         delivery_branch=None,
         agent_timeout_seconds=600.0,
         verify_timeout_seconds=600.0,
+        required_ci_timeout_seconds=600.0,
     )
 
     with pytest.raises(ValueError):
