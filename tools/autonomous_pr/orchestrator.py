@@ -1110,6 +1110,23 @@ def _v2_structured_output_contract(require_non_convergence: bool) -> str:
         "recommended_corrective_approach\n"
         "When non_convergence_required is true, CHANGES_REQUESTED must include "
         "a complete non_convergence object with every field listed above.\n"
+        "BLOCKED is terminal because correct continuation needs information "
+        "outside the fixed approved contract; it is not a repairable "
+        "CHANGES_REQUESTED. BLOCKED must be followed by exactly one JSON object "
+        "with exactly these six keys: binding_bases, blocker_kind, problem, "
+        "evidence_reference, blocking_gap, required_resolution. Missing, unknown, "
+        "or duplicate keys are invalid. binding_bases "
+        "must be an ordered list of 1 to 8 unique strings, each already trimmed, "
+        "single-line, at most 512 characters, and valid under the binding_basis "
+        "grammar above. blocker_kind must be exactly one of missing_decision, "
+        "missing_scope, missing_architecture_contract, missing_dependency, "
+        "missing_information. problem, blocking_gap, and required_resolution "
+        "must each be already trimmed, non-empty, single-line strings of at most "
+        "1024 characters; evidence_reference has the same requirements with a "
+        "512-character limit. Leading or trailing whitespace is invalid and must "
+        "not be normalized. evidence_reference is a concise locator or description "
+        "of supplied evidence, not a place to copy the Task Execution Spec, "
+        "CURRENT_PATCH, prompts, logs, or evidence bodies.\n"
     )
 
 

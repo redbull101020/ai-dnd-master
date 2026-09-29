@@ -967,7 +967,20 @@ def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
     tmp_path: Path,
 ) -> None:
     env = _make_public_dispatch_env(tmp_path)
-    reviewer_code = "import sys\nsys.stdin.read()\nprint('BLOCKED')\n"
+    rationale = json.dumps(
+        {
+            "binding_bases": ["task:scope"],
+            "blocker_kind": "missing_scope",
+            "problem": "The fixed scope omits a required boundary.",
+            "evidence_reference": "Task Scope",
+            "blocking_gap": "The required boundary is not specified.",
+            "required_resolution": "Refine and approve the task scope.",
+        }
+    )
+    reviewer_code = (
+        "import sys\nsys.stdin.read()\nprint('BLOCKED')\n"
+        f"print({rationale!r})\n"
+    )
     config = OrchestratorConfig(
         task_id=_TASK_ID,
         repo=env.work,
@@ -2531,6 +2544,31 @@ def test_v2_reviewer_handoff_declares_complete_structured_output_contract(
         "recommended_corrective_approach",
     ):
         assert field in second
+    for prompt in (first, second):
+        for field in (
+            "binding_bases",
+            "blocker_kind",
+            "problem",
+            "evidence_reference",
+            "blocking_gap",
+            "required_resolution",
+        ):
+            assert field in prompt
+        for blocker_kind in (
+            "missing_decision",
+            "missing_scope",
+            "missing_architecture_contract",
+            "missing_dependency",
+            "missing_information",
+        ):
+            assert blocker_kind in prompt
+        assert "BLOCKED is terminal" in prompt
+        assert "not a repairable CHANGES_REQUESTED" in prompt
+        assert "Missing, unknown, or duplicate keys are invalid" in prompt
+        assert "ordered list of 1 to 8 unique strings" in prompt
+        assert "at most 1024 characters" in prompt
+        assert "Leading or trailing whitespace is invalid" in prompt
+        assert "not a place to copy the Task Execution Spec" in prompt
 
 
 def test_v2_designated_review_builders_declare_material_pass_and_applicability() -> None:
@@ -2614,6 +2652,8 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
         assert "APPROVED: the applicable material pass is complete" in prompt
         assert "CHANGES_REQUESTED: one or more proven repairable" in prompt
         assert "BLOCKED: correct continuation requires a missing decision" in prompt
+        assert "BLOCKED must be followed by exactly one JSON object" in prompt
+        assert "evidence_reference is a concise locator or description" in prompt
         assert "PRE_RETURN_CONFORMANCE_PASS:" not in prompt
         assert "self-review artifact" not in prompt
 

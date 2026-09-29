@@ -36,10 +36,12 @@ from typing import Mapping
 
 from .model import (
     AgentRole,
+    BlockedReviewRationale,
     ComputeProfile,
     NonConvergenceDiagnosis,
     RepairFinding,
     RepairPacket,
+    ReviewBlockerKind,
     ReviewVerdict,
     StructuredReviewResult,
 )
@@ -328,6 +330,41 @@ _NON_CONVERGENCE_FIELDS = (
     "remaining_required_outcome",
     "recommended_corrective_approach",
 )
+_BLOCKED_RATIONALE_FIELDS = frozenset(
+    {
+        "binding_bases",
+        "blocker_kind",
+        "problem",
+        "evidence_reference",
+        "blocking_gap",
+        "required_resolution",
+    }
+)
+_BLOCKED_PROSE_LIMITS = {
+    "problem": 1024,
+    "evidence_reference": 512,
+    "blocking_gap": 1024,
+    "required_resolution": 1024,
+}
+
+
+class _DuplicateJsonKeyError(ValueError):
+    """A JSON object repeated a key instead of satisfying an exact schema."""
+
+
+class _BlockedRationaleProtocolError(ValueError):
+    """A bounded category-level BLOCKED rationale validation failure."""
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJsonKeyError
+        result[key] = value
+    return result
 
 
 def _blocked_structured_review(output: str, reason: str) -> StructuredReviewResult:
@@ -359,6 +396,87 @@ def _validate_binding_basis(value: str, *, where: str) -> str:
     raise ValueError(
         f"{where}.binding_basis must be an approved task, checkpoint, or "
         "non-empty repo reference"
+    )
+
+
+def _validate_blocked_string(
+    value: object, *, field_name: str, maximum_length: int
+) -> str:
+    if not isinstance(value, str):
+        raise _BlockedRationaleProtocolError(
+            f"invalid {field_name} type"
+        )
+    if not value or value != value.strip():
+        raise _BlockedRationaleProtocolError(
+            f"invalid {field_name} whitespace"
+        )
+    if "\r" in value or "\n" in value:
+        raise _BlockedRationaleProtocolError(
+            f"invalid {field_name} line structure"
+        )
+    if len(value) > maximum_length:
+        raise _BlockedRationaleProtocolError(
+            f"oversized {field_name}"
+        )
+    return value
+
+
+def _parse_blocked_rationale(remainder: str) -> BlockedReviewRationale:
+    if not remainder:
+        raise _BlockedRationaleProtocolError("missing rationale")
+    try:
+        decoded = json.loads(remainder, object_pairs_hook=_reject_duplicate_json_keys)
+    except _DuplicateJsonKeyError as exc:
+        raise _BlockedRationaleProtocolError("duplicate JSON key") from exc
+    except json.JSONDecodeError as exc:
+        raise _BlockedRationaleProtocolError("invalid JSON") from exc
+
+    if not isinstance(decoded, dict):
+        raise _BlockedRationaleProtocolError("rationale must be one JSON object")
+    if frozenset(decoded) != _BLOCKED_RATIONALE_FIELDS:
+        raise _BlockedRationaleProtocolError("invalid top-level keys")
+
+    raw_bases = decoded["binding_bases"]
+    if not isinstance(raw_bases, list):
+        raise _BlockedRationaleProtocolError("invalid binding_bases type")
+    if not 1 <= len(raw_bases) <= 8:
+        raise _BlockedRationaleProtocolError("invalid binding_bases count")
+
+    binding_bases: list[str] = []
+    for raw_basis in raw_bases:
+        basis = _validate_blocked_string(
+            raw_basis,
+            field_name="binding_bases entry",
+            maximum_length=512,
+        )
+        try:
+            _validate_binding_basis(basis, where="blocked_rationale")
+        except ValueError as exc:
+            raise _BlockedRationaleProtocolError("invalid binding basis") from exc
+        binding_bases.append(basis)
+    if len(set(binding_bases)) != len(binding_bases):
+        raise _BlockedRationaleProtocolError("duplicate binding basis")
+
+    raw_kind = decoded["blocker_kind"]
+    if not isinstance(raw_kind, str):
+        raise _BlockedRationaleProtocolError("invalid blocker_kind type")
+    try:
+        blocker_kind = ReviewBlockerKind(raw_kind)
+    except ValueError as exc:
+        raise _BlockedRationaleProtocolError("unknown blocker_kind") from exc
+
+    prose = {
+        field_name: _validate_blocked_string(
+            decoded[field_name],
+            field_name=field_name,
+            maximum_length=maximum_length,
+        )
+        for field_name, maximum_length in _BLOCKED_PROSE_LIMITS.items()
+    }
+    return BlockedReviewRationale(
+        binding_bases=tuple(binding_bases),
+        blocker_kind=blocker_kind,
+        **prose,
     )
 
 
@@ -421,9 +539,11 @@ def parse_structured_reviewer_output(output: str) -> StructuredReviewResult:
 
     The first non-empty line is the one verdict token. ``CHANGES_REQUESTED``
     must be followed by exactly one JSON value representing a complete repair
-    packet. The orchestrator separately enforces when the otherwise-optional
-    non-convergence diagnosis becomes mandatory, because that depends on the
-    in-memory consecutive-verdict count for the current gate.
+    packet. ``BLOCKED`` must be followed by exactly one JSON object representing
+    a bounded rationale. The orchestrator separately enforces when the
+    otherwise-optional non-convergence diagnosis becomes mandatory, because
+    that depends on the in-memory consecutive-verdict count for the current
+    gate.
     """
 
     lines = output.splitlines()
@@ -442,16 +562,31 @@ def parse_structured_reviewer_output(output: str) -> StructuredReviewResult:
     if any(line.strip() in _VERDICT_TOKENS for line in lines[first_index + 1 :]):
         return _blocked_structured_review(output, "reviewer verdict is ambiguous")
 
-    if verdict is not ReviewVerdict.CHANGES_REQUESTED:
+    if verdict is ReviewVerdict.BLOCKED:
+        if lines[first_index] != ReviewVerdict.BLOCKED.value:
+            return _blocked_structured_review(
+                output, "reviewer BLOCKED verdict line is not exact"
+            )
+        try:
+            rationale = _parse_blocked_rationale(remainder)
+        except (TypeError, _BlockedRationaleProtocolError) as exc:
+            return _blocked_structured_review(
+                output, f"malformed BLOCKED rationale: {exc}"
+            )
+        return StructuredReviewResult(
+            verdict=ReviewVerdict.BLOCKED,
+            repair_packet=None,
+            raw_output=output,
+            blocked_reason="designated reviewer returned BLOCKED",
+            verdict_is_explicit=True,
+            blocked_rationale=rationale,
+        )
+
+    if verdict is ReviewVerdict.APPROVED:
         return StructuredReviewResult(
             verdict=verdict,
             repair_packet=None,
             raw_output=output,
-            blocked_reason=(
-                "designated reviewer returned BLOCKED"
-                if verdict is ReviewVerdict.BLOCKED
-                else None
-            ),
             verdict_is_explicit=True,
         )
 

@@ -68,6 +68,16 @@ class ReviewVerdict(Enum):
     BLOCKED = "BLOCKED"
 
 
+class ReviewBlockerKind(Enum):
+    """Closed, provider-neutral reasons an explicit review cannot continue."""
+
+    MISSING_DECISION = "missing_decision"
+    MISSING_SCOPE = "missing_scope"
+    MISSING_ARCHITECTURE_CONTRACT = "missing_architecture_contract"
+    MISSING_DEPENDENCY = "missing_dependency"
+    MISSING_INFORMATION = "missing_information"
+
+
 class CandidateRejectionBasis(Enum):
     """Why one v2 gate candidate became ineligible for another review."""
 
@@ -173,6 +183,18 @@ class RepairPacket:
 
 
 @dataclass(frozen=True)
+class BlockedReviewRationale:
+    """Bounded diagnostic evidence for one valid explicit ``BLOCKED``."""
+
+    binding_bases: tuple[str, ...]
+    blocker_kind: ReviewBlockerKind
+    problem: str
+    evidence_reference: str
+    blocking_gap: str
+    required_resolution: str
+
+
+@dataclass(frozen=True)
 class StructuredReviewResult:
     """One v2 reviewer result after verdict and repair-packet validation."""
 
@@ -181,6 +203,7 @@ class StructuredReviewResult:
     raw_output: str
     blocked_reason: str | None = None
     verdict_is_explicit: bool = False
+    blocked_rationale: BlockedReviewRationale | None = None
 
 
 @dataclass(frozen=True)
