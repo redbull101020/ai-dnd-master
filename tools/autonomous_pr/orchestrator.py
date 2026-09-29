@@ -24,6 +24,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Callable
 
 from . import catalog, repository, task_context
@@ -73,6 +74,10 @@ from .task_spec import TaskSpecError, parse_task_document
 # stability) -- a small finite implementation-level value, not a canonical
 # numeric governance limit (docs/AUTONOMOUS_PR_HARNESS.md §11, §19).
 _POST_CLOSURE_MAX_ROUNDS = 2
+
+# Passive required-CI observation has one caller-configured overall deadline,
+# but its cadence is a private execution detail rather than a policy knob.
+_REQUIRED_CI_POLL_INTERVAL_SECONDS = 10.0
 
 # The canonical closure file set docs/TASK.md §18 actually requires:
 # docs/TASK.md and docs/DEVELOPMENT_LOG.md every time, docs/ROADMAP.md and
@@ -130,6 +135,7 @@ class OrchestratorConfig:
     reviewer_profiles: AgentProfileConfig
     delivery_branch: str
     verification_timeout_seconds: float = 600.0
+    required_ci_timeout_seconds: float = 600.0
     gh_command: tuple[str, ...] = ("gh",)
     selected_task_context: str | None = None
     _routing_decisions: list[RoutingDecisionRecord] | None = None
@@ -160,6 +166,10 @@ class OrchestratorConfig:
         if self.verification_timeout_seconds <= 0:
             raise ValueError(
                 "OrchestratorConfig.verification_timeout_seconds must be > 0"
+            )
+        if self.required_ci_timeout_seconds <= 0:
+            raise ValueError(
+                "OrchestratorConfig.required_ci_timeout_seconds must be > 0"
             )
         if not self.reviewer_spec.fresh_context_capable:
             raise ValueError(
@@ -2970,28 +2980,98 @@ def _review_v2_mode_c_candidate(
 def _require_v2_published_candidate_ci(
     config: OrchestratorConfig, pr_number: str, candidate_head_sha: str
 ) -> None:
-    before = repository.pr_head_sha(
-        config.repo, pr_number, gh_command=config.gh_command
-    )
-    if before != candidate_head_sha:
-        raise _Blocked("draft PR head does not equal the published audited candidate")
-    result = repository.pr_required_checks(
-        config.repo, pr_number, gh_command=config.gh_command
-    )
-    after = repository.pr_head_sha(
-        config.repo, pr_number, gh_command=config.gh_command
-    )
-    if after != candidate_head_sha:
-        raise _Blocked("draft PR head moved while required CI was read")
-    if result.no_required_checks or result.returncode == 0:
-        return
-    failing = [item.get("name") for item in result.checks if item.get("bucket") == "fail"]
-    if failing:
-        raise _Blocked(
-            f"required CI failed for the published v2 candidate: {failing!r}; "
-            "initial v2 does not perform post-publication candidate repair"
+    deadline = monotonic() + config.required_ci_timeout_seconds
+    last_transient_reason: str | None = None
+    while True:
+        if last_transient_reason is not None and monotonic() >= deadline:
+            raise _Blocked(
+                "required CI did not reach a terminal safe state within "
+                f"{config.required_ci_timeout_seconds}s: persistent "
+                f"{last_transient_reason}"
+            )
+        before = repository.pr_head_sha(
+            config.repo, pr_number, gh_command=config.gh_command
         )
-    raise _Blocked("required CI is pending or incomplete for the published candidate")
+        if before != candidate_head_sha:
+            raise _Blocked(
+                "draft PR head does not equal the published audited candidate"
+            )
+        result = repository.pr_required_checks(
+            config.repo, pr_number, gh_command=config.gh_command
+        )
+        after = repository.pr_head_sha(
+            config.repo, pr_number, gh_command=config.gh_command
+        )
+        if after != candidate_head_sha:
+            raise _Blocked("draft PR head moved while required CI was read")
+
+        if result.no_required_checks:
+            if result.no_checks_reported or result.checks or result.returncode != 1:
+                raise _Blocked("required CI returned an inconsistent empty-set result")
+            return
+
+        transient_reason: str | None = None
+        if result.no_checks_reported:
+            if result.checks or result.returncode != 1:
+                raise _Blocked(
+                    "required CI returned an inconsistent no-checks-reported result"
+                )
+            transient_reason = "no checks reported"
+        else:
+            if not result.checks:
+                raise _Blocked("required CI returned an empty ordinary checks result")
+            if not all(
+                isinstance(item, dict)
+                and isinstance(item.get("name"), str)
+                and bool(item["name"])
+                and isinstance(item.get("state"), str)
+                and bool(item["state"])
+                and item.get("bucket")
+                in {"pass", "fail", "pending", "skipping", "cancel"}
+                for item in result.checks
+            ):
+                raise _Blocked("required CI returned malformed or unknown check data")
+            failing = [
+                item["name"] for item in result.checks if item["bucket"] == "fail"
+            ]
+            cancelled = [
+                item["name"] for item in result.checks if item["bucket"] == "cancel"
+            ]
+            if failing or cancelled:
+                raise _Blocked(
+                    "required CI failed or was cancelled for the published v2 "
+                    f"candidate: failed={failing!r}, cancelled={cancelled!r}; "
+                    "initial v2 does not perform post-publication candidate repair"
+                )
+            if any(item["bucket"] == "pending" for item in result.checks):
+                if result.returncode not in {1, 8}:
+                    raise _Blocked(
+                        "required CI returned pending checks with an inconsistent "
+                        "exit code"
+                    )
+                transient_reason = "pending required checks"
+            elif all(
+                item["bucket"] in {"pass", "skipping"} for item in result.checks
+            ):
+                if result.returncode != 0:
+                    raise _Blocked(
+                        "required CI returned successful checks with an "
+                        "inconsistent exit code"
+                    )
+                return
+            else:
+                raise _Blocked("required CI returned an unclassifiable result")
+
+        assert transient_reason is not None
+        last_transient_reason = transient_reason
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise _Blocked(
+                "required CI did not reach a terminal safe state within "
+                f"{config.required_ci_timeout_seconds}s: persistent "
+                f"{last_transient_reason}"
+            )
+        sleep(min(_REQUIRED_CI_POLL_INTERVAL_SECONDS, remaining))
 
 
 def _stabilize_v2_published_candidate(

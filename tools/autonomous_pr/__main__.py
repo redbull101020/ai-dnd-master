@@ -157,6 +157,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--agent-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--verify-timeout-seconds", type=float, default=600.0)
+    parser.add_argument("--required-ci-timeout-seconds", type=float, default=600.0)
     return parser.parse_args(argv)
 
 
@@ -215,6 +216,7 @@ def _build_config(args: argparse.Namespace) -> OrchestratorConfig:
         ),
         delivery_branch=args.delivery_branch or "",
         verification_timeout_seconds=args.verify_timeout_seconds,
+        required_ci_timeout_seconds=args.required_ci_timeout_seconds,
     )
 
 

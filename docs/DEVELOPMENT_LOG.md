@@ -7593,3 +7593,18 @@ passed; mypy — 133 source files clean; `git diff --check` clean. Authority,
 routing, gameplay, and the existing post-publication candidate-changing repair
 limitation were not expanded. A third production TSK-0032 pilot remains a
 separate post-merge validation action.
+
+## 2026-09-29 — TSK-0035: Required-CI observation stabilization (delivery summary)
+
+Delivered in draft PR #116: required-CI observation now distinguishes the
+transient `no checks reported` state from the positively recognized empty
+required set `no required checks reported`, waits boundedly for check
+registration and pending required checks, and guards every observation with
+the exact candidate head before and after the checks query. A separate finite
+CI timeout bounds passive waiting without creating repair, review, or routing
+side effects. Verification passed: tooling tests — 603 passed; architecture
+tests — 19 passed; full pytest — 2901 passed; mypy — 133 source files clean;
+`git diff --check` clean. Routing, review, authority, gameplay, dependencies,
+and the post-publication candidate-changing repair limitation remain
+unchanged. The next fresh production TSK-0032 pilot remains a separate
+post-merge empirical validation action.

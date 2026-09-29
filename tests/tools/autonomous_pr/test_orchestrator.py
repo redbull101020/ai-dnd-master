@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -5581,6 +5581,325 @@ def test_v2_closure_only_repair_touching_source_blocks_unsafe_narrow_path(
     assert repository.remote_branch_sha(env.work, "delivery") == implementation_head
 
 
+def _ci_result(
+    *buckets: str,
+    returncode: int,
+) -> repository.RequiredChecksResult:
+    return repository.RequiredChecksResult(
+        checks=[
+            {"name": f"check-{index}", "state": bucket.upper(), "bucket": bucket}
+            for index, bucket in enumerate(buckets)
+        ],
+        no_required_checks=False,
+        returncode=returncode,
+    )
+
+
+@pytest.mark.parametrize(
+    "observations",
+    [
+        [
+            repository.RequiredChecksResult(
+                checks=[], no_required_checks=True, returncode=1
+            )
+        ],
+        [
+            repository.RequiredChecksResult(
+                checks=[],
+                no_required_checks=False,
+                returncode=1,
+                no_checks_reported=True,
+            ),
+            repository.RequiredChecksResult(
+                checks=[], no_required_checks=True, returncode=1
+            ),
+        ],
+        [
+            repository.RequiredChecksResult(
+                checks=[],
+                no_required_checks=False,
+                returncode=1,
+                no_checks_reported=True,
+            ),
+            _ci_result("pending", returncode=8),
+            _ci_result("pass", returncode=0),
+        ],
+        [
+            _ci_result("pending", returncode=8),
+            _ci_result("pending", returncode=8),
+            _ci_result("pass", returncode=0),
+        ],
+        [_ci_result("pass", "skipping", returncode=0)],
+    ],
+    ids=(
+        "no-required-immediate",
+        "no-checks-to-no-required",
+        "no-checks-to-pending-to-pass",
+        "pending-to-pending-to-pass",
+        "pass-and-skipping",
+    ),
+)
+def test_v2_required_ci_waits_boundedly_with_exact_head_guards(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    observations: list[repository.RequiredChecksResult],
+) -> None:
+    candidate = "c" * 40
+    queue = list(observations)
+    events: list[str] = []
+    sleeps: list[float] = []
+
+    def head(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> str:
+        events.append("head")
+        return candidate
+
+    def checks(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        events.append("checks")
+        return queue.pop(0)
+
+    monkeypatch.setattr(repository, "pr_head_sha", head)
+    monkeypatch.setattr(repository, "pr_required_checks", checks)
+    monkeypatch.setattr(orch_module, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(orch_module, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        orch_module,
+        "run_implementer",
+        lambda *args, **kwargs: pytest.fail("CI polling invoked implementer"),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "run_structured_reviewer",
+        lambda *args, **kwargs: pytest.fail("CI polling invoked reviewer"),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "route_agent_work",
+        lambda *args, **kwargs: pytest.fail("CI polling created routing activity"),
+    )
+    config = _cp3_config(env)
+
+    orch_module._require_v2_published_candidate_ci(config, "1", candidate)
+
+    assert queue == []
+    assert events == ["head", "checks", "head"] * len(observations)
+    assert sleeps == [10.0] * (len(observations) - 1)
+    assert config._routing_decisions is None
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_names"),
+    [
+        (_ci_result("fail", "pending", returncode=1), "failed=['check-0']"),
+        (_ci_result("cancel", returncode=1), "cancelled=['check-0']"),
+    ],
+)
+def test_v2_required_ci_terminal_non_success_precedes_pending(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    result: repository.RequiredChecksResult,
+    expected_names: str,
+) -> None:
+    candidate = "c" * 40
+    head_calls = 0
+    sleep_calls: list[float] = []
+
+    def head(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> str:
+        nonlocal head_calls
+        head_calls += 1
+        return candidate
+
+    monkeypatch.setattr(repository, "pr_head_sha", head)
+    monkeypatch.setattr(repository, "pr_required_checks", lambda *a, **k: result)
+    monkeypatch.setattr(orch_module, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(orch_module, "sleep", sleep_calls.append)
+
+    with pytest.raises(orch_module._Blocked, match="failed or was cancelled") as exc:
+        orch_module._require_v2_published_candidate_ci(
+            _cp3_config(env), "1", candidate
+        )
+
+    assert expected_names in str(exc.value)
+    assert head_calls == 2
+    assert sleep_calls == []
+
+
+@pytest.mark.parametrize(
+    ("result", "reason"),
+    [
+        (
+            repository.RequiredChecksResult(
+                checks=[],
+                no_required_checks=False,
+                returncode=1,
+                no_checks_reported=True,
+            ),
+            "persistent no checks reported",
+        ),
+        (_ci_result("pending", returncode=8), "persistent pending required checks"),
+    ],
+)
+def test_v2_required_ci_transient_state_times_out_monotonically(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    result: repository.RequiredChecksResult,
+    reason: str,
+) -> None:
+    candidate = "c" * 40
+    now = 100.0
+    sleeps: list[float] = []
+    head_calls = 0
+    check_calls = 0
+
+    def clock() -> float:
+        return now
+
+    def bounded_sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    def head(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> str:
+        nonlocal head_calls
+        head_calls += 1
+        return candidate
+
+    def checks(*args: object, **kwargs: object) -> repository.RequiredChecksResult:
+        nonlocal check_calls
+        check_calls += 1
+        return result
+
+    monkeypatch.setattr(repository, "pr_head_sha", head)
+    monkeypatch.setattr(repository, "pr_required_checks", checks)
+    monkeypatch.setattr(orch_module, "monotonic", clock)
+    monkeypatch.setattr(orch_module, "sleep", bounded_sleep)
+    config = replace(_cp3_config(env), required_ci_timeout_seconds=3.5)
+
+    with pytest.raises(orch_module._Blocked, match=reason):
+        orch_module._require_v2_published_candidate_ci(config, "1", candidate)
+
+    assert sleeps == [3.5]
+    assert all(delay <= config.required_ci_timeout_seconds for delay in sleeps)
+    assert head_calls == 2
+    assert check_calls == 1
+
+
+def test_v2_required_ci_head_movement_during_observation_blocks_immediately(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = "c" * 40
+    heads = iter((candidate, "d" * 40))
+    checks_called = 0
+    sleeps: list[float] = []
+
+    def checks(*args: object, **kwargs: object) -> repository.RequiredChecksResult:
+        nonlocal checks_called
+        checks_called += 1
+        return _ci_result("pending", returncode=8)
+
+    monkeypatch.setattr(
+        repository, "pr_head_sha", lambda *args, **kwargs: next(heads)
+    )
+    monkeypatch.setattr(repository, "pr_required_checks", checks)
+    monkeypatch.setattr(orch_module, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(orch_module, "sleep", sleeps.append)
+
+    with pytest.raises(orch_module._Blocked, match="head moved"):
+        orch_module._require_v2_published_candidate_ci(
+            _cp3_config(env), "1", candidate
+        )
+
+    assert checks_called == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        repository.RequiredChecksResult(
+            checks=[], no_required_checks=False, returncode=0
+        ),
+        _ci_result("pass", returncode=1),
+        _ci_result("pending", returncode=0),
+        _ci_result("mystery", returncode=1),
+    ],
+    ids=("ordinary-empty", "success-wrong-exit", "pending-wrong-exit", "unknown"),
+)
+def test_v2_required_ci_impossible_results_fail_closed(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    result: repository.RequiredChecksResult,
+) -> None:
+    candidate = "c" * 40
+    monkeypatch.setattr(
+        repository, "pr_head_sha", lambda *args, **kwargs: candidate
+    )
+    monkeypatch.setattr(repository, "pr_required_checks", lambda *a, **k: result)
+    monkeypatch.setattr(orch_module, "monotonic", lambda: 0.0)
+
+    with pytest.raises(orch_module._Blocked):
+        orch_module._require_v2_published_candidate_ci(
+            _cp3_config(env), "1", candidate
+        )
+
+
+def test_v2_required_ci_timeout_is_reported_in_required_ci_phase(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, checkpoints, pre_closure, _ = _prepared_cp4_context(env, spec)
+    implementer_prompts, reviewer_prompts = _install_cp4_agents(
+        env, monkeypatch, [_v2_approved(), _v2_approved()]
+    )
+    now = 0.0
+    checks_count = 0
+
+    def clock() -> float:
+        return now
+
+    def advance(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def no_checks(
+        repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
+    ) -> repository.RequiredChecksResult:
+        nonlocal checks_count
+        checks_count += 1
+        return repository.RequiredChecksResult(
+            checks=[],
+            no_required_checks=False,
+            returncode=1,
+            no_checks_reported=True,
+        )
+
+    monkeypatch.setattr(repository, "pr_required_checks", no_checks)
+    monkeypatch.setattr(orch_module, "monotonic", clock)
+    monkeypatch.setattr(orch_module, "sleep", advance)
+
+    result = orch_module.execute_v2_unpublished_closure(
+        replace(_cp3_config(env), required_ci_timeout_seconds=2.0),
+        target,
+        checkpoints,
+        pre_closure,
+        repair_acceptor=_cp4_repair_acceptor(env),
+    )
+
+    assert not result.completed and result.published
+    assert result.terminal_phase is Phase.REQUIRED_CI
+    assert "persistent no checks reported" in (result.blocked_reason or "")
+    assert checks_count == 1
+    assert len(implementer_prompts) == 1
+    assert len(reviewer_prompts) == 2
+
+
 def test_v2_required_ci_failure_blocks_only_after_exact_candidate_publication(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5631,21 +5950,35 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     )
     recorded = _capture_recorded_review_attempts(monkeypatch)
     histories: list[GateHistory] = []
-    real_checks = repository.pr_required_checks
     checks_count = 0
     moved_sha: str | None = None
+    ci_observations = [
+        repository.RequiredChecksResult(
+            checks=[],
+            no_required_checks=False,
+            returncode=1,
+            no_checks_reported=True,
+        ),
+        repository.RequiredChecksResult(
+            checks=[], no_required_checks=True, returncode=1
+        ),
+        _ci_result("pending", returncode=8),
+        _ci_result("pass", returncode=0),
+    ]
+    ci_sleeps: list[float] = []
 
     def move_base_after_first_ci(
         repo: Path, pr_number: str, *, gh_command: tuple[str, ...]
     ) -> repository.RequiredChecksResult:
         nonlocal checks_count, moved_sha
         checks_count += 1
-        result = real_checks(repo, pr_number, gh_command=gh_command)
         if checks_count == 1:
             moved_sha = _advance_cp3_origin_main(env, "post-publication-base-move")
-        return result
+        return ci_observations.pop(0)
 
     monkeypatch.setattr(repository, "pr_required_checks", move_base_after_first_ci)
+    monkeypatch.setattr(orch_module, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(orch_module, "sleep", ci_sleeps.append)
 
     result = orch_module.execute_v2_unpublished_closure(
         _cp3_config(env),
@@ -5657,7 +5990,9 @@ def test_v2_post_publication_origin_move_reaudits_same_candidate_and_replays_ci(
     )
 
     assert result.completed and result.published
-    assert checks_count == 2
+    assert checks_count == 4
+    assert ci_observations == []
+    assert ci_sleeps == [10.0, 10.0]
     assert moved_sha is not None
     assert result.mode_c_evidence is not None
     assert result.mode_c_evidence.base_sha == moved_sha
