@@ -192,3 +192,4 @@ Concrete known constraints.
 | `TSK-0031` | `Done` | PR #110 | Add deterministic adaptive compute-profile routing to AUTONOMOUS_PR |
 | `TSK-0033` | `Done` | PR #112 | Harden AUTONOMOUS_PR verification runtime binding and prospective closure evidence handoff |
 | `TSK-0034` | `Done` | PR #114 | Harden AUTONOMOUS_PR Mode C authoritative evidence handoff and replay freshness |
+| `TSK-0035` | `Done` | PR #116 | Stabilize AUTONOMOUS_PR required-CI observation across check registration and pending states |
