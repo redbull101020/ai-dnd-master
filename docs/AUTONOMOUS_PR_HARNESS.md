@@ -1476,12 +1476,12 @@ failure is always `BLOCKED`, and none that forbids future post-publication
 repair.
 
 The initial v2 implementation is not required to make any candidate-changing
-repair after publication. That covers a required CI failure and a Mode C
-`CHANGES_REQUESTED` obtained by rebuilding Mode C after `origin/main` moved
-post-publication (§32). If it cannot yet perform a safe post-publication
-replay, it ends the run as `BLOCKED`. This is an implementation limitation, not
-a governance rule. Safe post-push replay and persisted resume are a separate
-future task.
+repair after publication. A real required-CI failure or cancellation is
+therefore terminal `BLOCKED`, as is a Mode C `CHANGES_REQUESTED` obtained by
+rebuilding Mode C after `origin/main` moved post-publication (§32). If it cannot
+yet perform a safe post-publication replay, it ends the run as `BLOCKED`. This
+is an implementation limitation, not a governance rule. Safe post-push replay
+and persisted resume are a separate future task.
 
 A rebuilt Mode C that approves the same published candidate needs no repair and
 does not by itself stop the run.
@@ -1491,7 +1491,43 @@ Verification/cumulative-review provenance for the unchanged exact published
 candidate, while constructing a fresh `FINAL_CUMULATIVE_AUDIT` patch and Mode C
 projection from the newly revalidated current audit base. It repeats the same
 candidate-predecessor/verified-HEAD validation as initial Mode C and then
-replays required CI under the existing ordering.
+replays the same required-CI observation path under the existing ordering.
+
+Required CI is observed through the one-shot structured repository boundary,
+but bounded waiting belongs to the orchestrator. The outcomes have distinct,
+fail-closed meanings:
+
+- `no checks reported on the '<branch>' branch` is a transient registration
+  observation. It is not evidence that the required set is empty and never
+  satisfies the gate directly.
+- `no required checks reported on the '<branch>' branch` is the separately,
+  positively recognized empty required set. It satisfies the gate immediately;
+  optional workflows do not thereby become mandatory.
+- Real required checks containing `fail` or `cancel` are terminal, including
+  when another required check is still `pending`. Otherwise pending required
+  checks are observed again boundedly; only a consistent successful result
+  containing `pass`/`skipping` satisfies the real-check path.
+- Every observation is bound to the exact published candidate: the draft PR
+  head must equal that candidate SHA both before and after the one-shot checks
+  query. Head movement fails closed, and evidence read for the old head is not
+  reused.
+
+The bounded loop uses one monotonic deadline from the separate finite
+required-CI observation timeout. The first observation is immediate; after a
+transient result, sleep is capped by the remaining deadline, and no further
+head/check observation begins once that deadline has expired. Persistent
+check-registration and pending states produce distinguishable `BLOCKED`
+diagnostics. This timeout is a safety boundary for passive observation, not a
+numeric repair budget. Polling creates no implementer or reviewer invocation,
+repair packet, review iteration, routing decision, compute escalation, or
+candidate mutation, and it does not change review/routing metrics.
+
+After required CI succeeds (including the recognized empty-required-set
+outcome), the existing fresh `origin/main` revalidation still runs. Safe
+post-publication movement rebuilds Mode C for the same exact published
+candidate and then uses this same bounded required-CI path again. The
+orchestrator does not poll `origin/main` in parallel with CI and adds no REST,
+branch-protection, or ruleset-discovery semantics to infer repository policy.
 
 A post-publication repair, once implemented, follows the evidence-invalidation
 and replay rule of §33 and never weakens a gate to make a check pass.
