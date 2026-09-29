@@ -7608,3 +7608,16 @@ tests — 19 passed; full pytest — 2901 passed; mypy — 133 source files clea
 and the post-publication candidate-changing repair limitation remain
 unchanged. The next fresh production TSK-0032 pilot remains a separate
 post-merge empirical validation action.
+
+## 2026-09-29 — TSK-0032: Retained terminal task spec cleanup (delivery summary)
+
+Delivered in draft PR #117: removed the retained standalone specs for terminal
+Done tasks TSK-0029, TSK-0030, and TSK-0031 while preserving their permanent
+terminal-registry facts, the open TSK-0023 spec, and the selected TSK-0032
+spec. Existing task-tracker and autonomous catalog semantics continue to accept
+missing terminal specs and satisfy the TSK-0032 dependency on Done TSK-0031
+from the registry. Verification passed: focused task-tracker tests, the full
+autonomous tooling suite, the architecture suite, full pytest, configured mypy,
+and `git diff --check`. Gameplay, tooling, tests, dependencies, and governance
+contracts were unchanged; removal of TSK-0032 after authoritative completion
+remains a separate reviewed change.
