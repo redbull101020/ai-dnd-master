@@ -633,6 +633,20 @@ def test_duplicate_checkpoint_field_rejected() -> None:
         _parse(_render(_replace("Execution checkpoints", body)))
 
 
+def test_checkpoint_field_labels_are_literal_not_markdown_prose() -> None:
+    literal = _checkpoint(1)
+    assert _parse(
+        _render(_replace("Execution checkpoints", literal))
+    ).checkpoints[0].objective == "Objective of checkpoint 1."
+
+    decorated = literal.replace("- Objective:", "- **Objective:**", 1)
+    with pytest.raises(
+        TaskSpecError,
+        match=r"content before its first field; expected '- Objective:'",
+    ):
+        _parse(_render(_replace("Execution checkpoints", decorated)))
+
+
 def test_multiline_checkpoint_field_continues_until_next_field() -> None:
     body = (
         "### CP-1 — Step\n"

@@ -30,6 +30,30 @@ sections in the order shown by the template below, concrete CP-1…CP-N fields,
 JSON-argv verification commands, and no unresolved execution requirement.
 Approval and publication are execution input, not invocation authority.
 
+Checkpoint headings and field labels are parser literals, not Markdown prose
+that may be reformatted. Every checkpoint must use this exact shape:
+
+```text
+### CP-N — <name>
+- Objective: ...
+- Required result: ...
+- Constraints: ...
+- Verification: ["python", ...]
+- Review focus: ...
+```
+
+The first non-blank content in each checkpoint block must start with literal
+`- Objective:`. All five labels must use exactly the spelling, case, and
+punctuation shown above: do not wrap them in `**...**`, `__...__`, or
+backticks, replace their list marker, turn them into headings, or put prose,
+another bullet, or any other content before `- Objective:`. A field body may
+continue across lines until the next recognized literal field. `Verification`
+remains one or more JSON argv arrays, never a shell command or prose. Before
+an approved task is ready for publication, its exact final file must pass
+`tools.autonomous_pr.task_spec.parse_task_document`; a parser error means the
+document is not ready. Successful parser validation is mandatory but does not
+replace semantic execution-readiness review.
+
 For orchestration or tooling tasks, refinement must put every already-known
 material boundary failure mode into binding task content — especially
 checkpoint `Constraints`, Acceptance criteria, and/or deterministic

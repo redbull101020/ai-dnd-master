@@ -34,10 +34,10 @@ IMPLEMENTER_COMMON_ARGS = (
     "--ephemeral",
     "--ignore-user-config",
     "--ignore-rules",
-    "--ask-for-approval",
-    "never",
     "--sandbox",
     "workspace-write",
+    "-c",
+    "approval_policy=never",
     "-c",
     "sandbox_workspace_write.network_access=false",
 )
@@ -51,10 +51,10 @@ REVIEWER_COMMON_ARGS = (
     "--ephemeral",
     "--ignore-user-config",
     "--ignore-rules",
-    "--ask-for-approval",
-    "never",
     "--sandbox",
     "read-only",
+    "-c",
+    "approval_policy=never",
 )
 REVIEWER_PROFILE_ARGS = {
     "deliberate": ("-c", "model_reasoning_effort=medium", "-"),
