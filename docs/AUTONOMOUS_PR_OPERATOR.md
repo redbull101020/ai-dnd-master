@@ -86,8 +86,8 @@ not pin, install, or update Codex.
 ## Fixed child profiles
 
 The implementer always uses non-interactive `codex exec`, ephemeral sessions,
-ignored user config and exec-policy rules, approval policy `never`, the
-`workspace-write` sandbox, and
+ignored user config and exec-policy rules, approval policy `never` through the
+fixed inline config `approval_policy=never`, the `workspace-write` sandbox, and
 `sandbox_workspace_write.network_access=false`. Its fixed profile mapping is:
 
 | Orchestrator profile | Codex reasoning effort |
@@ -97,8 +97,9 @@ ignored user config and exec-policy rules, approval policy `never`, the
 | `CRITICAL` | `high` |
 
 The designated reviewer always uses non-interactive `codex exec`, ephemeral
-sessions, ignored user config and exec-policy rules, approval policy `never`,
-and the `read-only` sandbox. Its fixed mapping is `DELIBERATE → medium` and
+sessions, ignored user config and exec-policy rules, approval policy `never`
+through the same fixed inline config `approval_policy=never`, and the
+`read-only` sandbox. Its fixed mapping is `DELIBERATE → medium` and
 `CRITICAL → high`.
 
 The launcher only supplies these mappings. Selection and escalation of the

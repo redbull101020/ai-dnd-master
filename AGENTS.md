@@ -88,6 +88,13 @@ independently mergeable scope. Do not delegate material architecture or
 contract choices to an autonomous implementer or reviewer. `docs/TASK.md` is
 the normative source for the detailed planning/refinement policy.
 
+When creating or editing an approved `docs/tasks/TSK-NNNN.md`, use the
+canonical checkpoint field labels literally, without Markdown decoration,
+and pass the exact final file through
+`tools.autonomous_pr.task_spec.parse_task_document` before claiming it is
+ready for publication or execution. Any parser error means the document is
+not ready, even when its rendered Markdown looks correct.
+
 During implementation:
 
 * make the smallest change that satisfies the task;

@@ -57,10 +57,10 @@ def _expected_generic_argv(repo: Path, executable: Path) -> tuple[str, ...]:
         "--implementer-arg=--ephemeral",
         "--implementer-arg=--ignore-user-config",
         "--implementer-arg=--ignore-rules",
-        "--implementer-arg=--ask-for-approval",
-        "--implementer-arg=never",
         "--implementer-arg=--sandbox",
         "--implementer-arg=workspace-write",
+        "--implementer-arg=-c",
+        "--implementer-arg=approval_policy=never",
         "--implementer-arg=-c",
         "--implementer-arg=sandbox_workspace_write.network_access=false",
         "--implementer-routine-arg=-c",
@@ -78,10 +78,10 @@ def _expected_generic_argv(repo: Path, executable: Path) -> tuple[str, ...]:
         "--reviewer-arg=--ephemeral",
         "--reviewer-arg=--ignore-user-config",
         "--reviewer-arg=--ignore-rules",
-        "--reviewer-arg=--ask-for-approval",
-        "--reviewer-arg=never",
         "--reviewer-arg=--sandbox",
         "--reviewer-arg=read-only",
+        "--reviewer-arg=-c",
+        "--reviewer-arg=approval_policy=never",
         "--reviewer-deliberate-arg=-c",
         "--reviewer-deliberate-arg=model_reasoning_effort=medium",
         "--reviewer-deliberate-arg=-",
@@ -427,10 +427,10 @@ def test_fixed_common_and_profile_arrays_are_exact() -> None:
         "--ephemeral",
         "--ignore-user-config",
         "--ignore-rules",
-        "--ask-for-approval",
-        "never",
         "--sandbox",
         "workspace-write",
+        "-c",
+        "approval_policy=never",
         "-c",
         "sandbox_workspace_write.network_access=false",
     )
@@ -439,7 +439,16 @@ def test_fixed_common_and_profile_arrays_are_exact() -> None:
         "deliberate": ("-c", "model_reasoning_effort=medium", "-"),
         "critical": ("-c", "model_reasoning_effort=high", "-"),
     }
-    assert launcher.REVIEWER_COMMON_ARGS[-2:] == ("--sandbox", "read-only")
+    assert launcher.REVIEWER_COMMON_ARGS == (
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--sandbox",
+        "read-only",
+        "-c",
+        "approval_policy=never",
+    )
     assert launcher.REVIEWER_PROFILE_ARGS == {
         "deliberate": ("-c", "model_reasoning_effort=medium", "-"),
         "critical": ("-c", "model_reasoning_effort=high", "-"),
@@ -470,6 +479,24 @@ def test_generic_argv_uses_equals_form_and_required_assertions(tmp_path: Path) -
     opaque = [token for token in argv if "-arg=" in token]
     assert opaque
     assert all(token.startswith("--") and "=" in token for token in opaque)
+
+
+def test_fixed_child_args_use_inline_approval_policy_without_legacy_flag() -> None:
+    for common in (launcher.IMPLEMENTER_COMMON_ARGS, launcher.REVIEWER_COMMON_ARGS):
+        assert "--ask-for-approval" not in common
+        assert common.count("approval_policy=never") == 1
+        policy_index = common.index("approval_policy=never")
+        assert common[policy_index - 1] == "-c"
+
+    assert launcher.IMPLEMENTER_COMMON_ARGS[
+        launcher.IMPLEMENTER_COMMON_ARGS.index("--sandbox") + 1
+    ] == "workspace-write"
+    assert launcher.REVIEWER_COMMON_ARGS[
+        launcher.REVIEWER_COMMON_ARGS.index("--sandbox") + 1
+    ] == "read-only"
+    assert "sandbox_workspace_write.network_access=false" in (
+        launcher.IMPLEMENTER_COMMON_ARGS
+    )
 
 
 def test_generic_argv_is_exact_including_all_forwarded_values(tmp_path: Path) -> None:
@@ -510,6 +537,7 @@ def test_composed_argv_has_no_dangerous_or_public_escape_tokens(tmp_path: Path) 
         "--provider",
         "--merge",
         "--auto-merge",
+        "--ask-for-approval",
     ):
         assert forbidden not in joined
 
