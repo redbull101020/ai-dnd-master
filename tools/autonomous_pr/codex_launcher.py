@@ -1,10 +1,10 @@
 """Deterministic Codex configuration for the AUTONOMOUS_PR generic CLI.
 
 This module is a narrow provider-specific adapter.  It validates the local
-operator environment and composes the reviewed Codex argv consumed by
-``tools.autonomous_pr.__main__``.  Repository workflow delegation is added by
-the next TSK-0037 checkpoint; this module deliberately contains no Git,
-GitHub, task-selection, or orchestrator logic.
+operator environment, materializes the fixed Codex configuration, and
+delegates in-process to the existing ``tools.autonomous_pr.__main__`` generic
+CLI.  It deliberately contains no Git, GitHub, task-selection, or orchestrator
+workflow logic.
 """
 
 from __future__ import annotations
