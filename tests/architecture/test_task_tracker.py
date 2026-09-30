@@ -24,6 +24,7 @@ from tools.autonomous_pr.task_spec import parse_task_document
 
 
 ROOT = Path(__file__).resolve().parents[2]
+AGENTS_MD = ROOT / "AGENTS.md"
 TASK_MD = ROOT / "docs" / "TASK.md"
 TASKS = ROOT / "docs" / "tasks"
 SHA = "a" * 40
@@ -134,6 +135,33 @@ def test_live_tracker_is_only_normative_guidance_and_terminal_registry() -> None
     )
     assert {task.task_id: task.status for task in registry.tasks}["TSK-0005"] is TaskStatus.SUPERSEDED
     assert {task.task_id: task.status for task in registry.tasks}["TSK-0028"] is TaskStatus.DONE
+
+
+def test_task_planning_policy_is_execution_ready_and_agent_discoverable() -> None:
+    task_text = TASK_MD.read_text(encoding="utf-8")
+    task_section = re.search(
+        r"(?ms)^### Task planning and refinement\s*\n"
+        r"(?P<body>.*?)(?=^#{1,3}\s|\Z)",
+        task_text,
+    )
+    assert task_section is not None
+    policy = " ".join(task_section.group("body").split())
+
+    assert "planning and refinement should produce" in policy
+    assert "execution-ready S/M" in policy
+    assert "L work must be decomposed before approval" in policy
+    assert "canonical architecture decision" in policy
+    assert "canonical sources and procedure" in policy
+    assert "before autonomous execution relies on it" in policy
+
+    agents_text = AGENTS_MD.read_text(encoding="utf-8")
+    agents_section = re.search(
+        r"(?ms)^### Task planning and refinement\s*\n"
+        r"(?P<body>.*?)(?=^#{1,3}\s|\Z)",
+        agents_text,
+    )
+    assert agents_section is not None
+    assert "docs/TASK.md" in agents_section.group("body")
 
 
 def test_id_allocation_uses_all_standalone_and_terminal_identities() -> None:
