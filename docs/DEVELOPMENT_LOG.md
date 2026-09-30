@@ -7649,3 +7649,14 @@ files clean; `git diff --check` clean. Configuration assertions remain reviewed
 claims rather than runtime proof; model pinning, stronger reviewer capability,
 and a real production launcher run remain out of scope, with first real use
 allowed only after merge.
+
+## 2026-09-30 — TSK-0038: Execution-ready task planning governance (delivery summary)
+
+Delivered in draft PR #121: planning/refinement governance now makes
+independently mergeable execution-ready S/M specs the default planning
+outcome, with concise agent-facing guidance in `AGENTS.md` and a narrow
+governance regression scoped to the new policy subsection. The operational
+`AUTONOMOUS_PR` runtime, parser/catalog, task metadata schema, gameplay, and
+human-only merge boundary remain unchanged. Verification passed: focused task
+tracker tests — 12 passed; architecture tests — 20 passed; `git diff --check`
+clean.

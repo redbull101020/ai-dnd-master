@@ -77,6 +77,17 @@ For architecture changes, multi-file features, or ambiguous tasks:
 4. Propose or follow the smallest sufficient change.
 5. Follow the phase/capability scope and order in `docs/ROADMAP.md`, then resolve one eligible standalone task by explicit ID or deterministic `NEXT` selection.
 
+### Task planning and refinement
+
+When creating or refining future tasks, target an independently mergeable,
+execution-ready S/M spec ordinarily suitable for `AUTONOMOUS_PR`. Before
+approval, resolve every applicable material scope, architecture, and contract
+decision; publish new canonical architecture decisions through the normal
+canonical procedure before execution depends on them; and decompose L or
+independently mergeable scope. Do not delegate material architecture or
+contract choices to an autonomous implementer or reviewer. `docs/TASK.md` is
+the normative source for the detailed planning/refinement policy.
+
 During implementation:
 
 * make the smallest change that satisfies the task;
