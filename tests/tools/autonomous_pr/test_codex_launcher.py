@@ -1,4 +1,6 @@
 import argparse
+import ast
+import inspect
 import os
 import subprocess
 from pathlib import Path
@@ -27,6 +29,75 @@ def _namespace(repo: Path, **overrides: object) -> argparse.Namespace:
     }
     values.update(overrides)
     return argparse.Namespace(**values)
+
+
+def _configuration(
+    tmp_path: Path, *, generic_argv: tuple[str, ...] = ("delegated",)
+) -> launcher.LauncherConfiguration:
+    return launcher.LauncherConfiguration(
+        selector="TSK-0037",
+        repo=tmp_path / "repo",
+        codex_executable=tmp_path / "codex.exe",
+        temp_directory=tmp_path / "dedicated-temp",
+        agent_timeout_seconds=1800.0,
+        verify_timeout_seconds=1800.0,
+        required_ci_timeout_seconds=600.0,
+        generic_argv=generic_argv,
+    )
+
+
+def _expected_generic_argv(repo: Path, executable: Path) -> tuple[str, ...]:
+    return (
+        "TSK-0037",
+        "--repo",
+        os.fspath(repo),
+        "--implementer",
+        os.fspath(executable),
+        "--implementer-arg=exec",
+        "--implementer-arg=--ephemeral",
+        "--implementer-arg=--ignore-user-config",
+        "--implementer-arg=--ignore-rules",
+        "--implementer-arg=--ask-for-approval",
+        "--implementer-arg=never",
+        "--implementer-arg=--sandbox",
+        "--implementer-arg=workspace-write",
+        "--implementer-arg=-c",
+        "--implementer-arg=sandbox_workspace_write.network_access=false",
+        "--implementer-routine-arg=-c",
+        "--implementer-routine-arg=model_reasoning_effort=low",
+        "--implementer-routine-arg=-",
+        "--implementer-deliberate-arg=-c",
+        "--implementer-deliberate-arg=model_reasoning_effort=medium",
+        "--implementer-deliberate-arg=-",
+        "--implementer-critical-arg=-c",
+        "--implementer-critical-arg=model_reasoning_effort=high",
+        "--implementer-critical-arg=-",
+        "--reviewer",
+        os.fspath(executable),
+        "--reviewer-arg=exec",
+        "--reviewer-arg=--ephemeral",
+        "--reviewer-arg=--ignore-user-config",
+        "--reviewer-arg=--ignore-rules",
+        "--reviewer-arg=--ask-for-approval",
+        "--reviewer-arg=never",
+        "--reviewer-arg=--sandbox",
+        "--reviewer-arg=read-only",
+        "--reviewer-deliberate-arg=-c",
+        "--reviewer-deliberate-arg=model_reasoning_effort=medium",
+        "--reviewer-deliberate-arg=-",
+        "--reviewer-critical-arg=-c",
+        "--reviewer-critical-arg=model_reasoning_effort=high",
+        "--reviewer-critical-arg=-",
+        "--reviewer-fresh-context-capable",
+        "--implementer-no-git-github-write-capability",
+        "--reviewer-no-git-github-write-capability",
+        "--agent-timeout-seconds",
+        "1800.0",
+        "--verify-timeout-seconds",
+        "1800.0",
+        "--required-ci-timeout-seconds",
+        "600.0",
+    )
 
 
 @pytest.mark.parametrize("selector", ["NEXT", "TSK-0001", "TSK-9999"])
@@ -401,6 +472,23 @@ def test_generic_argv_uses_equals_form_and_required_assertions(tmp_path: Path) -
     assert all(token.startswith("--") and "=" in token for token in opaque)
 
 
+def test_generic_argv_is_exact_including_all_forwarded_values(tmp_path: Path) -> None:
+    repo = (tmp_path / "repo").resolve()
+    executable = (tmp_path / "codex.exe").resolve()
+
+    argv = launcher._compose_generic_argv(
+        selector="TSK-0037",
+        repo=repo,
+        codex_executable=executable,
+        agent_timeout_seconds=1800.0,
+        verify_timeout_seconds=1800.0,
+        required_ci_timeout_seconds=600.0,
+    )
+
+    assert argv == _expected_generic_argv(repo, executable)
+    assert "--delivery-branch" not in argv
+
+
 def test_composed_argv_has_no_dangerous_or_public_escape_tokens(tmp_path: Path) -> None:
     argv = launcher._compose_generic_argv(
         selector="NEXT",
@@ -448,3 +536,185 @@ def test_configuration_preserves_codex_home_semantics(
     assert config.codex_executable == executable
     assert environment == initial
     assert ("CODEX_HOME" in environment) == ("CODEX_HOME" in initial)
+
+
+def test_main_delegates_exact_argv_once_and_returns_exit_code_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = (tmp_path / "repo").resolve()
+    executable = (tmp_path / "codex.exe").resolve()
+    expected = _expected_generic_argv(repo, executable)
+    configuration = _configuration(tmp_path, generic_argv=expected)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        launcher, "_prepare_configuration", lambda parsed: configuration
+    )
+
+    def generic_main(argv: list[str]) -> int:
+        calls.append(argv)
+        return 73
+
+    monkeypatch.setattr(launcher.generic_cli, "main", generic_main)
+
+    assert launcher.main(["TSK-0037"]) == 73
+    assert calls == [list(expected)]
+
+
+def test_generic_stdout_and_stderr_are_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configuration = _configuration(tmp_path)
+    monkeypatch.setattr(
+        launcher, "_prepare_configuration", lambda parsed: configuration
+    )
+
+    def generic_main(argv: list[str]) -> int:
+        print("generic stdout")
+        print("generic stderr", file=launcher.sys.stderr)
+        return 0
+
+    monkeypatch.setattr(launcher.generic_cli, "main", generic_main)
+
+    assert launcher.main(["NEXT"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "generic stdout\n"
+    assert captured.err == "generic stderr\n"
+
+
+def test_delegate_sets_temp_variables_and_restores_environment_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _configuration(tmp_path)
+    original = {"TEMP": "old-temp", "TMP": None, "TMPDIR": "old-tmpdir"}
+    monkeypatch.setenv("TEMP", original["TEMP"] or "")
+    monkeypatch.delenv("TMP", raising=False)
+    monkeypatch.setenv("TMPDIR", original["TMPDIR"] or "")
+    observed: dict[str, str | None] = {}
+
+    def generic_main(argv: list[str]) -> int:
+        observed.update({name: os.environ.get(name) for name in ("TEMP", "TMP", "TMPDIR")})
+        return 11
+
+    monkeypatch.setattr(launcher.generic_cli, "main", generic_main)
+
+    assert launcher._delegate(configuration) == 11
+    target = os.fspath(configuration.temp_directory)
+    assert observed == {"TEMP": target, "TMP": target, "TMPDIR": target}
+    assert os.environ["TEMP"] == "old-temp"
+    assert "TMP" not in os.environ
+    assert os.environ["TMPDIR"] == "old-tmpdir"
+
+
+def test_delegate_restores_environment_after_generic_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _configuration(tmp_path)
+    monkeypatch.delenv("TEMP", raising=False)
+    monkeypatch.setenv("TMP", "old-tmp")
+    monkeypatch.delenv("TMPDIR", raising=False)
+
+    def generic_main(argv: list[str]) -> int:
+        raise RuntimeError("generic failure")
+
+    monkeypatch.setattr(launcher.generic_cli, "main", generic_main)
+
+    with pytest.raises(RuntimeError, match="generic failure"):
+        launcher._delegate(configuration)
+    assert "TEMP" not in os.environ
+    assert os.environ["TMP"] == "old-tmp"
+    assert "TMPDIR" not in os.environ
+
+
+@pytest.mark.parametrize("codex_home", [None, "exact-auth-home"])
+def test_delegation_never_changes_codex_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, codex_home: str | None
+) -> None:
+    configuration = _configuration(tmp_path)
+    if codex_home is None:
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+    else:
+        monkeypatch.setenv("CODEX_HOME", codex_home)
+    observed: list[str | None] = []
+    monkeypatch.setattr(
+        launcher.generic_cli,
+        "main",
+        lambda argv: observed.append(os.environ.get("CODEX_HOME")) or 0,
+    )
+
+    launcher._delegate(configuration)
+
+    assert observed == [codex_home]
+    assert os.environ.get("CODEX_HOME") == codex_home
+    assert ("CODEX_HOME" in os.environ) == (codex_home is not None)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "invalid repository",
+        "wrong virtual environment",
+        "repository .codex is present",
+        "Codex executable not found",
+        "Codex identity mismatch",
+        "temp directory is not writable",
+    ],
+)
+def test_launcher_configuration_failures_return_two_without_delegation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    message: str,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fail(parsed: argparse.Namespace) -> launcher.LauncherConfiguration:
+        raise launcher.LauncherConfigurationError(message)
+
+    monkeypatch.setattr(launcher, "_prepare_configuration", fail)
+    monkeypatch.setattr(
+        launcher.generic_cli, "main", lambda argv: calls.append(argv) or 0
+    )
+
+    assert launcher.main(["NEXT"]) == 2
+    assert calls == []
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"codex launcher configuration error: {message}\n"
+
+
+def test_argparse_failure_never_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        launcher.generic_cli, "main", lambda argv: calls.append(argv) or 0
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        launcher.main(["not-a-selector"])
+    assert exc_info.value.code == 2
+    assert calls == []
+
+
+def test_launcher_has_no_direct_orchestrator_import_or_workflow_calls() -> None:
+    tree = ast.parse(inspect.getsource(launcher))
+    imported_modules = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imported_modules.update(
+        node.module or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    )
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert not any(module.endswith("orchestrator") for module in imported_modules)
+    assert "run" not in called_names
+    assert "OrchestratorConfig" not in called_names
+    assert "git" not in called_names
+    assert "gh" not in called_names

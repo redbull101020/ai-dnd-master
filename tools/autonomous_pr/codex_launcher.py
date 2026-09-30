@@ -21,6 +21,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import __main__ as generic_cli
+
 
 DEFAULT_AGENT_TIMEOUT_SECONDS = 1800.0
 DEFAULT_VERIFY_TIMEOUT_SECONDS = 1800.0
@@ -360,3 +362,36 @@ def _prepare_configuration(
         required_ci_timeout_seconds=args.required_ci_timeout_seconds,
         generic_argv=generic_argv,
     )
+
+
+def _delegate(configuration: LauncherConfiguration) -> int:
+    temp_value = os.fspath(configuration.temp_directory)
+    variable_names = ("TEMP", "TMP", "TMPDIR")
+    previous_values = {
+        name: (name in os.environ, os.environ.get(name)) for name in variable_names
+    }
+    try:
+        for name in variable_names:
+            os.environ[name] = temp_value
+        return generic_cli.main(list(configuration.generic_argv))
+    finally:
+        for name, (was_present, previous_value) in previous_values.items():
+            if was_present:
+                assert previous_value is not None
+                os.environ[name] = previous_value
+            else:
+                os.environ.pop(name, None)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parsed = _parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        configuration = _prepare_configuration(parsed)
+    except LauncherConfigurationError as exc:
+        print(f"codex launcher configuration error: {exc}", file=sys.stderr)
+        return 2
+    return _delegate(configuration)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
