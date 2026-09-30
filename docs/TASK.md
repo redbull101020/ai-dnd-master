@@ -36,6 +36,74 @@ checkpoint `Constraints`, Acceptance criteria, and/or deterministic
 `Verification`, as appropriate. Advisory `Review focus` may direct attention
 but does not make a requirement binding by itself.
 
+### Task planning and refinement
+
+Ordinary future planning and refinement should produce one or more
+independently mergeable, execution-ready S/M Task Execution Specs that are
+ordinarily suitable for `AUTONOMOUS_PR`. Execution readiness is a quality of
+the task contract; `MANUAL` and `AUTONOMOUS_PR` are delivery and authority
+modes. Choosing `MANUAL` therefore does not lower the execution-readiness
+quality bar, and publication or approval remains distinct from the separate
+explicit invocation required to activate `AUTONOMOUS_PR`.
+
+Planning must inspect the current canonical sources and implementation and
+resolve every applicable material decision before approval. A decision is
+material when, without it, an implementer or reviewer would have to do any of
+the following independently:
+
+- expand or choose scope;
+- create or change a canonical contract, or choose State ownership;
+- invent a material Command, Event, or Result contract;
+- choose material validation or error behaviour;
+- choose persistence, schema, Event ordering, causality, or atomicity
+  behaviour;
+- change an observable required result or the dependency set; or
+- add an unapproved production dependency.
+
+This checklist is applicability-based: a task need not involve State, Events,
+persistence, schema, or any other listed concern when that concern is outside
+its scope. An unresolved material decision means that the work remains in
+planning/refinement and cannot become an approved executable task. `draft` is
+the sole existing state for a task file whose refinement is incomplete; this
+policy adds no planning/refinement metadata or lifecycle status. Implementers
+retain freedom over local, non-material coding choices within the boundaries
+defined by `AUTONOMOUS_PR_HARNESS.md` §24.
+
+Approved executable work remains S/M, and L work must be decomposed before
+approval. Decomposition follows cohesion, independent mergeability,
+independently observable acceptance, and independent review and verification
+boundaries; file count, line count, or checkpoint count is not a mechanical
+split threshold. Checkpoints remain internal review-risk boundaries within
+one coherent mergeable TSK, not miniature task IDs.
+
+A separate architecture-only TSK is an exception, not a mandatory
+define-then-implement sequence. It is justified when the architecture or
+documentation outcome is independently valuable and reviewable, or must be
+accepted separately before publication of the implementation task. A new
+canonical architecture decision must be published through the normal
+canonical sources and procedure before autonomous execution relies on it. A
+resolved task-specific decision that creates no new canonical contract may
+instead live in the approved TSK's binding sections.
+
+When one planning cycle resolves both a new canonical architecture decision
+and the resulting implementation-ready task spec(s), the canonical
+architecture/decision updates and resulting approved TSK file(s) may be
+prepared and reviewed together in one `MANUAL` planning/publication PR,
+subject to the existing document-ownership and authority rules. Architecture
+work alone does not require a separate architecture-only TSK or a separate
+architecture publication PR. The resulting approved task may rely on that
+decision only after the canonical truth is published on `main`; publication
+or approval still does not activate `AUTONOMOUS_PR`.
+
+Planning conversation, chat, and history are not durable project sources of
+truth. Before execution, load-bearing decisions must be transferred to
+repository sources. In particular, a load-bearing task-specific decision
+cannot exist only in informational `Context / References` or `Known
+constraints / edge cases`, or in advisory `Review focus`; it must also appear
+in an applicable binding section under the existing §24 boundary. The
+existing nine-section Task Execution Spec and metadata schema remain
+unchanged.
+
 ## 2. Identity, dependencies, and deterministic selection
 
 Task IDs are never reused. Allocate `max(standalone IDs, terminal IDs) + 1`;
@@ -60,8 +128,13 @@ reselects because an unrelated file changed.
 ## 3. Workflow and authority
 
 ```text
-discussion and approval
-→ publish one reviewed task file on main
+Roadmap capability / requested change
+→ planning and refinement
+→ inspect current canonical sources and implementation
+→ resolve applicable material decisions
+→ persist new canonical decisions when required
+→ decompose L / independently mergeable work
+→ approve and publish reviewed execution-ready S/M task spec(s) on main
 → separate explicit AUTONOMOUS_PR <ID|NEXT> invocation
 → fixed task / checkpoints / independent review / adaptive repair
 → Full verification
@@ -114,7 +187,7 @@ Until that reconciliation reaches authoritative `main`, the task is not
 
 ## Goal
 
-Concrete outcome.
+Concrete observable outcome with no unresolved material design choice.
 
 ## Context / References
 
@@ -122,19 +195,20 @@ Authoritative references.
 
 ## Scope
 
-- Included work.
+- Exact bounded execution scope.
 
 ## Out of scope
 
-- Explicit exclusions.
+- Explicit scope exclusions.
 
 ## Approved implementation approach
 
-Approved approach and binding decisions.
+Binding approach and resolved task-specific decisions. Cite canonical
+architecture; do not create a new canonical contract here.
 
 ## Acceptance criteria
 
-- Observable acceptance result.
+- Observable deterministic completion conditions.
 
 ## Execution checkpoints
 
