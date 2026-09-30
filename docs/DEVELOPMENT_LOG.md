@@ -7635,3 +7635,17 @@ passed with `python -m pytest tests/architecture/test_task_tracker.py`, `python
 -m pytest tests/tools/autonomous_pr`, `python -m pytest tests/architecture`,
 `python -m pytest`, `python -m mypy src/dnd_engine tools/autonomous_pr`, and
 `git diff --check`.
+
+## 2026-09-30 — TSK-0037: Deterministic Codex operator launcher (delivery summary)
+
+Delivered in draft PR #120: added a configuration-isolated Codex operator
+launcher that validates the repository environment, materializes fixed
+implementer/reviewer profiles, and delegates in-process to the unchanged
+generic `AUTONOMOUS_PR` CLI, plus focused tests and concise operator guidance.
+Generic harness/orchestrator semantics, authority, gameplay, and dependencies
+remain unchanged. Verification passed: tooling tests — 746 passed;
+architecture tests — 19 passed; full pytest — 3044 passed; mypy — 134 source
+files clean; `git diff --check` clean. Configuration assertions remain reviewed
+claims rather than runtime proof; model pinning, stronger reviewer capability,
+and a real production launcher run remain out of scope, with first real use
+allowed only after merge.

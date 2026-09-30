@@ -195,3 +195,4 @@ Concrete known constraints.
 | `TSK-0034` | `Done` | PR #114 | Harden AUTONOMOUS_PR Mode C authoritative evidence handoff and replay freshness |
 | `TSK-0035` | `Done` | PR #116 | Stabilize AUTONOMOUS_PR required-CI observation across check registration and pending states |
 | `TSK-0036` | `Done` | PR #118 | Preserve bounded structured rationale for explicit AUTONOMOUS_PR reviewer BLOCKED verdicts |
+| `TSK-0037` | `Done` | PR #120 | Add a deterministic Codex operator launcher for one-command AUTONOMOUS_PR execution |

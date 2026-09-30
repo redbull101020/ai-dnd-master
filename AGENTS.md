@@ -308,6 +308,17 @@ A terminal `STOP` in the flow below, or a designated reviewer verdict of
 `BLOCKED` verdict requires a new explicit invocation from the user; it is
 never resumed automatically and never inferred from context.
 
+#### Codex operator dispatch
+
+Only when the current user instruction already satisfies **Valid invocation**
+above, use the repository Codex operator launcher described in
+[`docs/AUTONOMOUS_PR_OPERATOR.md`](docs/AUTONOMOUS_PR_OPERATOR.md). The
+launcher is convenience configuration, not authorization. The outer Codex
+must let the harness own the bounded workflow and must not independently
+implement, review, commit, push, or merge in parallel around it. After the
+harness returns a terminal result, the outer Codex reports that result and
+stops. A new run or a merge requires a separate user instruction.
+
 #### Bounded authority
 
 One valid `AUTONOMOUS_PR` invocation authorises, for the exact task selected
