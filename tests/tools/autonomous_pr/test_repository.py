@@ -924,7 +924,8 @@ def test_isolated_reviewer_workspace_rejects_parent_symlink_to_external_director
     candidate = parent / "context.txt"
     parent.mkdir()
     candidate.write_bytes(b"indexed candidate\n")
-    _run_git(["add", "data/context.txt"], cwd=work)
+    (work / ".gitignore").write_text("/data\n", encoding="utf-8")
+    _run_git(["add", "-f", "data/context.txt"], cwd=work)
     candidate.unlink()
     parent.rmdir()
     external = tmp_path / "outside"
