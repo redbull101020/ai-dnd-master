@@ -52,6 +52,7 @@ GOBLIN_PAYLOAD: dict[str, object] = {
         "charisma": 8,
     },
     "armorClass": 15,
+    "walkingSpeed": 30,
     "attacks": [SCIMITAR_ATTACK_PAYLOAD],
 }
 
@@ -89,6 +90,7 @@ def test_production_default_reads_packaged_goblin() -> None:
     assert monster.version == 1
     assert monster.name == "Goblin"
     assert monster.armor_class == 15
+    assert monster.walking_speed == 30
     assert monster.ability_scores.strength == 8
     assert monster.ability_scores.dexterity == 14
     assert monster.ability_scores.constitution == 10
@@ -799,3 +801,46 @@ def test_unsupported_scope_under_valid_root_remains_not_found(
             definition_id="goblin",
             expected_type=MonsterDefinition,
         )
+
+
+@pytest.mark.parametrize("speed", [None, True, False, "30", 30.0, -1, [], {}])
+def test_packaged_walking_speed_rejects_invalid_values(
+    tmp_path: Path, speed: object,
+) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["walkingSpeed"] = speed
+    write_definition(tmp_path, payload=payload)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        PackagedDefinitionSource(resources_root=tmp_path).get_definition(
+            ruleset_id="dnd_5e", ruleset_version="5.1",
+            definition_id="goblin", expected_type=MonsterDefinition,
+        )
+
+
+def test_packaged_walking_speed_is_required(tmp_path: Path) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    del payload["walkingSpeed"]
+    write_definition(tmp_path, payload=payload)
+
+    with pytest.raises(InvalidPackagedDefinitionError):
+        PackagedDefinitionSource(resources_root=tmp_path).get_definition(
+            ruleset_id="dnd_5e", ruleset_version="5.1",
+            definition_id="goblin", expected_type=MonsterDefinition,
+        )
+
+
+@pytest.mark.parametrize("speed", [0, 30, 31, 10**100])
+def test_packaged_walking_speed_accepts_nonnegative_exact_int(
+    tmp_path: Path, speed: int,
+) -> None:
+    payload = dict(GOBLIN_PAYLOAD)
+    payload["walkingSpeed"] = speed
+    write_definition(tmp_path, payload=payload)
+
+    monster = PackagedDefinitionSource(resources_root=tmp_path).get_definition(
+        ruleset_id="dnd_5e", ruleset_version="5.1",
+        definition_id="goblin", expected_type=MonsterDefinition,
+    )
+
+    assert monster.walking_speed == speed

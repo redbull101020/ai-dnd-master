@@ -12,6 +12,7 @@
     "charisma": 8
   },
   "armorClass": 15,
+  "walkingSpeed": 30,
   "attacks": [
     {
       "actionId": "scimitar",

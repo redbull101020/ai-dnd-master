@@ -11,10 +11,16 @@ class MonsterDefinition(Definition):
     ability_scores: AbilityScores
     armor_class: int
     attacks: tuple[MonsterAttackDefinition, ...] = ()
+    walking_speed: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.armor_class) is not int:
             raise TypeError("armor_class must be an int")
+        if self.walking_speed is not None:
+            if type(self.walking_speed) is not int:
+                raise TypeError("walking_speed must be an int or None")
+            if self.walking_speed < 0:
+                raise ValueError("walking_speed must be >= 0")
         if type(self.attacks) is not tuple:
             raise TypeError("attacks must be a tuple")
         if not all(

@@ -29,7 +29,10 @@ _ABILITY_SCORE_FIELDS = (
     "charisma",
 )
 _MONSTER_FIELDS = frozenset(
-    {"type", "id", "version", "name", "abilityScores", "armorClass", "attacks"}
+    {
+        "type", "id", "version", "name", "abilityScores", "armorClass",
+        "attacks", "walkingSpeed",
+    }
 )
 _MONSTER_ATTACK_FIELDS = frozenset(
     {
@@ -274,6 +277,7 @@ def _decode_monster(payload: dict[str, Any], definition_id: str) -> MonsterDefin
     ability_scores = _require_ability_scores(payload, definition_id)
     armor_class = _require_int(payload, "armorClass", definition_id)
     attacks = _require_monster_attacks(payload, definition_id)
+    walking_speed = _require_int(payload, "walkingSpeed", definition_id)
     try:
         return MonsterDefinition(
             id=payload_id,
@@ -282,6 +286,7 @@ def _decode_monster(payload: dict[str, Any], definition_id: str) -> MonsterDefin
             ability_scores=ability_scores,
             armor_class=armor_class,
             attacks=attacks,
+            walking_speed=walking_speed,
         )
     except (TypeError, ValueError) as error:
         raise InvalidPackagedDefinitionError(
