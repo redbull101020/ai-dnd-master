@@ -40,10 +40,11 @@ import shutil
 import stat
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 from .model import TaskFileRecord
 
@@ -53,6 +54,7 @@ _DEFAULT_TIMEOUT_SECONDS = 60.0
 _EXACT_COMMIT_SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _TASK_FILE_NAME = re.compile(r"TSK-.*\.md")
 _REGULAR_FILE_MODES = frozenset({"100644", "100755"})
+_REVIEWER_WORKSPACE_PREFIX = "ai-dnd-reviewer-"
 
 
 class RepositoryError(Exception):
@@ -192,6 +194,174 @@ class RepositoryFingerprint:
     branch: str
     head_sha: str
     content_digest: str
+
+
+def _remove_reviewer_workspace(root: Path) -> None:
+    """Remove one disposable reviewer root and prove that it is gone."""
+
+    try:
+        shutil.rmtree(root)
+    except OSError as exc:
+        raise RepositoryError(
+            f"could not remove disposable reviewer workspace: {root}"
+        ) from exc
+    if os.path.lexists(root):
+        raise RepositoryError(
+            f"disposable reviewer workspace still exists after cleanup: {root}"
+        )
+
+
+def _reject_reviewer_snapshot_link_components(
+    authoritative_root: Path, relative: Path, *, raw_path: str
+) -> None:
+    """Reject symlink or junction components below the authoritative root."""
+
+    current = authoritative_root
+    for part in relative.parts:
+        current /= part
+        is_junction = getattr(current, "is_junction", None)
+        if current.is_symlink() or (
+            is_junction is not None and bool(is_junction())
+        ):
+            raise RepositoryError(
+                "disposable reviewer workspace only supports regular candidate "
+                f"files; unsafe entry: {raw_path!r}"
+            )
+
+
+def _materialize_reviewer_snapshot(repo: Path, workspace: Path) -> None:
+    """Copy the current candidate surface without sharing repository metadata."""
+
+    try:
+        authoritative_root = repo.resolve(strict=True)
+    except OSError as exc:
+        raise RepositoryError(
+            f"could not resolve authoritative repository root: {repo}"
+        ) from exc
+
+    listed = _git(
+        authoritative_root,
+        ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    )
+    relative_paths = sorted(path for path in listed.split("\x00") if path)
+    for raw_path in relative_paths:
+        relative = Path(raw_path)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or any(part.casefold() == ".git" for part in relative.parts)
+        ):
+            raise RepositoryError(
+                f"unsafe path cannot enter disposable reviewer workspace: {raw_path!r}"
+            )
+        if relative.as_posix() == "review.patch":
+            continue
+
+        source = authoritative_root / relative
+        _reject_reviewer_snapshot_link_components(
+            authoritative_root, relative, raw_path=raw_path
+        )
+        try:
+            resolved_source = source.resolve(strict=True)
+        except FileNotFoundError:
+            # A tracked deletion is part of the candidate and must remain absent
+            # from the snapshot.
+            continue
+        except OSError as exc:
+            raise RepositoryError(
+                f"could not resolve candidate path: {raw_path!r}"
+            ) from exc
+        if not resolved_source.is_relative_to(authoritative_root):
+            raise RepositoryError(
+                "candidate path resolves outside authoritative repository: "
+                f"{raw_path!r}"
+            )
+        if not resolved_source.is_file():
+            raise RepositoryError(
+                "disposable reviewer workspace only supports regular candidate "
+                f"files; unsafe entry: {raw_path!r}"
+            )
+
+        destination = workspace / relative
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(resolved_source, destination)
+            if resolved_source.read_bytes() != destination.read_bytes():
+                raise RepositoryError(
+                    "disposable reviewer workspace copy is not byte-identical "
+                    f"for {raw_path!r}"
+                )
+        except OSError as exc:
+            raise RepositoryError(
+                "could not materialize disposable reviewer workspace entry "
+                f"{raw_path!r}"
+            ) from exc
+
+    if os.path.lexists(workspace / ".git"):
+        raise RepositoryError(
+            "disposable reviewer workspace unexpectedly contains Git metadata"
+        )
+
+    _git(workspace, ["init", "--quiet"])
+    git_common_dir_value = _git(workspace, ["rev-parse", "--git-common-dir"]).strip()
+    git_common_dir = Path(git_common_dir_value)
+    if not git_common_dir.is_absolute():
+        git_common_dir = workspace / git_common_dir
+    try:
+        resolved_common_dir = git_common_dir.resolve(strict=True)
+    except OSError as exc:
+        raise RepositoryError(
+            "could not resolve disposable reviewer Git metadata"
+        ) from exc
+    if not resolved_common_dir.is_relative_to(workspace.resolve(strict=True)):
+        raise RepositoryError(
+            "disposable reviewer workspace shares Git metadata outside its root"
+        )
+    if _git(workspace, ["remote"]).strip():
+        raise RepositoryError(
+            "disposable reviewer workspace unexpectedly has a Git remote"
+        )
+
+
+@contextmanager
+def isolated_reviewer_workspace(repo: Path) -> Iterator[Path]:
+    """Yield a disposable candidate snapshot with no shared ``.git`` metadata.
+
+    The snapshot contains the current tracked and visible untracked working-file
+    bytes, including staged/unstaged candidate content, but excludes ignored
+    files and the orchestrator-owned ``review.patch``. It receives a fresh,
+    independent local ``.git`` directory solely so command-line reviewers that
+    require a trusted repository can start; that metadata has no remote and no
+    path to the authoritative repository's index, refs, or objects. The snapshot
+    is contextual inspection input only, never a source of truth. Any preparation
+    or cleanup uncertainty raises :class:`RepositoryError`.
+    """
+
+    authoritative = repo.resolve(strict=True)
+    try:
+        root = Path(tempfile.mkdtemp(prefix=_REVIEWER_WORKSPACE_PREFIX)).resolve(
+            strict=True
+        )
+    except OSError as exc:
+        raise RepositoryError("could not create disposable reviewer workspace") from exc
+
+    try:
+        if root == authoritative or root.is_relative_to(authoritative):
+            raise RepositoryError(
+                "disposable reviewer workspace must be outside the authoritative "
+                "repository"
+            )
+        workspace = root / "snapshot"
+        workspace.mkdir()
+        _materialize_reviewer_snapshot(authoritative, workspace)
+    except BaseException:
+        _remove_reviewer_workspace(root)
+        raise
+
+    try:
+        yield workspace
+    finally:
+        _remove_reviewer_workspace(root)
 
 
 def _run(

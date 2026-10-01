@@ -98,9 +98,30 @@ fixed inline config `approval_policy=never`, the `workspace-write` sandbox, and
 
 The designated reviewer always uses non-interactive `codex exec`, ephemeral
 sessions, ignored user config and exec-policy rules, approval policy `never`
-through the same fixed inline config `approval_policy=never`, and the
-`read-only` sandbox. Its fixed mapping is `DELIBERATE → medium` and
-`CRITICAL → high`.
+through the fixed inline config `approval_policy=never`, the `workspace-write`
+sandbox, and `sandbox_workspace_write.network_access=false`. There is no
+approval or permission-escalation path. This `workspace-write` boundary is the
+disposable reviewer inspection snapshot, never the authoritative delivery
+worktree. Before every designated review, the orchestrator creates that
+disposable filesystem snapshot of the exact current candidate, with no shared
+`.git` metadata, and runs the reviewer there. The snapshot has its own temporary
+local Git metadata only to satisfy Codex's repository trust check; it has no
+remote and no link to the authoritative repository's index, refs, or objects.
+The reviewer may mutate only this non-authoritative snapshot; those mutations
+never become candidate or repair input, and the snapshot is removed before a
+verdict is accepted. The reviewer subprocess receives no inherited GitHub
+token, Git/SSH command override, askpass, or SSH-agent variables; `gh` uses an
+empty snapshot-local config, Git credential helpers and interactive prompts are
+disabled, and the reviewer sandbox has network access explicitly disabled.
+The network restriction is the primary provider-level barrier to external
+Git/GitHub writes; credential stripping remains defense in depth. Codex
+authentication state remains available independently.
+The authoritative delivery
+worktree, its index/refs/objects, and repository-root `review.patch` remain
+outside that inspection surface and are fingerprinted before and after the
+review; the snapshot is removed before the verdict is accepted. The outer user
+is not asked to approve reviewer commands interactively. The fixed mapping
+remains `DELIBERATE → medium` and `CRITICAL → high`.
 
 The launcher only supplies these mappings. Selection and escalation of the
 reasoning-effort profile remain deterministic orchestrator responsibilities;
@@ -108,6 +129,16 @@ see `AUTONOMOUS_PR_HARNESS.md` §36. The fresh-context and no-Git/GitHub-write
 flags passed to the generic CLI are reviewed configuration assertions for
 these exact profiles. They are not runtime proof derived from the executable
 name or version output; the harness guards remain defense in depth.
+
+On native Windows, the launcher also appends the fixed inline config
+`windows.sandbox=elevated` to both child roles. Autonomous children intentionally
+use `--ignore-user-config`, so the launcher selects the native Windows sandbox
+backend explicitly instead of depending on mutable user configuration. This
+backend selector does not broaden the security envelope: both roles remain
+`workspace-write` with `approval_policy=never` and
+`sandbox_workspace_write.network_access=false`; the reviewer workspace remains
+the disposable snapshot described above. POSIX launches never receive this
+Windows-specific config.
 
 ## Temporary files, credentials, and host permissions
 

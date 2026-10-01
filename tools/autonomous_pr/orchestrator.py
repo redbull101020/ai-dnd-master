@@ -19,6 +19,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -385,6 +386,53 @@ class _V2ClosureMaterialBaseline:
     material_paths: frozenset[str]
 
 
+_REVIEWER_CREDENTIAL_ENV_NAMES = frozenset(
+    {
+        "gh_token",
+        "github_token",
+        "gh_enterprise_token",
+        "github_enterprise_token",
+        "github_pat",
+        "git_askpass",
+        "git_config_parameters",
+        "git_ssh",
+        "git_ssh_command",
+        "ssh_askpass",
+        "ssh_agent_pid",
+        "ssh_auth_sock",
+    }
+)
+
+
+def _isolated_reviewer_environment(
+    spec: AgentInvocationSpec, workspace: Path
+) -> dict[str, str]:
+    """Preserve agent runtime state while removing Git/GitHub credentials."""
+
+    source = os.environ if spec.env is None else spec.env
+    environment = {
+        key: value
+        for key, value in source.items()
+        if key.casefold() not in _REVIEWER_CREDENTIAL_ENV_NAMES
+        and not key.casefold().startswith("git_config_key_")
+        and not key.casefold().startswith("git_config_value_")
+    }
+    environment.update(
+        {
+            "GH_CONFIG_DIR": str(workspace / ".reviewer-gh-config"),
+            "GH_PROMPT_DISABLED": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GCM_INTERACTIVE": "Never",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "",
+        }
+    )
+    return environment
+
+
 def _run_v2_designated_review(
     config: OrchestratorConfig,
     review_input: str,
@@ -393,17 +441,33 @@ def _run_v2_designated_review(
     context: str,
     reviewer_spec: AgentInvocationSpec | None = None,
 ) -> StructuredReviewResult:
-    """Materialize and protect the exact patch supplied to one reviewer."""
+    """Run one reviewer in a disposable snapshot and protect authoritative state."""
 
     repository.materialize_review_patch(config.repo, patch)
     fingerprint = repository.capture_fingerprint(config.repo)
-    review = run_structured_reviewer(
-        reviewer_spec or config.reviewer_spec, review_input
-    )
-    repository.verify_fingerprint_unchanged(
-        config.repo, fingerprint, context=context
-    )
-    repository.verify_materialized_review_patch(config.repo, patch)
+    try:
+        with repository.isolated_reviewer_workspace(config.repo) as workspace:
+            # Snapshot preparation must itself leave the exact authoritative
+            # candidate and audit artifact unchanged before the reviewer starts.
+            repository.verify_fingerprint_unchanged(
+                config.repo, fingerprint, context=f"{context} workspace preparation"
+            )
+            repository.verify_materialized_review_patch(config.repo, patch)
+            isolated_spec = replace(
+                reviewer_spec or config.reviewer_spec,
+                cwd=workspace,
+                env=_isolated_reviewer_environment(
+                    reviewer_spec or config.reviewer_spec, workspace
+                ),
+            )
+            review = run_structured_reviewer(isolated_spec, review_input)
+    finally:
+        # The context manager has already removed the disposable snapshot here.
+        # These guards run for every verdict and every reviewer/preparation error.
+        repository.verify_fingerprint_unchanged(
+            config.repo, fingerprint, context=context
+        )
+        repository.verify_materialized_review_patch(config.repo, patch)
     return review
 
 
@@ -1084,6 +1148,12 @@ def _v2_designated_review_protocol(gate_name: str, applicability: str) -> str:
 
     return (
         "DESIGNATED_REVIEW_PROTOCOL:\n"
+        "CURRENT_PATCH supplied in this prompt is the exact authoritative review "
+        "artifact for this invocation. Review that supplied text directly; do not "
+        "require reopening repository-root review.patch merely to establish its "
+        "contents or digest. Repository inspection commands are for contextual "
+        "source and contract inspection. The repository-root review.patch remains "
+        "the orchestrator-owned audit artifact and byte-identity guard.\n"
         "Before returning a verdict, determine the binding requirements "
         "applicable to this gate. Review the complete current review artifact "
         "and all supplied deterministic evidence. On a repeat review, first "
