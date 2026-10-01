@@ -52,14 +52,17 @@ REVIEWER_COMMON_ARGS = (
     "--ignore-user-config",
     "--ignore-rules",
     "--sandbox",
-    "read-only",
+    "workspace-write",
     "-c",
     "approval_policy=never",
+    "-c",
+    "sandbox_workspace_write.network_access=false",
 )
 REVIEWER_PROFILE_ARGS = {
     "deliberate": ("-c", "model_reasoning_effort=medium", "-"),
     "critical": ("-c", "model_reasoning_effort=high", "-"),
 }
+WINDOWS_SANDBOX_ARGS = ("-c", "windows.sandbox=elevated")
 
 _SELECTOR_PATTERN = re.compile(r"TSK-[0-9]{4}")
 _CODEX_IDENTITY_PATTERN = re.compile(r"(?:^|\s)codex-cli\s+(\S+)")
@@ -292,6 +295,14 @@ def _opaque_arguments(option: str, values: Sequence[str]) -> list[str]:
     return [f"{option}={value}" for value in values]
 
 
+def _platform_child_args(
+    common_args: Sequence[str], *, windows: bool
+) -> tuple[str, ...]:
+    if windows:
+        return (*common_args, *WINDOWS_SANDBOX_ARGS)
+    return tuple(common_args)
+
+
 def _compose_generic_argv(
     *,
     selector: str,
@@ -300,10 +311,18 @@ def _compose_generic_argv(
     agent_timeout_seconds: float,
     verify_timeout_seconds: float,
     required_ci_timeout_seconds: float,
+    windows: bool | None = None,
 ) -> tuple[str, ...]:
     executable = os.fspath(codex_executable)
+    native_windows = _is_windows() if windows is None else windows
+    implementer_common_args = _platform_child_args(
+        IMPLEMENTER_COMMON_ARGS, windows=native_windows
+    )
+    reviewer_common_args = _platform_child_args(
+        REVIEWER_COMMON_ARGS, windows=native_windows
+    )
     argv = [selector, "--repo", os.fspath(repo), "--implementer", executable]
-    argv.extend(_opaque_arguments("--implementer-arg", IMPLEMENTER_COMMON_ARGS))
+    argv.extend(_opaque_arguments("--implementer-arg", implementer_common_args))
     for profile in ("routine", "deliberate", "critical"):
         argv.extend(
             _opaque_arguments(
@@ -311,7 +330,7 @@ def _compose_generic_argv(
             )
         )
     argv.extend(("--reviewer", executable))
-    argv.extend(_opaque_arguments("--reviewer-arg", REVIEWER_COMMON_ARGS))
+    argv.extend(_opaque_arguments("--reviewer-arg", reviewer_common_args))
     for profile in ("deliberate", "critical"):
         argv.extend(
             _opaque_arguments(

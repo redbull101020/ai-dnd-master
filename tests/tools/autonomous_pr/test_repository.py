@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -801,6 +802,270 @@ def test_materialized_review_patch_is_exact_and_mutation_is_rejected(
     (work / "review.patch").write_bytes(b"mutated\n")
     with pytest.raises(RepositoryError, match="no longer byte-identical"):
         repo_module.verify_materialized_review_patch(work, patch)
+
+
+def test_isolated_reviewer_workspace_copies_candidate_without_shared_git_metadata(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    (work / "README.md").write_text("candidate tracked\n", encoding="utf-8")
+    (work / "context.txt").write_text("candidate untracked\n", encoding="utf-8")
+    (work / "review.patch").write_text("authoritative audit\n", encoding="utf-8")
+    fingerprint = repo_module.capture_fingerprint(work)
+    refs_before = _run_git(["show-ref"], cwd=work)
+    index_value = Path(_run_git(["rev-parse", "--git-path", "index"], cwd=work).strip())
+    index_path = index_value if index_value.is_absolute() else work / index_value
+    index_before = index_path.read_bytes()
+    authoritative_bytes = (work / "README.md").read_bytes()
+
+    with repo_module.isolated_reviewer_workspace(work) as workspace:
+        root = workspace.parent
+        assert workspace.resolve() != work.resolve()
+        assert (workspace / ".git").is_dir()
+        common_dir_value = Path(
+            _run_git(["rev-parse", "--git-common-dir"], cwd=workspace).strip()
+        )
+        common_dir = (
+            common_dir_value
+            if common_dir_value.is_absolute()
+            else workspace / common_dir_value
+        ).resolve()
+        assert common_dir.is_relative_to(workspace.resolve())
+        assert not common_dir.is_relative_to((work / ".git").resolve())
+        assert _run_git(["remote"], cwd=workspace) == ""
+        assert (workspace / "README.md").read_bytes() == authoritative_bytes
+        assert (workspace / "context.txt").read_text(encoding="utf-8") == (
+            "candidate untracked\n"
+        )
+        assert not (workspace / "review.patch").exists()
+
+        (workspace / "README.md").write_text("reviewer mutation\n", encoding="utf-8")
+        (workspace / "reviewer-only.txt").write_text("disposable\n", encoding="utf-8")
+
+        assert (work / "README.md").read_bytes() == authoritative_bytes
+        assert repo_module.capture_fingerprint(work) == fingerprint
+        assert _run_git(["show-ref"], cwd=work) == refs_before
+        assert index_path.read_bytes() == index_before
+
+    assert not root.exists()
+    assert (work / "README.md").read_bytes() == authoritative_bytes
+    assert repo_module.capture_fingerprint(work) == fingerprint
+    assert _run_git(["show-ref"], cwd=work) == refs_before
+    assert index_path.read_bytes() == index_before
+
+
+def test_isolated_reviewer_workspace_copies_nested_regular_candidate_path(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    nested = work / "data" / "context.txt"
+    nested.parent.mkdir()
+    nested.write_bytes(b"nested candidate bytes\n")
+
+    with repo_module.isolated_reviewer_workspace(work) as workspace:
+        root = workspace.parent
+        assert (workspace / "data" / "context.txt").read_bytes() == (
+            b"nested candidate bytes\n"
+        )
+
+    assert not root.exists()
+
+
+def test_isolated_reviewer_workspace_rejects_resolved_source_outside_repo_before_copy(
+    git_env: GitEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = git_env.work.resolve()
+    nested = work / "data" / "context.txt"
+    nested.parent.mkdir()
+    nested.write_bytes(b"internal decoy\n")
+    _run_git(["add", "data/context.txt"], cwd=work)
+    external = tmp_path / "outside" / "secret.txt"
+    external.parent.mkdir()
+    external.write_bytes(b"EXTERNAL_SENTINEL_SECRET\n")
+    root = tmp_path / "reviewer-root"
+    original_resolve = Path.resolve
+    original_copy2 = repo_module.shutil.copy2
+
+    def fake_mkdtemp(*, prefix: str) -> str:
+        assert prefix == "ai-dnd-reviewer-"
+        root.mkdir()
+        return str(root)
+
+    def fake_resolve(path: Path, strict: bool = False) -> Path:
+        if path == nested:
+            return external
+        return original_resolve(path, strict=strict)
+
+    def guarded_copy2(source: Path, destination: Path) -> str:
+        assert source != external
+        return original_copy2(source, destination)
+
+    monkeypatch.setattr(repo_module.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    monkeypatch.setattr(repo_module.shutil, "copy2", guarded_copy2)
+
+    with pytest.raises(
+        RepositoryError,
+        match="candidate path resolves outside authoritative repository: 'data/context.txt'",
+    ):
+        with repo_module.isolated_reviewer_workspace(work):
+            pytest.fail("outside-resolving candidate must fail before yielding")
+
+    assert external.read_bytes() == b"EXTERNAL_SENTINEL_SECRET\n"
+    assert not root.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native symlink creation is privileged")
+def test_isolated_reviewer_workspace_rejects_parent_symlink_to_external_directory(
+    git_env: GitEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = git_env.work
+    parent = work / "data"
+    candidate = parent / "context.txt"
+    parent.mkdir()
+    candidate.write_bytes(b"indexed candidate\n")
+    _run_git(["add", "data/context.txt"], cwd=work)
+    candidate.unlink()
+    parent.rmdir()
+    external = tmp_path / "outside"
+    external.mkdir()
+    secret = external / "context.txt"
+    secret.write_bytes(b"EXTERNAL_SENTINEL_SECRET\n")
+    parent.symlink_to(external, target_is_directory=True)
+    root = tmp_path / "reviewer-root"
+
+    def fake_mkdtemp(*, prefix: str) -> str:
+        assert prefix == "ai-dnd-reviewer-"
+        root.mkdir()
+        return str(root)
+
+    monkeypatch.setattr(repo_module.tempfile, "mkdtemp", fake_mkdtemp)
+
+    with pytest.raises(RepositoryError, match="unsafe entry: 'data/context.txt'"):
+        with repo_module.isolated_reviewer_workspace(work):
+            pytest.fail("parent symlink must fail before yielding")
+
+    assert secret.read_bytes() == b"EXTERNAL_SENTINEL_SECRET\n"
+    assert not root.exists()
+
+
+def test_isolated_reviewer_workspace_rejects_parent_junction_component(
+    git_env: GitEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = git_env.work.resolve()
+    parent = work / "data"
+    candidate = parent / "context.txt"
+    parent.mkdir()
+    candidate.write_bytes(b"candidate\n")
+    _run_git(["add", "data/context.txt"], cwd=work)
+    external = tmp_path / "outside"
+    external.mkdir()
+    secret = external / "context.txt"
+    secret.write_bytes(b"EXTERNAL_SENTINEL_SECRET\n")
+    root = tmp_path / "reviewer-root"
+    original_is_junction = getattr(Path, "is_junction")
+
+    def fake_mkdtemp(*, prefix: str) -> str:
+        assert prefix == "ai-dnd-reviewer-"
+        root.mkdir()
+        return str(root)
+
+    def fake_is_junction(path: Path) -> bool:
+        if path == parent:
+            return True
+        return original_is_junction(path)
+
+    monkeypatch.setattr(repo_module.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(Path, "is_junction", fake_is_junction)
+
+    with pytest.raises(RepositoryError, match="unsafe entry: 'data/context.txt'"):
+        with repo_module.isolated_reviewer_workspace(work):
+            pytest.fail("parent junction must fail before yielding")
+
+    assert secret.read_bytes() == b"EXTERNAL_SENTINEL_SECRET\n"
+    assert not root.exists()
+
+
+def test_isolated_reviewer_workspace_cleans_up_after_body_failure(
+    git_env: GitEnv,
+) -> None:
+    workspace_path: Path | None = None
+
+    with pytest.raises(RuntimeError, match="reviewer failed"):
+        with repo_module.isolated_reviewer_workspace(git_env.work) as workspace:
+            workspace_path = workspace
+            raise RuntimeError("reviewer failed")
+
+    assert workspace_path is not None
+    assert not workspace_path.parent.exists()
+
+
+def test_isolated_reviewer_workspace_rejects_broken_symlink_before_deletion(
+    git_env: GitEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = git_env.work
+    unsafe = work / "broken-link"
+    unsafe.write_text("target", encoding="utf-8")
+    _run_git(["add", "broken-link"], cwd=work)
+    unsafe.unlink()
+    original_is_symlink = Path.is_symlink
+
+    def fake_is_symlink(path: Path) -> bool:
+        if path == unsafe:
+            return True
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
+
+    with pytest.raises(RepositoryError, match="unsafe entry: 'broken-link'"):
+        with repo_module.isolated_reviewer_workspace(work):
+            pytest.fail("broken symlink must fail before the workspace is yielded")
+
+
+def test_isolated_reviewer_workspace_preparation_failure_cleans_up_and_blocks(
+    git_env: GitEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "reviewer-root"
+
+    def fake_mkdtemp(*, prefix: str) -> str:
+        assert prefix == "ai-dnd-reviewer-"
+        root.mkdir()
+        return str(root)
+
+    monkeypatch.setattr(repo_module.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(
+        repo_module.shutil,
+        "copy2",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("copy failed")),
+    )
+
+    with pytest.raises(RepositoryError, match="could not materialize"):
+        with repo_module.isolated_reviewer_workspace(git_env.work):
+            pytest.fail("preparation failure must occur before yielding")
+
+    assert not root.exists()
+
+
+def test_isolated_reviewer_workspace_cleanup_failure_is_fail_closed(
+    git_env: GitEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "reviewer-root"
+
+    def fake_mkdtemp(*, prefix: str) -> str:
+        assert prefix == "ai-dnd-reviewer-"
+        root.mkdir()
+        return str(root)
+
+    monkeypatch.setattr(repo_module.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(
+        repo_module.shutil,
+        "rmtree",
+        lambda path: (_ for _ in ()).throw(OSError("cleanup failed")),
+    )
+
+    with pytest.raises(RepositoryError, match="could not remove"):
+        with repo_module.isolated_reviewer_workspace(git_env.work):
+            pass
 
 
 def test_commit_rejects_pre_staged_review_patch_even_when_not_in_paths(

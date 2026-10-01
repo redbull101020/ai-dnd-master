@@ -243,6 +243,14 @@ to the implementer or reviewer process directly:
 
 - the implementer changes working files inside the workspace, but never
   performs its own `git commit` / `git push` to bypass the review gate;
+- every designated reviewer runs in a disposable snapshot of the exact
+  candidate, outside the authoritative worktree, with independent temporary
+  Git metadata that has no remote and shares no index, refs, or objects with
+  the authoritative repository; inherited GitHub tokens, askpass/SSH-agent
+  variables, Git credential helpers, and interactive credential prompts are
+  removed or disabled for the reviewer subprocess; snapshot mutation is
+  discarded before the verdict can be accepted, and preparation or cleanup
+  uncertainty fails closed;
 - a checkpoint is committed by the orchestrator only after that checkpoint
   has been `APPROVED` by the designated reviewer;
 - accepted commits are pushed by the orchestrator only to the invocation's
@@ -970,17 +978,23 @@ No reviewer verdict is recorded or synthesized for it, and it advances neither
 the consecutive `CHANGES_REQUESTED` count nor the review iteration number of
 §26 until a review actually takes place.
 
-The reviewer never edits the working tree. The repair stays inside the fixed
-spec and the approved scope; a repair that would need more than that is a
-fail-closed condition (§27).
+The reviewer never edits the authoritative working tree. A provider integration
+may permit commands to mutate only its disposable, non-authoritative inspection
+snapshot; that snapshot is removed before the verdict is accepted and never
+becomes repair input or a source of truth. The repair stays inside the fixed spec
+and the approved scope; a repair that would need more than that is a fail-closed
+condition (§27).
 
 ### Complete material review and gate applicability
 
 Before every verdict, a designated reviewer determines the binding
 requirements applicable to that gate, reviews the complete current
-`review.patch` and supplied deterministic evidence, and reports all independent
-material defects found in one `CHANGES_REQUESTED`. A blocking finding requires
-a concrete binding basis. Style preferences, optional improvements,
+`CURRENT_PATCH` embedded in its explicit handoff and supplied deterministic
+evidence, and reports all independent material defects found in one
+`CHANGES_REQUESTED`. That embedded text is byte-identical to the orchestrator-
+owned repository-root `review.patch`; the latter remains the audit artifact and
+identity guard rather than a file the reviewer must reopen. A blocking finding
+requires a concrete binding basis. Style preferences, optional improvements,
 speculative abstraction or generalization, future scope, and advisory
 `Review focus` are non-blocking unless a separate binding requirement makes
 them material.

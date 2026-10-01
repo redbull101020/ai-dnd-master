@@ -2462,6 +2462,7 @@ def _execute_v2_scenario(
     reviewer_prompts: list[str] = []
     implementer_profiles: list[ComputeProfile] = []
     reviewer_profiles: list[ComputeProfile] = []
+    built_patches: list[str] = []
 
     def fake_implementer(
         spec: AgentInvocationSpec, prompt_text: str
@@ -2477,6 +2478,7 @@ def _execute_v2_scenario(
         assert repo_path == env.work
         assert candidate_queue, "test scenario exhausted candidate states"
         diff = candidate_queue.pop(0)
+        built_patches.append(diff)
         return repository.ReviewPatch(
             purpose=repository.ReviewPurpose.CHECKPOINT,
             range_description="HEAD",
@@ -2498,8 +2500,12 @@ def _execute_v2_scenario(
         spec: AgentInvocationSpec, review_input_text: str
     ) -> StructuredReviewResult:
         assert spec.role is AgentRole.REVIEWER
+        assert spec.cwd is not None
+        assert spec.cwd.resolve() != env.work.resolve()
+        assert (spec.cwd / ".git").is_dir()
+        assert _run_git(["remote"], cwd=spec.cwd) == ""
         reviewer_profiles.append(ComputeProfile(spec.args[-1].upper()))
-        artifact = (env.work / "review.patch").read_text(encoding="utf-8")
+        artifact = built_patches[-1]
         assert f"CURRENT_PATCH:\n{artifact}\n" in review_input_text
         if mutate_review_patch:
             (env.work / "review.patch").write_text(
@@ -2903,6 +2909,208 @@ def test_v2_designated_review_builders_declare_material_pass_and_applicability()
     assert "closure/governance boundaries" in mode_c_prompt
     assert "AUTHORITATIVE_MODE_C_EVIDENCE_JSON:\n{}\n" in mode_c_prompt
     assert "do not replace a fresh, independent Mode C material review" in mode_c_prompt
+
+
+def test_v2_checkpoint_reviewer_uses_embedded_current_patch_as_authoritative() -> None:
+    spec = _v2_spec()
+    patch_text = "diff --git a/source.py b/source.py\n+embedded sentinel\n"
+    verification = dataclasses.replace(_v2_verification(True), head_sha="h" * 40)
+
+    prompt = orch_module._build_v2_reviewer_input(
+        spec,
+        spec.checkpoints[0],
+        patch_text,
+        verification,
+        review_iteration=1,
+        previous_packet=None,
+        repair_delta=None,
+        require_non_convergence=False,
+    )
+
+    assert f"CURRENT_PATCH:\n{patch_text}\n" in prompt
+    assert "CURRENT_PATCH supplied in this prompt is the exact authoritative" in prompt
+    assert "Review that supplied text directly" in prompt
+    assert "do not require reopening repository-root review.patch" in prompt
+    assert "Repository inspection commands are for contextual source" in prompt
+    assert "orchestrator-owned audit artifact and byte-identity guard" in prompt
+    assert "PASSING_VERIFICATION:" in prompt
+
+
+@pytest.mark.parametrize(
+    "review",
+    [
+        _v2_approved(),
+        _v2_changes("repairable defect"),
+        _v2_explicit_blocked("missing approved decision"),
+        _v2_blocked("reviewer process exited with status 1"),
+    ],
+    ids=("approved", "changes-requested", "explicit-blocked", "process-failure"),
+)
+def test_v2_designated_review_uses_disposable_workspace_and_always_cleans_up(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    review: StructuredReviewResult,
+) -> None:
+    candidate = env.work / "candidate.txt"
+    candidate.write_text("authoritative candidate\n", encoding="utf-8")
+    patch = repository.build_checkpoint_patch_uncommitted(env.work)
+    reviewer_environment = {
+        **_FAKE_AGENT_ENV,
+        "GH_TOKEN": "must-not-reach-reviewer",
+        "GITHUB_TOKEN": "must-not-reach-reviewer",
+        "GIT_ASKPASS": "must-not-reach-reviewer",
+        "GIT_CONFIG_PARAMETERS": "must-not-reach-reviewer",
+        "GIT_SSH": "must-not-reach-reviewer",
+        "GIT_SSH_COMMAND": "must-not-reach-reviewer",
+        "SSH_AGENT_PID": "must-not-reach-reviewer",
+        "SSH_AUTH_SOCK": "must-not-reach-reviewer",
+        "CODEX_HOME": "preserved-codex-auth-home",
+    }
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, "print('unused')"),
+        reviewer_spec=replace(
+            _reviewer_spec(env.work, "print('unused')"),
+            env=reviewer_environment,
+        ),
+    )
+    authoritative_bytes = candidate.read_bytes()
+    fingerprint_before = repository.capture_fingerprint(env.work)
+    reviewer_workspaces: list[Path] = []
+    fingerprint_guards: list[str] = []
+    patch_guards: list[Path] = []
+    real_verify_fingerprint = repository.verify_fingerprint_unchanged
+    real_verify_patch = repository.verify_materialized_review_patch
+    def verify_fingerprint(
+        repo_path: Path,
+        expected: repository.RepositoryFingerprint,
+        *,
+        context: str,
+    ) -> None:
+        fingerprint_guards.append(context)
+        real_verify_fingerprint(repo_path, expected, context=context)
+
+    def verify_patch(repo_path: Path, expected: repository.ReviewPatch) -> None:
+        patch_guards.append(repo_path)
+        real_verify_patch(repo_path, expected)
+
+    def fake_reviewer(
+        spec: AgentInvocationSpec, review_input: str
+    ) -> StructuredReviewResult:
+        assert spec.cwd is not None
+        reviewer_workspaces.append(spec.cwd)
+        assert spec.cwd.resolve() != env.work.resolve()
+        assert (spec.cwd / ".git").is_dir()
+        common_dir_value = Path(
+            _run_git(["rev-parse", "--git-common-dir"], cwd=spec.cwd).strip()
+        )
+        common_dir = (
+            common_dir_value
+            if common_dir_value.is_absolute()
+            else spec.cwd / common_dir_value
+        ).resolve()
+        assert common_dir.is_relative_to(spec.cwd.resolve())
+        assert not common_dir.is_relative_to((env.work / ".git").resolve())
+        assert _run_git(["remote"], cwd=spec.cwd) == ""
+        assert spec.env is not None
+        casefolded_env = {key.casefold(): value for key, value in spec.env.items()}
+        for forbidden in (
+            "gh_token",
+            "github_token",
+            "git_askpass",
+            "git_config_parameters",
+            "git_ssh",
+            "git_ssh_command",
+            "ssh_agent_pid",
+            "ssh_auth_sock",
+        ):
+            assert forbidden not in casefolded_env
+        assert casefolded_env["codex_home"] == "preserved-codex-auth-home"
+        assert Path(casefolded_env["gh_config_dir"]).is_relative_to(spec.cwd)
+        assert casefolded_env["gh_prompt_disabled"] == "1"
+        assert casefolded_env["git_terminal_prompt"] == "0"
+        assert casefolded_env["gcm_interactive"] == "Never"
+        assert casefolded_env["git_config_nosystem"] == "1"
+        assert casefolded_env["git_config_global"] == os.devnull
+        assert casefolded_env["git_config_key_0"] == "credential.helper"
+        assert casefolded_env["git_config_value_0"] == ""
+        assert (spec.cwd / "candidate.txt").read_bytes() == authoritative_bytes
+        assert f"CURRENT_PATCH:\n{patch.diff_text}\n" in review_input
+        (spec.cwd / "candidate.txt").write_text(
+            "disposable reviewer mutation\n", encoding="utf-8"
+        )
+        return review
+
+    monkeypatch.setattr(repository, "verify_fingerprint_unchanged", verify_fingerprint)
+    monkeypatch.setattr(repository, "verify_materialized_review_patch", verify_patch)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", fake_reviewer)
+
+    actual = orch_module._run_v2_designated_review(
+        config,
+        f"CURRENT_PATCH:\n{patch.diff_text}\n",
+        patch,
+        context="designated reviewer invocation",
+    )
+
+    assert actual is review
+    assert len(reviewer_workspaces) == 1
+    assert not reviewer_workspaces[0].parent.exists()
+    assert candidate.read_bytes() == authoritative_bytes
+    assert repository.capture_fingerprint(env.work) == fingerprint_before
+    assert len(fingerprint_guards) == 2
+    assert len(patch_guards) == 2
+
+
+def test_v2_designated_review_preparation_and_cleanup_failures_are_fail_closed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch = repository.build_checkpoint_patch_uncommitted(env.work)
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, "print('unused')"),
+        reviewer_spec=_reviewer_spec(env.work, "print('unused')"),
+    )
+    reviewer_calls: list[str] = []
+
+    class FailingWorkspace:
+        def __init__(self, failure_point: str) -> None:
+            self.failure_point = failure_point
+
+        def __enter__(self) -> Path:
+            if self.failure_point == "preparation":
+                raise repository.RepositoryError("workspace preparation failed")
+            return env.scratch
+
+        def __exit__(self, *args: object) -> None:
+            raise repository.RepositoryError("workspace cleanup failed")
+
+    monkeypatch.setattr(
+        orch_module,
+        "run_structured_reviewer",
+        lambda *args: reviewer_calls.append("called") or _v2_approved(),
+    )
+
+    monkeypatch.setattr(
+        repository,
+        "isolated_reviewer_workspace",
+        lambda repo: FailingWorkspace("preparation"),
+    )
+    with pytest.raises(repository.RepositoryError, match="preparation failed"):
+        orch_module._run_v2_designated_review(
+            config, "review input", patch, context="review"
+        )
+    assert reviewer_calls == []
+
+    monkeypatch.setattr(
+        repository,
+        "isolated_reviewer_workspace",
+        lambda repo: FailingWorkspace("cleanup"),
+    )
+    with pytest.raises(repository.RepositoryError, match="cleanup failed"):
+        orch_module._run_v2_designated_review(
+            config, "review input", patch, context="review"
+        )
+    assert reviewer_calls == ["called"]
 
 
 def test_v2_candidate_changing_handoffs_require_internal_conformance_pass() -> None:

@@ -46,7 +46,19 @@ def _configuration(
     )
 
 
-def _expected_generic_argv(repo: Path, executable: Path) -> tuple[str, ...]:
+def _expected_generic_argv(
+    repo: Path, executable: Path, *, windows: bool = False
+) -> tuple[str, ...]:
+    implementer_platform_args = (
+        ("--implementer-arg=-c", "--implementer-arg=windows.sandbox=elevated")
+        if windows
+        else ()
+    )
+    reviewer_platform_args = (
+        ("--reviewer-arg=-c", "--reviewer-arg=windows.sandbox=elevated")
+        if windows
+        else ()
+    )
     return (
         "TSK-0037",
         "--repo",
@@ -63,6 +75,7 @@ def _expected_generic_argv(repo: Path, executable: Path) -> tuple[str, ...]:
         "--implementer-arg=approval_policy=never",
         "--implementer-arg=-c",
         "--implementer-arg=sandbox_workspace_write.network_access=false",
+        *implementer_platform_args,
         "--implementer-routine-arg=-c",
         "--implementer-routine-arg=model_reasoning_effort=low",
         "--implementer-routine-arg=-",
@@ -79,9 +92,12 @@ def _expected_generic_argv(repo: Path, executable: Path) -> tuple[str, ...]:
         "--reviewer-arg=--ignore-user-config",
         "--reviewer-arg=--ignore-rules",
         "--reviewer-arg=--sandbox",
-        "--reviewer-arg=read-only",
+        "--reviewer-arg=workspace-write",
         "--reviewer-arg=-c",
         "--reviewer-arg=approval_policy=never",
+        "--reviewer-arg=-c",
+        "--reviewer-arg=sandbox_workspace_write.network_access=false",
+        *reviewer_platform_args,
         "--reviewer-deliberate-arg=-c",
         "--reviewer-deliberate-arg=model_reasoning_effort=medium",
         "--reviewer-deliberate-arg=-",
@@ -445,14 +461,43 @@ def test_fixed_common_and_profile_arrays_are_exact() -> None:
         "--ignore-user-config",
         "--ignore-rules",
         "--sandbox",
-        "read-only",
+        "workspace-write",
         "-c",
         "approval_policy=never",
+        "-c",
+        "sandbox_workspace_write.network_access=false",
     )
     assert launcher.REVIEWER_PROFILE_ARGS == {
         "deliberate": ("-c", "model_reasoning_effort=medium", "-"),
         "critical": ("-c", "model_reasoning_effort=high", "-"),
     }
+    assert launcher.WINDOWS_SANDBOX_ARGS == ("-c", "windows.sandbox=elevated")
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_platform_materialization_is_native_windows_only(
+    tmp_path: Path, windows: bool
+) -> None:
+    argv = launcher._compose_generic_argv(
+        selector="TSK-0037",
+        repo=tmp_path,
+        codex_executable=tmp_path / "codex.exe",
+        agent_timeout_seconds=1.0,
+        verify_timeout_seconds=2.0,
+        required_ci_timeout_seconds=3.0,
+        windows=windows,
+    )
+    generic = parse_generic_args(list(argv))
+
+    for child_args in (generic.implementer_args, generic.reviewer_args):
+        assert child_args[: len(launcher.IMPLEMENTER_COMMON_ARGS)] == list(
+            launcher.IMPLEMENTER_COMMON_ARGS
+        )
+        if windows:
+            assert child_args[-2:] == ["-c", "windows.sandbox=elevated"]
+            assert child_args.count("windows.sandbox=elevated") == 1
+        else:
+            assert "windows.sandbox=elevated" not in child_args
 
 
 def test_generic_argv_uses_equals_form_and_required_assertions(tmp_path: Path) -> None:
@@ -463,6 +508,7 @@ def test_generic_argv_uses_equals_form_and_required_assertions(tmp_path: Path) -
         agent_timeout_seconds=1.25,
         verify_timeout_seconds=2.5,
         required_ci_timeout_seconds=3.75,
+        windows=False,
     )
     generic = parse_generic_args(list(argv))
 
@@ -482,21 +528,27 @@ def test_generic_argv_uses_equals_form_and_required_assertions(tmp_path: Path) -
 
 
 def test_fixed_child_args_use_inline_approval_policy_without_legacy_flag() -> None:
-    for common in (launcher.IMPLEMENTER_COMMON_ARGS, launcher.REVIEWER_COMMON_ARGS):
-        assert "--ask-for-approval" not in common
-        assert common.count("approval_policy=never") == 1
-        policy_index = common.index("approval_policy=never")
-        assert common[policy_index - 1] == "-c"
+    implementer = launcher.IMPLEMENTER_COMMON_ARGS
+    reviewer = launcher.REVIEWER_COMMON_ARGS
 
-    assert launcher.IMPLEMENTER_COMMON_ARGS[
-        launcher.IMPLEMENTER_COMMON_ARGS.index("--sandbox") + 1
-    ] == "workspace-write"
-    assert launcher.REVIEWER_COMMON_ARGS[
-        launcher.REVIEWER_COMMON_ARGS.index("--sandbox") + 1
-    ] == "read-only"
-    assert "sandbox_workspace_write.network_access=false" in (
-        launcher.IMPLEMENTER_COMMON_ARGS
-    )
+    for common in (implementer, reviewer):
+        assert "--ask-for-approval" not in common
+
+    assert implementer.count("approval_policy=never") == 1
+    assert implementer[implementer.index("approval_policy=never") - 1] == "-c"
+    assert "approval_policy=on-request" not in implementer
+    assert "approvals_reviewer=auto_review" not in implementer
+
+    assert reviewer.count("approval_policy=never") == 1
+    assert reviewer[reviewer.index("approval_policy=never") - 1] == "-c"
+    assert "approval_policy=on-request" not in reviewer
+    assert "approvals_reviewer=auto_review" not in reviewer
+
+    assert implementer[implementer.index("--sandbox") + 1] == "workspace-write"
+    assert reviewer[reviewer.index("--sandbox") + 1] == "workspace-write"
+    for common in (implementer, reviewer):
+        assert common.count("sandbox_workspace_write.network_access=false") == 1
+        assert common[common.index("sandbox_workspace_write.network_access=false") - 1] == "-c"
 
 
 def test_generic_argv_is_exact_including_all_forwarded_values(tmp_path: Path) -> None:
@@ -510,10 +562,30 @@ def test_generic_argv_is_exact_including_all_forwarded_values(tmp_path: Path) ->
         agent_timeout_seconds=1800.0,
         verify_timeout_seconds=1800.0,
         required_ci_timeout_seconds=600.0,
+        windows=False,
     )
 
     assert argv == _expected_generic_argv(repo, executable)
     assert "--delivery-branch" not in argv
+
+
+def test_windows_generic_argv_is_exact_including_platform_suffix(
+    tmp_path: Path,
+) -> None:
+    repo = (tmp_path / "repo").resolve()
+    executable = (tmp_path / "codex.exe").resolve()
+
+    argv = launcher._compose_generic_argv(
+        selector="TSK-0037",
+        repo=repo,
+        codex_executable=executable,
+        agent_timeout_seconds=1800.0,
+        verify_timeout_seconds=1800.0,
+        required_ci_timeout_seconds=600.0,
+        windows=True,
+    )
+
+    assert argv == _expected_generic_argv(repo, executable, windows=True)
 
 
 def test_composed_argv_has_no_dangerous_or_public_escape_tokens(tmp_path: Path) -> None:
@@ -524,6 +596,7 @@ def test_composed_argv_has_no_dangerous_or_public_escape_tokens(tmp_path: Path) 
         agent_timeout_seconds=1800.0,
         verify_timeout_seconds=1800.0,
         required_ci_timeout_seconds=600.0,
+        windows=True,
     )
     joined = "\n".join(argv)
     for forbidden in (
