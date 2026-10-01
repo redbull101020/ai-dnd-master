@@ -226,10 +226,19 @@ existence/id-match, затем placement-subject lookup, затем
 `id`/`round`/`order`/`active_index`/`action_spent`; State schema не менялась
 (current writer остаётся V9) — подтверждено real-adapter/filesystem round
 trip. Это initial tactical placement, не voluntary Movement: broader
-Movement (authoritative speed, movement allowance/budget, reposition,
+Movement (movement allowance/budget, reposition,
 Dash/Disengage, forced movement, terrain/pathfinding/collision,
 occupancy/footprint, elevation, Reactions, Opportunity Attacks) остаётся
 полностью pending и undesigned.
+
+TSK-0039 (§3.37 / DEC-0053) implements immutable
+`MonsterDefinition.walking_speed: int | None = None` after `attacks`, in feet.
+`None` preserves direct Domain compatibility; exact nonnegative integers
+include `0`, while `bool` is invalid. Packaged Monster JSON requires
+`walkingSpeed`; production Goblin has `30` and retains version `1`, verified
+through default `PackagedDefinitionSource()` after wheel installation.
+Character speed and effective-speed modifiers remain undefined; voluntary
+Movement remains unimplemented and unchecked in Roadmap.
 
 Canonical контракты, чья production implementation ещё не сделана,
 отслеживаются в `docs/ROADMAP.md` и `docs/TASK.md`; не выводи implementation

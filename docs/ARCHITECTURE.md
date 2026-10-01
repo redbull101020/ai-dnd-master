@@ -1031,6 +1031,7 @@ class MonsterDefinition:
     ability_scores: AbilityScores
     armor_class: int
     attacks: tuple[MonsterAttackDefinition, ...] = ()
+    walking_speed: int | None = None
 ```
 
 `MonsterDefinition` — immutable template/rules definition. `armor_class` —
@@ -1044,11 +1045,14 @@ name, attack_bonus, damage_dice, damage_modifier, damage_type`), default
 hierarchy — только attack roll + damage source facts. `MonsterDefinition`
 не содержит current HP, current conditions/effects, position, combat turn
 data, monster runtime ID или inventory/equipment state. Реализовано сейчас:
+`walking_speed` (TSK-0039, §3.37): immutable base walking speed in feet;
+`None` preserves direct Domain construction, exact nonnegative `int` values
+include `0`, and packaged Monster JSON requires `walkingSpeed`. Also implemented:
 narrow `attacks`/`MonsterAttackDefinition` (G8, §3.26). Остаются future
 scope и не добавляются заранее: generic Monster actions field, action
 selection среди нескольких supported attacks, range/reach, Multiattack,
 recharge actions, saving-throw/AoE actions, spellcasting и другие non-attack
-action kinds, а также Speed, CR, senses и прочие поля будущих phases —
+action kinds, а также other movement modes, CR, senses и прочие поля будущих phases —
 добавляются только тогда, когда их потребует Roadmap и конкретный consumer.
 
 ---
@@ -9118,8 +9122,9 @@ with no dice, no Definition lookup, and no new State Owner.
 
 ### 3.37. Minimal authoritative Monster walking-speed source (TSK-0039)
 
-Implementation status: **Canonical contract defined; production
-implementation remains pending in TSK-0039.** This section defines only the
+Implementation status: **Implemented by TSK-0039 in Domain, the strict
+packaged decoder, production Goblin data, and installed-wheel regression.**
+This section defines only the
 first authoritative immutable Monster base walking-speed source required by
 a later voluntary-Movement contract. It does not define or implement runtime
 Movement.
@@ -9172,7 +9177,7 @@ normalization or coercion.
 
 #### Production Goblin and attribution
 
-TSK-0039 must add the walking-speed fact to the currently selected production
+TSK-0039 adds the walking-speed fact to the currently selected production
 resource while keeping its identity exactly:
 
 ```text
@@ -13035,7 +13040,18 @@ top-level scaffold `rules/dnd_5e/` (только `.gitkeep` placeholders, без
     "wisdom": 8,
     "charisma": 8
   },
-  "armorClass": 15
+  "armorClass": 15,
+  "walkingSpeed": 30,
+  "attacks": [
+    {
+      "actionId": "scimitar",
+      "name": "Scimitar",
+      "attackBonus": 4,
+      "damageDice": "1d6",
+      "damageModifier": 2,
+      "damageType": "slashing"
+    }
+  ]
 }
 ```
 
