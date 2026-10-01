@@ -7660,3 +7660,12 @@ governance regression scoped to the new policy subsection. The operational
 human-only merge boundary remain unchanged. Verification passed: focused task
 tracker tests — 12 passed; architecture tests — 20 passed; `git diff --check`
 clean.
+
+## 2026-10-01 — TSK-0039 canonical-publication hotfix
+
+TSK-0039 was approved before its required Architecture §3.37 and DEC-0053
+were published, causing the production `AUTONOMOUS_PR` run to stop fail-closed.
+Published the already-resolved immutable Monster walking-speed contract and
+added deterministic validation that approved standalone tasks reference
+existing Architecture sections and Decision records; draft future references
+remain allowed. The production TSK-0039 implementation remains pending.
