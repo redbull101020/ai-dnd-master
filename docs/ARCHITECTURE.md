@@ -9116,6 +9116,112 @@ same concrete §3.18 mutating-command pattern already used by
 3.35): it appends exactly one new `CombatPosition` to an existing tuple,
 with no dice, no Definition lookup, and no new State Owner.
 
+### 3.37. Minimal authoritative Monster walking-speed source (TSK-0039)
+
+Implementation status: **Canonical contract defined; production
+implementation remains pending in TSK-0039.** This section defines only the
+first authoritative immutable Monster base walking-speed source required by
+a later voluntary-Movement contract. It does not define or implement runtime
+Movement.
+
+#### Ownership and Domain shape
+
+Walking speed is an immutable stat-block/rules Definition fact owned by
+`MonsterDefinition`. It is not State and is not owned by `CombatState`,
+`CreatureState`, or a new Movement State.
+
+The canonical Domain shape is:
+
+```python
+@dataclass(frozen=True)
+class MonsterDefinition(Definition):
+    name: str
+    ability_scores: AbilityScores
+    armor_class: int
+    attacks: tuple[MonsterAttackDefinition, ...] = ()
+    walking_speed: int | None = None
+```
+
+`walking_speed` is appended after `attacks`; this field order preserves
+compatibility with existing positional construction. The value is measured in
+feet.
+
+`None` is valid for phased direct Domain construction and means that the
+Definition does not provide a supported walking-speed source. It does not mean
+`0` or `30` and must not be silently defaulted or coerced to either value.
+For a non-`None` value, `type(value) is int` and `value >= 0`; Python `bool`
+is therefore invalid. Zero is a valid authoritative walking speed and remains
+distinct from `None`. There is no arbitrary upper bound and no multiple-of-5
+invariant.
+
+#### Packaged Monster contract
+
+For a packaged `"monster"` Definition, the canonical JSON field is required:
+
+```json
+"walkingSpeed": 30
+```
+
+The strict packaged Monster decoder must require `walkingSpeed` and map it to
+`MonsterDefinition.walking_speed`. Missing, `null`, boolean,
+stringified-number, and other wrong primitive/container values are rejected;
+negative integers are rejected through Domain validation. Existing exact
+field-set and unknown-field rejection remains unchanged. The optional Domain
+default does not make the packaged field optional and does not authorize
+normalization or coercion.
+
+#### Production Goblin and attribution
+
+TSK-0039 must add the walking-speed fact to the currently selected production
+resource while keeping its identity exactly:
+
+```text
+ruleset_id = dnd_5e
+ruleset_version = 5.1
+id = goblin
+version = 1
+walkingSpeed = 30
+```
+
+The Definition version is not bumped. This is not a Definition-version-aware
+migration: the project representation of the existing Goblin catches up to
+one newly supported immutable stat-block fact while the current lookup
+contract remains unchanged. No second Goblin resource or parallel dataset is
+introduced.
+
+The production SRD attribution notice for the packaged ruleset must include
+walking speed `30 ft` among the transformed/verified Goblin facts. It must not
+copy additional SRD prose.
+
+#### Installed-wheel boundary
+
+After ordinary wheel installation, production default
+`PackagedDefinitionSource()` must resolve the packaged `dnd_5e / 5.1 /
+goblin` Definition as a `MonsterDefinition` with `walking_speed == 30` from
+the single authoritative packaged dataset. Source-checkout or editable-install
+behavior is not sufficient evidence, and no second dataset is permitted.
+
+#### Explicit exclusions and positional-State boundary
+
+This section does not define or introduce:
+
+```text
+MoveCombatantCommand or another voluntary-Movement Command/Event flow
+runtime voluntary Movement, allowance/budget, expenditure, or split movement
+Dash, Disengage, Reactions, or Opportunity Attacks
+forced movement or teleport
+difficult terrain, pathfinding, collision, occupancy/footprint, or elevation
+Character walking speed or a universal creature speed
+effective/current speed modifiers
+generic Speed, MovementSpeed, MovementMode, MovementEngine, or Movement State
+any State schema change
+```
+
+`CombatState.positions` remains the sole authoritative tactical positional
+State under §§3.30 and 3.36. This section supplies only an immutable Monster
+base walking-speed Definition fact; later runtime Movement must separately
+define how that fact participates in Command/Event/State transitions.
+
 ---
 
 ## 4. ID System
