@@ -1031,6 +1031,7 @@ class MonsterDefinition:
     ability_scores: AbilityScores
     armor_class: int
     attacks: tuple[MonsterAttackDefinition, ...] = ()
+    walking_speed: int | None = None
 ```
 
 `MonsterDefinition` — immutable template/rules definition. `armor_class` —
@@ -1050,6 +1051,9 @@ selection среди нескольких supported attacks, range/reach, Multia
 recharge actions, saving-throw/AoE actions, spellcasting и другие non-attack
 action kinds, а также Speed, CR, senses и прочие поля будущих phases —
 добавляются только тогда, когда их потребует Roadmap и конкретный consumer.
+
+Implemented base walking-speed source: `walking_speed: int | None = None`,
+measured in feet; see §3.37 for exact type/range and packaged completeness.
 
 ---
 
@@ -9118,9 +9122,9 @@ with no dice, no Definition lookup, and no new State Owner.
 
 ### 3.37. Minimal authoritative Monster walking-speed source (TSK-0039)
 
-Implementation status: **Canonical contract defined; production
-implementation remains pending in TSK-0039.** This section defines only the
-first authoritative immutable Monster base walking-speed source required by
+Implementation status: **Implemented (TSK-0039): Domain field, strict packaged
+loading, production Goblin data, attribution, and installed-wheel regression.**
+This section defines only the first authoritative immutable Monster base walking-speed source required by
 a later voluntary-Movement contract. It does not define or implement runtime
 Movement.
 
@@ -9172,8 +9176,8 @@ normalization or coercion.
 
 #### Production Goblin and attribution
 
-TSK-0039 must add the walking-speed fact to the currently selected production
-resource while keeping its identity exactly:
+TSK-0039 added the walking-speed fact to the currently selected production
+resource, retaining its identity exactly:
 
 ```text
 ruleset_id = dnd_5e
@@ -13035,7 +13039,18 @@ top-level scaffold `rules/dnd_5e/` (только `.gitkeep` placeholders, без
     "wisdom": 8,
     "charisma": 8
   },
-  "armorClass": 15
+  "armorClass": 15,
+  "attacks": [
+    {
+      "actionId": "scimitar",
+      "name": "Scimitar",
+      "attackBonus": 4,
+      "damageDice": "1d6",
+      "damageModifier": 2,
+      "damageType": "slashing"
+    }
+  ],
+  "walkingSpeed": 30
 }
 ```
 

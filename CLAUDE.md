@@ -116,6 +116,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | --- | --- |
 | `AbilityScores` | §1.2.1 |
 | `Definition` (база), `ItemDefinition`, `WeaponDefinition`, `MonsterDefinition` | §3.1, §3.1.1 |
+| Monster base walking-speed source (`walking_speed: int | None = None`, feet, after `attacks`; packaged `walkingSpeed` required, Goblin 30 ft/version 1; voluntary Movement remains unimplemented) | §3.37 |
 | `DamageType` | §3.1.1 |
 | `CreatureState`, `CampaignState`, `StateSnapshot`, `CharacterState` | §3.2.1–§3.2.4 |
 | `DiceEngine`, `DiceRoll` | §1.7.1 |

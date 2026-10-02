@@ -7681,3 +7681,18 @@ host-removable; the launcher therefore now fixes MXC for both Windows child
 roles without an elevated fallback. The TSK-0039 delivery branch remains
 preserved, and task completion still requires a fresh invocation after this
 hotfix lands.
+
+## 2026-10-02 — TSK-0039: Authoritative Monster walking-speed source
+
+Delivered the immutable Monster base walking-speed Definition source and strict
+required packaged `walkingSpeed`, with Goblin 30 ft and unchanged version 1.
+The installed-wheel child process proves production default lookup outside the
+checkout, retaining Dagger and missing-Definition coverage. Architecture,
+Roadmap, and CLAUDE now report the implemented source; voluntary Movement,
+Character speed, State schema V9, and Command/Event flows remain outside scope.
+Verification: CP-1 focused tests 125 passed; CP-2 tests 15 passed; configured
+mypy and `git diff --check` passed. Full pytest: 2798 passed, 1 skipped,
+43 failed, 258 errors in autonomous-tooling tests (including temporary Git
+fixture setup failures). A focused reproduction reports Windows
+`PermissionError [WinError 5]` resolving a temporary repository path.
+No autonomous-tooling changes were made; full verification remains non-green.
