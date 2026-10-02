@@ -62,7 +62,7 @@ REVIEWER_PROFILE_ARGS = {
     "deliberate": ("-c", "model_reasoning_effort=medium", "-"),
     "critical": ("-c", "model_reasoning_effort=high", "-"),
 }
-WINDOWS_SANDBOX_ARGS = ("-c", "windows.sandbox=elevated")
+WINDOWS_SANDBOX_ARGS = ("-c", "windows.sandbox=mxc")
 
 _SELECTOR_PATTERN = re.compile(r"TSK-[0-9]{4}")
 _CODEX_IDENTITY_PATTERN = re.compile(r"(?:^|\s)codex-cli\s+(\S+)")
