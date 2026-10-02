@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
@@ -16,6 +16,7 @@ CANONICAL_FIELDS = (
     "ability_scores",
     "armor_class",
     "attacks",
+    "walking_speed",
 )
 
 
@@ -187,3 +188,41 @@ def test_monster_definition_allows_multiple_distinct_action_ids() -> None:
     )
 
     assert len(monster.attacks) == 2
+
+
+def test_walking_speed_defaults_to_none_with_existing_positional_construction() -> None:
+    monster = MonsterDefinition(
+        "goblin", 1, "Goblin", goblin().ability_scores, 15, (scimitar(),)
+    )
+
+    assert monster.walking_speed is None
+    assert monster.attacks == (scimitar(),)
+    assert goblin().walking_speed is None
+
+
+@pytest.mark.parametrize("speed", [None, 0, 30, 31, 10**100])
+def test_walking_speed_accepts_supported_values(speed: int | None) -> None:
+    assert replace(goblin(), walking_speed=speed).walking_speed == speed
+
+
+@pytest.mark.parametrize("speed", [-1, -30])
+def test_walking_speed_rejects_negative_values(speed: int) -> None:
+    with pytest.raises(ValueError, match="walking_speed"):
+        replace(goblin(), walking_speed=speed)
+
+
+class IntSubclass(int):
+    pass
+
+
+@pytest.mark.parametrize("speed", [True, False, "30", 30.0, [], {}, IntSubclass(30)])
+def test_walking_speed_rejects_non_exact_int(speed: object) -> None:
+    with pytest.raises(TypeError, match="walking_speed"):
+        replace(goblin(), walking_speed=speed)
+
+
+def test_walking_speed_is_immutable() -> None:
+    monster = replace(goblin(), walking_speed=30)
+
+    with pytest.raises(FrozenInstanceError):
+        monster.walking_speed = 0  # type: ignore[misc]
