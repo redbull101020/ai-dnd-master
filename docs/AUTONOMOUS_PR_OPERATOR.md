@@ -131,14 +131,17 @@ these exact profiles. They are not runtime proof derived from the executable
 name or version output; the harness guards remain defense in depth.
 
 On native Windows, the launcher also appends the fixed inline config
-`windows.sandbox=elevated` to both child roles. Autonomous children intentionally
+`windows.sandbox=mxc` to both child roles. Autonomous children intentionally
 use `--ignore-user-config`, so the launcher selects the native Windows sandbox
 backend explicitly instead of depending on mutable user configuration. This
-backend selector does not broaden the security envelope: both roles remain
+backend preserves the same outer autonomous security contract: both roles remain
 `workspace-write` with `approval_policy=never` and
 `sandbox_workspace_write.network_access=false`; the reviewer workspace remains
-the disposable snapshot described above. POSIX launches never receive this
-Windows-specific config.
+the disposable snapshot described above. MXC avoids relying on the elevated
+backend's persistent host ACL/ownership mutation behavior, which prevented host
+cleanup of a disposable reviewer workspace. There is no fallback to elevated:
+if MXC is unavailable, child execution fails closed. POSIX launches receive no
+Windows backend override.
 
 ## Temporary files, credentials, and host permissions
 

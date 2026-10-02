@@ -7669,3 +7669,15 @@ Published the already-resolved immutable Monster walking-speed contract and
 added deterministic validation that approved standalone tasks reference
 existing Architecture sections and Decision records; draft future references
 remain allowed. The production TSK-0039 implementation remains pending.
+
+## 2026-10-01 — Windows autonomous sandbox backend hotfix
+
+TSK-0039 checkpoints CP-1 and CP-2 both passed designated review with
+`APPROVED`, but the pre-closure cumulative review stopped fail-closed when the
+Windows elevated sandbox left sandbox-created content inaccessible to host
+cleanup. An isolated MXC smoke preserved `workspace-write`, approval-never, and
+network-off boundaries, blocked authoritative/outside escape, and remained
+host-removable; the launcher therefore now fixes MXC for both Windows child
+roles without an elevated fallback. The TSK-0039 delivery branch remains
+preserved, and task completion still requires a fresh invocation after this
+hotfix lands.

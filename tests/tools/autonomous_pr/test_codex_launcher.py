@@ -50,12 +50,12 @@ def _expected_generic_argv(
     repo: Path, executable: Path, *, windows: bool = False
 ) -> tuple[str, ...]:
     implementer_platform_args = (
-        ("--implementer-arg=-c", "--implementer-arg=windows.sandbox=elevated")
+        ("--implementer-arg=-c", "--implementer-arg=windows.sandbox=mxc")
         if windows
         else ()
     )
     reviewer_platform_args = (
-        ("--reviewer-arg=-c", "--reviewer-arg=windows.sandbox=elevated")
+        ("--reviewer-arg=-c", "--reviewer-arg=windows.sandbox=mxc")
         if windows
         else ()
     )
@@ -471,7 +471,7 @@ def test_fixed_common_and_profile_arrays_are_exact() -> None:
         "deliberate": ("-c", "model_reasoning_effort=medium", "-"),
         "critical": ("-c", "model_reasoning_effort=high", "-"),
     }
-    assert launcher.WINDOWS_SANDBOX_ARGS == ("-c", "windows.sandbox=elevated")
+    assert launcher.WINDOWS_SANDBOX_ARGS == ("-c", "windows.sandbox=mxc")
 
 
 @pytest.mark.parametrize("windows", [False, True])
@@ -494,9 +494,11 @@ def test_platform_materialization_is_native_windows_only(
             launcher.IMPLEMENTER_COMMON_ARGS
         )
         if windows:
-            assert child_args[-2:] == ["-c", "windows.sandbox=elevated"]
-            assert child_args.count("windows.sandbox=elevated") == 1
+            assert child_args[-2:] == ["-c", "windows.sandbox=mxc"]
+            assert child_args.count("windows.sandbox=mxc") == 1
+            assert "windows.sandbox=elevated" not in child_args
         else:
+            assert "windows.sandbox=mxc" not in child_args
             assert "windows.sandbox=elevated" not in child_args
 
 
