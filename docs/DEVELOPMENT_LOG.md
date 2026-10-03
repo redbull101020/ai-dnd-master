@@ -7764,3 +7764,19 @@ Windows sandbox access failures in autonomous-tooling temporary repositories
 (`WinError 5`); no tooling/governance gate was changed to bypass them.
 Character Movement, Dash, terrain/pathfinding/collision, Reactions and
 Opportunity Attacks remain deferred; broad Roadmap Movement stays unchecked.
+
+## 2026-10-03 — TSK-0040: Prospective Task Closure (draft PR #129)
+
+Delivered Monster-only voluntary walking Movement with deterministic integer
+segments, split turn-local expenditure, authoritative walking-speed budgeting,
+`CombatantMoved` V1, Action independence, turn reset, and exact additive State
+schema V10. Position and expenditure share one replacement snapshot/save;
+historical schema compatibility and existing Action/lifecycle boundaries remain
+preserved. The supplied closure evidence records successful full `python -m
+pytest`, configured `python -m mypy src/dnd_engine tools/autonomous_pr`, and
+`git diff --check` at accepted implementation head
+`0353c7e6576ced4701af25b67c1148a4268bb943`; this completed full verification
+supersedes the earlier entry's interrupted verification report. Character
+Movement, Dash, terrain/pathfinding/collision, Reactions and Opportunity Attacks
+remain deferred, and broad Roadmap Movement remains unchecked. This closure is
+prospective in draft PR #129; merge remains human-only.
