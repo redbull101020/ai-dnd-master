@@ -7721,8 +7721,8 @@ Implementation status: **Contract defined by TSK-0016 (architecture-only);
 production implementation delivered by TSK-0017.** Command, Event, resolver,
 applier, Application handler, and State schema writer behavior for this
 narrow Character Death Save slice are implemented in production. The current
-production State schema writer is exact V9 (§12.13), implementing this
-section's additive V9 contract (see below) over the prior V8 writer.
+production State schema writer is exact V10 (§12.13), preserving this
+section's additive V9 lifecycle contract and adding §3.38 Movement expenditure.
 
 This section resolves the architectural questions required for the minimal
 Character Death Save slice tracked by DEF-0005 (Character Death Saving
@@ -8506,8 +8506,9 @@ For ordinary Healing (§3.20):
 
 #### State schema V9 target contract
 
-The current production State schema writer is exact V9 (§3.34, §12.13),
-implemented by TSK-0017: additive over V8, adding only the four Character
+The current production State schema writer is exact V10 (§3.38, §12.13).
+It preserves the V9 contract implemented by TSK-0017: additive over V8,
+adding only the four Character
 death-save/lifecycle fields above. V9 does not change any root `state` key,
 does not change the `CreatureState` wire shape, does not change the
 `CombatState` wire shape, and does not change any Inventory/Equipment wire
@@ -8617,7 +8618,7 @@ production implementation delivered by TSK-0019.** `EndCombatCommand`/
 `CombatEnded` V1 builder/applier, and `EndCombatHandler` are implemented in
 production, confirmed through deterministic Domain/Application tests and a
 real-adapter/filesystem `StartCombat → EndCombat → reload → StartCombat`
-round trip. The current production State schema writer remains exact V9
+round trip. The current production State schema writer is exact V10
 (§3.34, §12.13); this section introduced no new schema version, confirmed
 by that same round trip (see "Persistence" below).
 
@@ -8846,7 +8847,7 @@ builder/applier, and `PlaceCombatantHandler` are implemented in production,
 confirmed through deterministic Domain/Application tests and a
 real-adapter/filesystem round trip that persists a new `CombatPosition`
 alongside an existing one and reloads both correctly. The current
-production State schema writer remains exact V9 (§3.34, §12.13); this
+production State schema writer is exact V10 (§3.38, §12.13); this
 section introduced no new schema version, confirmed by that same round
 trip (see "State schema" below).
 
@@ -9108,7 +9109,7 @@ save. No new atomicity guarantee is introduced.
 
 No State schema V10 is introduced. `positions` is already a persisted
 field of the existing Combat wire shape since State schema V7 (§3.30); the
-current production writer is State schema V9 (§3.34, §12.13). This section
+current production writer is State schema V10 (§3.38, §12.13). This section
 changes the *content* one Command may add to an already-existing
 `positions` array, not the wire schema itself; the existing V7/V8/V9
 serializer contract (§§3.30, 3.33, 3.34, 12.9, 12.13) is unchanged.
@@ -9234,8 +9235,8 @@ define how that fact participates in Command/Event/State transitions.
 
 ### 3.38. Minimal Phase 3 Monster voluntary Movement contract (TSK-0040)
 
-Implementation status: **Contract defined by DEC-0054; production
-implementation pending TSK-0040.** This section defines the first runtime
+Implementation status: **Implemented by TSK-0040 under DEC-0054.**
+This section defines the first runtime
 voluntary-Movement consumer that may rely on the implemented §3.37 Monster
 walking-speed source. It does not claim that broad Movement, Character
 Movement, Reactions, or Opportunity Attacks are implemented.
@@ -9626,8 +9627,7 @@ it does not individually reset Movement fields.
 #### Persistence and atomicity
 
 The persistence consequence is the additive State schema V10 contract in
-§12.13. This planning decision does not itself change production Python or the
-current V9 writer; TSK-0040 performs that implementation.
+§12.13. TSK-0040 implements this contract with the current exact V10 writer.
 
 One successful Move is one logical transaction:
 
@@ -12504,13 +12504,13 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Текущий production writer — exact State schema V9
-(`SCHEMA_V9_VERSION`), additive over V8; его точный field-by-field контракт
+filesystem I/O. Текущий production writer — exact State schema V10
+(`SCHEMA_V10_VERSION`), additive over V9; его точный field-by-field контракт
 (top-level `inventories`, `equipment`, Character `weaponProficiencies` —
 §3.29; non-null `combat.positions` — §3.30; non-null `combat.actionSpent` —
 §3.33; required Character `deathSaveSuccesses`/`deathSaveFailures`/
-`deathSaveStable`/`dead` — §3.34) канонически определён в
-§3.29/§3.30/§3.33/§3.34 и не дублируется здесь. Ниже — historical V5
+`deathSaveStable`/`dead` — §3.34; non-null `combat.movementSpent` — §3.38)
+канонически определён в §3.29/§3.30/§3.33/§3.34/§3.38 и не дублируется здесь. Ниже — historical V5
 example (предшествует V6/V7/V8/V9 additions), иллюстрирующий общую
 envelope-форму; это не current writer shape:
 
@@ -12560,11 +12560,11 @@ envelope-форму; это не current writer shape:
 }
 ```
 
-JSON использует camelCase. The current V9 writer always emits
-`schemaVersion: 9` and the exact V7 top-level state fields defined in
+JSON использует camelCase. The current V10 writer always emits
+`schemaVersion: 10` and the exact V7 top-level state fields defined in
 §3.30 (`campaign`, `creatures`, `characters`, `inventories`, `equipment`,
 `combat`), additionally requiring `actionSpent` inside a non-null `combat`
-(§3.33) and requiring `deathSaveSuccesses`, `deathSaveFailures`,
+(§3.33) and `movementSpent` (§3.38), and requiring `deathSaveSuccesses`, `deathSaveFailures`,
 `deathSaveStable`, and `dead` on every Character entry (§3.34). V6
 preserves the V5 campaign, creature, and combat shapes and preserves the
 pre-existing Character fields/semantics, while adding the V6 Character
@@ -12582,9 +12582,10 @@ include `"characters": []` для пустой collection, `"conditions": []` д
 `Skill.value`, а `conditions` — по `Condition.value`. Пустые membership
 сериализуются как JSON arrays `[]`. Когда combat присутствует, `combat` —
 object с exact fields `id`, `round`, `order` (JSON array Creature ID strings в
-initiative-порядке) и `activeIndex`.
+initiative-порядке), `activeIndex`, `positions`, `actionSpent` и
+`movementSpent`.
 
-Reader принимает девять точных схем: legacy V1 с state fields `campaign` и
+Reader принимает десять точных схем: legacy V1 с state fields `campaign` и
 `creatures`, legacy V2 с обязательным дополнительным `characters`, legacy V3 с
 обязательным дополнительным `skillProficiencies`, legacy V4 с обязательным
 `conditions` (без `combat`), legacy V5 с обязательным дополнительным
@@ -12596,10 +12597,11 @@ top-level `inventories`, `equipment` и Character `weaponProficiencies`
 (exact field-by-field контракт — §3.30, без `combat.actionSpent`), legacy
 V8 с теми же V7 полями плюс обязательным `actionSpent` внутри non-null
 `combat` (exact field-by-field контракт — §3.33, без Character death-save
-полей), и current V9 с теми же V8 полями плюс обязательными Character
+полей), legacy V9 с теми же V8 полями плюс обязательными Character
 `deathSaveSuccesses`, `deathSaveFailures`, `deathSaveStable` и `dead`
-(exact field-by-field контракт — §3.34). V1–V8 сохраняют свои exact
-historical shapes без retroactive расширения V9-полями. Поле
+(exact field-by-field контракт — §3.34), и current V10 с теми же V9
+полями плюс обязательным Combat `movementSpent` (§3.38). V1–V9 сохраняют
+свои exact historical shapes без retroactive расширения новыми полями. Поле
 `characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
 `StateSnapshot.characters=()` и не придумывает level или proficiency
 defaults. V2 Character entry сохраняет exact legacy fields `id`,
@@ -12877,18 +12879,16 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 9` (§3.34/§12.13,
-TSK-0017), additive over V8 `combat.actionSpent` (§3.33/TSK-0015), V7
-`combat.positions` (§3.30/TSK-0010), and V6 Inventory/Equipment plus
-Character `weaponProficiencies` (§3.29/TSK-0004). The production writer
-emits only exact V9 today. Reader also accepts exact legacy integer
-`schemaVersion = 1` through `schemaVersion = 8`; other values are rejected,
-and `bool` is not an integer schema version. Architecture §3.38 and §12.13
-define the planned additive V10 `movementSpent` contract for TSK-0040, but
-publishing that contract does not change `SCHEMA_VERSION` or the current
-production writer before TSK-0040 is implemented. This is a storage schema
-version, not a revision of current State and not a concurrency-control
-mechanism.
+Current State schema — exact integer `schemaVersion = 10` (§3.38/§12.13,
+TSK-0040), strictly additive over V9 Character lifecycle (§3.34/TSK-0017),
+V8 `combat.actionSpent` (§3.33/TSK-0015), V7 `combat.positions`
+(§3.30/TSK-0010), and V6 Inventory/Equipment plus Character
+`weaponProficiencies` (§3.29/TSK-0004). The production writer emits only
+exact V10. Reader also accepts exact legacy integer `schemaVersion = 1`
+through `schemaVersion = 9`; other values are rejected, and `bool` is not
+an integer schema version. V10 adds only non-null Combat `movementSpent`;
+V5–V9 Combat decodes with `movement_spent=0`. This is a storage schema
+version, not a revision of current State or a concurrency-control mechanism.
 
 ---
 
@@ -12926,9 +12926,10 @@ Migration
 State v3
 ```
 
-Текущие production migration paths читают exact legacy V1–V8 и current V9
+Текущие production migration paths читают exact legacy V1–V9 и current V10
 согласно их фиксированным wire-контрактам; production writer выпускает exact
-V9 (§3.34), реализованный TSK-0017, additive поверх exact V8 (§3.33),
+V10 (§3.38), реализованный TSK-0040, additive поверх exact V9 (§3.34),
+реализованного TSK-0017, additive поверх exact V8 (§3.33),
 реализованного TSK-0015, которая, в свою очередь, additive поверх exact V7
 (§3.30), реализованного TSK-0010, которая, в свою очередь, additive поверх
 exact V6 (§3.29), реализованного TSK-0004. Reader сохраняет те же exact
@@ -13007,12 +13008,10 @@ durable Event replay exists to reconstruct them, so the canonical `0`/`0`/
 `False`/`False` compatibility values are not a reconstruction of what Death
 Save progress actually happened in that legacy game.
 
-#### Planned State schema V10 — turn-local Movement expenditure (TSK-0040)
+#### State schema V10 — turn-local Movement expenditure (TSK-0040)
 
-Architecture §3.38 / DEC-0054 define the next additive State schema. Until
-TSK-0040 is implemented, the **current production writer remains exact V9**;
-this subsection is the canonical implementation target for V10, not a claim
-that current code already emits it.
+Architecture §3.38 / DEC-0054 define the additive State schema implemented
+by TSK-0040. The **current production writer is exact V10**.
 
 V10 is strictly additive over exact V9. The top-level envelope, root `state`
 keys, Campaign, Creature, Character, Inventory, Equipment, and
@@ -13085,7 +13084,7 @@ The V5–V9 default is canonical compatibility, not reconstructed history:
 voluntary Movement expenditure did not exist as an authoritative persisted
 fact in those schemas and no durable Event replay exists to recover it.
 
-After TSK-0040 makes V10 the current writer, successfully loaded legacy
+With V10 as the current writer, successfully loaded legacy
 snapshots are saved as exact V10 while preserving every real value their
 source schema already carried and materializing only the documented
 compatibility defaults. Historical V1–V9 wire schemas are never retroactively
