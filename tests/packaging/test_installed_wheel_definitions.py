@@ -56,6 +56,8 @@ monster = source.get_definition(
 
 assert type(monster) is MonsterDefinition, type(monster)
 assert monster.id == "goblin", monster.id
+assert monster.version == 1, monster.version
+assert monster.walking_speed == 30, monster.walking_speed
 assert monster.armor_class == 15, monster.armor_class
 assert monster.ability_scores.dexterity == 14, monster.ability_scores.dexterity
 

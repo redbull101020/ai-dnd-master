@@ -295,3 +295,4 @@ Concrete known constraints.
 | `TSK-0036` | `Done` | PR #118 | Preserve bounded structured rationale for explicit AUTONOMOUS_PR reviewer BLOCKED verdicts |
 | `TSK-0037` | `Done` | PR #120 | Add a deterministic Codex operator launcher for one-command AUTONOMOUS_PR execution |
 | `TSK-0038` | `Done` | PR #121 | Make execution-ready AUTONOMOUS_PR-suitable tasks the default planning outcome |
+| `TSK-0039` | `Done` | PR #126 | Add authoritative Monster walking-speed source |
