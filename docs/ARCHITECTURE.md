@@ -72,6 +72,8 @@
 | Character zero-HP turn / Death Save contract (TSK-0016 contract, TSK-0017 implementation) | §3.34 |
 | Combat end lifecycle contract, `EndCombatCommand`/`CombatEnded` V1 (TSK-0018 contract, TSK-0019 implementation) | §3.35 |
 | Initial Combat placement contract, `PlaceCombatantCommand`/`CombatantPlaced` V1 (TSK-0021, decision-only) | §3.36 |
+| Authoritative Monster walking-speed source (TSK-0039) | §3.37 |
+| Minimal Monster voluntary Movement contract (TSK-0040) | §3.38 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -142,6 +144,8 @@
   * [3.34. Minimal Character zero-HP turn and Death Save contract (TSK-0016)](#334-minimal-character-zero-hp-turn-and-death-save-contract-tsk-0016)
   * [3.35. Minimal Phase 3 Combat end lifecycle (TSK-0018)](#335-minimal-phase-3-combat-end-lifecycle-tsk-0018)
   * [3.36. Minimal Phase 3 initial Combat placement contract (TSK-0021)](#336-minimal-phase-3-initial-combat-placement-contract-tsk-0021)
+  * [3.37. Minimal authoritative Monster walking-speed source (TSK-0039)](#337-minimal-authoritative-monster-walking-speed-source-tsk-0039)
+  * [3.38. Minimal Phase 3 Monster voluntary Movement contract (TSK-0040)](#338-minimal-phase-3-monster-voluntary-movement-contract-tsk-0040)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -9228,6 +9232,461 @@ define how that fact participates in Command/Event/State transitions.
 
 ---
 
+### 3.38. Minimal Phase 3 Monster voluntary Movement contract (TSK-0040)
+
+Implementation status: **Contract defined by DEC-0054; production
+implementation pending TSK-0040.** This section defines the first runtime
+voluntary-Movement consumer that may rely on the implemented §3.37 Monster
+walking-speed source. It does not claim that broad Movement, Character
+Movement, Reactions, or Opportunity Attacks are implemented.
+
+#### Scope and first concrete consumer
+
+The first runtime voluntary-Movement consumer is deliberately narrow:
+
+```text
+one active Combat participant
+→ participant is a non-Character Creature whose Definition is a MonsterDefinition
+→ MonsterDefinition.walking_speed is authoritative and non-None
+→ participant already has a CombatPosition
+→ one MoveCombatantCommand requests one straight segment
+→ cumulative movement for the current turn must remain within walking_speed
+```
+
+A Character is explicitly unsupported by this slice because no authoritative
+Character walking-speed source exists yet. No temporary Character or universal
+`30 ft` default is introduced.
+
+`MoveCombatantCommand` is Combat-only. Absence of `CombatState` is a failed
+prerequisite rather than an outside-Combat mode.
+
+#### Command and mover identity
+
+The canonical Command payload is:
+
+```text
+MoveCombatantCommand(command_id, campaign_id, actor_id, payload)
+
+MoveCombatantPayload(
+    combat_id: str,
+    x: int,
+    y: int,
+)
+```
+
+`command.actor_id` is the moving Creature. There is no second
+`creature_id`, caller-supplied speed, caller-supplied distance,
+`movementRemaining`, path, movement mode, legality flag, or action-resource
+field.
+
+Payload validation follows the existing Command-boundary discipline:
+
+```text
+combat_id: exact str
+x: exact int; bool invalid
+y: exact int; bool invalid
+```
+
+`x` and `y` reuse §3.30's combat-local coordinate semantics: units are feet,
+negative coordinates are permitted, and no grid/hex/tile/elevation identity
+is introduced.
+
+#### State ownership and turn-local Movement expenditure
+
+The sole authoritative tactical position remains
+`CombatState.positions` (§§3.30, 3.36). Voluntary Movement replaces the
+existing active actor's `CombatPosition`; it does not introduce another
+position owner.
+
+TSK-0040 extends the existing `CombatState` under the unchanged
+`CombatEngine` State Owner (§10.7) with one turn-local fact, appended after
+`action_spent`:
+
+```python
+movement_spent: int = 0
+```
+
+Canonical semantics:
+
+```text
+type(movement_spent) is int
+movement_spent >= 0
+bool is invalid
+0 is valid
+there is no intrinsic upper bound on the State field
+```
+
+`movement_spent` means the whole-foot voluntary Movement distance already
+spent by the current `active_creature_id` during the current turn. It is not
+stored on `CreatureState` or `CharacterState`, and no `MovementState`,
+`TurnState`, `TurnResources`, resource pool, or remaining-movement field is
+introduced.
+
+The State field does not validate itself against a Definition. Remaining
+capacity is derived when a concrete Command is handled:
+
+```text
+remaining = MonsterDefinition.walking_speed - CombatState.movement_spent
+```
+
+The implementation must not classify the State as corrupt merely because an
+already-recorded `movement_spent` is greater than a walking speed read later.
+A positive candidate segment simply fails the cumulative budget check below
+when the new total exceeds current capacity.
+
+#### Straight-segment distance semantics
+
+One `MoveCombatantCommand` represents one straight endpoint-to-endpoint
+segment from the actor's current `CombatPosition` to the requested
+destination.
+
+For:
+
+```text
+dx = to_x - from_x
+dy = to_y - from_y
+squared = dx*dx + dy*dy
+root = isqrt(squared)
+```
+
+the canonical whole-foot segment cost is:
+
+```text
+distance = root      if root*root == squared
+distance = root + 1  otherwise
+```
+
+This is deterministic `ceil(sqrt(dx² + dy²))` without floating-point
+arithmetic. Examples:
+
+```text
+(0,0) → (3,4) = 5 ft
+(0,0) → (1,1) = 2 ft
+(0,0) → (0,5) = 5 ft
+```
+
+This is a project-defined first-consumer Movement rule. It does not
+retroactively turn §3.30's squared Dagger-reach approximation into a universal
+geometry model and does not introduce a generic geometry service.
+
+A destination exactly equal to the current position is rejected as an invalid
+Movement Command. Choosing not to move is represented by not issuing the
+Command; zero-distance `CombatantMoved` Events are not emitted.
+
+Multiple combatants may still occupy identical coordinates. Collision,
+occupancy, footprint, blocking, and path traversal remain outside this
+contract.
+
+#### Split Movement and ordinary Action independence
+
+One turn may contain zero, one, or multiple successful
+`MoveCombatantCommand` instances. Each successful segment accumulates:
+
+```text
+new_movement_spent = combat.movement_spent + distance
+```
+
+The Command succeeds only when:
+
+```text
+new_movement_spent <= monster_definition.walking_speed
+```
+
+A total exactly equal to walking speed is valid. `walking_speed == 0` remains
+a valid Definition value but permits no positive voluntary Movement segment.
+
+Movement is independent of the current baseline ordinary Action:
+
+```text
+Move → Attack → Move
+Attack → Move
+Move → Move
+```
+
+are structurally legal when every Command independently passes its own
+eligibility and budget checks. `MoveCombatantCommand` never reads
+`action_spent` as a gate, never sets it, and never produces
+`TurnActionSpent`. Conversely, `action_spent=True` does not itself prevent
+remaining legal Movement.
+
+#### Result contract
+
+Pure Domain resolution receives the already-selected `CombatState`, current
+actor `CombatPosition`, and Command and derives one immutable result:
+
+```text
+MoveCombatantResult(
+    combat_id: str,
+    from_x: int,
+    from_y: int,
+    to_x: int,
+    to_y: int,
+    distance: int,
+    movement_spent: int,
+)
+```
+
+`distance` is the canonical segment cost above.
+`movement_spent` is the resolved cumulative value after that segment:
+
+```text
+combat.movement_spent + distance
+```
+
+Neither value is caller supplied. The pure resolver performs no Definition
+lookup, I/O, persistence, Event metadata allocation, or State mutation.
+
+#### Application eligibility and validation precedence
+
+The canonical Application order is:
+
+```text
+StateStore.load
+→ actor CreatureState lookup
+→ active Combat existence and exact payload.combat_id match
+→ actor must equal combat.active_creature_id
+→ CharacterState lookup for actor; Character actor is unsupported
+→ actor Definition lookup as MonsterDefinition
+→ actor current_hp must be > 0
+→ MonsterDefinition.walking_speed must be non-None
+→ actor CombatPosition must already exist
+→ requested destination must differ from current position
+→ pure Movement resolution
+→ resolved movement_spent must be <= walking_speed
+→ Event metadata
+→ CombatantMoved V1
+→ apply_combatant_moved_v1
+→ replacement StateSnapshot
+→ exactly one StateStore.save()
+→ successful ResolutionResult
+```
+
+Exact gameplay failure mappings are:
+
+```text
+missing actor
+    → ENTITY_NOT_FOUND
+      entity_id = actor_id
+      field = None
+
+missing Combat / combat id mismatch
+    → ENTITY_NOT_FOUND
+      entity_id = payload.combat_id
+      field = "combat_id"
+
+actor is not active_creature_id
+    → ACTION_NOT_AVAILABLE
+      entity_id = actor_id
+      field = None
+
+actor has CharacterState
+    → ACTION_NOT_AVAILABLE
+      entity_id = actor_id
+      field = None
+
+Monster Definition missing
+    → DEFINITION_NOT_FOUND
+      entity_id = actor.definition_id
+      field = "definition_id"
+
+actor Definition is not MonsterDefinition
+    → INVALID_STATE
+      entity_id = actor_id
+      field = "definition_id"
+
+actor current_hp == 0
+    → ACTION_NOT_AVAILABLE
+      entity_id = actor_id
+      field = None
+
+walking_speed is None
+    → ACTION_NOT_AVAILABLE
+      entity_id = actor_id
+      field = "walking_speed"
+
+actor CombatPosition missing
+    → ACTION_NOT_AVAILABLE
+      entity_id = actor_id
+      field = "position"
+
+destination equals current position
+    → INVALID_COMMAND
+      entity_id = actor_id
+      field = "position"
+
+resolved cumulative movement_spent exceeds walking_speed
+    → OUT_OF_RANGE
+      entity_id = actor_id
+      field = "position"
+```
+
+Character rejection occurs before Monster Definition lookup. The zero-HP rule
+is a concrete Movement eligibility rule only; it does not define Monster death,
+unconsciousness, stabilization, removal from Combat, targetability, or broader
+DEF-0015 lifecycle semantics.
+
+Every rejected gameplay path above returns before Event metadata allocation,
+Event creation, authoritative State replacement, and `StateStore.save()`.
+
+#### `CombatantMoved` V1
+
+One successful Command produces exactly one Event:
+
+```text
+type = "CombatantMoved"
+version = 1
+actorId = moving Monster id
+causedBy = null
+```
+
+Exact V1 payload:
+
+```text
+combatId
+fromX
+fromY
+toX
+toY
+distance
+```
+
+The Event records the occurred segment. It does not duplicate cumulative
+`movementSpent`, walking speed, remaining capacity, current HP, round,
+active index, path, terrain, or Action state. The applier can derive the new
+cumulative expenditure deterministically from pre-event authoritative State
+plus `distance`.
+
+#### Event application and stale-state integrity
+
+A concrete pure applier:
+
+```text
+apply_combatant_moved_v1(combat: CombatState, event: GameEvent) -> CombatState
+```
+
+validates:
+
+```text
+event type == CombatantMoved
+event version == 1
+exact V1 payload keys
+payload.combatId == combat.id
+event.actor_id == combat.active_creature_id
+actor has exactly one existing CombatPosition
+that current position equals payload.fromX/fromY
+payload.toX/toY differs from payload.fromX/fromY
+payload.distance equals the canonical integer segment cost
+```
+
+On success it replaces the actor's existing `CombatPosition` at the same tuple
+index and sets:
+
+```text
+movement_spent = combat.movement_spent + payload.distance
+```
+
+All other positions and Combat facts are preserved, including `id`, `round`,
+`order`, `active_index`, and `action_spent`.
+
+The applier performs no Definition lookup and does not re-check walking-speed
+legality. Walking-speed eligibility is resolved before Event creation.
+Malformed or stale Event/State correlation is a propagating
+`TypeError`/`ValueError` integrity failure, not a gameplay `EngineError`.
+
+#### Turn lifecycle and compatibility with existing Combat projections
+
+`CombatStarted` V1 remains unchanged. A newly projected `CombatState` starts
+with the dataclass default:
+
+```text
+movement_spent = 0
+```
+
+`TurnAdvanced` V1 remains unchanged. Its existing applier additionally resets
+the new active turn to:
+
+```text
+action_spent = False
+movement_spent = 0
+```
+
+No `TurnAdvanced` V2 or Movement field is added to the Event.
+
+Same-turn unrelated projections preserve `movement_spent`:
+
+```text
+TurnActionSpent changes only action_spent
+CombatantPlaced changes only positions
+Attack persistence must preserve movement_spent
+```
+
+`EndCombat` continues to replace the entire Combat projection with `None`;
+it does not individually reset Movement fields.
+
+#### Persistence and atomicity
+
+The persistence consequence is the additive State schema V10 contract in
+§12.13. This planning decision does not itself change production Python or the
+current V9 writer; TSK-0040 performs that implementation.
+
+One successful Move is one logical transaction:
+
+```text
+MoveCombatantCommand
+→ MoveCombatantResult
+→ CombatantMoved V1
+→ replacement CombatState(position + movement_spent together)
+→ replacement StateSnapshot
+→ exactly one StateStore.save()
+```
+
+Position and expenditure are never saved separately. A `StateStore.save()`
+failure propagates through the existing §12.9 boundary and yields no successful
+`ResolutionResult`; no rollback, UnitOfWork, TransactionManager, EventStore,
+or replay guarantee is introduced.
+
+`MoveCombatantHandler` requires `StateStore`, `DefinitionSource`, and
+`EventMetadataProvider`; it does not require `DiceEngine`.
+
+#### Reactions / Opportunity Attacks boundary
+
+This slice does not adjudicate Reactions or Opportunity Attacks. It does not
+detect hostile-reach departure, reserve or spend a Reaction, interrupt a
+Movement segment, emit an Opportunity Attack, or define future Event ordering
+or causality between Movement and Reaction events.
+
+That omission is a phased implementation boundary only. It must not be
+documented as a gameplay rule that this Movement never provokes Opportunity
+Attacks. TSK-0023 remains separate future refinement and is not a dependency
+of TSK-0040.
+
+#### Explicit exclusions and abstraction verdict
+
+This section does not design or implement:
+
+```text
+Character walking speed or Character voluntary Movement
+Dash or Disengage
+Reaction resources
+Opportunity Attack execution/order
+forced movement or teleportation
+difficult terrain or speed modifiers
+Conditions/equipment/spells modifying speed
+flying/swimming/climbing/burrowing modes
+pathfinding, walls, collision, occupancy, footprint, elevation
+grid/hex/tile rules
+generic MovementEngine, GeometryService, MovementState, TurnResources,
+    ResourcePool, movement modifier pipeline, or action framework
+EventStore/replay
+API, AI DM, UI, database, broker, or cloud behavior
+```
+
+**KEEP CONCRETE.** One concrete Command/Result/Event/applier/handler, one
+additional `CombatState` integer, and one additive State schema version are
+sufficient for the evidenced first consumer.
+
+---
+
 ## 4. ID System
 
 ID являются частью архитектурного контракта.
@@ -12387,7 +12846,7 @@ Sequence > Timestamp
 
 ```json
 {
-  "schemaVersion": 7,
+  "schemaVersion": 9,
   "campaignId": "campaign_001",
   "state": {
     ...
@@ -12418,15 +12877,18 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 7` (§3.30/§12.13,
-TSK-0010: adds `combat.positions` when `combat` is non-null, additive over
-V6's §3.29/TSK-0004 top-level `inventories`/`equipment` and Character
-`weaponProficiencies`); writer выпускает только V7. Reader также принимает
-exact legacy integer `schemaVersion = 1`, `schemaVersion = 2`,
-`schemaVersion = 3`, `schemaVersion = 4`, `schemaVersion = 5` и
-`schemaVersion = 6`. Другие значения запрещены, а `bool` не считается
-integer version. Это версия storage schema, а не revision текущего State и
-не механизм concurrency control.
+Current State schema — exact integer `schemaVersion = 9` (§3.34/§12.13,
+TSK-0017), additive over V8 `combat.actionSpent` (§3.33/TSK-0015), V7
+`combat.positions` (§3.30/TSK-0010), and V6 Inventory/Equipment plus
+Character `weaponProficiencies` (§3.29/TSK-0004). The production writer
+emits only exact V9 today. Reader also accepts exact legacy integer
+`schemaVersion = 1` through `schemaVersion = 8`; other values are rejected,
+and `bool` is not an integer schema version. Architecture §3.38 and §12.13
+define the planned additive V10 `movementSpent` contract for TSK-0040, but
+publishing that contract does not change `SCHEMA_VERSION` or the current
+production writer before TSK-0040 is implemented. This is a storage schema
+version, not a revision of current State and not a concurrency-control
+mechanism.
 
 ---
 
@@ -12544,6 +13006,94 @@ lifecycle defaults above: no pre-V9 snapshot recorded
 durable Event replay exists to reconstruct them, so the canonical `0`/`0`/
 `False`/`False` compatibility values are not a reconstruction of what Death
 Save progress actually happened in that legacy game.
+
+#### Planned State schema V10 — turn-local Movement expenditure (TSK-0040)
+
+Architecture §3.38 / DEC-0054 define the next additive State schema. Until
+TSK-0040 is implemented, the **current production writer remains exact V9**;
+this subsection is the canonical implementation target for V10, not a claim
+that current code already emits it.
+
+V10 is strictly additive over exact V9. The top-level envelope, root `state`
+keys, Campaign, Creature, Character, Inventory, Equipment, and
+`CombatPosition` wire shapes remain exactly V9. A non-null Combat object gains
+one required field:
+
+```text
+movementSpent: int
+```
+
+The resulting exact V10 non-null Combat field set is:
+
+```text
+id
+round
+order
+activeIndex
+positions
+actionSpent
+movementSpent
+```
+
+`movementSpent` maps to `CombatState.movement_spent` and must satisfy:
+
+```text
+type(value) is int
+value >= 0
+bool is invalid
+```
+
+It is required for non-null V10 Combat; missing, `null`, boolean,
+string/float, negative, and unknown-field forms are rejected by the strict
+State boundary. A null V10 `state.combat` remains JSON `null` exactly as in
+V5–V9.
+
+V10 must retain every V9 semantic rather than accidentally falling through to
+an older schema branch:
+
+```text
+Creature.conditions                       retained
+Character skillProficiencies              retained
+Character weaponProficiencies             retained
+Character deathSaveSuccesses              retained
+Character deathSaveFailures               retained
+Character deathSaveStable                 retained
+Character dead                            retained
+StateSnapshot.inventories                 retained
+StateSnapshot.equipment                   retained
+CombatState.positions                     retained
+CombatState.action_spent                  retained
+```
+
+In particular, a V10 Character uses the exact V9 Character field set including
+all four death-save/lifecycle fields.
+
+Legacy Movement-expenditure compatibility is:
+
+```text
+V1–V4:
+    no Combat projection exists
+
+V5–V9 non-null combat:
+    CombatState.movement_spent = 0
+
+V10 non-null combat:
+    CombatState.movement_spent = serialized movementSpent
+```
+
+The V5–V9 default is canonical compatibility, not reconstructed history:
+voluntary Movement expenditure did not exist as an authoritative persisted
+fact in those schemas and no durable Event replay exists to recover it.
+
+After TSK-0040 makes V10 the current writer, successfully loaded legacy
+snapshots are saved as exact V10 while preserving every real value their
+source schema already carried and materializing only the documented
+compatibility defaults. Historical V1–V9 wire schemas are never retroactively
+extended and continue to reject `movementSpent` where it was not defined.
+
+No generic migration registry/framework is introduced. Version-specific
+reader branches remain explicit and must be extended deliberately so V10
+inherits V9 behavior before adding only this one Combat field.
 
 ---
 
