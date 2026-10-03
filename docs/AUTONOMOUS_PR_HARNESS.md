@@ -1116,16 +1116,20 @@ judgment such as "the agent is not making enough progress".
   number, timestamps, reviewer prose, temporary artifact paths, or the
   formatting of verification logs. This contract does not choose a fingerprint algorithm;
   that is an implementation detail of the later task.
-- **Rejected candidate.** A candidate that received `CHANGES_REQUESTED`, or
-  failed required deterministic verification, at a gate. Rejection by
-  verification involves no reviewer verdict.
+- **Rejected candidate.** A candidate that received `CHANGES_REQUESTED`,
+  failed required deterministic verification, or was positively classified
+  as failing deterministic prospective Task Closure candidate validation at a
+  gate. Rejection by verification or prospective-closure validation involves
+  no reviewer verdict.
 - **Comparison scope.** Identities are compared only within the same gate,
   fixed spec, and accepted base context. A candidate seen under a different
   context is a different candidate.
 - **Rule.** When a repair produces a candidate whose identity equals that of
   any candidate already rejected at the same gate and context, the run ends
   as `BLOCKED`: an exact repair cycle, or no progress. This applies equally to
-  a repair made after a verification failure.
+  a repair made after a verification failure or a deterministic prospective-
+  closure validation failure. The latter stays in the same Task Closure gate,
+  fixed spec, and accepted-base comparison context.
 
 | Sequence at one gate | Outcome |
 | --- | --- |
@@ -1134,7 +1138,8 @@ judgment such as "the agent is not making enough progress".
 | `A → B → C → D → …`, all distinct | not blocked, however many iterations |
 
 Iteration count alone never triggers this rule; only a repeated rejected
-identity does.
+identity does. Deterministic prospective-closure validation repair has no
+numeric repair limit.
 
 ---
 
@@ -1147,14 +1152,16 @@ repair attempt it records the orchestration facts that apply to it:
 - the candidate's fingerprint or identity;
 - the verification evidence;
 - whether the candidate was rejected, and on what basis (a reviewer
-  `CHANGES_REQUESTED` or a verification failure);
+  `CHANGES_REQUESTED`, a verification failure, or a positively classified
+  deterministic prospective-closure validation failure);
 - for an attempt produced by a repair, the repair delta or its fingerprint and
   the resulting candidate state.
 
 Only when a designated review actually took place for the attempt does the
 record also hold the review iteration, the reviewer verdict, and the findings.
-An attempt rejected by verification has none of the three, and no synthetic
-verdict stands in for them.
+An attempt rejected by verification or deterministic prospective-closure
+validation has no reviewer iteration, verdict, findings, or `RepairPacket`,
+and no synthetic reviewer result stands in for them.
 
 For a valid explicit reviewer `BLOCKED`, `GateAttempt` also stores the typed
 `BlockedReviewRationale`. That attempt has no findings or repair packet, is not
@@ -1176,6 +1183,15 @@ A fresh reviewer is not handed the whole history. Its ordinary handoff is:
 - the repair delta since the last reviewed candidate, spanning any repairs made
   after verification failures, and the resulting candidate — only if a
   reviewed candidate exists.
+
+`previous_reviewed_candidate_identity` and
+`previous_reviewed_candidate_state` retain their literal meaning: they refer
+only to a candidate actually seen by the designated reviewer. A deterministic
+prospective-closure validation rejection does not populate them. Its dedicated
+closure-validation-failure handoff is mechanical candidate-validation input
+for the next Task Closure implementer invocation, not reviewer feedback,
+findings, deterministic command-verification evidence, or a replacement for a
+reviewer `RepairPacket`.
 
 For the gate's first review, none of the last two items exists: the handoff is
 the fixed Task Execution Spec, the current gate or checkpoint, the current
@@ -1396,6 +1412,20 @@ fresh formatting. An implementation-affecting repair invalidates the stale
 downstream Full Verification and cumulative-review evidence, completes the
 existing conservative replay, and produces new Full Verification and a new
 accepted cumulative review before another closure handoff is built.
+
+Before a prospective-closure defect can be classified as candidate-local and
+sent to Task Closure repair, the orchestrator positively parses the immutable
+authoritative `docs/TASK.md` baseline and proves that the selected task is not
+already terminal there. Baseline parse failure, an already-terminal selected
+task, any disallowed changed path, and any repository read/staging/integrity
+failure remain terminal `BLOCKED`. Once baseline validity and the closure-only
+path boundary are established, deterministic candidate-local defects — such as
+missing required closure-file changes or strict terminal-only row validation
+failure — reject that candidate inside the existing Task Closure repair
+episode. A distinct repaired candidate that passes deterministic validation
+still requires fresh independent Closure Review. After that review approves,
+the existing local unpublished closure commit → fresh `origin/main`
+revalidation → Mode C → exact publication → required CI sequence is unchanged.
 
 Before every Mode C reviewer invocation, including a rebuilt pre-publication
 candidate and a post-publication replay, the orchestrator freshly validates and
@@ -1656,6 +1686,13 @@ becomes `CRITICAL` when either:
   in an earlier packet of that causal episode, including a direct upstream
   seed. Non-adjacent repetition such as `A → B → A` therefore escalates, while
   a new basis alone does not.
+
+A deterministic prospective Task Closure validation rejection is not a
+verification rejection and does not increment the verification-rejection
+count or create `REPEATED_VERIFICATION_REJECTION`. It selects the existing
+`TASK_CLOSURE_REPAIR` work kind, whose baseline remains `DELIBERATE`; the
+baseline routing table above and its verification-specific escalation policy
+are unchanged.
 
 For a reviewer whose baseline is not already `CRITICAL`, review iteration 2 or
 later in the same gate is `CRITICAL`. The first review of a repair candidate
