@@ -172,7 +172,7 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 9
+    assert data["schemaVersion"] == 10
     assert data["state"]["characters"] == []
     assert data["state"]["inventories"] == []
     assert data["state"]["equipment"] == []
@@ -271,6 +271,7 @@ def test_save_load_v9_preserves_prior_state_and_death_save_lifecycle(
         active_index=0,
         positions=(CombatPosition(creature_id="character_001", x=3, y=4),),
         action_spent=True,
+        movement_spent=17,
     )
     original = StateSnapshot(
         campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
@@ -298,7 +299,7 @@ def test_save_load_v9_preserves_prior_state_and_death_save_lifecycle(
 
     state_path = tmp_path / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 9
+    assert data["schemaVersion"] == 10
     assert data["state"]["characters"][0] == {
         "id": "character_001",
         "totalLevel": 5,
@@ -326,6 +327,7 @@ def test_save_load_v9_preserves_prior_state_and_death_save_lifecycle(
         "activeIndex": 0,
         "positions": [{"creatureId": "character_001", "x": 3, "y": 4}],
         "actionSpent": True,
+        "movementSpent": 17,
     }
 
 

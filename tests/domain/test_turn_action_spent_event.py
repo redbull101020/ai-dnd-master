@@ -204,3 +204,10 @@ def test_applier_rejects_wrong_types() -> None:
         apply_turn_action_spent_v1(object(), build_event())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="GameEvent"):
         apply_turn_action_spent_v1(make_combat(), object())  # type: ignore[arg-type]
+
+
+def test_spending_action_preserves_movement() -> None:
+    combat = make_combat(movement_spent=17)
+    updated = apply_turn_action_spent_v1(combat, build_event())
+    assert updated.movement_spent == 17
+    assert combat.movement_spent == 17

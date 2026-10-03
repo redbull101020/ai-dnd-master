@@ -195,3 +195,7 @@ def test_applier_rejects_unexpected_payload_fields() -> None:
 def test_applier_rejects_non_gameevent() -> None:
     with pytest.raises(TypeError, match="GameEvent"):
         apply_combat_started_v1(object())  # type: ignore[arg-type]
+
+
+def test_start_combat_defaults_movement_expenditure_to_zero() -> None:
+    assert apply_combat_started_v1(build_event()).movement_spent == 0

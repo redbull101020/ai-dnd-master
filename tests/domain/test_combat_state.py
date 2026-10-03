@@ -24,6 +24,7 @@ def test_combat_state_has_exact_fields() -> None:
         "active_index",
         "positions",
         "action_spent",
+        "movement_spent",
     )
 
 
@@ -211,3 +212,23 @@ def test_combat_state_accepts_explicit_action_spent_true() -> None:
 def test_combat_state_rejects_non_bool_action_spent(invalid_value: object) -> None:
     with pytest.raises(TypeError, match="action_spent"):
         make_combat(action_spent=invalid_value)
+
+
+def test_movement_spent_defaults_to_zero() -> None:
+    assert make_combat().movement_spent == 0
+
+
+@pytest.mark.parametrize("spent", [0, 1, 31, 10**100])
+def test_movement_spent_has_no_intrinsic_upper_bound(spent: int) -> None:
+    assert make_combat(movement_spent=spent).movement_spent == spent
+
+
+@pytest.mark.parametrize("value", [True, False, "0", 1.0, None])
+def test_movement_spent_rejects_non_integer(value: object) -> None:
+    with pytest.raises(TypeError, match="movement_spent"):
+        make_combat(movement_spent=value)
+
+
+def test_movement_spent_rejects_negative() -> None:
+    with pytest.raises(ValueError, match="movement_spent"):
+        make_combat(movement_spent=-1)

@@ -296,7 +296,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     # --- initial persisted state: combat absent under the current V9 writer -
 
     initial_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert initial_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert initial_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert initial_raw["state"]["combat"] is None
 
     # --- Start Combat -> save -> fresh reload -> CombatState present -------
@@ -338,7 +338,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     assert after_start.combat.id == "combat_001"
 
     started_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert started_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert started_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert started_raw["state"]["combat"] is not None
 
     # --- End Combat -> save -> fresh reload -> combat absent again ----------
@@ -393,7 +393,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     # --- current production V9 persistence contract: no schema bump --------
 
     ended_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert ended_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert ended_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert ended_raw["state"]["combat"] is None
     assert ended_raw.keys() == initial_raw.keys()
     assert ended_raw["state"].keys() == initial_raw["state"].keys()
@@ -443,7 +443,7 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
     writer canonically sorts combat.positions by creature_id on serialize, so
     this test checks persisted position values/identity rather than assuming
     input tuple order survives a save/reload. No schema bump or unrelated
-    wire-shape change occurs: schemaVersion stays 9 and the raw JSON top-level
+    wire-shape change occurs: schemaVersion stays 10 and the raw JSON top-level
     and state keys are unchanged before and after placement."""
     campaigns_root = tmp_path / "campaigns"
     character = CreatureState(
@@ -493,7 +493,7 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
 
     state_path = campaigns_root / "campaign_001" / "state.json"
     before_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert before_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert before_raw["schemaVersion"] == SCHEMA_VERSION == 10
 
     # --- Place Combatant -> save -> fresh reload -> new position present ---
 
@@ -555,7 +555,7 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
     # --- current production V9 persistence contract: no schema bump --------
 
     after_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert after_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert after_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert after_raw.keys() == before_raw.keys()
     assert after_raw["state"].keys() == before_raw["state"].keys()
     assert after_raw["state"]["combat"].keys() == before_raw["state"]["combat"].keys()
@@ -576,3 +576,93 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
         for path in state_path.parent.rglob("*")
         if path.is_file()
     ) == ["state.json"]
+
+
+def test_monster_split_movement_attack_and_turn_reset_with_real_adapters(tmp_path: Path) -> None:
+    from dnd_engine.application.handlers.attack import AttackHandler
+    from dnd_engine.application.handlers.move_combatant import MoveCombatantHandler
+    from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
+    from dnd_engine.domain.commands.move_combatant import MoveCombatantCommand, MoveCombatantPayload
+    from dnd_engine.domain.definitions.monster import MonsterDefinition
+    from dnd_engine.domain.value_objects.dice_roll import DiceRoll
+    from dnd_engine.infrastructure.definitions.packaged import PackagedDefinitionSource
+
+    class CountingStore(FilesystemStateStore):
+        def __init__(self, root):
+            super().__init__(root)
+            self.saves = 0
+
+        def save(self, snapshot):
+            self.saves += 1
+            super().save(snapshot)
+
+    class AttackDice:
+        def roll(self, expression):
+            # A deterministic miss still consumes the ordinary Action.
+            assert expression == "1d20"
+            return DiceRoll(expression=expression, rolls=(1,), total=1)
+
+    root = tmp_path / "campaigns"
+    definitions = PackagedDefinitionSource()
+    goblin = definitions.get_definition(ruleset_id="dnd_5e", ruleset_version="5.1",
+                                         definition_id="goblin", expected_type=MonsterDefinition)
+    assert goblin.walking_speed == 30
+    actor = CreatureState("monster_001", "goblin", goblin.ability_scores, 7, 7)
+    target = CreatureState("character_001", "fighter", goblin.ability_scores, 20, 20)
+    FilesystemStateStore(root).save(StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
+        creatures=(actor, target),
+        characters=(CharacterState(target.id, 1, frozenset(), frozenset(), frozenset()),),
+        combat=CombatState("combat_001", 1, (actor.id,target.id), 0),
+    ))
+    for creature_id, x in [(actor.id,0), (target.id,5)]:
+        assert PlaceCombatantHandler(state_store=FilesystemStateStore(root),
+            event_metadata_provider=FixedEventMetadataProvider()).handle(PlaceCombatantCommand(
+                "command_place_001", "campaign_001", actor.id,
+                PlaceCombatantPayload("combat_001", creature_id, x, 0))).success
+
+    def move(x, y, spent, action_spent):
+        store = CountingStore(root)
+        metadata = FixedEventMetadataProvider()
+        result = MoveCombatantHandler(state_store=store, definition_source=definitions,
+            event_metadata_provider=metadata).handle(MoveCombatantCommand(
+                "command_move_001", "campaign_001", actor.id, MoveCombatantPayload("combat_001", x,y)))
+        assert result.success and len(result.events) == 1 and store.saves == 1
+        loaded = FilesystemStateStore(root).load("campaign_001")
+        assert loaded.combat.positions == (CombatPosition(target.id,5,0), CombatPosition(actor.id,x,y))
+        assert loaded.combat.movement_spent == spent
+        assert loaded.combat.action_spent is action_spent
+        wire = json.loads((root / "campaign_001" / "state.json").read_text(encoding="utf-8"))
+        assert wire["schemaVersion"] == 10
+        assert set(wire["state"]["combat"]) == {"id","round","order","activeIndex","positions","actionSpent","movementSpent"}
+        assert wire["state"]["combat"]["movementSpent"] == spent
+
+    move(3,4,5,False)
+    attack_store = CountingStore(root)
+    attack = AttackHandler(state_store=attack_store, definition_source=definitions,
+        dice=AttackDice(), event_metadata_provider=FixedEventMetadataProvider()).handle(
+            AttackCommand("command_attack_001", "campaign_001", actor.id, AttackPayload(target.id)))
+    assert attack.success and attack_store.saves == 1
+    assert any(event.type == "TurnActionSpent" for event in attack.events)
+    after_attack = FilesystemStateStore(root).load("campaign_001")
+    assert after_attack.combat.movement_spent == 5 and after_attack.combat.action_spent
+    move(0,0,10,True)
+    move(-20,0,30,True)
+    state_path = root / "campaign_001" / "state.json"
+    before = state_path.read_bytes()
+    store = CountingStore(root)
+    metadata = FixedEventMetadataProvider()
+    rejected = MoveCombatantHandler(state_store=store, definition_source=definitions,
+        event_metadata_provider=metadata).handle(MoveCombatantCommand(
+            "command_move_002", "campaign_001", actor.id, MoveCombatantPayload("combat_001", -21,0)))
+    assert not rejected.success and rejected.events == ()
+    assert rejected.errors[0].code is ErrorCode.OUT_OF_RANGE
+    assert store.saves == 0 and metadata.calls == [] and state_path.read_bytes() == before
+    assert AdvanceTurnHandler(state_store=store, dice=AttackDice(),
+        event_metadata_provider=FixedEventMetadataProvider()).handle(AdvanceTurnCommand(
+            "command_advance_001", "campaign_001", actor.id, AdvanceTurnPayload("combat_001"))).success
+    after_turn = FilesystemStateStore(root).load("campaign_001")
+    assert store.saves == 1 and after_turn.combat.movement_spent == 0
+    assert after_turn.combat.action_spent is False
+    assert after_turn.combat.positions == (
+        CombatPosition(target.id,5,0), CombatPosition(actor.id,-20,0))

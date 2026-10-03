@@ -7746,3 +7746,37 @@ post-merge `AUTONOMOUS_PR TSK-0040` run is claimed. Verification passed:
 focused operator/task/launcher tests — 102 passed; documentation references —
 8 passed; full pytest — 3104 passed, 1 skipped; configured mypy — 134 source
 files with no issues; `git diff --check` passed.
+
+
+## 2026-10-03 — TSK-0040: Monster voluntary Movement
+
+Implemented the Monster-only voluntary walking-Movement slice: turn-local
+`movement_spent`, exact additive State schema V10, deterministic integer
+segment resolution, `CombatantMoved` V1 projection, and Application eligibility
+and authoritative walking-speed budget checks. Movement preserves the ordinary
+Action and persists position plus expenditure in one replacement snapshot/save.
+Production Goblin/filesystem coverage proves split Move → Attack → Move,
+exact-budget acceptance, side-effect-free over-budget rejection, and turn reset
+across fresh reloads. Domain/Application/Infrastructure/Integration/Architecture
+verification passed (2511 tests); configured mypy passed (138 source files),
+and diff whitespace checks passed. The full pytest invocation was stopped after repeated
+Windows sandbox access failures in autonomous-tooling temporary repositories
+(`WinError 5`); no tooling/governance gate was changed to bypass them.
+Character Movement, Dash, terrain/pathfinding/collision, Reactions and
+Opportunity Attacks remain deferred; broad Roadmap Movement stays unchecked.
+
+## 2026-10-03 — TSK-0040: Prospective Task Closure (draft PR #129)
+
+Delivered Monster-only voluntary walking Movement with deterministic integer
+segments, split turn-local expenditure, authoritative walking-speed budgeting,
+`CombatantMoved` V1, Action independence, turn reset, and exact additive State
+schema V10. Position and expenditure share one replacement snapshot/save;
+historical schema compatibility and existing Action/lifecycle boundaries remain
+preserved. The supplied closure evidence records successful full `python -m
+pytest`, configured `python -m mypy src/dnd_engine tools/autonomous_pr`, and
+`git diff --check` at accepted implementation head
+`0353c7e6576ced4701af25b67c1148a4268bb943`; this completed full verification
+supersedes the earlier entry's interrupted verification report. Character
+Movement, Dash, terrain/pathfinding/collision, Reactions and Opportunity Attacks
+remain deferred, and broad Roadmap Movement remains unchecked. This closure is
+prospective in draft PR #129; merge remains human-only.
