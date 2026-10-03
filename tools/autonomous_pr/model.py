@@ -82,6 +82,7 @@ class CandidateRejectionBasis(Enum):
     """Why one v2 gate candidate became ineligible for another review."""
 
     VERIFICATION_FAILURE = "verification_failure"
+    CLOSURE_VALIDATION_FAILURE = "closure_validation_failure"
     CHANGES_REQUESTED = "changes_requested"
     REPEATED_IDENTITY = "repeated_identity"
 

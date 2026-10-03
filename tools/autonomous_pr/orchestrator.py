@@ -2676,6 +2676,7 @@ def _build_v2_closure_prompt(
     closure_evidence: str,
     upstream_packet: RepairPacket | None,
     closure_gate_packet: RepairPacket | None,
+    closure_validation_failure: str | None = None,
 ) -> str:
     cumulative = pre_closure.evidence.cumulative_review
     if cumulative is None:
@@ -2712,6 +2713,8 @@ def _build_v2_closure_prompt(
         f"{_repair_packet_json(upstream_packet)}\n"
         "CURRENT_CLOSURE_REVIEW_REPAIR_PACKET:\n"
         f"{_repair_packet_json(closure_gate_packet)}\n"
+        "CURRENT_CLOSURE_VALIDATION_FAILURE:\n"
+        f"{closure_validation_failure or '(none)'}\n"
         "PRE_RETURN_CONFORMANCE_PASS:\n"
         "Before returning control, inspect only the resulting closure candidate "
         "against canonical closure content, factual evidence, terminal-registry "
@@ -2796,6 +2799,33 @@ def _prepare_v2_unpublished_closure(
         ),
         history_sink,
     )
+    # Preserve the existing fail-closed precedence: accepted implementation
+    # evidence must be valid before any closure agent or baseline
+    # classification is reached.
+    closure_evidence = _format_validated_v2_closure_evidence(
+        execution_target,
+        pre_closure,
+        pr_number=pr_number,
+        expected_published_head=expected_published_head,
+    )
+    try:
+        authoritative_terminal = task_context.parse_terminal_registry(
+            task_md_baseline
+        )
+    except TaskTrackerError as exc:
+        raise _Blocked(
+            f"invalid authoritative Task Closure baseline: {exc}"
+        ) from exc
+    if any(
+        task.task_id == execution_target.task.task_id
+        for task in authoritative_terminal.tasks
+    ):
+        raise _Blocked(
+            f"{execution_target.task.task_id} is already terminal in the "
+            "authoritative Task Closure baseline"
+        )
+
+    closure_validation_failure: str | None = None
     while True:
         closure_evidence = _format_validated_v2_closure_evidence(
             execution_target,
@@ -2811,6 +2841,7 @@ def _prepare_v2_unpublished_closure(
             closure_evidence,
             upstream_packet,
             history.latest_valid_repair_packet,
+            closure_validation_failure,
         )
         closure_work_kind = (
             AgentWorkKind.TASK_CLOSURE_PREPARATION
@@ -2837,21 +2868,72 @@ def _prepare_v2_unpublished_closure(
                 "unsafe narrow continuation is refused"
             )
         _require_canonical_closure_files_touched(touched)
+        identity = _candidate_identity(patch.diff_text)
+        repair_delta = (
+            _repair_delta(
+                history.previous_reviewed_candidate_state, patch.diff_text
+            )
+            if history.previous_reviewed_candidate_state is not None
+            else None
+        )
+        delta_digest = (
+            hashlib.sha256(repair_delta.encode("utf-8")).hexdigest()
+            if repair_delta is not None
+            else None
+        )
+        if identity in history.rejected_candidate_identities:
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=None,
+                    rejected=True,
+                    rejection_basis=CandidateRejectionBasis.REPEATED_IDENTITY,
+                    review_iteration=None,
+                    reviewer_verdict=None,
+                    repair_delta_digest=delta_digest,
+                )
+            )
+            raise _Blocked("Task Closure repair reproduced a rejected candidate")
+
         try:
-            task_context.validate_terminal_only_closure(
-                task_md_baseline,
-                repository.read_worktree_utf8_file_exact(
-                    config.repo, "docs/TASK.md"
-                ),
+            closure_validation_failures = _collect_v2_closure_validation_failures(
+                config.repo,
+                touched,
+                task_md_baseline=task_md_baseline,
                 task_id=execution_target.task.task_id,
                 pr_number=pr_number,
                 title=execution_target.task.title,
             )
-        except (RepositoryError, TaskTrackerError) as exc:
-            raise _Blocked(f"invalid terminal-only Task Closure: {exc}") from exc
-        identity = _candidate_identity(patch.diff_text)
-        if identity in history.rejected_candidate_identities:
-            raise _Blocked("Task Closure repair reproduced a rejected candidate")
+        except RepositoryError as exc:
+            raise _Blocked(
+                f"cannot safely read prospective Task Closure candidate: {exc}"
+            ) from exc
+        if closure_validation_failures:
+            closure_validation_failure = _format_v2_closure_validation_failures(
+                closure_validation_failures
+            )
+            history.rejected_candidate_identities.add(identity)
+            history.attempts.append(
+                GateAttempt(
+                    candidate_identity=identity,
+                    candidate_state=patch.diff_text,
+                    verification=None,
+                    rejected=True,
+                    rejection_basis=(
+                        CandidateRejectionBasis.CLOSURE_VALIDATION_FAILURE
+                    ),
+                    review_iteration=None,
+                    reviewer_verdict=None,
+                    findings=(),
+                    repair_packet=None,
+                    repair_delta_digest=delta_digest,
+                    blocked_rationale=None,
+                )
+            )
+            continue
+
+        closure_validation_failure = None
         closure_evidence = _format_validated_v2_closure_evidence(
             execution_target,
             pre_closure,
@@ -3765,15 +3847,14 @@ def _extract_pr_number(pr_url: str) -> str:
 
 
 def _require_canonical_closure_files_touched(touched: tuple[str, ...]) -> None:
-    """Prospective Task Closure may touch only the canonical closure file
-    set ``docs/TASK.md`` §18 defines: ``docs/TASK.md`` and
-    ``docs/DEVELOPMENT_LOG.md`` are required every time; ``docs/ROADMAP.md``
-    and ``docs/DEFERRED.md`` are optional, included only when this task's
-    delivered work legitimately changes Roadmap/Deferred status (the
-    designated closure reviewer is responsible for judging whether an
-    included optional file is actually justified — this guard only
-    enforces the mechanical file-set boundary). No source file, arbitrary
-    doc, or governance-contract edit is ever permitted here —
+    """Prospective Task Closure may touch only the canonical closure file set.
+
+    Missing required files are candidate-local deterministic validation
+    defects collected separately for in-process repair. This guard retains
+    the stricter terminal boundary for every disallowed path. Optional
+    ``docs/ROADMAP.md`` and ``docs/DEFERRED.md`` changes remain subject to
+    designated Closure Review. No source file, arbitrary doc, or
+    governance-contract edit is ever permitted here —
     ``AUTONOMOUS_PR``'s ``docs/TASK.md``-mutation restriction (``AGENTS.md``
     "Bounded authority") is the floor, not the entire closure procedure.
     """
@@ -3786,10 +3867,46 @@ def _require_canonical_closure_files_touched(touched: tuple[str, ...]) -> None:
             f"canonical closure file set {sorted(_CLOSURE_ALLOWED_FILES)!r}: "
             f"{sorted(disallowed)!r}"
         )
-    missing_required = _CLOSURE_REQUIRED_FILES - normalized
+
+
+def _collect_v2_closure_validation_failures(
+    repo: Path,
+    touched: tuple[str, ...],
+    *,
+    task_md_baseline: str,
+    task_id: str,
+    pr_number: str,
+    title: str,
+) -> tuple[str, ...]:
+    """Collect safely knowable candidate-local closure defects in stable order."""
+
+    normalized = {path.replace("\\", "/") for path in touched}
+    failures: list[str] = []
+    missing_required = sorted(_CLOSURE_REQUIRED_FILES - normalized)
     if missing_required:
-        raise _Blocked(
-            "prospective Task Closure diff must touch every required "
-            f"canonical closure file {sorted(_CLOSURE_REQUIRED_FILES)!r}; "
-            f"missing: {sorted(missing_required)!r}"
+        failures.append(
+            "missing required closure-file change(s): "
+            + ", ".join(missing_required)
         )
+    candidate_task_md = repository.read_worktree_utf8_file_exact(
+        repo, "docs/TASK.md"
+    )
+    try:
+        task_context.validate_terminal_only_closure(
+            task_md_baseline,
+            candidate_task_md,
+            task_id=task_id,
+            pr_number=pr_number,
+            title=title,
+        )
+    except TaskTrackerError as exc:
+        failures.append(f"invalid terminal-only Task Closure: {exc}")
+    return tuple(failures)
+
+
+def _format_v2_closure_validation_failures(failures: tuple[str, ...]) -> str:
+    """Format one bounded deterministic implementer handoff diagnostic."""
+
+    return "\n".join(
+        f"{index}. {failure}" for index, failure in enumerate(failures, start=1)
+    )

@@ -5079,6 +5079,287 @@ def test_v2_invalid_closure_evidence_blocks_before_agent_invocation(
     assert invoked == []
 
 
+@pytest.mark.parametrize(
+    ("task_md_baseline", "expected"),
+    [
+        ("not a terminal registry", "invalid authoritative Task Closure baseline"),
+        (
+            _v2_task_md_text(
+                _TASK_ID, terminal_rows=((_TASK_ID, TaskStatus.DONE.value),)
+            ),
+            f"{_TASK_ID} is already terminal",
+        ),
+    ],
+    ids=("malformed", "selected-task-already-terminal"),
+)
+def test_v2_invalid_authoritative_closure_baseline_blocks_before_implementer(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    task_md_baseline: str,
+    expected: str,
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_implementer",
+        lambda *args, **kwargs: invoked.append("implementer"),
+    )
+
+    with pytest.raises(orch_module._Blocked, match=expected):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+        )
+
+    assert invoked == []
+
+
+def _write_test_closure_candidate(
+    env: Env, *, evidence: str, log_text: str
+) -> None:
+    task_path = env.work / "docs" / "TASK.md"
+    task_text = task_path.read_bytes().decode("utf-8")
+    eol = "\r\n" if "\r\n" in task_text else "\n"
+    separator = (
+        f"| ID | Status | Evidence | Title |{eol}"
+        f"| --- | --- | --- | --- |{eol}"
+    )
+    wrong_row = f"| `{_TASK_ID}` | `Done` | draft PR #1 | Test task |{eol}"
+    valid_row = f"| `{_TASK_ID}` | `Done` | PR #1 | Test task |{eol}"
+    desired_row = wrong_row if evidence == "draft PR #1" else valid_row
+    if wrong_row in task_text:
+        task_text = task_text.replace(wrong_row, desired_row, 1)
+    elif valid_row in task_text:
+        task_text = task_text.replace(valid_row, desired_row, 1)
+    else:
+        assert separator in task_text
+        task_text = task_text.replace(separator, separator + desired_row, 1)
+    task_path.write_bytes(task_text.encode("utf-8"))
+    (env.work / "docs" / "DEVELOPMENT_LOG.md").write_text(
+        log_text, encoding="utf-8"
+    )
+
+
+def test_v2_wrong_closure_evidence_repairs_before_review_with_distinct_handoff(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert (
+        CandidateRejectionBasis.CLOSURE_VALIDATION_FAILURE.value
+        == "closure_validation_failure"
+    )
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+    prompts: list[str] = []
+    work_kinds: list[AgentWorkKind] = []
+    reviews = [
+        _changes_with_paths(
+            "closure prose defect", ("docs/DEVELOPMENT_LOG.md",)
+        ),
+        _v2_approved(),
+    ]
+    reviewer_calls = 0
+
+    def implement(
+        config: OrchestratorConfig,
+        prompt: str,
+        *,
+        work_kind: AgentWorkKind,
+        history: GateHistory,
+        direct_upstream_repair_packet: RepairPacket | None = None,
+        seed_verification_rejection_count: int = 0,
+    ) -> AgentInvocationResult:
+        prompts.append(prompt)
+        work_kinds.append(work_kind)
+        if len(prompts) == 1:
+            _write_test_closure_candidate(
+                env, evidence="draft PR #1", log_text="invalid closure\n"
+            )
+        elif len(prompts) == 2:
+            _write_test_closure_candidate(
+                env, evidence="PR #1", log_text="valid closure\n"
+            )
+        else:
+            _write_test_closure_candidate(
+                env, evidence="PR #1", log_text="review repair\n"
+            )
+        return AgentInvocationResult("done", "", 0, False)
+
+    def review(
+        config: OrchestratorConfig,
+        review_input: str,
+        patch: repository.ReviewPatch,
+        *,
+        context: str,
+        work_kind: AgentWorkKind,
+        history: GateHistory,
+        direct_upstream_repair_packet: RepairPacket | None = None,
+        seed_verification_rejection_count: int = 0,
+    ) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        if reviewer_calls == 1:
+            assert history.review_iteration == 0
+            assert history.consecutive_changes_requested == 0
+            assert history.previous_reviewed_candidate_identity is None
+            assert history.previous_reviewed_candidate_state is None
+            assert history.latest_valid_repair_packet is None
+            assert len(history.attempts) == 1
+        return reviews.pop(0)
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_implementer", implement)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+    histories: list[GateHistory] = []
+
+    candidate, history, _ = orch_module._prepare_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        pre_closure,
+        pr_number="1",
+        expected_published_head=implementation_head,
+        task_md_baseline=task_md_baseline,
+        history_sink=histories,
+    )
+
+    assert candidate.published_predecessor_sha == implementation_head
+    assert history is histories[0]
+    assert work_kinds == [
+        AgentWorkKind.TASK_CLOSURE_PREPARATION,
+        AgentWorkKind.TASK_CLOSURE_REPAIR,
+        AgentWorkKind.TASK_CLOSURE_REPAIR,
+    ]
+    assert "CURRENT_CLOSURE_VALIDATION_FAILURE:\n(none)\n" in prompts[0]
+    assert "CURRENT_CLOSURE_VALIDATION_FAILURE:\n1. invalid terminal-only" in (
+        prompts[1]
+    )
+    assert "prospective closure must add exactly one selected-task terminal row" in (
+        prompts[1]
+    )
+    assert "CURRENT_CLOSURE_VALIDATION_FAILURE:\n(none)\n" in prompts[2]
+    first = history.attempts[0]
+    assert first.rejected
+    assert (
+        first.rejection_basis
+        is CandidateRejectionBasis.CLOSURE_VALIDATION_FAILURE
+    )
+    assert first.verification is None
+    assert first.review_iteration is None
+    assert first.reviewer_verdict is None
+    assert first.findings == ()
+    assert first.repair_packet is None
+    assert first.blocked_rationale is None
+    assert reviewer_calls == 2
+
+
+def test_v2_repeated_invalid_closure_identity_blocks_before_reviewer(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+    implementer_calls = 0
+    reviewer_calls = 0
+
+    def implement(*args: object, **kwargs: object) -> AgentInvocationResult:
+        nonlocal implementer_calls
+        implementer_calls += 1
+        if implementer_calls == 1:
+            _write_test_closure_candidate(
+                env, evidence="draft PR #1", log_text="same invalid closure\n"
+            )
+        return AgentInvocationResult("done", "", 0, False)
+
+    def review(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        return _v2_approved()
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_implementer", implement)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+    histories: list[GateHistory] = []
+
+    with pytest.raises(orch_module._Blocked, match="reproduced a rejected candidate"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+            history_sink=histories,
+        )
+
+    history = histories[0]
+    assert implementer_calls == 2
+    assert reviewer_calls == 0
+    assert len(history.attempts) == 2
+    assert (
+        history.attempts[0].rejection_basis
+        is CandidateRejectionBasis.CLOSURE_VALIDATION_FAILURE
+    )
+    repeated = history.attempts[1]
+    assert repeated.rejected
+    assert repeated.rejection_basis is CandidateRejectionBasis.REPEATED_IDENTITY
+    assert repeated.verification is None
+    assert repeated.review_iteration is None
+    assert repeated.reviewer_verdict is None
+
+
+def test_v2_closure_validation_collects_missing_file_and_terminal_row_defects(
+    env: Env
+) -> None:
+    baseline = (env.work / "docs" / "TASK.md").read_text(encoding="utf-8")
+    _write_test_closure_candidate(
+        env, evidence="draft PR #1", log_text="not part of touched set\n"
+    )
+
+    failures = orch_module._collect_v2_closure_validation_failures(
+        env.work,
+        ("docs/TASK.md",),
+        task_md_baseline=baseline,
+        task_id=_TASK_ID,
+        pr_number="1",
+        title="Test task",
+    )
+
+    assert failures[0] == (
+        "missing required closure-file change(s): docs/DEVELOPMENT_LOG.md"
+    )
+    assert failures[1].startswith("invalid terminal-only Task Closure:")
+
+
+def test_v2_unchanged_readable_task_file_reports_missing_change_and_row(
+    env: Env
+) -> None:
+    baseline = (env.work / "docs" / "TASK.md").read_text(encoding="utf-8")
+    (env.work / "docs" / "DEVELOPMENT_LOG.md").write_text(
+        "closure log only\n", encoding="utf-8"
+    )
+
+    failures = orch_module._collect_v2_closure_validation_failures(
+        env.work,
+        ("docs/DEVELOPMENT_LOG.md",),
+        task_md_baseline=baseline,
+        task_id=_TASK_ID,
+        pr_number="1",
+        title="Test task",
+    )
+
+    assert failures[0] == "missing required closure-file change(s): docs/TASK.md"
+    assert failures[1].startswith("invalid terminal-only Task Closure:")
+    assert "selected-task terminal row" in failures[1]
+
+
 def test_v2_closure_evidence_is_revalidated_before_reviewer_invocation(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
