@@ -296,3 +296,4 @@ Concrete known constraints.
 | `TSK-0037` | `Done` | PR #120 | Add a deterministic Codex operator launcher for one-command AUTONOMOUS_PR execution |
 | `TSK-0038` | `Done` | PR #121 | Make execution-ready AUTONOMOUS_PR-suitable tasks the default planning outcome |
 | `TSK-0039` | `Done` | PR #126 | Add authoritative Monster walking-speed source |
+| `TSK-0041` | `Done` | PR #128 | Make local Codex-chat AUTONOMOUS_PR dispatch approval-aware |
