@@ -55,6 +55,52 @@ are forwarded without clamping or rounding. The launcher exposes no arbitrary
 agent argv, model, provider, sandbox, approval, network, delivery-branch,
 verification-command, capability-assertion, merge, or auto-merge override.
 
+## Approval-aware outer dispatch
+
+The three execution boundaries are:
+
+```text
+outer local Codex chat
+    → one approval-aware tools.autonomous_pr.codex_launcher execution
+        → deterministic AUTONOMOUS_PR harness owns Git/GitHub side effects
+            → implementer child: fixed restricted profile
+            → reviewer child: fixed restricted disposable-snapshot profile
+```
+
+A valid explicit `AUTONOMOUS_PR <TSK-NNNN|NEXT>` instruction is repository-
+workflow authorization. Codex sandbox approval is a separate product
+execution permission: it only permits the already-authorized launcher process
+to cross the current sandbox boundary. Approval alone never activates
+`AUTONOMOUS_PR` and is not commit, push, pull-request, or merge authorization.
+
+The outer Codex treats the launcher command as one side-effecting orchestration
+unit. When its current sandbox cannot perform the harness-owned Git/GitHub
+operations, it requests sandbox escalation/approval for that command before
+launcher execution. It must not first launch inside a known-insufficient
+sandbox merely to obtain a `git fetch origin` failure, and it must not perform
+`git fetch`, branch creation, commit, push, or `gh` operations independently
+around the harness.
+
+The ordinary bounded local-chat capability profile is `workspace-write` with
+an approval policy capable of surfacing granular sandbox escalation, such as
+`on-request` where supported. An eligible prompt may be reviewed by a human or
+by `auto_review` where the client supports it; neither reviewer is guaranteed
+to approve. An outer `workspace-write` session with `approval_policy=never`
+cannot support this chat-native workflow because the required escalation
+cannot surface.
+
+User-selected full access may already be capable of running the launcher, but
+the repository neither requires nor enables it and does not recommend it as a
+mandatory workaround. Repository instructions and code do not edit `.codex`,
+global or user `config.toml`, exec-policy rules, or organization settings to
+obtain capability.
+
+If the active surface cannot surface the required escalation, policy forbids
+it, or approval is denied, dispatch stops fail-closed and reports the outer
+execution-boundary blocker. There is no direct Git/GitHub fallback by the
+outer Codex. Outer execution permission does not flow into the implementer or
+reviewer children and does not weaken their fixed security profiles.
+
 ## Environment and Codex resolution
 
 The launcher requires `<repo>/.venv` to exist and the current `sys.prefix` to
@@ -158,9 +204,10 @@ This directory is temporary subprocess workspace, not persisted harness state.
 
 The outer Codex host sandbox/permission boundary and each child Codex sandbox
 are separate. The launcher fixes the child profiles described above, but it
-does not bypass, broaden, or automatically escalate outer-host restrictions.
-If the outer host cannot perform a harness-owned Git/GitHub operation, the run
-must fail or stop under the existing contract rather than weakening a gate.
+does not itself bypass, broaden, or automatically escalate outer-host
+restrictions. The outer Codex must establish the approval-aware launcher
+execution described above; if it cannot, dispatch stops fail-closed rather
+than weakening a gate or substituting direct Git/GitHub operations.
 
 ## Terminal outcomes
 
@@ -191,4 +238,4 @@ another task.
 | `codex --version` failure, timeout, or malformed identity | Verify the selected executable manually and correct the path/installation. The launcher does not update or replace it. |
 | Repository `.codex` refused | Remove the repository-local configuration from this execution boundary or use a separately reviewed future change; the launcher never ignores the guard. |
 | Temp directory creation/write probe fails | Correct host temp-path permissions or configuration so the dedicated directory is outside the repository and writable. |
-| Outer-host permissions are insufficient | Adjust the outer execution authorization separately if appropriate. The launcher does not request, bypass, or manufacture those permissions. |
+| Outer-host permissions are insufficient | The outer Codex requests approval for the single launcher command before execution. If escalation is unavailable, forbidden, or denied, stop fail-closed; the launcher does not request, bypass, or manufacture permission, and there is no direct Git/GitHub fallback. |

@@ -331,11 +331,24 @@ never resumed automatically and never inferred from context.
 Only when the current user instruction already satisfies **Valid invocation**
 above, use the repository Codex operator launcher described in
 [`docs/AUTONOMOUS_PR_OPERATOR.md`](docs/AUTONOMOUS_PR_OPERATOR.md). The
-launcher is convenience configuration, not authorization. The outer Codex
-must let the harness own the bounded workflow and must not independently
-implement, review, commit, push, or merge in parallel around it. After the
-harness returns a terminal result, the outer Codex reports that result and
-stops. A new run or a merge requires a separate user instruction.
+launcher is convenience configuration, not authorization. The valid
+`AUTONOMOUS_PR` invocation is the repository-workflow authorization; a Codex
+sandbox approval is only product execution permission for the already-
+authorized launcher process. Approval alone never activates `AUTONOMOUS_PR`.
+
+Treat the existing launcher invocation as one side-effecting orchestration
+unit. When the current outer sandbox cannot perform the harness-owned
+Git/GitHub operations, request sandbox escalation/approval for the launcher
+command before starting it. Do not first run the launcher inside a known
+insufficient sandbox merely to observe `git fetch origin` fail. If the active
+surface cannot offer the required approval, policy forbids it, or approval is
+denied, stop fail-closed and report the outer execution-boundary blocker.
+
+The outer Codex must let the harness own the bounded workflow and must not
+independently implement, review, run `git fetch`, create the delivery branch,
+commit, push, run `gh` pull-request operations, or merge around the launcher.
+After the harness returns a terminal result, the outer Codex reports that
+result and stops. A new run or a merge requires a separate user instruction.
 
 #### Bounded authority
 

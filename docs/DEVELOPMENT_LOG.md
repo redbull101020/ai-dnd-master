@@ -7727,3 +7727,22 @@ pathfinding, collision/occupancy/elevation, movement modes/modifiers, and
 generic Movement abstractions remain outside this publication slice. A fresh
 explicit `AUTONOMOUS_PR TSK-0040` invocation is required after this canonical
 publication lands on `main`.
+
+## 2026-10-03 — TSK-0041: Approval-aware outer Codex dispatch
+
+Moved the mistakenly published `docs/TSK-0041.md` to canonical
+`docs/tasks/TSK-0041.md` and added deterministic governance regression against
+tracked `TSK-NNNN.md` task documents outside `docs/tasks/`. Corrected the
+observed local-chat `.git/FETCH_HEAD` blocker: when the current outer execution
+boundary cannot perform harness-owned Git/GitHub operations, the outer Codex
+must obtain the required sandbox escalation/approval for the existing launcher
+before starting it; a context that already has sufficient capability needs no
+separate approval. Repository authorization remains distinct from product
+execution permission, and unavailable or denied required escalation fails
+closed with no direct Git/GitHub fallback. The generic harness, mandatory fresh
+fetch, human-only merge boundary, and fixed approval-never/network-off
+implementer and reviewer profiles remain unchanged. No successful post-merge
+`AUTONOMOUS_PR TSK-0040` run is claimed. Verification passed: focused
+operator/task/launcher tests — 102 passed; documentation references — 8 passed;
+full pytest — 3104 passed, 1 skipped; configured mypy — 134 source files;
+`git diff --check` clean.
