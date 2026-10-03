@@ -152,7 +152,7 @@ CANONICAL_V6_DATA: dict[str, object] = {
 # Inventory/Equipment shape; only non-null Combat gains `positions`. This
 # minimal fixture has no Combat, so its wire shape differs from V6 only in
 # `schemaVersion`. Superseded by V8 (below), which is itself historical under
-# the current V9 writer; kept for explicit historical V7 reader tests (§12.13).
+# the current V10 writer; kept for explicit historical V7 reader tests (§12.13).
 CANONICAL_V7_DATA: dict[str, object] = {
     **deepcopy(CANONICAL_V6_DATA),
     "schemaVersion": 7,
@@ -168,7 +168,7 @@ CANONICAL_V8_DATA: dict[str, object] = {
     "schemaVersion": 8,
 }
 
-# Current V9: exact state shape emitted by the current writer. Additive over
+# Historical V9: exact state shape with Character lifecycle fields. Additive over
 # V8 (§3.34/DEC-0050, §12.13): only the Character shape gains four required
 # lifecycle fields; every other wire shape remains unchanged.
 CANONICAL_V9_DATA: dict[str, object] = deepcopy(CANONICAL_V8_DATA)
@@ -181,6 +181,11 @@ CANONICAL_V9_DATA["state"]["characters"][0].update(  # type: ignore[index,union-
         "dead": False,
     }
 )
+
+# Current V10 retains the V9 shape when Combat is null.
+CANONICAL_V10_DATA: dict[str, object] = deepcopy(CANONICAL_V9_DATA)
+CANONICAL_V10_DATA["schemaVersion"] = 10
+
 
 # Legacy V3: current V1-V3 Character schema, no Creature `conditions` field.
 LEGACY_V3_DATA: dict[str, object] = deepcopy(CANONICAL_V4_DATA)
@@ -379,25 +384,26 @@ def nested(data: dict[str, object], *path: str | int) -> object:
     return value
 
 
-# --- V9 writer: exact shape, ordering, and field sets -----------------------
+# --- V10 writer: exact shape, ordering, and field sets -----------------------
 
 
-def test_serialize_emits_exact_canonical_v9_mapping() -> None:
+def test_serialize_emits_exact_canonical_v10_mapping() -> None:
     serialized = StateSerializer.serialize(
         snapshot(creature_state(), characters=(character_state(),))
     )
 
-    assert serialized == CANONICAL_V9_DATA
-    assert serialized["schemaVersion"] == 9
+    assert serialized == CANONICAL_V10_DATA
+    assert serialized["schemaVersion"] == 10
     assert state_serializer.SCHEMA_V9_VERSION == 9
-    assert state_serializer.SCHEMA_VERSION == 9
+    assert state_serializer.SCHEMA_V10_VERSION == 10
+    assert state_serializer.SCHEMA_VERSION == 10
 
 
-def test_serialize_emits_empty_projections_in_v9() -> None:
+def test_serialize_emits_empty_projections_in_v10() -> None:
     serialized = StateSerializer.serialize(snapshot())
 
     assert serialized == {
-        "schemaVersion": 9,
+        "schemaVersion": 10,
         "campaignId": "campaign_001",
         "state": {
             "campaign": {
@@ -414,7 +420,7 @@ def test_serialize_emits_empty_projections_in_v9() -> None:
     }
 
 
-def test_serialize_uses_exact_v9_state_and_nested_fields() -> None:
+def test_serialize_uses_exact_v10_state_and_nested_fields() -> None:
     serialized = StateSerializer.serialize(
         snapshot(
             creature_state("character_001"),
@@ -475,6 +481,7 @@ def test_serialize_uses_exact_v9_state_and_nested_fields() -> None:
         "activeIndex",
         "positions",
         "actionSpent",
+        "movementSpent",
     }
     assert set(position) == {"creatureId", "x", "y"}
 
@@ -495,6 +502,7 @@ def test_serialize_emits_exact_combat_fields_with_empty_positions() -> None:
         "activeIndex": 1,
         "positions": [],
         "actionSpent": False,
+        "movementSpent": 0,
     }
 
 
@@ -525,6 +533,7 @@ def test_serialize_emits_exact_combat_fields_with_non_empty_positions() -> None:
             {"creatureId": "monster_001", "x": 1, "y": 2},
         ],
         "actionSpent": True,
+        "movementSpent": 0,
     }
 
 
@@ -721,7 +730,7 @@ def test_serialize_emits_null_equipped_weapon_id() -> None:
     )
 
 
-def test_v9_round_trip_reconstructs_equivalent_current_snapshot() -> None:
+def test_v10_round_trip_reconstructs_equivalent_current_snapshot() -> None:
     original = snapshot(
         creature_state(conditions=frozenset({Condition.POISONED})),
         characters=(character_state(),),
@@ -732,7 +741,7 @@ def test_v9_round_trip_reconstructs_equivalent_current_snapshot() -> None:
     assert reconstructed == original
 
 
-def test_v9_round_trip_with_empty_conditions() -> None:
+def test_v10_round_trip_with_empty_conditions() -> None:
     original = snapshot(creature_state())
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
@@ -741,7 +750,7 @@ def test_v9_round_trip_with_empty_conditions() -> None:
     assert reconstructed.creatures[0].conditions == frozenset()
 
 
-def test_v9_round_trip_with_poisoned_condition() -> None:
+def test_v10_round_trip_with_poisoned_condition() -> None:
     original = snapshot(creature_state(conditions=frozenset({Condition.POISONED})))
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
@@ -750,7 +759,7 @@ def test_v9_round_trip_with_poisoned_condition() -> None:
     assert reconstructed.creatures[0].conditions == frozenset({Condition.POISONED})
 
 
-def test_v9_round_trip_with_combat_and_empty_positions() -> None:
+def test_v10_round_trip_with_combat_and_empty_positions() -> None:
     original = snapshot(
         creature_state("character_001"),
         creature_state("monster_001"),
@@ -764,7 +773,7 @@ def test_v9_round_trip_with_combat_and_empty_positions() -> None:
     assert reconstructed.combat.positions == ()  # type: ignore[union-attr]
 
 
-def test_v9_round_trip_with_non_empty_positions() -> None:
+def test_v10_round_trip_with_non_empty_positions() -> None:
     """`positions` is supplied already sorted by `creatureId` (matching the
     writer's deterministic output order, §3.30) so this test proves
     round-trip fidelity of `CombatPosition` content; the separate
@@ -792,7 +801,7 @@ def test_v9_round_trip_with_non_empty_positions() -> None:
     )
 
 
-def test_v9_round_trip_without_combat() -> None:
+def test_v10_round_trip_without_combat() -> None:
     original = snapshot(creature_state())
 
     reconstructed = StateSerializer.deserialize(StateSerializer.serialize(original))
@@ -800,7 +809,7 @@ def test_v9_round_trip_without_combat() -> None:
     assert reconstructed.combat is None
 
 
-def test_v9_round_trip_with_weapon_proficiencies() -> None:
+def test_v10_round_trip_with_weapon_proficiencies() -> None:
     original = snapshot(
         creature_state(),
         characters=(
@@ -816,7 +825,7 @@ def test_v9_round_trip_with_weapon_proficiencies() -> None:
     )
 
 
-def test_v9_round_trip_with_inventory_and_equipment() -> None:
+def test_v10_round_trip_with_inventory_and_equipment() -> None:
     original = snapshot(
         creature_state(),
         characters=(character_state(),),
@@ -838,7 +847,7 @@ def test_v9_round_trip_with_inventory_and_equipment() -> None:
     )
 
 
-def test_v9_round_trip_combines_all_prior_state_projections() -> None:
+def test_v10_round_trip_combines_all_prior_state_projections() -> None:
     """Additive-relationship regression (§3.30/DEC-0045, §3.33/DEC-0049,
     §12.13): V9 combines the already-existing V6/V7 weapon-source and
     spatial State (weaponProficiencies, Inventory, Equipment,
@@ -866,7 +875,7 @@ def test_v9_round_trip_combines_all_prior_state_projections() -> None:
     serialized = StateSerializer.serialize(original)
     reconstructed = StateSerializer.deserialize(serialized)
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert reconstructed == original
     assert reconstructed.characters[0].weapon_proficiencies == frozenset({"dagger"})
     assert reconstructed.inventories == (
@@ -885,7 +894,7 @@ def test_v9_round_trip_combines_all_prior_state_projections() -> None:
     assert reconstructed.combat.action_spent is True  # type: ignore[union-attr]
 
 
-def test_v9_round_trip_with_combat_action_spent_false() -> None:
+def test_v10_round_trip_with_combat_action_spent_false() -> None:
     original = snapshot(
         creature_state("character_001"),
         creature_state("monster_001"),
@@ -898,7 +907,7 @@ def test_v9_round_trip_with_combat_action_spent_false() -> None:
     assert reconstructed.combat.action_spent is False  # type: ignore[union-attr]
 
 
-def test_v9_round_trip_with_combat_action_spent_true() -> None:
+def test_v10_round_trip_with_combat_action_spent_true() -> None:
     original = snapshot(
         creature_state("character_001"),
         creature_state("monster_001"),
@@ -911,7 +920,7 @@ def test_v9_round_trip_with_combat_action_spent_true() -> None:
     assert reconstructed.combat.action_spent is True  # type: ignore[union-attr]
 
 
-def test_v9_round_trip_preserves_non_default_death_save_lifecycle() -> None:
+def test_v10_round_trip_preserves_non_default_death_save_lifecycle() -> None:
     original = snapshot(
         creature_state(current_hp=0),
         characters=(
@@ -998,10 +1007,10 @@ def test_deserialize_v3_restores_skill_membership_and_empty_conditions() -> None
     assert reconstructed.creatures[0].conditions == frozenset()
 
 
-def test_legacy_v2_reserializes_as_current_v9() -> None:
+def test_legacy_v2_reserializes_as_current_v10() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v2_data()))
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == []
@@ -1014,10 +1023,10 @@ def test_legacy_v2_reserializes_as_current_v9() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v3_reserializes_as_current_v9() -> None:
+def test_legacy_v3_reserializes_as_current_v10() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v3_data()))
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == ["athletics", "perception"]
@@ -1030,10 +1039,10 @@ def test_legacy_v3_reserializes_as_current_v9() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v4_reserializes_as_current_v9() -> None:
+def test_legacy_v4_reserializes_as_current_v10() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v4_data()))
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "skillProficiencies"
     ] == ["athletics", "perception"]
@@ -1046,10 +1055,10 @@ def test_legacy_v4_reserializes_as_current_v9() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v5_reserializes_as_current_v9() -> None:
+def test_legacy_v5_reserializes_as_current_v10() -> None:
     serialized = StateSerializer.serialize(StateSerializer.deserialize(v5_data()))
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert serialized["state"]["characters"][0][  # type: ignore[index]
         "weaponProficiencies"
     ] == []
@@ -1058,12 +1067,12 @@ def test_legacy_v5_reserializes_as_current_v9() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_legacy_v1_reserializes_as_current_v9() -> None:
+def test_legacy_v1_reserializes_as_current_v10() -> None:
     reconstructed = StateSerializer.deserialize(v1_data())
 
     serialized = StateSerializer.serialize(reconstructed)
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert serialized["state"]["characters"] == []  # type: ignore[index]
     assert serialized["state"]["creatures"][0]["conditions"] == []  # type: ignore[index]
     assert serialized["state"]["inventories"] == []  # type: ignore[index]
@@ -1071,23 +1080,23 @@ def test_legacy_v1_reserializes_as_current_v9() -> None:
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_v6_without_combat_reserializes_as_current_v9() -> None:
+def test_v6_without_combat_reserializes_as_current_v10() -> None:
     """A successfully loaded historical V6 snapshot with no Combat at all
-    (`combat: null`) saves again as the current V9 writer with `combat`
+    (`combat: null`) saves again as the current V10 writer with `combat`
     still `null` -- there is no Combat to attach `positions`/`actionSpent`
-    to. The sibling `test_v6_combat_reserializes_as_current_v9_with_empty_
-    positions` below covers the non-null-Combat case, where V9 does emit
+    to. The sibling `test_v6_combat_reserializes_as_current_v10_with_empty_
+    positions` below covers the non-null-Combat case, where V10 does emit
     an explicit empty `positions` list and `actionSpent: false` (§12.13)."""
     reconstructed = StateSerializer.deserialize(v6_data())
 
     serialized = StateSerializer.serialize(reconstructed)
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert reconstructed.combat is None
     assert serialized["state"]["combat"] is None  # type: ignore[index]
 
 
-def test_v6_combat_reserializes_as_current_v9_with_empty_positions() -> None:
+def test_v6_combat_reserializes_as_current_v10_with_empty_positions() -> None:
     data = v6_data()
     combat = deepcopy(COMBAT_DATA)
     combat["order"] = ["character_001"]
@@ -1097,7 +1106,7 @@ def test_v6_combat_reserializes_as_current_v9_with_empty_positions() -> None:
 
     serialized = StateSerializer.serialize(reconstructed)
 
-    assert serialized["schemaVersion"] == 9
+    assert serialized["schemaVersion"] == 10
     assert reconstructed.combat.positions == ()  # type: ignore[union-attr]
     assert reconstructed.combat.action_spent is False  # type: ignore[union-attr]
     assert serialized["state"]["combat"] == {  # type: ignore[index]
@@ -1107,6 +1116,7 @@ def test_v6_combat_reserializes_as_current_v9_with_empty_positions() -> None:
         "activeIndex": 0,
         "positions": [],
         "actionSpent": False,
+        "movementSpent": 0,
     }
 
 
@@ -1649,7 +1659,7 @@ def test_deserialize_rejects_invalid_hp(current_hp: int, max_hp: int) -> None:
         StateSerializer.deserialize(data)
 
 
-@pytest.mark.parametrize("schema_version", [0, 10, -1])
+@pytest.mark.parametrize("schema_version", [0, 11, -1])
 def test_deserialize_rejects_unsupported_schema_version(
     schema_version: int,
 ) -> None:
@@ -2748,18 +2758,23 @@ def test_v7_deserialize_rejects_action_spent_field() -> None:
     "field",
     ["deathSaveSuccesses", "deathSaveFailures", "deathSaveStable", "dead"],
 )
+@pytest.mark.parametrize("schema_version", [9, 10])
 def test_v9_deserialize_rejects_missing_character_lifecycle_field(
     field: str,
+    schema_version: int,
 ) -> None:
     data = v9_data()
+    data["schemaVersion"] = schema_version
     del nested(data, "state", "characters", 0)[field]  # type: ignore[index]
 
     with pytest.raises(ValueError):
         StateSerializer.deserialize(data)
 
 
-def test_v9_deserialize_rejects_unknown_character_field() -> None:
+@pytest.mark.parametrize("schema_version", [9, 10])
+def test_v9_deserialize_rejects_unknown_character_field(schema_version: int) -> None:
     data = v9_data()
+    data["schemaVersion"] = schema_version
     nested(data, "state", "characters", 0)["lifeState"] = "alive"  # type: ignore[index]
 
     with pytest.raises(ValueError):
@@ -2777,11 +2792,14 @@ def test_v9_deserialize_rejects_unknown_character_field() -> None:
         ("dead", "false"),
     ],
 )
+@pytest.mark.parametrize("schema_version", [9, 10])
 def test_v9_deserialize_rejects_wrong_character_lifecycle_type(
     field: str,
     value: object,
+    schema_version: int,
 ) -> None:
     data = v9_data()
+    data["schemaVersion"] = schema_version
     nested(data, "state", "characters", 0)[field] = value  # type: ignore[index]
 
     with pytest.raises(TypeError):
@@ -2797,19 +2815,24 @@ def test_v9_deserialize_rejects_wrong_character_lifecycle_type(
         ("deathSaveFailures", 4),
     ],
 )
+@pytest.mark.parametrize("schema_version", [9, 10])
 def test_v9_deserialize_rejects_out_of_range_character_lifecycle_counter(
     field: str,
     value: int,
+    schema_version: int,
 ) -> None:
     data = v9_data()
+    data["schemaVersion"] = schema_version
     nested(data, "state", "characters", 0)[field] = value  # type: ignore[index]
 
     with pytest.raises(ValueError):
         StateSerializer.deserialize(data)
 
 
-def test_v9_deserialize_rejects_invalid_character_creature_relation() -> None:
+@pytest.mark.parametrize("schema_version", [9, 10])
+def test_v9_deserialize_rejects_invalid_character_creature_relation(schema_version: int) -> None:
     data = v9_data()
+    data["schemaVersion"] = schema_version
     nested(data, "state", "characters", 0)["deathSaveSuccesses"] = 1  # type: ignore[index]
 
     with pytest.raises(ValueError, match="positive-HP"):
@@ -2839,3 +2862,87 @@ def test_legacy_character_schema_rejects_v9_only_field(
 
     with pytest.raises(ValueError):
         StateSerializer.deserialize(data)
+
+
+# --- V10 Movement expenditure and exact additive compatibility -------------
+
+
+def v10_data_with_combat() -> dict[str, object]:
+    data = deepcopy(CANONICAL_V10_DATA)
+    nested(data, "state")["combat"] = {  # type: ignore[index]
+        **deepcopy(V8_COMBAT_DATA),
+        "order": ["character_001"],
+        "activeIndex": 0,
+        "positions": [deepcopy(COMBAT_POSITION_DATA)],
+        "actionSpent": True,
+        "movementSpent": 41,
+    }
+    return data
+
+
+def test_v10_round_trip_preserves_movement_and_all_v9_projections() -> None:
+    data = v10_data_with_combat()
+    state = nested(data, "state")
+    state["inventories"] = [deepcopy(INVENTORY_DATA)]  # type: ignore[index]
+    state["equipment"] = [deepcopy(EQUIPMENT_DATA)]  # type: ignore[index]
+    character = nested(data, "state", "characters", 0)
+    character["deathSaveFailures"] = 3  # type: ignore[index]
+    character["dead"] = True  # type: ignore[index]
+    nested(data, "state", "creatures", 0)["currentHp"] = 0  # type: ignore[index]
+    character["weaponProficiencies"] = ["dagger"]  # type: ignore[index]
+    restored = StateSerializer.deserialize(data)
+    assert restored.combat.movement_spent == 41  # type: ignore[union-attr]
+    assert restored.combat.action_spent is True  # type: ignore[union-attr]
+    assert restored.characters[0].death_save_failures == 3
+    assert restored.characters[0].dead is True
+    assert StateSerializer.serialize(restored) == data
+
+
+@pytest.mark.parametrize("value", [None, True, False, "1", 1.0, -1])
+def test_v10_rejects_invalid_movement_spent(value: object) -> None:
+    data = v10_data_with_combat()
+    nested(data, "state", "combat")["movementSpent"] = value  # type: ignore[index]
+    with pytest.raises((TypeError, ValueError), match="movement"):
+        StateSerializer.deserialize(data)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown"])
+def test_v10_requires_exact_combat_fields(mutation: str) -> None:
+    data = v10_data_with_combat()
+    combat = nested(data, "state", "combat")
+    if mutation == "missing":
+        del combat["movementSpent"]  # type: ignore[attr-defined]
+    else:
+        combat["movementRemaining"] = 1  # type: ignore[index]
+    with pytest.raises(ValueError, match="combat fields"):
+        StateSerializer.deserialize(data)
+
+
+@pytest.mark.parametrize("version", [5, 6, 7, 8, 9])
+def test_historical_combat_defaults_movement_and_rejects_v10_field(version: int) -> None:
+    factories = {5: v5_data, 6: v6_data, 7: v7_data, 8: v8_data, 9: v9_data}
+    data = factories[version]()
+    shape = COMBAT_DATA if version < 7 else V7_COMBAT_DATA if version == 7 else V8_COMBAT_DATA
+    combat = {**deepcopy(shape), "order": ["character_001"], "activeIndex": 0}
+    nested(data, "state")["combat"] = combat  # type: ignore[index]
+    restored = StateSerializer.deserialize(data)
+    assert restored.combat.movement_spent == 0  # type: ignore[union-attr]
+    assert StateSerializer.serialize(restored)["schemaVersion"] == 10
+    combat["movementSpent"] = 0
+    with pytest.raises(ValueError, match="unknown combat fields"):
+        StateSerializer.deserialize(data)
+
+
+@pytest.mark.parametrize("value", [None, True, "1", 1.0, -1])
+def test_writer_revalidates_mutated_movement_spent(value: object) -> None:
+    restored = StateSerializer.deserialize(v10_data_with_combat())
+    restored.combat.movement_spent = value  # type: ignore[union-attr,assignment]
+    with pytest.raises((TypeError, ValueError), match="movement_spent"):
+        StateSerializer.serialize(restored)
+
+
+@pytest.mark.parametrize("spent", [0, 10**100])
+def test_v10_accepts_zero_and_unbounded_expenditure(spent: int) -> None:
+    data = v10_data_with_combat()
+    nested(data, "state", "combat")["movementSpent"] = spent  # type: ignore[index]
+    assert StateSerializer.serialize(StateSerializer.deserialize(data)) == data

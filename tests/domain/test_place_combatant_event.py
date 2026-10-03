@@ -309,3 +309,10 @@ def test_applier_rejects_wrong_types() -> None:
         apply_combatant_placed_v1(object(), build_event())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="GameEvent"):
         apply_combatant_placed_v1(make_combat(), object())  # type: ignore[arg-type]
+
+
+def test_placement_preserves_movement_expenditure() -> None:
+    combat = make_combat(movement_spent=17)
+    updated = apply_combatant_placed_v1(combat, build_event())
+    assert updated.movement_spent == 17
+    assert combat.movement_spent == 17

@@ -134,4 +134,5 @@ def apply_turn_advanced_v1(
         round=decoded.round,
         active_index=new_active_index,
         action_spent=False,
+        movement_spent=0,
     )

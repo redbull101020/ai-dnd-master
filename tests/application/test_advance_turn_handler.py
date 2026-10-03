@@ -168,7 +168,7 @@ def default_creatures() -> tuple[CreatureState, ...]:
 
 
 def test_successful_advance_turn_persists_new_active_combatant() -> None:
-    combat = make_combat(active_index=0, round=1)
+    combat = make_combat(active_index=0, round=1, movement_spent=17, action_spent=True)
     snapshot = make_snapshot(creatures=default_creatures(), combat=combat)
     loaded_before = deepcopy(snapshot)
     store, metadata, calls = make_dependencies(snapshot)
@@ -317,11 +317,14 @@ def test_eligible_character_gets_one_death_save_after_turn_advanced(
         make_creature(creature_id="character_001"),
         make_creature(creature_id="monster_001", current_hp=0),
     )
-    snapshot = make_snapshot(creatures=creatures, combat=make_combat(), characters=(character,))
+    snapshot = make_snapshot(creatures=creatures, combat=make_combat(movement_spent=17, action_spent=True), characters=(character,))
     store, metadata, calls = make_dependencies(snapshot)
     result = handle_with(store, metadata, raw_rolls=(roll,))
     assert [event.type for event in result.events] == ["TurnAdvanced", "CharacterDeathSaveResolved"]
     assert calls == ["load", "metadata", "dice", "metadata", "save"]
+    assert store.save_calls[0].combat.movement_spent == 0
+    assert store.save_calls[0].combat.action_spent is False
+    assert snapshot.combat.movement_spent == 17
     saved_character = store.save_calls[0].characters[0]
     assert (saved_character.death_save_successes, saved_character.death_save_failures, saved_character.death_save_stable, saved_character.dead) == expected
     assert len(store.save_calls) == 1

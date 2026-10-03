@@ -296,7 +296,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     # --- initial persisted state: combat absent under the current V9 writer -
 
     initial_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert initial_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert initial_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert initial_raw["state"]["combat"] is None
 
     # --- Start Combat -> save -> fresh reload -> CombatState present -------
@@ -338,7 +338,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     assert after_start.combat.id == "combat_001"
 
     started_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert started_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert started_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert started_raw["state"]["combat"] is not None
 
     # --- End Combat -> save -> fresh reload -> combat absent again ----------
@@ -393,7 +393,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     # --- current production V9 persistence contract: no schema bump --------
 
     ended_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert ended_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert ended_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert ended_raw["state"]["combat"] is None
     assert ended_raw.keys() == initial_raw.keys()
     assert ended_raw["state"].keys() == initial_raw["state"].keys()
@@ -443,7 +443,7 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
     writer canonically sorts combat.positions by creature_id on serialize, so
     this test checks persisted position values/identity rather than assuming
     input tuple order survives a save/reload. No schema bump or unrelated
-    wire-shape change occurs: schemaVersion stays 9 and the raw JSON top-level
+    wire-shape change occurs: schemaVersion stays 10 and the raw JSON top-level
     and state keys are unchanged before and after placement."""
     campaigns_root = tmp_path / "campaigns"
     character = CreatureState(
@@ -493,7 +493,7 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
 
     state_path = campaigns_root / "campaign_001" / "state.json"
     before_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert before_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert before_raw["schemaVersion"] == SCHEMA_VERSION == 10
 
     # --- Place Combatant -> save -> fresh reload -> new position present ---
 
@@ -555,7 +555,7 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
     # --- current production V9 persistence contract: no schema bump --------
 
     after_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert after_raw["schemaVersion"] == SCHEMA_VERSION == 9
+    assert after_raw["schemaVersion"] == SCHEMA_VERSION == 10
     assert after_raw.keys() == before_raw.keys()
     assert after_raw["state"].keys() == before_raw["state"].keys()
     assert after_raw["state"]["combat"].keys() == before_raw["state"]["combat"].keys()

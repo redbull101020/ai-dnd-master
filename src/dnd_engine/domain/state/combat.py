@@ -24,6 +24,7 @@ class CombatState:
     active_index: int
     positions: tuple[CombatPosition, ...] = ()
     action_spent: bool = False
+    movement_spent: int = 0
 
     def __post_init__(self) -> None:
         if type(self.id) is not str:
@@ -59,6 +60,11 @@ class CombatState:
             )
         if type(self.action_spent) is not bool:
             raise TypeError("action_spent must be a bool")
+
+        if type(self.movement_spent) is not int:
+            raise TypeError("movement_spent must be an int")
+        if self.movement_spent < 0:
+            raise ValueError("movement_spent must be non-negative")
 
     @property
     def active_creature_id(self) -> str:

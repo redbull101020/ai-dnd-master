@@ -124,7 +124,7 @@ def test_v9_state_store_round_trip_preserves_character_lifecycle_state(
 
     state_path = campaigns_root / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 9
+    assert data["schemaVersion"] == 10
     assert data["state"]["characters"][0]["deathSaveSuccesses"] == 1
     assert data["state"]["characters"][0]["deathSaveFailures"] == 1
     assert data["state"]["characters"][0]["deathSaveStable"] is False
@@ -230,7 +230,7 @@ def test_advance_turn_rolls_automatic_death_save_and_persists_through_real_files
 
     state_path = campaigns_root / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 9
+    assert data["schemaVersion"] == 10
 
 
 def test_damage_at_zero_hp_records_death_save_failure_through_real_filesystem(

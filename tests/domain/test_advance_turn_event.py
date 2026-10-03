@@ -231,3 +231,13 @@ def test_applier_rejects_wrong_types() -> None:
         apply_turn_advanced_v1(object(), build_event())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="GameEvent"):
         apply_turn_advanced_v1(make_combat(), object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("spent", [0, 7, 100])
+def test_turn_advance_resets_movement_without_mutating_source(spent: int) -> None:
+    combat = make_combat(movement_spent=spent, action_spent=True)
+    updated = apply_turn_advanced_v1(combat, build_event())
+    assert updated.movement_spent == 0
+    assert updated.action_spent is False
+    assert combat.movement_spent == spent
+    assert combat.action_spent is True
