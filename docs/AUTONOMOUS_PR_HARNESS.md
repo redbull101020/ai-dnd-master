@@ -1278,6 +1278,14 @@ outcomes and `READY_FOR_HUMAN_MERGE` keep the meaning given in §10. Mode C must
 remain fresh from the moment it is built through `READY_FOR_HUMAN_MERGE` and the
 mandatory `STOP`; `STOP` does not make it permanently valid (§32).
 
+**Outer execution prerequisite.** Harness-owned mandatory Git/GitHub
+operations require an outer operator execution context already capable of
+performing those operations. The harness does not escape or reconfigure its
+parent sandbox and does not turn product execution permission into additional
+repository authority. The mandatory fresh `git fetch origin` remains required:
+an unavailable or denied outer capability fails closed, with no cached-ref,
+caller-supplied-SHA, GitHub-API, or direct-caller Git/GitHub fallback.
+
 **Preflight.** The orchestrator fetches and captures one exact `origin/main`
 SHA. From that SHA it reads the strict terminal registry and every regular
 Git-tracked canonical task blob, validates all nonterminal envelopes/bodies and

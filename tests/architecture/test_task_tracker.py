@@ -1,5 +1,6 @@
 import hashlib
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ AGENTS_MD = ROOT / "AGENTS.md"
 TASK_MD = ROOT / "docs" / "TASK.md"
 TASKS = ROOT / "docs" / "tasks"
 SHA = "a" * 40
+TASK_DOCUMENT_NAME = re.compile(r"TSK-\d{4,}\.md")
 
 
 def _metadata(
@@ -116,6 +118,28 @@ def _allocated_identities(
     standalone_ids: list[str], terminal: TerminalRegistry
 ) -> set[str]:
     return set(standalone_ids) | {task.task_id for task in terminal.tasks}
+
+
+def test_tracked_task_documents_use_only_the_canonical_directory() -> None:
+    tracked_paths = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+
+    misplaced = [
+        path
+        for path in tracked_paths
+        if TASK_DOCUMENT_NAME.fullmatch(Path(path).name)
+        and Path(path).parent.as_posix() != "docs/tasks"
+    ]
+
+    assert misplaced == [], (
+        "canonical-looking standalone task documents must be tracked only at "
+        f"docs/tasks/TSK-NNNN.md; misplaced: {misplaced}"
+    )
 
 
 def test_live_tracker_is_only_normative_guidance_and_terminal_registry() -> None:
