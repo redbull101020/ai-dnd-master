@@ -644,6 +644,39 @@ def _public_dispatch_implementer_code(task_id: str) -> str:
     )
 
 
+def _public_dispatch_closure_validation_repair_implementer_code(
+    task_id: str,
+) -> str:
+    return (
+        "import pathlib, sys\n"
+        "prompt = sys.stdin.read()\n"
+        f"assert 'selected_task_id: {task_id}' in prompt\n"
+        "if 'CURRENT_GATE: prospective Task Closure\\n' in prompt:\n"
+        "    task = pathlib.Path('docs/TASK.md')\n"
+        "    text = task.read_bytes().decode('utf-8')\n"
+        "    eol = '\\r\\n' if '\\r\\n' in text else '\\n'\n"
+        "    separator = ('| ID | Status | Evidence | Title |' + eol "
+        "+ '| --- | --- | --- | --- |' + eol)\n"
+        f"    wrong = '| `{task_id}` | `Done` | draft PR #1 | Public run integration |' + eol\n"
+        f"    valid = '| `{task_id}` | `Done` | PR #1 | Public run integration |' + eol\n"
+        "    if wrong in text:\n"
+        "        assert 'CURRENT_CLOSURE_VALIDATION_FAILURE:\\n(none)' not in prompt\n"
+        "        task.write_bytes(text.replace(wrong, valid, 1).encode('utf-8'))\n"
+        "    else:\n"
+        "        assert valid not in text and separator in text\n"
+        "        assert 'CURRENT_CLOSURE_VALIDATION_FAILURE:\\n(none)' in prompt\n"
+        "        task.write_bytes(text.replace(separator, separator + wrong, 1).encode('utf-8'))\n"
+        "        log = pathlib.Path('docs/DEVELOPMENT_LOG.md')\n"
+        "        log.write_text(log.read_text(encoding='utf-8') + "
+        "'\\n- Public run integration closure.\\n', encoding='utf-8')\n"
+        "elif 'CURRENT_CHECKPOINT:\\nid: CP-1\\n' in prompt:\n"
+        "    pathlib.Path('integration-marker.txt').write_text("
+        "'accepted v2 checkpoint\\n', encoding='utf-8')\n"
+        "else:\n"
+        "    raise SystemExit('unexpected implementer handoff')\n"
+    )
+
+
 def _public_dispatch_config(
     env: PublicDispatchEnv,
     *,
@@ -963,6 +996,160 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
         "",
         "- Public run integration closure.",
     ]
+
+
+def test_public_run_repairs_pr129_closure_validation_incident_to_ready_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
+    config = OrchestratorConfig(
+        task_id=_TASK_ID,
+        repo=env.work,
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work,
+                _public_dispatch_closure_validation_repair_implementer_code(
+                    _TASK_ID
+                ),
+            )
+        ),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID),
+    )
+    routed: list[tuple[AgentRole, AgentWorkKind, ComputeProfile]] = []
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    retained_histories: list[GateHistory] = []
+    real_route_agent_work = orch_module.route_agent_work
+    real_implementer = orch_module.run_implementer
+    real_reviewer = orch_module.run_structured_reviewer
+    real_retain = orch_module._retain_v2_gate_history
+
+    def observe_route(
+        *,
+        role: AgentRole,
+        work_kind: AgentWorkKind,
+        history: GateHistory | None = None,
+        direct_upstream_repair_packet: RepairPacket | None = None,
+        seed_verification_rejection_count: int = 0,
+    ) -> RoutingDecision:
+        decision = real_route_agent_work(
+            role=role,
+            work_kind=work_kind,
+            history=history,
+            direct_upstream_repair_packet=direct_upstream_repair_packet,
+            seed_verification_rejection_count=seed_verification_rejection_count,
+        )
+        routed.append((decision.role, decision.work_kind, decision.selected_profile))
+        return decision
+
+    def observe_implementer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        implementer_prompts.append(prompt)
+        return real_implementer(spec, prompt)
+
+    def observe_reviewer(
+        spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        return real_reviewer(spec, prompt)
+
+    def observe_history(
+        history: GateHistory, history_sink: list[GateHistory] | None
+    ) -> GateHistory:
+        retained_histories.append(history)
+        return real_retain(history, history_sink)
+
+    monkeypatch.setattr(orch_module, "route_agent_work", observe_route)
+    monkeypatch.setattr(orch_module, "run_implementer", observe_implementer)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", observe_reviewer)
+    monkeypatch.setattr(orch_module, "_retain_v2_gate_history", observe_history)
+
+    result = run(config)
+
+    expected_routing = [
+        (AgentRole.IMPLEMENTER, AgentWorkKind.CHECKPOINT_IMPLEMENTATION, ComputeProfile.ROUTINE),
+        (AgentRole.REVIEWER, AgentWorkKind.CHECKPOINT_REVIEW, ComputeProfile.DELIBERATE),
+        (AgentRole.REVIEWER, AgentWorkKind.PRE_CLOSURE_CUMULATIVE_REVIEW, ComputeProfile.CRITICAL),
+        (AgentRole.IMPLEMENTER, AgentWorkKind.TASK_CLOSURE_PREPARATION, ComputeProfile.ROUTINE),
+        (AgentRole.IMPLEMENTER, AgentWorkKind.TASK_CLOSURE_REPAIR, ComputeProfile.DELIBERATE),
+        (AgentRole.REVIEWER, AgentWorkKind.TASK_CLOSURE_REVIEW, ComputeProfile.DELIBERATE),
+        (AgentRole.REVIEWER, AgentWorkKind.MODE_C_REVIEW, ComputeProfile.CRITICAL),
+    ]
+    assert result.outcome is RunOutcome.STOP
+    assert result.phase is Phase.READY_FOR_HUMAN_MERGE
+    assert result.blocked_reason is None
+    assert routed == expected_routing
+    assert [
+        (record.role, record.work_kind, record.selected_profile)
+        for record in result.routing_decisions
+    ] == expected_routing
+    repair_record = next(
+        record
+        for record in result.routing_decisions
+        if record.work_kind is AgentWorkKind.TASK_CLOSURE_REPAIR
+    )
+    assert (
+        RoutingEscalationReason.REPEATED_VERIFICATION_REJECTION
+        not in repair_record.escalation_reasons
+    )
+
+    closure_implementer_prompts = [
+        prompt
+        for prompt in implementer_prompts
+        if "CURRENT_GATE: prospective Task Closure\n" in prompt
+    ]
+    closure_reviewer_prompts = [
+        prompt
+        for prompt in reviewer_prompts
+        if "CURRENT_GATE: prospective Task Closure review\n" in prompt
+    ]
+    assert len(closure_implementer_prompts) == 2
+    assert "CURRENT_CLOSURE_VALIDATION_FAILURE:\n(none)\n" in (
+        closure_implementer_prompts[0]
+    )
+    assert "CURRENT_CLOSURE_VALIDATION_FAILURE:\n1. invalid terminal-only" in (
+        closure_implementer_prompts[1]
+    )
+    assert len(closure_reviewer_prompts) == 1
+
+    closure_history = next(
+        history
+        for history in retained_histories
+        if history.context.gate_id == "prospective-task-closure"
+    )
+    assert closure_history.review_iteration == 1
+    assert closure_history.previous_reviewed_candidate_identity is None
+    assert closure_history.previous_reviewed_candidate_state is None
+    assert len(closure_history.attempts) == 2
+    rejected, approved = closure_history.attempts
+    assert (
+        rejected.rejection_basis
+        is CandidateRejectionBasis.CLOSURE_VALIDATION_FAILURE
+    )
+    assert rejected.review_iteration is None
+    assert rejected.reviewer_verdict is None
+    assert approved.review_iteration == 1
+    assert approved.reviewer_verdict is ReviewVerdict.APPROVED
+
+    closure_metric = next(
+        metric
+        for metric in result.review_metrics
+        if metric.gate_id == "prospective-task-closure"
+    )
+    assert closure_metric.review_iterations == 1
+    assert closure_metric.verification_rejection_count == 0
+    assert result.head_sha == _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+    assert result.head_sha == _run_git(
+        ["rev-parse", f"origin/autonomous-pr/{_TASK_ID.lower()}"], cwd=env.work
+    ).strip()
+    terminal = task_context.parse_terminal_registry(
+        (env.work / "docs" / "TASK.md").read_text(encoding="utf-8")
+    )
+    assert terminal.tasks[-1].evidence == "PR #1"
 
 
 def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(
@@ -5130,13 +5317,14 @@ def _write_test_closure_candidate(
         f"| ID | Status | Evidence | Title |{eol}"
         f"| --- | --- | --- | --- |{eol}"
     )
-    wrong_row = f"| `{_TASK_ID}` | `Done` | draft PR #1 | Test task |{eol}"
-    valid_row = f"| `{_TASK_ID}` | `Done` | PR #1 | Test task |{eol}"
-    desired_row = wrong_row if evidence == "draft PR #1" else valid_row
-    if wrong_row in task_text:
-        task_text = task_text.replace(wrong_row, desired_row, 1)
-    elif valid_row in task_text:
-        task_text = task_text.replace(valid_row, desired_row, 1)
+    candidate_rows = tuple(
+        f"| `{_TASK_ID}` | `Done` | {candidate_evidence} | Test task |{eol}"
+        for candidate_evidence in ("draft PR #1", "PR #2", "PR #1")
+    )
+    desired_row = f"| `{_TASK_ID}` | `Done` | {evidence} | Test task |{eol}"
+    existing_row = next((row for row in candidate_rows if row in task_text), None)
+    if existing_row is not None:
+        task_text = task_text.replace(existing_row, desired_row, 1)
     else:
         assert separator in task_text
         task_text = task_text.replace(separator, separator + desired_row, 1)
@@ -5313,6 +5501,216 @@ def test_v2_repeated_invalid_closure_identity_blocks_before_reviewer(
     assert repeated.verification is None
     assert repeated.review_iteration is None
     assert repeated.reviewer_verdict is None
+
+
+def test_v2_distinct_invalid_closure_candidates_continue_until_valid(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+    evidences = iter(("draft PR #1", "PR #2", "PR #1"))
+    work_kinds: list[AgentWorkKind] = []
+    reviewer_calls = 0
+
+    def implement(
+        *args: object, work_kind: AgentWorkKind, **kwargs: object
+    ) -> AgentInvocationResult:
+        work_kinds.append(work_kind)
+        evidence = next(evidences)
+        _write_test_closure_candidate(
+            env, evidence=evidence, log_text=f"candidate {evidence}\n"
+        )
+        return AgentInvocationResult("done", "", 0, False)
+
+    def review(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        return _v2_approved()
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_implementer", implement)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+
+    _, history, _ = orch_module._prepare_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        pre_closure,
+        pr_number="1",
+        expected_published_head=implementation_head,
+        task_md_baseline=task_md_baseline,
+    )
+
+    assert work_kinds == [
+        AgentWorkKind.TASK_CLOSURE_PREPARATION,
+        AgentWorkKind.TASK_CLOSURE_REPAIR,
+        AgentWorkKind.TASK_CLOSURE_REPAIR,
+    ]
+    assert reviewer_calls == 1
+    assert [attempt.rejection_basis for attempt in history.attempts[:2]] == [
+        CandidateRejectionBasis.CLOSURE_VALIDATION_FAILURE,
+        CandidateRejectionBasis.CLOSURE_VALIDATION_FAILURE,
+    ]
+    assert history.review_iteration == 1
+
+
+@pytest.mark.parametrize(
+    "missing_path",
+    ("docs/TASK.md", "docs/DEVELOPMENT_LOG.md"),
+    ids=("task-tracker", "development-log"),
+)
+def test_v2_missing_required_closure_file_change_enters_repair(
+    env: Env, monkeypatch: pytest.MonkeyPatch, missing_path: str
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+    prompts: list[str] = []
+    work_kinds: list[AgentWorkKind] = []
+    reviewer_calls = 0
+
+    def implement(
+        config: OrchestratorConfig,
+        prompt: str,
+        *,
+        work_kind: AgentWorkKind,
+        **kwargs: object,
+    ) -> AgentInvocationResult:
+        prompts.append(prompt)
+        work_kinds.append(work_kind)
+        if len(prompts) == 1 and missing_path == "docs/TASK.md":
+            (env.work / "docs" / "DEVELOPMENT_LOG.md").write_text(
+                "log-only candidate\n", encoding="utf-8"
+            )
+        else:
+            _write_test_closure_candidate(
+                env, evidence="PR #1", log_text="complete closure\n"
+            )
+            if len(prompts) == 1:
+                (env.work / "docs" / "DEVELOPMENT_LOG.md").unlink()
+        return AgentInvocationResult("done", "", 0, False)
+
+    def review(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        return _v2_approved()
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_implementer", implement)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+
+    orch_module._prepare_v2_unpublished_closure(
+        _cp3_config(env),
+        target,
+        pre_closure,
+        pr_number="1",
+        expected_published_head=implementation_head,
+        task_md_baseline=task_md_baseline,
+    )
+
+    assert work_kinds == [
+        AgentWorkKind.TASK_CLOSURE_PREPARATION,
+        AgentWorkKind.TASK_CLOSURE_REPAIR,
+    ]
+    assert f"missing required closure-file change(s): {missing_path}" in prompts[1]
+    assert reviewer_calls == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("src/unsafe.py", "tests/unsafe.py", "tools/unsafe.py", "docs/OTHER.md"),
+)
+def test_v2_closure_disallowed_paths_remain_terminal(path: str) -> None:
+    with pytest.raises(orch_module._Blocked, match="outside the canonical"):
+        orch_module._require_canonical_closure_files_touched((path,))
+
+
+def test_v2_closure_repository_error_during_exact_read_is_terminal(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+    reviewer_calls = 0
+
+    def implement(*args: object, **kwargs: object) -> AgentInvocationResult:
+        _write_test_closure_candidate(
+            env, evidence="PR #1", log_text="closure candidate\n"
+        )
+        return AgentInvocationResult("done", "", 0, False)
+
+    def fail_read(*args: object, **kwargs: object) -> str:
+        raise repository.RepositoryError("isolated exact-read failure")
+
+    def review(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        return _v2_approved()
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_implementer", implement)
+    monkeypatch.setattr(repository, "read_worktree_utf8_file_exact", fail_read)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+
+    with pytest.raises(orch_module._Blocked, match="cannot safely read"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+        )
+
+    assert reviewer_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("returncode", "timed_out"),
+    ((7, False), (None, True)),
+    ids=("non-zero", "timeout"),
+)
+def test_v2_closure_implementer_failure_remains_terminal(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int | None,
+    timed_out: bool,
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+    reviewer_calls = 0
+    monkeypatch.setattr(
+        orch_module,
+        "_run_routed_v2_implementer",
+        lambda *args, **kwargs: AgentInvocationResult(
+            "", "failed", returncode, timed_out
+        ),
+    )
+
+    def review(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        return _v2_approved()
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+
+    with pytest.raises(orch_module._Blocked, match="implementer failed"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+        )
+
+    assert reviewer_calls == 0
 
 
 def test_v2_closure_validation_collects_missing_file_and_terminal_row_defects(
