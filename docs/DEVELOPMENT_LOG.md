@@ -7710,3 +7710,20 @@ for accepted implementation head `9ec484b6fdcb0944933adde91d5dcec42625f24c`,
 superseding the earlier non-green verification status above. The cumulative
 implementation review accepted that head; this prospective closure records
 only TSK-0039 and remains subject to review and human merge.
+
+## 2026-10-03 — TSK-0040 canonical-publication prerequisite hotfix
+
+The approved `docs/tasks/TSK-0040.md` reached `main` before its required
+Architecture §3.38, DEC-0054, and planned V10 contract were published, so the
+first `AUTONOMOUS_PR TSK-0040` preflight correctly stopped fail-closed before
+implementation. This hotfix publishes the already-refined Monster-only
+voluntary-Movement contract, its additive V10 target in §12.13, and the
+corresponding Roadmap status; it also corrects stale §12.12 text that still
+called V7 the current schema even though the production writer is V9. No
+production Python or runtime Movement behavior changes here: the writer
+remains exact V9 until TSK-0040 implementation. Character Movement,
+Dash/Disengage, Reactions/Opportunity Attacks, forced movement, terrain,
+pathfinding, collision/occupancy/elevation, movement modes/modifiers, and
+generic Movement abstractions remain outside this publication slice. A fresh
+explicit `AUTONOMOUS_PR TSK-0040` invocation is required after this canonical
+publication lands on `main`.
