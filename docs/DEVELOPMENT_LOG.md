@@ -7780,3 +7780,20 @@ supersedes the earlier entry's interrupted verification report. Character
 Movement, Dash, terrain/pathfinding/collision, Reactions and Opportunity Attacks
 remain deferred, and broad Roadmap Movement remains unchecked. This closure is
 prospective in draft PR #129; merge remains human-only.
+
+## 2026-10-04 — TSK-0042: Prospective Task Closure (PR #130)
+
+Delivered MANUAL in PR #130: corrected the PR #129 incident class in which
+the validator correctly rejected a mechanically invalid prospective closure
+candidate, but orchestration ended BLOCKED instead of entering existing closure
+repair. Positively classified candidate-local deterministic closure validation
+failures now stay in the same in-memory closure gate and enter
+`TASK_CLOSURE_REPAIR`, with deterministic no-progress detection and independent
+Closure Review. Authoritative baseline failure, `RepositoryError`, disallowed
+implementation paths, and agent failures remain fail-closed; reviewer isolation,
+Mode C, exact publication, required CI, and human-only merge remain preserved.
+Verification passed: focused CP-1 suite, full pytest,
+`python -m mypy src/dnd_engine tools/autonomous_pr`, and `git diff --check`.
+No gameplay, Architecture, or Roadmap mechanic changed; no production dependency
+was added. This terminal closure remains prospective pending review and human
+merge.
