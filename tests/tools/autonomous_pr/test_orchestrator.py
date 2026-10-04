@@ -4951,7 +4951,7 @@ def test_v2_seeded_verification_episode_escalates_repair_not_first_review(
 
     monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
 
-    orch_module._execute_v2_late_repair(
+    _, history, _ = orch_module._execute_v2_late_repair(
         _cp3_config(env),
         spec,
         gate_id="seeded-verification-child-repair",
@@ -4961,6 +4961,7 @@ def test_v2_seeded_verification_episode_escalates_repair_not_first_review(
         initial_packet=None,
         initial_verification_failure="upstream verification failed",
         initial_verification_rejection_count=1,
+        initial_rejected_candidate_identity=orch_module._candidate_identity(""),
         verification_commands=spec.checkpoints[0].verification,
         repair_acceptor=_commit_late_repair(env, []),
     )
@@ -4971,6 +4972,233 @@ def test_v2_seeded_verification_episode_escalates_repair_not_first_review(
         ComputeProfile.CRITICAL,
     ]
     assert reviewer_profiles == [ComputeProfile.DELIBERATE]
+    verification_rejections = [
+        attempt
+        for attempt in history.attempts
+        if attempt.rejection_basis is CandidateRejectionBasis.VERIFICATION_FAILURE
+    ]
+    assert len(verification_rejections) == 1
+    assert len(history.attempts) == 2
+
+
+def test_v2_direct_verification_noop_repair_blocks_from_empty_delta_seed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    histories: list[GateHistory] = []
+    decisions: list[orch_module.RoutingDecisionRecord] = []
+    config = dataclasses.replace(_cp3_config(env), _routing_decisions=decisions)
+    empty_identity = orch_module._candidate_identity("")
+    implementer_calls = 0
+    verification_calls = 0
+    reviewer_calls = 0
+
+    def implementer(
+        spec: AgentInvocationSpec, prompt_text: str
+    ) -> AgentInvocationResult:
+        nonlocal implementer_calls
+        implementer_calls += 1
+        history = histories[0]
+        assert history.rejected_candidate_identities == {empty_identity}
+        assert history.attempts == []
+        assert history.review_iteration == 0
+        assert history.consecutive_changes_requested == 0
+        assert history.latest_valid_repair_packet is None
+        assert history.previous_reviewed_candidate_identity is None
+        assert history.previous_reviewed_candidate_state is None
+        return AgentInvocationResult("no change", "", 0, False)
+
+    def verification(*args: object, **kwargs: object) -> VerificationEvidence:
+        nonlocal verification_calls
+        verification_calls += 1
+        pytest.fail("repeated empty candidate must block before verification")
+
+    def reviewer(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        pytest.fail("repeated empty candidate must block before review")
+
+    monkeypatch.setattr(orch_module, "run_implementer", implementer)
+    monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", reviewer)
+
+    with pytest.raises(orch_module._Blocked, match="reproduced rejected candidate"):
+        orch_module._execute_v2_late_repair(
+            config,
+            spec,
+            gate_id="direct-verification-noop-repair",
+            accepted_base_context_identity=_run_git(
+                ["rev-parse", "HEAD"], cwd=env.work
+            ).strip(),
+            initial_packet=None,
+            initial_verification_failure="upstream verification failed",
+            initial_verification_rejection_count=1,
+            initial_rejected_candidate_identity=empty_identity,
+            verification_commands=spec.checkpoints[0].verification,
+            repair_acceptor=lambda candidate: pytest.fail(
+                f"repeated candidate was accepted: {candidate}"
+            ),
+            history_sink=histories,
+        )
+
+    assert implementer_calls == 1
+    assert verification_calls == 0
+    assert reviewer_calls == 0
+    history = histories[0]
+    assert history.rejected_candidate_identities == {empty_identity}
+    assert history.review_iteration == 0
+    assert history.consecutive_changes_requested == 0
+    assert history.previous_reviewed_candidate_identity is None
+    assert history.previous_reviewed_candidate_state is None
+    assert len(history.attempts) == 1
+    repeated = history.attempts[0]
+    assert repeated.candidate_identity == empty_identity
+    assert repeated.rejection_basis is CandidateRejectionBasis.REPEATED_IDENTITY
+    assert repeated.verification is None
+    assert repeated.review_iteration is None
+    assert repeated.reviewer_verdict is None
+    assert repeated.findings == ()
+    assert repeated.repair_packet is None
+    assert len(decisions) == 1
+    assert decisions[0].work_kind is AgentWorkKind.IMPLEMENTATION_REPAIR
+    assert decisions[0].selected_profile is ComputeProfile.DELIBERATE
+    assert decisions[0].escalation_reasons == ()
+
+
+def test_v2_packet_triggered_noop_late_repair_has_no_empty_delta_seed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    packet = _v2_changes("packet repair").repair_packet
+    assert packet is not None
+    histories: list[GateHistory] = []
+    verification_calls = 0
+    reviewer_calls = 0
+
+    monkeypatch.setattr(
+        orch_module,
+        "run_implementer",
+        lambda spec, prompt: AgentInvocationResult("no change", "", 0, False),
+    )
+
+    def verification(*args: object, **kwargs: object) -> VerificationEvidence:
+        nonlocal verification_calls
+        verification_calls += 1
+        return _v2_verification(True)
+
+    def reviewer(
+        *args: object, history: GateHistory, **kwargs: object
+    ) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        assert history.rejected_candidate_identities == set()
+        assert history.attempts == []
+        return _v2_explicit_blocked("packet repair reached review")
+
+    monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", reviewer)
+
+    with pytest.raises(orch_module._Blocked, match="packet repair reached review"):
+        orch_module._execute_v2_late_repair(
+            _cp3_config(env),
+            spec,
+            gate_id="packet-noop-repair",
+            accepted_base_context_identity=_run_git(
+                ["rev-parse", "HEAD"], cwd=env.work
+            ).strip(),
+            initial_packet=packet,
+            verification_commands=spec.checkpoints[0].verification,
+            repair_acceptor=lambda candidate: pytest.fail(
+                f"blocked candidate was accepted: {candidate}"
+            ),
+            history_sink=histories,
+        )
+
+    assert verification_calls == 1
+    assert reviewer_calls == 1
+    history = histories[0]
+    assert history.rejected_candidate_identities == set()
+    assert len(history.attempts) == 1
+    assert history.attempts[0].reviewer_verdict is ReviewVerdict.BLOCKED
+
+
+def test_v2_replayed_checkpoint_verification_noop_repair_uses_empty_delta_seed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    evidence = orch_module.V2ImplementationEvidence(
+        spec_identity=spec.digest,
+        base_identity="base",
+        accepted_checkpoints=list(checkpoint_result.checkpoint_evidence),
+    )
+    histories: list[GateHistory] = []
+    implementer_profiles: list[ComputeProfile] = []
+    verification_calls = 0
+    reviewer_calls = 0
+
+    def verification(*args: object, **kwargs: object) -> VerificationEvidence:
+        nonlocal verification_calls
+        verification_calls += 1
+        if verification_calls > 1:
+            pytest.fail("repeated empty repair must block before verification")
+        return _v2_verification(False)
+
+    def implementer(
+        spec: AgentInvocationSpec, prompt_text: str
+    ) -> AgentInvocationResult:
+        implementer_profiles.append(ComputeProfile(spec.args[-1].upper()))
+        return AgentInvocationResult("no change", "", 0, False)
+
+    def reviewer(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        pytest.fail("repeated empty repair must block before review")
+
+    monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
+    monkeypatch.setattr(orch_module, "run_implementer", implementer)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", reviewer)
+
+    with pytest.raises(orch_module._Blocked, match="reproduced rejected candidate"):
+        orch_module._replay_v2_checkpoints_conservatively(
+            _cp3_config(env),
+            spec,
+            checkpoint_result.checkpoint_evidence,
+            evidence,
+            lambda candidate: pytest.fail(
+                f"repeated candidate was accepted: {candidate}"
+            ),
+            history_sink=histories,
+        )
+
+    assert verification_calls == 1
+    assert reviewer_calls == 0
+    assert implementer_profiles == [ComputeProfile.DELIBERATE]
+    replay_history = next(
+        history for history in histories if history.context.gate_id == "replay:CP-1"
+    )
+    assert len(replay_history.attempts) == 1
+    assert (
+        replay_history.attempts[0].rejection_basis
+        is CandidateRejectionBasis.VERIFICATION_FAILURE
+    )
+    repair_history = next(
+        history
+        for history in histories
+        if history.context.gate_id == "replay-repair:CP-1"
+    )
+    empty_identity = orch_module._candidate_identity("")
+    assert repair_history.rejected_candidate_identities == {empty_identity}
+    assert repair_history.previous_reviewed_candidate_identity is None
+    assert repair_history.previous_reviewed_candidate_state is None
+    assert len(repair_history.attempts) == 1
+    assert (
+        repair_history.attempts[0].rejection_basis
+        is CandidateRejectionBasis.REPEATED_IDENTITY
+    )
 
 
 def test_v2_late_repair_records_explicit_blocked_before_terminal_transition(

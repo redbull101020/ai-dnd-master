@@ -1910,9 +1910,16 @@ def _execute_v2_late_repair(
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
     initial_verification_failure: str | None = None,
     initial_verification_rejection_count: int = 0,
+    initial_rejected_candidate_identity: CandidateIdentity | None = None,
     history_sink: list[GateHistory] | None = None,
 ) -> tuple[AcceptedImplementationRepairCandidate, GateHistory, str]:
-    """Adaptive mode-A repair with CP-2 no-progress semantics and no budget."""
+    """Adaptive mode-A repair with CP-2 no-progress semantics and no budget.
+
+    ``initial_rejected_candidate_identity`` seeds cycle detection for a direct
+    upstream rejection in this child gate's candidate space. It is causal
+    state only: no synthetic attempt, review, packet, or routing count is
+    created from it.
+    """
 
     history = _retain_v2_gate_history(
         GateHistory(
@@ -1925,6 +1932,10 @@ def _execute_v2_late_repair(
         ),
         history_sink,
     )
+    if initial_rejected_candidate_identity is not None:
+        history.rejected_candidate_identities.add(
+            initial_rejected_candidate_identity
+        )
     verification_failure = initial_verification_failure
     reviewer_upstream_packet = initial_packet
 
@@ -2250,6 +2261,11 @@ def _replay_v2_checkpoints_conservatively(
                 initial_verification_failure=verification_failure,
                 initial_verification_rejection_count=(
                     1 if verification_failure is not None else 0
+                ),
+                initial_rejected_candidate_identity=(
+                    _candidate_identity("")
+                    if verification_failure is not None
+                    else None
                 ),
                 history_sink=history_sink,
             )
