@@ -7797,3 +7797,19 @@ Verification passed: focused CP-1 suite, full pytest,
 No gameplay, Architecture, or Roadmap mechanic changed; no production dependency
 was added. This terminal closure remains prospective pending review and human
 merge.
+
+## 2026-10-04 — TSK-0043: Rename-safe changed-path discovery (draft PR #132)
+
+Delivered MANUAL in draft PR #132: candidate mutation discovery now uses a
+machine-readable Git status boundary and returns complete deterministic paths,
+closing the enforcement gap where a rename could hide its original path from
+scope checks. Renames contribute source and destination; copies contribute the
+destination while the source remains lineage only. Real-repository authority
+regressions cover fixed-spec and prospective-closure rename bypasses. Existing
+orchestrator authority and call graph, exact reviewed staging and discard
+proofs, A/B/C ranges, reviewer isolation, Mode C, required CI, and human-only
+merge remain unchanged. Full verification passed: 3321 tests passed and 1 was
+skipped; configured mypy found no issues in 138 source files; canonical and
+cumulative diff checks passed. Arbitrary non-UTF-8 pathname bytes and exact
+CR/CRLF pathname transport remain outside the existing UTF-8 text subprocess
+boundary and this task's scope.
