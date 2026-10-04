@@ -176,6 +176,69 @@ def _validate_repository(repo_argument: Path, *, prefix: str | None = None) -> P
     return repo
 
 
+def _resolved_loaded_path(value: object, *, description: str) -> Path:
+    if value is None:
+        raise LauncherConfigurationError(f"loaded {description} has no __file__")
+    try:
+        path = Path(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise LauncherConfigurationError(
+            f"loaded {description} has an invalid path: {value!r}"
+        ) from exc
+    return _normalized_path(path, strict=True)
+
+
+def _validate_loaded_package_provenance(repo: Path) -> None:
+    expected_package_root = _normalized_path(
+        repo / "tools" / "autonomous_pr", strict=True
+    )
+    package = sys.modules.get(__package__)
+    package_search_path = getattr(package, "__path__", None)
+    if package_search_path is None:
+        raise LauncherConfigurationError(
+            "loaded tools.autonomous_pr package has no package search path"
+        )
+    try:
+        package_roots = tuple(package_search_path)
+    except TypeError as exc:
+        raise LauncherConfigurationError(
+            "loaded tools.autonomous_pr package search path is invalid"
+        ) from exc
+    if len(package_roots) != 1:
+        raise LauncherConfigurationError(
+            "loaded tools.autonomous_pr package must have exactly one search root "
+            f"(got {len(package_roots)})"
+        )
+
+    actual_package_root = _resolved_loaded_path(
+        package_roots[0], description="tools.autonomous_pr package root"
+    )
+    expected_launcher = _normalized_path(
+        expected_package_root / "codex_launcher.py", strict=True
+    )
+    expected_generic_cli = _normalized_path(
+        expected_package_root / "__main__.py", strict=True
+    )
+    actual_launcher = _resolved_loaded_path(
+        globals().get("__file__"), description="codex_launcher module"
+    )
+    actual_generic_cli = _resolved_loaded_path(
+        getattr(generic_cli, "__file__", None), description="generic_cli module"
+    )
+
+    comparisons = (
+        ("tools.autonomous_pr package root", actual_package_root, expected_package_root),
+        ("codex_launcher module", actual_launcher, expected_launcher),
+        ("generic_cli module", actual_generic_cli, expected_generic_cli),
+    )
+    for description, actual, expected in comparisons:
+        if not _same_path(actual, expected):
+            raise LauncherConfigurationError(
+                f"loaded {description} is not from the selected repository "
+                f"(expected {expected}, got {actual})"
+            )
+
+
 def _concrete_executable(candidate: str, *, source: str) -> Path:
     resolved_by_path = shutil.which(candidate)
     if resolved_by_path is None:
@@ -360,6 +423,7 @@ def _prepare_configuration(
     prefix: str | None = None,
 ) -> LauncherConfiguration:
     repo = _validate_repository(args.repo, prefix=prefix)
+    _validate_loaded_package_provenance(repo)
     codex_executable = _resolve_codex(args.codex, environ=environ)
     _check_codex_identity(codex_executable)
     temp_directory = _prepare_temp_directory(repo)

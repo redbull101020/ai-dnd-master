@@ -11,6 +11,9 @@ from tools.autonomous_pr import codex_launcher as launcher
 from tools.autonomous_pr.__main__ import _parse_args as parse_generic_args
 
 
+ROOT = Path(__file__).resolve().parents[3]
+
+
 def _repository(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     environment = repo / ".venv"
@@ -256,6 +259,177 @@ def test_repository_refuses_codex_symlink_entries(
     )
     with pytest.raises(launcher.LauncherConfigurationError, match="not allowed"):
         launcher._validate_repository(repo, prefix=os.fspath(environment))
+
+
+def _loaded_package() -> object:
+    return launcher.sys.modules[launcher.__package__]
+
+
+def _provenance_tree(root: Path) -> Path:
+    package_root = root / "tools" / "autonomous_pr"
+    package_root.mkdir(parents=True)
+    (package_root / "codex_launcher.py").write_text("", encoding="utf-8")
+    (package_root / "__main__.py").write_text("", encoding="utf-8")
+    return package_root
+
+
+def _directory_alias(alias: Path, target: Path) -> None:
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        if os.name != "nt":
+            raise
+    completed = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", os.fspath(alias), os.fspath(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        shell=False,
+    )
+    if completed.returncode != 0:
+        raise OSError(completed.stderr or completed.stdout)
+
+
+def test_selected_repository_package_provenance_passes() -> None:
+    launcher._validate_loaded_package_provenance(ROOT)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows case-folding contract")
+def test_case_only_selected_repository_spelling_is_accepted() -> None:
+    launcher._validate_loaded_package_provenance(Path(os.fspath(ROOT).swapcase()))
+
+
+def test_foreign_package_root_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    foreign_root = _provenance_tree(tmp_path / "foreign")
+    monkeypatch.setattr(_loaded_package(), "__path__", [os.fspath(foreign_root)])
+
+    with pytest.raises(launcher.LauncherConfigurationError, match="package root"):
+        launcher._validate_loaded_package_provenance(ROOT)
+
+
+@pytest.mark.parametrize(
+    ("module", "filename", "description"),
+    [
+        (launcher, "codex_launcher.py", "codex_launcher module"),
+        (launcher.generic_cli, "__main__.py", "generic_cli module"),
+    ],
+)
+def test_foreign_loaded_module_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    module: object,
+    filename: str,
+    description: str,
+) -> None:
+    foreign_file = tmp_path / "foreign" / filename
+    foreign_file.parent.mkdir()
+    foreign_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(module, "__file__", os.fspath(foreign_file))
+
+    with pytest.raises(launcher.LauncherConfigurationError, match=description):
+        launcher._validate_loaded_package_provenance(ROOT)
+
+
+@pytest.mark.parametrize("module", [launcher, launcher.generic_cli])
+def test_missing_loaded_module_file_fails(
+    monkeypatch: pytest.MonkeyPatch, module: object
+) -> None:
+    monkeypatch.delattr(module, "__file__")
+
+    with pytest.raises(launcher.LauncherConfigurationError, match="has no __file__"):
+        launcher._validate_loaded_package_provenance(ROOT)
+
+
+@pytest.mark.parametrize("package_roots", [None, (), ("same", "same")])
+def test_missing_empty_or_multiple_package_roots_fail(
+    monkeypatch: pytest.MonkeyPatch, package_roots: object
+) -> None:
+    package = _loaded_package()
+    if package_roots is None:
+        monkeypatch.delattr(package, "__path__")
+        expected = "no package search path"
+    else:
+        monkeypatch.setattr(package, "__path__", package_roots)
+        expected = "exactly one search root"
+
+    with pytest.raises(launcher.LauncherConfigurationError, match=expected):
+        launcher._validate_loaded_package_provenance(ROOT)
+
+
+def test_unresolvable_loaded_path_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "missing-package-root"
+    monkeypatch.setattr(_loaded_package(), "__path__", [os.fspath(missing)])
+
+    with pytest.raises(launcher.LauncherConfigurationError, match="cannot resolve"):
+        launcher._validate_loaded_package_provenance(ROOT)
+
+
+def test_resolved_alias_of_selected_repository_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alias = tmp_path / "selected-package-alias"
+    _directory_alias(alias, ROOT / "tools" / "autonomous_pr")
+    monkeypatch.setattr(_loaded_package(), "__path__", [os.fspath(alias)])
+    monkeypatch.setattr(launcher, "__file__", os.fspath(alias / "codex_launcher.py"))
+    monkeypatch.setattr(
+        launcher.generic_cli, "__file__", os.fspath(alias / "__main__.py")
+    )
+
+    launcher._validate_loaded_package_provenance(ROOT)
+
+
+def test_symlink_alias_to_foreign_source_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_package = _provenance_tree(tmp_path / "selected")
+    foreign_package = _provenance_tree(tmp_path / "foreign")
+    alias = tmp_path / "foreign-package-alias"
+    _directory_alias(alias, foreign_package)
+    monkeypatch.setattr(_loaded_package(), "__path__", [os.fspath(alias)])
+    monkeypatch.setattr(launcher, "__file__", os.fspath(alias / "codex_launcher.py"))
+    monkeypatch.setattr(
+        launcher.generic_cli, "__file__", os.fspath(alias / "__main__.py")
+    )
+
+    with pytest.raises(launcher.LauncherConfigurationError, match="package root"):
+        launcher._validate_loaded_package_provenance(selected_package.parents[1])
+
+
+def test_provenance_failure_precedes_all_later_launcher_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    repo = tmp_path / "repo"
+
+    def repository(*args: object, **kwargs: object) -> Path:
+        calls.append("repository")
+        return repo
+
+    def provenance(candidate: Path) -> None:
+        calls.append("provenance")
+        raise launcher.LauncherConfigurationError("foreign package")
+
+    def forbidden(name: str) -> object:
+        def fail(*args: object, **kwargs: object) -> object:
+            calls.append(name)
+            raise AssertionError(f"{name} must not be called")
+
+        return fail
+
+    monkeypatch.setattr(launcher, "_validate_repository", repository)
+    monkeypatch.setattr(launcher, "_validate_loaded_package_provenance", provenance)
+    monkeypatch.setattr(launcher, "_resolve_codex", forbidden("resolve Codex"))
+    monkeypatch.setattr(launcher, "_check_codex_identity", forbidden("Codex identity"))
+    monkeypatch.setattr(launcher, "_prepare_temp_directory", forbidden("temp directory"))
+    monkeypatch.setattr(launcher, "_delegate", forbidden("generic delegation"))
+
+    assert launcher.main(["NEXT", "--repo", os.fspath(repo)]) == 2
+    assert calls == ["repository", "provenance"]
 
 
 def test_codex_precedence_is_explicit_then_env_then_path(
@@ -626,6 +800,7 @@ def test_configuration_preserves_codex_home_semantics(
     executable = tmp_path / "codex.exe"
     temp_directory = tmp_path / "temp" / "ai-dnd-autonomous"
     monkeypatch.setattr(launcher, "_validate_repository", lambda repo, prefix=None: repo.resolve())
+    monkeypatch.setattr(launcher, "_validate_loaded_package_provenance", lambda repo: None)
     monkeypatch.setattr(
         launcher, "_resolve_codex", lambda explicit, environ=None: executable
     )
