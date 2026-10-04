@@ -789,6 +789,38 @@ def _public_dispatch_implementer_code(task_id: str) -> str:
     )
 
 
+def _public_dispatch_full_verification_repair_implementer_code(
+    task_id: str,
+) -> str:
+    return (
+        "import pathlib, sys\n"
+        "prompt = sys.stdin.read()\n"
+        f"assert 'selected_task_id: {task_id}' in prompt\n"
+        "if 'CURRENT_GATE: prospective Task Closure\\n' in prompt:\n"
+        "    task = pathlib.Path('docs/TASK.md')\n"
+        "    text = task.read_bytes().decode('utf-8')\n"
+        "    eol = '\\r\\n' if '\\r\\n' in text else '\\n'\n"
+        "    separator = ('| ID | Status | Evidence | Title |' + eol "
+        "+ '| --- | --- | --- | --- |' + eol)\n"
+        f"    row = '| `{task_id}` | `Done` | PR #1 | Public run integration |' + eol\n"
+        "    assert separator in text and row not in text\n"
+        "    task.write_bytes(text.replace(separator, separator + row, 1).encode('utf-8'))\n"
+        "    log = pathlib.Path('docs/DEVELOPMENT_LOG.md')\n"
+        "    log.write_text(log.read_text(encoding='utf-8') + "
+        "'\\n- Public run integration closure.\\n', encoding='utf-8')\n"
+        "elif 'CURRENT_REPAIR_GATE: full-verification-repair\\n' in prompt:\n"
+        "    assert 'CURRENT_REPAIR_PACKET:\\n(none)\\n' in prompt\n"
+        "    assert 'initial-public-full-failure' in prompt\n"
+        "    pathlib.Path('integration-marker.txt').write_text("
+        "'repaired after full verification\\n', encoding='utf-8')\n"
+        "elif 'CURRENT_CHECKPOINT:\\nid: CP-1\\n' in prompt:\n"
+        "    pathlib.Path('integration-marker.txt').write_text("
+        "'accepted v2 checkpoint\\n', encoding='utf-8')\n"
+        "else:\n"
+        "    raise SystemExit('unexpected implementer handoff')\n"
+    )
+
+
 def _public_dispatch_closure_validation_repair_implementer_code(
     task_id: str,
 ) -> str:
@@ -1305,6 +1337,367 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
         "",
         "- Public run integration closure.",
     ]
+
+
+def test_public_run_repairs_full_verification_and_reaches_ready_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    gh_log = tmp_path / "full-repair-gh.jsonl"
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
+    config = OrchestratorConfig(
+        task_id=_TASK_ID,
+        repo=env.work,
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work,
+                _public_dispatch_full_verification_repair_implementer_code(
+                    _TASK_ID
+                ),
+            )
+        ),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+    outcomes = [
+        (True, "initial-checkpoint-pass"),
+        (False, "initial-public-full-failure"),
+        (True, "passing-pre-commit-full-repair"),
+        (True, "replayed-checkpoint-pass"),
+        (True, "authoritative-post-replay-full-pass"),
+    ]
+    produced: list[VerificationEvidence] = []
+    verification_order: list[tuple[tuple[str, ...], ...]] = []
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    initial_checkpoint_evidence: list[orch_module.AcceptedCheckpointEvidence] = []
+    closure_inputs: list[orch_module.V2PreClosureExecutionResult] = []
+    closure_entry_heads: list[str] = []
+
+    def sequenced_verification(
+        current_config: OrchestratorConfig,
+        commands: tuple[tuple[str, ...], ...],
+    ) -> VerificationEvidence:
+        assert current_config.repo == env.work
+        verification_order.append(commands)
+        assert outcomes, "test exhausted public Full verification sequence"
+        passed, marker = outcomes.pop(0)
+        evidence = _cp3_verification(env, commands, passed=passed, marker=marker)
+        produced.append(evidence)
+        return evidence
+
+    real_implementer = orch_module.run_implementer
+    real_reviewer = orch_module.run_structured_reviewer
+    real_checkpoints = orch_module.execute_v2_checkpoints
+    real_closure = orch_module.execute_v2_unpublished_closure
+
+    def capture_implementer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        implementer_prompts.append(prompt)
+        return real_implementer(agent_spec, prompt)
+
+    def capture_reviewer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        return real_reviewer(agent_spec, prompt)
+
+    def capture_checkpoints(*args: object, **kwargs: object) -> object:
+        checkpoint_result = real_checkpoints(*args, **kwargs)  # type: ignore[arg-type]
+        initial_checkpoint_evidence.extend(checkpoint_result.checkpoint_evidence)
+        return checkpoint_result
+
+    def capture_closure(*args: object, **kwargs: object) -> object:
+        pre_closure = args[3]
+        assert isinstance(pre_closure, orch_module.V2PreClosureExecutionResult)
+        closure_inputs.append(pre_closure)
+        closure_entry_heads.append(repository.head_sha(env.work))
+        return real_closure(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", sequenced_verification
+    )
+    monkeypatch.setattr(orch_module, "run_implementer", capture_implementer)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", capture_reviewer)
+    monkeypatch.setattr(orch_module, "execute_v2_checkpoints", capture_checkpoints)
+    monkeypatch.setattr(
+        orch_module, "execute_v2_unpublished_closure", capture_closure
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.STOP
+    assert result.phase is Phase.READY_FOR_HUMAN_MERGE
+    assert result.blocked_reason is None
+    assert result.pr_url == "https://github.com/example/repo/pull/1"
+    assert outcomes == []
+    assert len(produced) == 5
+    assert len(initial_checkpoint_evidence) == 1
+    assert len(closure_inputs) == 1
+    accepted = closure_inputs[0].evidence
+    assert len(accepted.accepted_checkpoints) == 1
+    assert accepted.accepted_checkpoints[0] is not initial_checkpoint_evidence[0]
+    assert accepted.full_verification is not None
+    assert accepted.full_verification.verification is produced[-1]
+    assert accepted.full_verification.verification is not produced[2]
+    assert accepted.full_verification.head_sha == closure_entry_heads[0]
+    assert accepted.full_verification.verification.commands[0].stdout == (
+        "authoritative-post-replay-full-pass"
+    )
+    assert accepted.cumulative_review is not None
+    assert accepted.cumulative_review.reviewed_head_sha == (
+        accepted.full_verification.head_sha
+    )
+    assert "repaired after full verification" in (
+        accepted.cumulative_review.review_patch.diff_text
+    )
+    assert verification_order == [(_verify_true(),)] * 5
+    assert [decision.work_kind for decision in result.routing_decisions] == [
+        AgentWorkKind.CHECKPOINT_IMPLEMENTATION,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+        AgentWorkKind.IMPLEMENTATION_REPAIR,
+        AgentWorkKind.IMPLEMENTATION_REPAIR_REVIEW,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+        AgentWorkKind.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        AgentWorkKind.TASK_CLOSURE_PREPARATION,
+        AgentWorkKind.TASK_CLOSURE_REVIEW,
+        AgentWorkKind.MODE_C_REVIEW,
+    ]
+    assert sum(
+        "CURRENT_GATE:\ncheckpoint_id: CP-1\n" in prompt
+        for prompt in reviewer_prompts
+    ) == 2
+    assert any(
+        "CURRENT_GATE: full-verification-repair\n" in prompt
+        for prompt in reviewer_prompts
+    )
+    assert sum(
+        "REVIEW_PURPOSE: PRE_CLOSURE_CUMULATIVE_REVIEW" in prompt
+        for prompt in reviewer_prompts
+    ) == 1
+    assert any(
+        "CURRENT_REPAIR_GATE: full-verification-repair\n" in prompt
+        for prompt in implementer_prompts
+    )
+    assert any(
+        "CURRENT_GATE: prospective Task Closure\n" in prompt
+        for prompt in implementer_prompts
+    )
+    gh_calls = [
+        json.loads(line)
+        for line in gh_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [call[:2] for call in gh_calls] == [
+        ["pr", "list"],
+        ["pr", "create"],
+        ["pr", "view"],
+        ["pr", "checks"],
+        ["pr", "view"],
+    ]
+    repair_metric = next(
+        metric
+        for metric in result.review_metrics
+        if metric.gate_id == "full-verification-repair"
+    )
+    assert repair_metric.review_iterations == 1
+    assert repair_metric.last_reviewer_verdict is ReviewVerdict.APPROVED
+    assert result.head_sha == repository.remote_branch_sha(
+        env.work, f"autonomous-pr/{_TASK_ID.lower()}"
+    )
+
+
+def test_public_run_does_not_start_downstream_before_full_repair_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    gh_log = tmp_path / "blocked-full-repair-gh.jsonl"
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
+    config = OrchestratorConfig(
+        task_id=_TASK_ID,
+        repo=env.work,
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work,
+                _public_dispatch_full_verification_repair_implementer_code(
+                    _TASK_ID
+                ),
+            )
+        ),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+    outcomes = [
+        (True, "initial-checkpoint-pass"),
+        (False, "initial-public-full-failure"),
+        (True, "passing-pre-commit-full-repair"),
+    ]
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    real_implementer = orch_module.run_implementer
+    real_reviewer = orch_module.run_structured_reviewer
+
+    def sequenced_verification(
+        current_config: OrchestratorConfig,
+        commands: tuple[tuple[str, ...], ...],
+    ) -> VerificationEvidence:
+        assert current_config.repo == env.work
+        passed, marker = outcomes.pop(0)
+        return _cp3_verification(env, commands, passed=passed, marker=marker)
+
+    def capture_implementer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        implementer_prompts.append(prompt)
+        return real_implementer(agent_spec, prompt)
+
+    def block_full_repair_review(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        if "CURRENT_GATE: full-verification-repair\n" in prompt:
+            return _v2_explicit_blocked("full repair review blocked")
+        return real_reviewer(agent_spec, prompt)
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", sequenced_verification
+    )
+    monkeypatch.setattr(orch_module, "run_implementer", capture_implementer)
+    monkeypatch.setattr(
+        orch_module, "run_structured_reviewer", block_full_repair_review
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.FULL_VERIFICATION
+    assert result.blocked_reason == "full repair review blocked"
+    assert result.pr_url is None
+    assert outcomes == []
+    assert [decision.work_kind for decision in result.routing_decisions] == [
+        AgentWorkKind.CHECKPOINT_IMPLEMENTATION,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+        AgentWorkKind.IMPLEMENTATION_REPAIR,
+        AgentWorkKind.IMPLEMENTATION_REPAIR_REVIEW,
+    ]
+    assert any(
+        "CURRENT_REPAIR_GATE: full-verification-repair\n" in prompt
+        for prompt in implementer_prompts
+    )
+    assert all(
+        "CURRENT_GATE: prospective Task Closure" not in prompt
+        for prompt in implementer_prompts
+    )
+    assert all(
+        "PRE_CLOSURE_CUMULATIVE_REVIEW" not in prompt
+        and "FINAL_CUMULATIVE_AUDIT" not in prompt
+        for prompt in reviewer_prompts
+    )
+    gh_calls = [
+        json.loads(line)
+        for line in gh_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [call[:2] for call in gh_calls] == [["pr", "list"]]
+    assert result.delivery_branch is not None
+    assert result.head_sha == repository.remote_branch_sha(
+        env.work, result.delivery_branch
+    )
+    assert (env.work / "integration-marker.txt").read_text(encoding="utf-8") == (
+        "repaired after full verification\n"
+    )
+    assert _run_git(["status", "--porcelain"], cwd=env.work) != ""
+
+
+@pytest.mark.parametrize(
+    ("failure_name", "failure_message"),
+    [
+        ("timeout", "verification command timed out after 10.000s: python -c"),
+        ("oserror", "could not start verification command python -c: unavailable"),
+    ],
+)
+def test_public_run_full_verification_execution_uncertainty_blocks_before_downstream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_name: str,
+    failure_message: str,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    gh_log = tmp_path / f"full-{failure_name}-gh.jsonl"
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+    verification_calls = 0
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    real_implementer = orch_module.run_implementer
+    real_reviewer = orch_module.run_structured_reviewer
+
+    def uncertain_full_verification(
+        current_config: OrchestratorConfig,
+        commands: tuple[tuple[str, ...], ...],
+    ) -> VerificationEvidence:
+        nonlocal verification_calls
+        assert current_config.repo == env.work
+        verification_calls += 1
+        if verification_calls == 1:
+            return _cp3_verification(
+                env, commands, passed=True, marker="checkpoint-passed"
+            )
+        raise repository.RepositoryError(failure_message)
+
+    def capture_implementer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        implementer_prompts.append(prompt)
+        return real_implementer(agent_spec, prompt)
+
+    def capture_reviewer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        return real_reviewer(agent_spec, prompt)
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", uncertain_full_verification
+    )
+    monkeypatch.setattr(orch_module, "run_implementer", capture_implementer)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", capture_reviewer)
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.FULL_VERIFICATION
+    assert result.blocked_reason == failure_message
+    assert result.pr_url is None
+    assert verification_calls == 2
+    assert [decision.work_kind for decision in result.routing_decisions] == [
+        AgentWorkKind.CHECKPOINT_IMPLEMENTATION,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+    ]
+    assert all(
+        "CURRENT_REPAIR_GATE: full-verification-repair" not in prompt
+        and "CURRENT_GATE: prospective Task Closure" not in prompt
+        for prompt in implementer_prompts
+    )
+    assert all(
+        "full-verification-repair" not in prompt
+        and "PRE_CLOSURE_CUMULATIVE_REVIEW" not in prompt
+        and "FINAL_CUMULATIVE_AUDIT" not in prompt
+        for prompt in reviewer_prompts
+    )
+    gh_calls = [
+        json.loads(line)
+        for line in gh_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [call[:2] for call in gh_calls] == [["pr", "list"]]
+    assert result.delivery_branch is not None
+    assert result.head_sha == repository.remote_branch_sha(
+        env.work, result.delivery_branch
+    )
+    assert "cp 1" in _run_git(["log", "-1", "--format=%s"], cwd=env.work)
 
 
 def test_public_run_repairs_pr129_closure_validation_incident_to_ready_stop(
@@ -4422,7 +4815,7 @@ def _cp3_config(env: Env) -> OrchestratorConfig:
 
 
 def _cp3_verification(
-    env: Env,
+    env: Env | PublicDispatchEnv,
     commands: tuple[tuple[str, ...], ...],
     *,
     passed: bool,
@@ -4792,7 +5185,7 @@ def test_v2_replayed_gate_changes_requested_repairs_and_restarts_from_cp1(
     base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
     assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
     accepted_heads: list[str] = []
-    prompts, implementer_prompts, _, ranges = _install_cp3_reviewer_sequence(
+    prompts, implementer_prompts, commands, ranges = _install_cp3_reviewer_sequence(
         env,
         monkeypatch,
         [
@@ -4823,6 +5216,28 @@ def test_v2_replayed_gate_changes_requested_repairs_and_restarts_from_cp1(
     )
     assert all("choose workflow transitions" not in prompt for prompt in prompts)
     assert len(result.evidence.accepted_checkpoints) == 2
+    checkpoint_review_prompts = [
+        prompt
+        for prompt in prompts
+        if "CURRENT_GATE:\ncheckpoint_id:" in prompt
+    ]
+    assert [
+        "CP-1" if "checkpoint_id: CP-1\n" in prompt else "CP-2"
+        for prompt in checkpoint_review_prompts
+    ] == ["CP-1", "CP-1", "CP-2"]
+    assert commands.count(spec.full_verification) == 2
+    assert result.evidence.full_verification is not None
+    assert result.evidence.full_verification.head_sha == accepted_heads[-1]
+    assert result.evidence.cumulative_review is not None
+    assert result.evidence.cumulative_review.reviewed_head_sha == accepted_heads[-1]
+    assert all(
+        current is not original
+        for current, original in zip(
+            result.evidence.accepted_checkpoints,
+            checkpoint_result.checkpoint_evidence,
+            strict=True,
+        )
+    )
 
 
 def test_v2_origin_main_movement_with_same_target_revalidates_and_rebuilds(
