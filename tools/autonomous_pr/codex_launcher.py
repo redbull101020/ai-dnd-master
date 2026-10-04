@@ -25,7 +25,7 @@ from . import __main__ as generic_cli
 
 
 DEFAULT_AGENT_TIMEOUT_SECONDS = 1800.0
-DEFAULT_VERIFY_TIMEOUT_SECONDS = 1800.0
+DEFAULT_VERIFY_TIMEOUT_SECONDS = 3600.0
 DEFAULT_REQUIRED_CI_TIMEOUT_SECONDS = 600.0
 CODEX_IDENTITY_TIMEOUT_SECONDS = 10.0
 
@@ -67,6 +67,7 @@ WINDOWS_SANDBOX_ARGS = ("-c", "windows.sandbox=mxc")
 _SELECTOR_PATTERN = re.compile(r"TSK-[0-9]{4}")
 _CODEX_IDENTITY_PATTERN = re.compile(r"(?:^|\s)codex-cli\s+(\S+)")
 _TEMP_DIRECTORY_NAME = "ai-dnd-autonomous"
+_PIP_CACHE_DIRECTORY_NAME = "pip-cache"
 
 
 class LauncherConfigurationError(ValueError):
@@ -81,6 +82,7 @@ class LauncherConfiguration:
     repo: Path
     codex_executable: Path
     temp_directory: Path
+    pip_cache_directory: Path
     agent_timeout_seconds: float
     verify_timeout_seconds: float
     required_ci_timeout_seconds: float
@@ -325,18 +327,67 @@ def _check_codex_identity(executable: Path) -> None:
         )
 
 
-def _prepare_temp_directory(repo: Path) -> Path:
-    temp_directory = _normalized_path(
-        Path(tempfile.gettempdir()) / _TEMP_DIRECTORY_NAME, strict=False
-    )
-    if temp_directory == repo or temp_directory.is_relative_to(repo):
-        raise LauncherConfigurationError(
-            f"dedicated temp directory must be outside repository: {temp_directory}"
-        )
+def _is_junction(path: Path) -> bool:
+    predicate = getattr(path, "is_junction", None)
+    return bool(predicate()) if predicate is not None else False
+
+
+def _validate_launcher_owned_directory_entry(path: Path, *, description: str) -> None:
     try:
-        temp_directory.mkdir(parents=True, exist_ok=True)
+        if not os.path.lexists(path):
+            raise LauncherConfigurationError(
+                f"{description} was not created: {path}"
+            )
+        if path.is_symlink():
+            raise LauncherConfigurationError(
+                f"{description} must not be a symlink: {path}"
+            )
+        if _is_junction(path):
+            raise LauncherConfigurationError(
+                f"{description} must not be a junction: {path}"
+            )
+        if not path.is_dir():
+            raise LauncherConfigurationError(
+                f"{description} is not a directory: {path}"
+            )
+    except OSError as exc:
+        raise LauncherConfigurationError(
+            f"cannot inspect {description} {path}: {exc}"
+        ) from exc
+
+
+def _prepare_launcher_owned_directory(path: Path, *, description: str) -> Path:
+    try:
+        exists = os.path.lexists(path)
+    except OSError as exc:
+        raise LauncherConfigurationError(
+            f"cannot inspect {description} {path}: {exc}"
+        ) from exc
+    if exists:
+        _validate_launcher_owned_directory_entry(path, description=description)
+    else:
+        try:
+            path.mkdir()
+        except OSError as exc:
+            raise LauncherConfigurationError(
+                f"cannot create {description} {path}: {exc}"
+            ) from exc
+        _validate_launcher_owned_directory_entry(path, description=description)
+    return _normalized_path(path, strict=True)
+
+
+def _require_outside_repository(path: Path, repo: Path, *, description: str) -> None:
+    if _same_path(path, repo) or path.is_relative_to(repo):
+        raise LauncherConfigurationError(
+            f"{description} must be outside repository: {path}"
+        )
+
+
+def _probe_launcher_owned_directory(path: Path, *, description: str) -> None:
+    probe_path: Path | None = None
+    try:
         with tempfile.NamedTemporaryFile(
-            mode="wb", dir=temp_directory, prefix="write-probe-", delete=False
+            mode="wb", dir=path, prefix="write-probe-", delete=False
         ) as probe:
             probe_path = Path(probe.name)
             probe.write(b"ok")
@@ -344,14 +395,47 @@ def _prepare_temp_directory(repo: Path) -> Path:
         probe_path.unlink()
     except OSError as exc:
         try:
-            if "probe_path" in locals() and probe_path.exists():
+            if probe_path is not None and os.path.lexists(probe_path):
                 probe_path.unlink()
         except OSError:
             pass
         raise LauncherConfigurationError(
-            f"dedicated temp directory is not writable: {temp_directory}: {exc}"
+            f"{description} failed create/write/remove probe at {path}: {exc}"
         ) from exc
+
+
+def _prepare_temp_directory(repo: Path) -> Path:
+    lexical_path = Path(tempfile.gettempdir()) / _TEMP_DIRECTORY_NAME
+    temp_directory = _prepare_launcher_owned_directory(
+        lexical_path, description="dedicated runtime directory"
+    )
+    _require_outside_repository(
+        temp_directory, repo, description="dedicated runtime directory"
+    )
+    _probe_launcher_owned_directory(
+        temp_directory, description="dedicated runtime directory"
+    )
     return temp_directory
+
+
+def _prepare_pip_cache_directory(repo: Path, temp_directory: Path) -> Path:
+    lexical_path = temp_directory / _PIP_CACHE_DIRECTORY_NAME
+    pip_cache_directory = _prepare_launcher_owned_directory(
+        lexical_path, description="dedicated pip cache directory"
+    )
+    _require_outside_repository(
+        pip_cache_directory, repo, description="dedicated pip cache directory"
+    )
+    if pip_cache_directory.parent != temp_directory:
+        raise LauncherConfigurationError(
+            "dedicated pip cache directory must resolve as the exact direct child "
+            f"of the runtime directory (runtime {temp_directory}, "
+            f"cache {pip_cache_directory})"
+        )
+    _probe_launcher_owned_directory(
+        pip_cache_directory, description="dedicated pip cache directory"
+    )
+    return pip_cache_directory
 
 
 def _opaque_arguments(option: str, values: Sequence[str]) -> list[str]:
@@ -427,6 +511,7 @@ def _prepare_configuration(
     codex_executable = _resolve_codex(args.codex, environ=environ)
     _check_codex_identity(codex_executable)
     temp_directory = _prepare_temp_directory(repo)
+    pip_cache_directory = _prepare_pip_cache_directory(repo, temp_directory)
     generic_argv = _compose_generic_argv(
         selector=args.selector,
         repo=repo,
@@ -440,6 +525,7 @@ def _prepare_configuration(
         repo=repo,
         codex_executable=codex_executable,
         temp_directory=temp_directory,
+        pip_cache_directory=pip_cache_directory,
         agent_timeout_seconds=args.agent_timeout_seconds,
         verify_timeout_seconds=args.verify_timeout_seconds,
         required_ci_timeout_seconds=args.required_ci_timeout_seconds,
@@ -449,15 +535,25 @@ def _prepare_configuration(
 
 def _delegate(configuration: LauncherConfiguration) -> int:
     temp_value = os.fspath(configuration.temp_directory)
-    variable_names = ("TEMP", "TMP", "TMPDIR")
-    previous_values = {
-        name: (name in os.environ, os.environ.get(name)) for name in variable_names
+    pip_cache_value = os.fspath(configuration.pip_cache_directory)
+    scoped_values = {
+        "TEMP": temp_value,
+        "TMP": temp_value,
+        "TMPDIR": temp_value,
+        "PIP_CACHE_DIR": pip_cache_value,
     }
+    previous_values = {
+        name: (name in os.environ, os.environ[name] if name in os.environ else None)
+        for name in scoped_values
+    }
+    previous_tempfile_tempdir = tempfile.tempdir
     try:
-        for name in variable_names:
-            os.environ[name] = temp_value
+        for name, value in scoped_values.items():
+            os.environ[name] = value
+        tempfile.tempdir = temp_value
         return generic_cli.main(list(configuration.generic_argv))
     finally:
+        tempfile.tempdir = previous_tempfile_tempdir
         for name, (was_present, previous_value) in previous_values.items():
             if was_present:
                 assert previous_value is not None

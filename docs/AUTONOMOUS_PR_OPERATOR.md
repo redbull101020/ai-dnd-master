@@ -49,9 +49,12 @@ The supported operator overrides are intentionally narrow:
 ```
 
 The repository defaults to the current working directory and is normalized to
-an absolute path. Timeout defaults are respectively `1800.0`, `1800.0`, and
-`600.0` seconds. Overrides must be finite and greater than zero; valid values
-are forwarded without clamping or rounding. The launcher exposes no arbitrary
+an absolute path. Timeout defaults are respectively `1800.0`, `3600.0`, and
+`600.0` seconds. The `3600.0`-second verification timeout bounds one local
+deterministic verification subprocess; it is not a repair budget. The separate
+`600.0`-second required-CI timeout remains a passive remote-observation budget.
+Overrides must be finite and greater than zero; valid values are forwarded
+without clamping or rounding. The launcher exposes no arbitrary
 agent argv, model, provider, sandbox, approval, network, delivery-branch,
 verification-command, capability-assertion, merge, or auto-merge override.
 
@@ -107,6 +110,15 @@ The launcher requires `<repo>/.venv` to exist and the current `sys.prefix` to
 resolve to that exact environment root. It does not create or activate a
 virtual environment, install packages, launch a second Python, or fall back to
 system Python.
+
+After repository, `.venv`, and repository-local `.codex` validation, the
+launcher proves that the already loaded regular `tools.autonomous_pr` package
+has exactly one resolved search root and that the loaded `codex_launcher.py`
+and generic `__main__.py` files all come from the selected repository's
+`tools/autonomous_pr` directory. A foreign checkout, site-packages/editable
+source, `PYTHONPATH` source, missing module file, or multiple package roots
+fails closed. The launcher does not repair `sys.path`, discard imports, or
+re-import from another location.
 
 Any filesystem entry at `<repo>/.codex` is refused, including a file,
 directory, symlink, or broken symlink. The launcher does not inspect or accept
@@ -196,11 +208,27 @@ locate, overwrite, or migrate it. Codex authentication therefore continues to
 use its normal inherited/default home even though child user configuration is
 ignored for these invocations.
 
-The launcher creates and probes `<system-temp>/ai-dnd-autonomous`, which must
-resolve outside the repository and be writable. Only around the in-process
-generic CLI call it sets `TEMP`, `TMP`, and `TMPDIR` to that same directory;
-all three variables are restored afterward, including after an exception.
-This directory is temporary subprocess workspace, not persisted harness state.
+The launcher owns the dedicated runtime root
+`<system-temp>/ai-dnd-autonomous` and its fixed direct child `pip-cache`.
+Before resolving either launcher-owned entry, it rejects a file, broken
+symlink, symlink, or supported Windows junction. An absent directory is
+created and then rechecked against the same rules. The resolved runtime root
+and cache must both be outside the repository, and the resolved cache parent
+must equal the resolved runtime root exactly. Each directory must pass a
+create/write/flush/close/remove probe; inability to remove the probe is a
+configuration failure, not a successful writable check.
+
+Only around the single synchronous in-process generic CLI call, the launcher
+sets `TEMP`, `TMP`, and `TMPDIR` to the validated runtime root,
+`PIP_CACHE_DIR` to the validated `pip-cache`, and the parent process's
+`tempfile.tempdir` to the runtime root. It restores the exact previous
+presence and value of every environment variable—including absent and empty
+states—and the exact previous `tempfile.tempdir` after success or exception.
+Descendant verification processes inherit these scoped environment values.
+The launcher leaves `CODEX_HOME`, pip index/authentication/proxy/certificate
+settings, dependency-resolution policy, and network policy unchanged;
+`PIP_CACHE_DIR` selects only the writable cache location. These directories
+are temporary subprocess workspace, not persisted harness state.
 
 The outer Codex host sandbox/permission boundary and each child Codex sandbox
 are separate. The launcher fixes the child profiles described above, but it
@@ -237,5 +265,5 @@ another task.
 | Multiple Windows fallback candidates | Choose the intended concrete executable explicitly with `--codex`; the launcher never guesses. |
 | `codex --version` failure, timeout, or malformed identity | Verify the selected executable manually and correct the path/installation. The launcher does not update or replace it. |
 | Repository `.codex` refused | Remove the repository-local configuration from this execution boundary or use a separately reviewed future change; the launcher never ignores the guard. |
-| Temp directory creation/write probe fails | Correct host temp-path permissions or configuration so the dedicated directory is outside the repository and writable. |
+| Runtime root or pip-cache validation/probe fails | Remove a file/link/junction collision or correct host temp-path permissions so both launcher-owned directories are real, outside the repository, exact parent/child, writable, and removable. |
 | Outer-host permissions are insufficient | The outer Codex requests approval for the single launcher command before execution. If escalation is unavailable, forbidden, or denied, stop fail-closed; the launcher does not request, bypass, or manufacture permission, and there is no direct Git/GitHub fallback. |

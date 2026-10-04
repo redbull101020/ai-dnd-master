@@ -86,3 +86,26 @@ def test_outer_approval_does_not_weaken_child_security_boundary() -> None:
     assert "no-Git/GitHub-write" in child_profiles
     assert "disposable filesystem snapshot" in child_profiles
     assert "it has no remote" in child_profiles
+
+
+def test_operator_guide_documents_deterministic_verification_environment() -> None:
+    operator = _read("docs/AUTONOMOUS_PR_OPERATOR.md")
+    normalized_operator = " ".join(operator.split())
+    environment = _section(
+        operator, "## Temporary files, credentials, and host permissions", 2
+    )
+
+    assert "`1800.0`, `3600.0`, and `600.0`" in normalized_operator
+    assert "not a repair budget" in normalized_operator
+    assert "passive remote-observation budget" in normalized_operator
+    assert "`<system-temp>/ai-dnd-autonomous`" in environment
+    assert "fixed direct child `pip-cache`" in environment
+    assert "broken symlink" in environment
+    assert "supported Windows junction" in environment
+    assert "resolved cache parent" in environment
+    assert "create/write/flush/close/remove probe" in environment
+    assert "`PIP_CACHE_DIR`" in environment
+    assert "`tempfile.tempdir`" in environment
+    assert "absent and empty" in environment
+    assert "`CODEX_HOME`" in environment
+    assert "network policy unchanged" in environment
