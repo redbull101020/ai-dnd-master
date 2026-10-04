@@ -299,3 +299,4 @@ Concrete known constraints.
 | `TSK-0041` | `Done` | PR #128 | Make local Codex-chat AUTONOMOUS_PR dispatch approval-aware |
 | `TSK-0040` | `Done` | PR #129 | Implement minimal Monster voluntary Movement vertical slice |
 | `TSK-0042` | `Done` | PR #130 | Repair deterministic prospective Task Closure validation failures in-process |
+| `TSK-0043` | `Done` | PR #132 | Make AUTONOMOUS_PR changed-path discovery machine-readable and rename-safe |

@@ -266,6 +266,16 @@ to the implementer or reviewer process directly:
   repository, matching the existing `.gitignore`d, uncommitted status of
   `*.patch`/`*.diff` files.
 
+Candidate mutation paths used for deterministic scope enforcement, bounded
+staging handoff, and rejected-candidate discard come from complete,
+machine-readable Git worktree status, not human-oriented pathname quoting,
+textual `PATH1 -> PATH2` rendering, or newline-delimited parsing. A rename
+`A` to `B` contributes both `A` and `B` as mutations; a copy `A` to `B`
+contributes `B` as the mutation while `A` is lineage only; and an independent
+deletion plus addition contributes both paths. This invariant is confined to
+candidate worktree mutation discovery and does not claim that every Git
+pathname operation in the harness shares one parser.
+
 The existing A/B/C `review.patch` diff-range semantics (`AGENTS.md`
 "review.patch and diff ranges") are unchanged by this document. The harness
 selects among exactly those three ranges; it does not introduce a fourth.
