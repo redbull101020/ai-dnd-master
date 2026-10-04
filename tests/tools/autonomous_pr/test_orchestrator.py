@@ -459,6 +459,45 @@ def test_verification_exact_python_uses_harness_interpreter_and_preserves_eviden
 
 
 @pytest.mark.parametrize(
+    ("returncode", "passed"),
+    ((0, True), (7, False), (-9, False)),
+)
+def test_verification_completed_process_uses_real_returncode(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    passed: bool,
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("verification-tool", "check")
+
+    monkeypatch.setattr(
+        orch_module.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv,
+            returncode,
+            stdout="completed stdout",
+            stderr="completed stderr",
+        ),
+    )
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert result == VerificationCommandResult(
+        command=original,
+        returncode=returncode,
+        stdout="completed stdout",
+        stderr="completed stderr",
+        passed=passed,
+    )
+
+
+@pytest.mark.parametrize(
     "executable",
     ("python3", "python.exe", "py", str(Path(sys.executable).resolve()), "git"),
 )
@@ -488,7 +527,7 @@ def test_verification_noncanonical_executables_are_not_rewritten(
 
 
 @pytest.mark.parametrize("startup_error", (FileNotFoundError, PermissionError))
-def test_verification_harness_interpreter_startup_failure_has_no_fallback(
+def test_verification_oserror_is_execution_uncertainty_without_synthetic_result(
     env: Env,
     monkeypatch: pytest.MonkeyPatch,
     startup_error: type[OSError],
@@ -508,16 +547,122 @@ def test_verification_harness_interpreter_startup_failure_has_no_fallback(
 
     monkeypatch.setattr(orch_module.sys, "executable", missing_interpreter)
     monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+    created_results: list[dict[str, object]] = []
 
-    result = orch_module._run_one_verification_command(config, original)
+    def record_result(**kwargs: object) -> None:
+        created_results.append(kwargs)
+
+    monkeypatch.setattr(orch_module, "VerificationCommandResult", record_result)
+
+    with pytest.raises(repository.RepositoryError) as exc_info:
+        orch_module._run_one_verification_command(config, original)
 
     assert len(attempted) == 1
     assert attempted[0][0] == [missing_interpreter, "-m", "pytest"]
     assert "env" not in attempted[0][1]
     assert "shell" not in attempted[0][1]
-    assert result.command == original
-    assert result.returncode == -1
-    assert not result.passed
+    assert created_results == []
+    assert startup_error.__name__ in str(exc_info.value)
+    assert "availability and permissions" in str(exc_info.value)
+    assert "unusable harness interpreter" not in str(exc_info.value)
+    assert len(str(exc_info.value)) < 200
+
+
+def test_verification_timeout_is_execution_uncertainty_without_captured_output(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("verification-tool", "check")
+    captured = "unbounded captured output " * 10_000
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(
+            cmd=argv,
+            timeout=config.verification_timeout_seconds,
+            output=captured,
+            stderr=captured,
+        )
+
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+    created_results: list[dict[str, object]] = []
+
+    def record_result(**kwargs: object) -> None:
+        created_results.append(kwargs)
+
+    monkeypatch.setattr(orch_module, "VerificationCommandResult", record_result)
+
+    with pytest.raises(repository.RepositoryError) as exc_info:
+        orch_module._run_one_verification_command(config, original)
+
+    assert created_results == []
+    assert "timed out" in str(exc_info.value)
+    assert "execution state is uncertain" in str(exc_info.value)
+    assert "unbounded captured output" not in str(exc_info.value)
+    assert len(str(exc_info.value)) < 200
+
+
+def test_verification_mixed_failure_then_execution_uncertainty_returns_no_evidence(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    commands = (("first-tool", "check"), ("second-tool", "check"))
+    fingerprint = repository.RepositoryFingerprint(
+        branch="delivery", head_sha="head-sha", content_digest="content-digest"
+    )
+    verified_contexts: list[str] = []
+    call_count = 0
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return subprocess.CompletedProcess(argv, 5, stdout="failed", stderr="")
+        raise OSError("second command execution is uncertain")
+
+    monkeypatch.setattr(repository, "capture_fingerprint", lambda repo: fingerprint)
+    monkeypatch.setattr(
+        repository,
+        "verify_fingerprint_unchanged",
+        lambda repo, expected, *, context: verified_contexts.append(context),
+    )
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    with pytest.raises(repository.RepositoryError):
+        orch_module._run_verification_commands(config, commands)
+
+    assert call_count == 2
+    assert verified_contexts == [
+        "deterministic verification command 'first-tool check'"
+    ]
+
+
+def test_verification_completed_command_still_enforces_repository_mutation_guard(
+    env: Env,
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    command = (
+        "python",
+        "-c",
+        "from pathlib import Path; "
+        "Path('README.md').write_text('unexpected mutation\\n', encoding='utf-8')",
+    )
+
+    with pytest.raises(repository.RepositoryError, match="python -c"):
+        orch_module._run_verification_commands(config, (command,))
 
 
 def test_checkpoint_and_full_verification_share_python_materialization(

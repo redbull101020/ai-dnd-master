@@ -3769,18 +3769,17 @@ def _run_one_verification_command(
             check=False,
         )
     except OSError as exc:
-        return VerificationCommandResult(
-            command=command, returncode=-1, stdout="", stderr=str(exc), passed=False
-        )
+        raise RepositoryError(
+            "deterministic verification command could not be executed: "
+            f"{type(exc).__name__} (errno={exc.errno!r}); check executable "
+            "availability and permissions"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
-        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
-        return VerificationCommandResult(
-            command=command,
-            returncode=-1,
-            stdout="",
-            stderr=f"verification command timed out: {stderr}",
-            passed=False,
-        )
+        raise RepositoryError(
+            "deterministic verification command timed out after "
+            f"{config.verification_timeout_seconds:g} seconds; execution "
+            "state is uncertain"
+        ) from exc
     return VerificationCommandResult(
         command=command,
         returncode=completed.returncode,
