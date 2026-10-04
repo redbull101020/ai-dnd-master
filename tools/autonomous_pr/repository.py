@@ -71,6 +71,15 @@ class RepositoryError(Exception):
     """
 
 
+@dataclass(frozen=True)
+class _WorktreeStatusRecord:
+    """One machine-readable porcelain v1 worktree status record."""
+
+    xy: str
+    path: str
+    original_path: str | None
+
+
 class ReviewPurpose(Enum):
     """What one review.patch is being used for.
 
@@ -1027,6 +1036,67 @@ def create_delivery_branch_from_sha(repo: Path, branch: str, base_sha: str) -> N
     _git(repo, ["checkout", "-b", branch, base_sha])
 
 
+def _parse_porcelain_v1_z_status(
+    status: str,
+) -> tuple[_WorktreeStatusRecord, ...]:
+    """Parse exact pathname records from ``git status --porcelain=v1 -z``."""
+
+    if not status:
+        return ()
+    if not status.endswith("\0"):
+        raise RepositoryError(
+            "non-empty porcelain v1 -z status output lacks a terminal NUL"
+        )
+
+    tokens = status[:-1].split("\0")
+    records: list[_WorktreeStatusRecord] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if len(token) < 3 or token[2] != " ":
+            raise RepositoryError(
+                "porcelain v1 -z status record has a malformed prefix"
+            )
+        xy = token[:2]
+        path = token[3:]
+        if not path:
+            raise RepositoryError(
+                "porcelain v1 -z status record has an empty primary path"
+            )
+
+        index += 1
+        original_path: str | None = None
+        if "R" in xy or "C" in xy:
+            if index >= len(tokens):
+                raise RepositoryError(
+                    "porcelain v1 -z rename/copy record lacks an original path"
+                )
+            original_path = tokens[index]
+            if not original_path:
+                raise RepositoryError(
+                    "porcelain v1 -z rename/copy record has an empty original path"
+                )
+            index += 1
+
+        records.append(
+            _WorktreeStatusRecord(
+                xy=xy,
+                path=path,
+                original_path=original_path,
+            )
+        )
+
+    return tuple(records)
+
+
+def _worktree_status_records(repo: Path) -> tuple[_WorktreeStatusRecord, ...]:
+    status = _git(
+        repo,
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )
+    return _parse_porcelain_v1_z_status(status)
+
+
 def intent_to_add_untracked_files(repo: Path) -> tuple[str, ...]:
     """Run ``git add -N`` for every currently untracked file.
 
@@ -1036,18 +1106,18 @@ def intent_to_add_untracked_files(repo: Path) -> tuple[str, ...]:
     only — it is never authorization to stage or commit it.
     """
 
-    status = _git(repo, ["status", "--porcelain=v1"])
-    untracked: list[str] = []
-    for line in status.splitlines():
-        if not line.startswith("??"):
-            continue
-        path = line[3:].strip()
-        if path.startswith('"') and path.endswith('"'):
-            path = path[1:-1]
-        untracked.append(path)
+    untracked = tuple(
+        sorted(
+            {
+                record.path
+                for record in _worktree_status_records(repo)
+                if record.xy == "??"
+            }
+        )
+    )
     for path in untracked:
         _git(repo, ["add", "-N", "--", path])
-    return tuple(untracked)
+    return untracked
 
 
 def changed_paths(repo: Path) -> tuple[str, ...]:
@@ -1061,18 +1131,16 @@ def changed_paths(repo: Path) -> tuple[str, ...]:
     never itself authorization to stage or commit anything.
     """
 
-    status = _git(repo, ["status", "--porcelain=v1"])
-    paths: list[str] = []
-    for line in status.splitlines():
-        if not line:
-            continue
-        path = line[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        if path.startswith('"') and path.endswith('"'):
-            path = path[1:-1]
-        paths.append(path)
-    return tuple(paths)
+    paths: set[str] = set()
+    for record in _worktree_status_records(repo):
+        paths.add(record.path)
+        if "R" in record.xy:
+            if record.original_path is None:
+                raise RepositoryError(
+                    "porcelain v1 -z rename record lacks an original path"
+                )
+            paths.add(record.original_path)
+    return tuple(sorted(paths))
 
 
 def _build_review_patch(

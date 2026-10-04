@@ -591,6 +591,193 @@ def test_mode_a_includes_new_untracked_file(git_env: GitEnv) -> None:
     assert "+hello world" in patch.diff_text
 
 
+def test_porcelain_v1_z_parser_accepts_empty_stream() -> None:
+    assert repo_module._parse_porcelain_v1_z_status("") == ()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_path"),
+    [
+        ("?? literal -> arrow.txt\0", "literal -> arrow.txt"),
+        ("??  leading.txt\0", " leading.txt"),
+        ("?? trailing.txt \0", "trailing.txt "),
+        ("?? line\nbreak.txt\0", "line\nbreak.txt"),
+    ],
+)
+def test_porcelain_v1_z_parser_preserves_path_text(
+    status: str, expected_path: str
+) -> None:
+    records = repo_module._parse_porcelain_v1_z_status(status)
+
+    assert records == (
+        repo_module._WorktreeStatusRecord(
+            xy="??", path=expected_path, original_path=None
+        ),
+    )
+
+
+def test_porcelain_v1_z_parser_preserves_rename_target_source_order() -> None:
+    records = repo_module._parse_porcelain_v1_z_status(
+        "R  destination.txt\0source.txt\0"
+    )
+
+    assert records == (
+        repo_module._WorktreeStatusRecord(
+            xy="R ", path="destination.txt", original_path="source.txt"
+        ),
+    )
+
+
+def test_copy_source_is_lineage_not_a_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = repo_module._parse_porcelain_v1_z_status(
+        " C destination.txt\0source.txt\0"
+    )[0]
+    monkeypatch.setattr(
+        repo_module,
+        "_worktree_status_records",
+        lambda repo: (
+            record,
+            repo_module._WorktreeStatusRecord(
+                xy="??", path="another.txt", original_path=None
+            ),
+            repo_module._WorktreeStatusRecord(
+                xy="??", path="another.txt", original_path=None
+            ),
+        ),
+    )
+
+    assert record.original_path == "source.txt"
+    assert repo_module.changed_paths(tmp_path) == (
+        "another.txt",
+        "destination.txt",
+    )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "?? missing-terminal.txt",
+        "?\0",
+        "??\0",
+        "??Xinvalid-separator.txt\0",
+        "?? \0",
+        "R  destination.txt\0",
+        " C destination.txt\0",
+        "R  destination.txt\0\0",
+        " C destination.txt\0\0",
+        "?? valid.txt\0dangling\0",
+    ],
+)
+def test_porcelain_v1_z_parser_rejects_malformed_stream(status: str) -> None:
+    with pytest.raises(RepositoryError):
+        repo_module._parse_porcelain_v1_z_status(status)
+
+
+def test_unicode_untracked_path_round_trips_with_quote_path_enabled(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    _run_git(["config", "core.quotePath", "true"], cwd=work)
+    path = "данные-героя.txt"
+    (work / path).write_text("unicode content\n", encoding="utf-8")
+
+    assert repo_module.intent_to_add_untracked_files(work) == (path,)
+    assert repo_module.changed_paths(work) == (path,)
+
+    patch = repo_module.build_checkpoint_patch_uncommitted(work)
+
+    assert "+unicode content" in patch.diff_text
+
+
+def test_untracked_path_with_spaces_round_trips_exactly(git_env: GitEnv) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    path = "ordinary file.txt"
+    (work / path).write_text("spaced content\n", encoding="utf-8")
+
+    assert repo_module.intent_to_add_untracked_files(work) == (path,)
+    assert repo_module.changed_paths(work) == (path,)
+
+    patch = repo_module.build_checkpoint_patch_uncommitted(work)
+
+    assert "+spaced content" in patch.diff_text
+
+
+def _prepare_tracked_rename(work: Path) -> tuple[str, str, str]:
+    source = "source.txt"
+    destination = "destination.txt"
+    (work / source).write_text("rename content\n", encoding="utf-8")
+    _run_git(["add", source], cwd=work)
+    _run_git(["commit", "-q", "-m", "add rename source"], cwd=work)
+    predecessor = repo_module.head_sha(work)
+    (work / source).rename(work / destination)
+    return source, destination, predecessor
+
+
+def test_real_tracked_rename_returns_both_mutation_paths(git_env: GitEnv) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    source, destination, _ = _prepare_tracked_rename(work)
+
+    paths = repo_module.changed_paths(work)
+
+    assert paths == tuple(sorted((source, destination)))
+    assert paths.count(source) == 1
+    assert paths.count(destination) == 1
+
+
+def test_exact_reviewed_rename_commit_succeeds_and_ends_clean(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    source, destination, predecessor = _prepare_tracked_rename(work)
+    reviewed_patch = repo_module.build_checkpoint_patch_uncommitted(work)
+    paths = repo_module.changed_paths(work)
+
+    committed = repo_module.commit_reviewed_checkpoint(
+        work,
+        reviewed_patch=reviewed_patch,
+        message="rename tracked file",
+        paths=paths,
+    )
+
+    assert committed != predecessor
+    assert repo_module.head_sha(work) == committed
+    assert not (work / source).exists()
+    assert (work / destination).read_text(encoding="utf-8") == "rename content\n"
+    assert repo_module.is_worktree_clean(work)
+
+
+def test_rejected_reviewed_rename_discard_restores_predecessor(
+    git_env: GitEnv,
+) -> None:
+    work = git_env.work
+    repo_module.create_delivery_branch_from_origin_main(work, "delivery")
+    source, destination, predecessor = _prepare_tracked_rename(work)
+    _run_git(["push", "-q", "-u", "origin", "delivery"], cwd=work)
+    reviewed_patch = repo_module.build_checkpoint_patch_uncommitted(work)
+    paths = repo_module.changed_paths(work)
+
+    repo_module.discard_reviewed_uncommitted_candidate(
+        work,
+        reviewed_patch=reviewed_patch,
+        paths=paths,
+        expected_branch="delivery",
+        expected_head=predecessor,
+        expected_remote_head=predecessor,
+    )
+
+    assert repo_module.head_sha(work) == predecessor
+    assert repo_module.remote_branch_sha(work, "delivery") == predecessor
+    assert (work / source).read_text(encoding="utf-8") == "rename content\n"
+    assert not (work / destination).exists()
+    assert repo_module.is_worktree_clean(work)
+
+
 def test_mode_b_exact_range(git_env: GitEnv) -> None:
     work = git_env.work
     repo_module.create_delivery_branch_from_origin_main(work, "delivery")
