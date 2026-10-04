@@ -141,6 +141,23 @@ Before delegation the launcher runs only `<candidate> --version`, with a fixed
 This is a sanity check, not proof of sandbox or capability behavior; it does
 not pin, install, or update Codex.
 
+## Runtime freshness and checkout recovery
+
+Runtime freshness has two layers. Before delegation, the launcher proves the
+selected-repository loaded-package provenance described above; it never
+switches to another imported checkout. After the harness freshly fetches and
+captures `origin/main`, it requires a clean worktree/index and exact equality
+between local `HEAD` and that captured SHA before reading the task catalog or
+resolving the selector. The local branch name is irrelevant: `main`, another
+branch name, or detached `HEAD` is valid at the exact commit.
+
+A clean checkout behind or ahead of captured `origin/main` is terminal
+`BLOCKED` in preflight. The launcher and harness do not pull, reset, switch,
+rebase, or otherwise update the selected checkout, and a stale invocation does
+not retry or resume. Recovery is a separate operator action: leave the ended
+invocation blocked, manually bring the selected checkout to the required
+authoritative state, and then issue a new explicit `AUTONOMOUS_PR` invocation.
+
 ## Fixed child profiles
 
 The implementer always uses non-interactive `codex exec`, ephemeral sessions,
@@ -265,5 +282,6 @@ another task.
 | Multiple Windows fallback candidates | Choose the intended concrete executable explicitly with `--codex`; the launcher never guesses. |
 | `codex --version` failure, timeout, or malformed identity | Verify the selected executable manually and correct the path/installation. The launcher does not update or replace it. |
 | Repository `.codex` refused | Remove the repository-local configuration from this execution boundary or use a separately reviewed future change; the launcher never ignores the guard. |
+| Local runtime `HEAD` is behind or ahead of captured `origin/main` | Leave the invocation `BLOCKED`, update the selected checkout manually outside it, then issue a new explicit `AUTONOMOUS_PR` invocation. Branch name is not the invariant; exact commit SHA is. |
 | Runtime root or pip-cache validation/probe fails | Remove a file/link/junction collision or correct host temp-path permissions so both launcher-owned directories are real, outside the repository, exact parent/child, writable, and removable. |
 | Outer-host permissions are insufficient | The outer Codex requests approval for the single launcher command before execution. If escalation is unavailable, forbidden, or denied, stop fail-closed; the launcher does not request, bypass, or manufacture permission, and there is no direct Git/GitHub fallback. |

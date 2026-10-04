@@ -1282,7 +1282,9 @@ spec. The planning and plan-review phases of Part I are v1-only.
 The operational v2 lifecycle is:
 
 ```text
-preflight (one captured origin/main SHA: terminal registry + task catalog)
+preflight (fresh fetch/capture origin/main SHA → clean worktree/index
+  → exact local HEAD == captured SHA → terminal registry + task catalog
+  → selector)
   → delivery branch
   → for each declared checkpoint, in order:
       implement → verify → review/repair* → APPROVED → commit/push
@@ -1312,10 +1314,26 @@ repository authority. The mandatory fresh `git fetch origin` remains required:
 an unavailable or denied outer capability fails closed, with no cached-ref,
 caller-supplied-SHA, GitHub-API, or direct-caller Git/GitHub fallback.
 
-**Preflight.** The orchestrator fetches and captures one exact `origin/main`
-SHA. From that SHA it reads the strict terminal registry and every regular
-Git-tracked canonical task blob, validates all nonterminal envelopes/bodies and
-their dependency graph, then resolves exactly one explicit ID or `NEXT`.
+**Preflight.** The orchestrator freshly fetches and captures one exact
+`origin/main` SHA, requires the worktree/index to be clean, reads the exact
+local `HEAD`, and requires literal SHA equality between that local runtime and
+the captured base. Only after those checks does it read from the captured SHA
+the strict terminal registry and every regular Git-tracked canonical task blob,
+validate all nonterminal envelopes/bodies and their dependency graph, and
+resolve exactly one explicit ID or `NEXT`.
+
+The runtime identity invariant is commit-based, not branch-name-based: local
+`main`, a differently named branch, or detached `HEAD` is acceptable at the
+exact captured SHA. A clean checkout behind or ahead of the freshly captured
+base fails closed in `PREFLIGHT` before catalog/selector resolution or delivery
+side effects. The harness does not pull, reset, checkout, switch, merge,
+rebase, update refs, restart/re-exec Python, retry, or resume automatically.
+The operator must update the selected checkout outside the ended invocation and
+start a new explicit invocation. Once initial equality succeeds, later
+`origin/main` movement continues to use the existing fixed-target
+revalidation, cumulative-review, Mode C, publication, and required-CI rules;
+it is not reclassified as an initial-runtime mismatch.
+
 Dependencies must be terminal `Done`; `Superseded`, open, unknown, self,
 duplicate, or cyclic dependencies do not permit execution. The selected task
 must be approved, execution-ready (§22), and inside permitted Roadmap scope.

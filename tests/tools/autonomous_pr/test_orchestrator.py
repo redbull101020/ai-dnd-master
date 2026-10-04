@@ -704,6 +704,167 @@ def _commit_and_push_main(seed: Path, message: str, *paths: str) -> None:
     _run_git(["push", "-q", "origin", "main"], cwd=seed)
 
 
+def _fast_forward_public_work_to_origin_main(env: PublicDispatchEnv) -> None:
+    _run_git(["fetch", "origin"], cwd=env.work)
+    _run_git(["merge", "-q", "--ff-only", "origin/main"], cwd=env.work)
+
+
+def _runtime_mismatch_result(
+    env: PublicDispatchEnv, monkeypatch: pytest.MonkeyPatch
+) -> RunResult:
+    downstream_calls: list[str] = []
+
+    def forbidden(name: str) -> Callable[..., object]:
+        def fail(*args: object, **kwargs: object) -> object:
+            downstream_calls.append(name)
+            raise AssertionError(f"{name} must not be called")
+
+        return fail
+
+    monkeypatch.setattr(
+        orch_module, "_resolve_file_based_target", forbidden("task selection")
+    )
+    for name in (
+        "require_branch_name_available",
+        "require_no_open_pr_for_task",
+        "create_delivery_branch_from_sha",
+        "commit_reviewed_checkpoint",
+        "push_delivery_branch",
+    ):
+        monkeypatch.setattr(repository, name, forbidden(name))
+
+    agent_marker = env.work / "runtime-mismatch-agent-called"
+    gh_log = env.work.parent / "runtime-mismatch-gh.jsonl"
+    fail_agent = (
+        "import pathlib\n"
+        f"pathlib.Path({str(agent_marker)!r}).write_text('called', encoding='utf-8')\n"
+    )
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        implementer_profiles=_profiles(_implementer_spec(env.work, fail_agent)),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, fail_agent)),
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+
+    result = run(config)
+
+    assert downstream_calls == []
+    assert not agent_marker.exists()
+    assert not gh_log.exists()
+    assert result.task_id is None
+    assert result.delivery_branch is None
+    assert result.head_sha is None
+    assert result.routing_decisions == ()
+    assert result.review_metrics == ()
+    assert _run_git(
+        ["branch", "--list", f"autonomous-pr/{_TASK_ID.lower()}"], cwd=env.work
+    ) == ""
+    return result
+
+
+def test_initial_runtime_preflight_blocks_clean_behind_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    actual_sha = repository.head_sha(env.work)
+    (env.seed / "README.md").write_text("advanced origin\n", encoding="utf-8")
+    _commit_and_push_main(env.seed, "advance origin main", "README.md")
+    expected_sha = repository.head_sha(env.seed)
+
+    result = _runtime_mismatch_result(env, monkeypatch)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.blocked_reason is not None
+    assert f"actual {actual_sha}" in result.blocked_reason
+    assert f"expected {expected_sha}" in result.blocked_reason
+    assert "update the selected local checkout outside this completed invocation" in (
+        result.blocked_reason
+    )
+    assert "new explicit AUTONOMOUS_PR invocation" in result.blocked_reason
+    assert repository.head_sha(env.work) == actual_sha
+    assert repository.origin_main_sha(env.work) == expected_sha
+
+
+def test_initial_runtime_preflight_blocks_clean_ahead_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    expected_sha = repository.origin_main_sha(env.work)
+    (env.work / "local-runtime-change.txt").write_text("ahead\n", encoding="utf-8")
+    _run_git(["add", "local-runtime-change.txt"], cwd=env.work)
+    _run_git(["commit", "-q", "-m", "local runtime ahead"], cwd=env.work)
+    actual_sha = repository.head_sha(env.work)
+
+    result = _runtime_mismatch_result(env, monkeypatch)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.blocked_reason is not None
+    assert f"actual {actual_sha}" in result.blocked_reason
+    assert f"expected {expected_sha}" in result.blocked_reason
+    assert repository.head_sha(env.work) == actual_sha
+    assert repository.origin_main_sha(env.work) == expected_sha
+
+
+def test_initial_runtime_preflight_allows_differently_named_exact_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    _run_git(["switch", "-q", "-c", "alternate-runtime"], cwd=env.work)
+    selection_calls: list[tuple[str, str]] = []
+
+    def stop_after_runtime_guard(
+        config: OrchestratorConfig, selector: str, source_sha: str
+    ) -> NoEligibleTask:
+        selection_calls.append((selector, source_sha))
+        raise repository.RepositoryError("controlled stop after runtime guard")
+
+    monkeypatch.setattr(
+        orch_module, "_resolve_file_based_target", stop_after_runtime_guard
+    )
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    exact_sha = repository.head_sha(env.work)
+    assert selection_calls == [(_TASK_ID, exact_sha)]
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.blocked_reason == "controlled stop after runtime guard"
+    assert repository.current_branch(env.work) == "alternate-runtime"
+    assert repository.origin_main_sha(env.work) == exact_sha
+
+
+def test_dirty_worktree_blocks_before_runtime_head_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    (env.work / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    monkeypatch.setattr(
+        repository,
+        "head_sha",
+        lambda repo: (_ for _ in ()).throw(
+            AssertionError("HEAD must not be read for dirty preflight")
+        ),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "_resolve_file_based_target",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("task selection must not run for dirty preflight")
+        ),
+    )
+
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.PREFLIGHT
+    assert result.blocked_reason == "working tree/index is not clean before v2 preflight"
+    assert result.task_id is None
+    assert result.delivery_branch is None
+    assert result.routing_decisions == ()
+
+
 def _mutate_main_before_first_acceptance(
     monkeypatch: pytest.MonkeyPatch,
     mutation: Callable[[], None],
@@ -780,7 +941,10 @@ def test_public_run_selects_only_v2_spec_driven_pipeline(
 
     monkeypatch.setattr(repository, "fetch_and_capture_origin_main_sha", lambda repo: base_sha)
     monkeypatch.setattr(repository, "is_worktree_clean", lambda repo: True)
-    monkeypatch.setattr(repository, "head_sha", lambda repo: head_sha)
+    head_shas = iter((base_sha,))
+    monkeypatch.setattr(
+        repository, "head_sha", lambda repo: next(head_shas, head_sha)
+    )
     monkeypatch.setattr(
         repository,
         "create_delivery_branch_from_sha",
@@ -1486,6 +1650,7 @@ def test_public_explicit_id_runs_outside_next_priority_order(tmp_path: Path) -> 
     _commit_and_push_main(
         env.seed, "add higher priority approved task", f"docs/tasks/{higher_id}.md"
     )
+    _fast_forward_public_work_to_origin_main(env)
 
     result = run(_public_dispatch_config(env, selector=_TASK_ID))
 
@@ -1515,6 +1680,7 @@ def test_public_next_changes_when_approved_file_is_added_without_tracker_edit(
         env.seed, "add higher priority approved task", f"docs/tasks/{higher_id}.md"
     )
     assert (env.seed / "docs" / "TASK.md").read_bytes() == tracker_before
+    _fast_forward_public_work_to_origin_main(env)
 
     result = run(
         _public_dispatch_config(
@@ -1975,6 +2141,7 @@ def test_new_invocation_still_rejects_same_malformed_catalog(
         "add malformed unrelated document",
         f"docs/tasks/{unrelated_id}.md",
     )
+    _fast_forward_public_work_to_origin_main(env)
 
     result = run(_public_dispatch_config(env, selector=_TASK_ID))
 
@@ -2103,6 +2270,7 @@ def test_public_run_rejects_invalid_utf8_nonterminal_before_side_effects(
         "make nonterminal task invalid utf8",
         f"docs/tasks/{_TASK_ID}.md",
     )
+    _fast_forward_public_work_to_origin_main(env)
     agent_marker = env.work / "agent-was-called"
     gh_log = tmp_path / "gh-commands.jsonl"
     fail_if_invoked = (
@@ -2146,6 +2314,7 @@ def test_public_run_reports_no_delivery_branch_when_branch_creation_fails(
     )
     monkeypatch.setattr(repository, "fetch_and_capture_origin_main_sha", lambda repo: base_sha)
     monkeypatch.setattr(repository, "is_worktree_clean", lambda repo: True)
+    monkeypatch.setattr(repository, "head_sha", lambda repo: base_sha)
     monkeypatch.setattr(
         orch_module, "_resolve_file_based_target", lambda *args: selected
     )
