@@ -2798,6 +2798,55 @@ def test_v2_multiple_checkpoints_block_without_acceptance_boundary(env: Env) -> 
     assert "committed and pushed" in (result.blocked_reason or "")
 
 
+def test_v2_checkpoint_rename_of_fixed_spec_blocks_before_review(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _v2_spec()
+    spec_path = env.work / spec.path
+    renamed_path = spec_path.with_name("renamed-task.md")
+    spec_path.parent.mkdir(parents=True)
+    spec_path.write_text(spec.text, encoding="utf-8")
+    _run_git(["add", spec.path], cwd=env.work)
+    _run_git(["commit", "-q", "-m", "track fixed task spec"], cwd=env.work)
+    original_head = _run_git(["rev-parse", "HEAD"], cwd=env.work).strip()
+    reviewer_calls = 0
+    acceptor_calls = 0
+
+    def implement(*args: object, **kwargs: object) -> AgentInvocationResult:
+        spec_path.rename(renamed_path)
+        return AgentInvocationResult("done", "", 0, False)
+
+    def review(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        return _v2_approved()
+
+    def accept(*args: object, **kwargs: object) -> str:
+        nonlocal acceptor_calls
+        acceptor_calls += 1
+        return "unexpected"
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_implementer", implement)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+
+    result = execute_v2_checkpoints(
+        _cp3_config(env),
+        spec,
+        accepted_base_context_identity=original_head,
+        checkpoint_acceptor=accept,
+    )
+
+    assert not result.completed
+    assert "fixed Task Execution Spec" in (result.blocked_reason or "")
+    assert repository.changed_paths(env.work) == (
+        "docs/tasks/TSK-9001.md",
+        "docs/tasks/renamed-task.md",
+    )
+    assert reviewer_calls == 0
+    assert acceptor_calls == 0
+    assert _run_git(["rev-parse", "HEAD"], cwd=env.work).strip() == original_head
+
+
 def test_v2_checkpoint_one_change_then_approved_has_bounded_fresh_handoff(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5625,6 +5674,58 @@ def test_v2_missing_required_closure_file_change_enters_repair(
 def test_v2_closure_disallowed_paths_remain_terminal(path: str) -> None:
     with pytest.raises(orch_module._Blocked, match="outside the canonical"):
         orch_module._require_canonical_closure_files_touched((path,))
+
+
+def test_v2_closure_rename_from_disallowed_source_blocks_before_review(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    target, _, pre_closure, implementation_head = _prepared_cp4_context(env, spec)
+    task_md_baseline = repository.read_utf8_file_at_ref_exact(
+        env.work, target.base_sha, "docs/TASK.md"
+    )
+    reviewer_calls = 0
+    unpublished_commit_calls = 0
+
+    def implement(*args: object, **kwargs: object) -> AgentInvocationResult:
+        (env.work / "README.md").rename(
+            env.work / "docs" / "DEVELOPMENT_LOG.md"
+        )
+        return AgentInvocationResult("done", "", 0, False)
+
+    def review(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        return _v2_approved()
+
+    def create_candidate(*args: object, **kwargs: object) -> object:
+        nonlocal unpublished_commit_calls
+        unpublished_commit_calls += 1
+        raise AssertionError("disallowed rename must not create a closure commit")
+
+    monkeypatch.setattr(orch_module, "_run_routed_v2_implementer", implement)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", review)
+    monkeypatch.setattr(
+        repository, "create_unpublished_reviewed_commit", create_candidate
+    )
+
+    with pytest.raises(orch_module._Blocked, match="outside the canonical"):
+        orch_module._prepare_v2_unpublished_closure(
+            _cp3_config(env),
+            target,
+            pre_closure,
+            pr_number="1",
+            expected_published_head=implementation_head,
+            task_md_baseline=task_md_baseline,
+        )
+
+    assert repository.changed_paths(env.work) == (
+        "README.md",
+        "docs/DEVELOPMENT_LOG.md",
+    )
+    assert reviewer_calls == 0
+    assert unpublished_commit_calls == 0
+    assert _run_git(["rev-parse", "HEAD"], cwd=env.work).strip() == implementation_head
 
 
 def test_v2_closure_repository_error_during_exact_read_is_terminal(
