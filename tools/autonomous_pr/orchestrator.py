@@ -805,6 +805,14 @@ def run(config: OrchestratorConfig) -> RunResult:
         base_sha = repository.fetch_and_capture_origin_main_sha(config.repo)
         if not repository.is_worktree_clean(config.repo):
             raise _Blocked("working tree/index is not clean before v2 preflight")
+        local_head_sha = repository.head_sha(config.repo)
+        if local_head_sha != base_sha:
+            raise _Blocked(
+                "local runtime HEAD does not match the freshly captured origin/main "
+                f"SHA (actual {local_head_sha}, expected {base_sha}); update the "
+                "selected local checkout outside this completed invocation, then "
+                "start a new explicit AUTONOMOUS_PR invocation"
+            )
         selection = _resolve_file_based_target(config, config.task_id, base_sha)
         if isinstance(selection, NoEligibleTask):
             return RunResult(

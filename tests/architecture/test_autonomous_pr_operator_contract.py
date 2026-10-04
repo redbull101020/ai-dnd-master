@@ -77,6 +77,23 @@ def test_operational_v2_keeps_fresh_fetch_and_parent_sandbox_boundary() -> None:
     assert "direct-caller Git/GitHub fallback" in lifecycle
 
 
+def test_operational_v2_requires_exact_initial_runtime_base_before_selection() -> None:
+    lifecycle = _section(
+        _read("docs/AUTONOMOUS_PR_HARNESS.md"),
+        "## 30. Spec-driven lifecycle and preflight (operational v2)",
+        2,
+    )
+
+    assert "requires the worktree/index to be clean" in lifecycle
+    assert "literal SHA equality" in lifecycle
+    assert "before catalog/selector resolution" in lifecycle
+    assert "not branch-name-based" in lifecycle
+    assert "behind or ahead" in lifecycle
+    assert "does not pull, reset, checkout, switch, merge, rebase" in lifecycle
+    assert "start a new explicit invocation" in lifecycle
+    assert "not reclassified as an initial-runtime mismatch" in lifecycle
+
+
 def test_outer_approval_does_not_weaken_child_security_boundary() -> None:
     operator = _read("docs/AUTONOMOUS_PR_OPERATOR.md")
     child_profiles = _section(operator, "## Fixed child profiles", 2)
@@ -86,3 +103,43 @@ def test_outer_approval_does_not_weaken_child_security_boundary() -> None:
     assert "no-Git/GitHub-write" in child_profiles
     assert "disposable filesystem snapshot" in child_profiles
     assert "it has no remote" in child_profiles
+
+
+def test_operator_guide_documents_deterministic_verification_environment() -> None:
+    operator = _read("docs/AUTONOMOUS_PR_OPERATOR.md")
+    normalized_operator = " ".join(operator.split())
+    environment = _section(
+        operator, "## Temporary files, credentials, and host permissions", 2
+    )
+
+    assert "`1800.0`, `3600.0`, and `600.0`" in normalized_operator
+    assert "not a repair budget" in normalized_operator
+    assert "passive remote-observation budget" in normalized_operator
+    assert "`<system-temp>/ai-dnd-autonomous`" in environment
+    assert "fixed direct child `pip-cache`" in environment
+    assert "broken symlink" in environment
+    assert "supported Windows junction" in environment
+    assert "resolved cache parent" in environment
+    assert "create/write/flush/close/remove probe" in environment
+    assert "`PIP_CACHE_DIR`" in environment
+    assert "`tempfile.tempdir`" in environment
+    assert "absent and empty" in environment
+    assert "`CODEX_HOME`" in environment
+    assert "network policy unchanged" in environment
+
+
+def test_operator_guide_documents_two_layer_runtime_freshness_recovery() -> None:
+    runtime = _section(
+        _read("docs/AUTONOMOUS_PR_OPERATOR.md"),
+        "## Runtime freshness and checkout recovery",
+        2,
+    )
+
+    assert "two layers" in runtime
+    assert "loaded-package provenance" in runtime
+    assert "never switches to another imported checkout" in runtime
+    assert "exact equality between local `HEAD`" in runtime
+    assert "branch name is irrelevant" in runtime
+    assert "behind or ahead" in runtime
+    assert "does not retry or resume" in runtime
+    assert "new explicit `AUTONOMOUS_PR` invocation" in runtime

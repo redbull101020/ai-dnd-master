@@ -7813,3 +7813,28 @@ skipped; configured mypy found no issues in 138 source files; canonical and
 cumulative diff checks passed. Arbitrary non-UTF-8 pathname bytes and exact
 CR/CRLF pathname transport remain outside the existing UTF-8 text subprocess
 boundary and this task's scope.
+
+## 2026-10-04 — TSK-0044: Runtime preflight hardening (draft PR #134)
+
+Delivered MANUAL in draft PR #134: the Codex launcher now validates loaded
+package provenance for the selected repository, uses agent/verification/required-
+CI defaults of `1800.0/3600.0/600.0`, and provides a link-, junction-, and
+type-safe dedicated runtime root with an exact direct-child pip cache and
+create/write/remove probes. Delegation scopes and exactly restores
+`TEMP`/`TMP`/`TMPDIR`/`PIP_CACHE_DIR` plus `tempfile.tempdir`; initial
+orchestrator preflight now requires fresh fetch, clean state, and exact local
+HEAD/captured-origin identity before catalog selection. Generic CLI defaults
+remain `600/600/600`; branch labels are not authoritative; no self-update,
+pull/reset/rebase/retry was added; later origin revalidation, routing/model
+effort, reviewer protocol, Mode C, required-CI semantics, and human-only merge
+remain unchanged. No gameplay, Architecture, Roadmap, or production dependency
+changed. Full local verification passed with `3366 passed, 7 skipped in
+1342.00s (0:22:22)`, mypy reported `Success: no issues found in 138 source
+files`, and canonical plus cumulative `git diff --check` passed; pytest used
+process-only writable temp/pip-cache paths and disabled only the optional cache
+provider without changing test selection. Full Verification in-process repair,
+typed verification-failure categories/retries, process-tree containment, Codex
+version/model pin or compatibility invocation, automatic checkout
+synchronization, and CI candidate repair remain deferred. GitHub Actions for
+PR #134 also completed successfully; this closure remains prospective pending
+review and human merge.
