@@ -301,3 +301,4 @@ Concrete known constraints.
 | `TSK-0042` | `Done` | PR #130 | Repair deterministic prospective Task Closure validation failures in-process |
 | `TSK-0043` | `Done` | PR #132 | Make AUTONOMOUS_PR changed-path discovery machine-readable and rename-safe |
 | `TSK-0044` | `Done` | PR #134 | Harden AUTONOMOUS_PR Codex runtime preflight and verification environment |
+| `TSK-0045` | `Done` | PR #135 | Repair deterministic Full Verification failures in-process |

@@ -1753,13 +1753,24 @@ def _require_v2_closure_material_unchanged(
 def _run_v2_full_verification(
     config: OrchestratorConfig,
     spec: TaskExecutionSpec,
-    base_identity: str,
-) -> V2FullVerificationEvidence:
+) -> VerificationEvidence:
     """Run only ``TaskExecutionSpec.full_verification`` at the exact HEAD."""
 
-    verification = _run_verification_commands(config, spec.full_verification)
+    return _run_verification_commands(config, spec.full_verification)
+
+
+def _promote_v2_full_verification(
+    config: OrchestratorConfig,
+    spec: TaskExecutionSpec,
+    base_identity: str,
+    verification: VerificationEvidence,
+) -> V2FullVerificationEvidence:
+    """Promote passing Full verification bound to the exact current HEAD."""
+
     if not verification.passed:
-        raise _Blocked("v2 Full verification from the fixed spec failed")
+        raise _Blocked("failing v2 Full verification cannot be accepted as evidence")
+    if tuple(item.command for item in verification.commands) != spec.full_verification:
+        raise _Blocked("v2 Full verification evidence differs from the fixed spec")
     current_head = repository.head_sha(config.repo)
     if verification.head_sha != current_head:
         raise _Blocked(
@@ -1910,9 +1921,16 @@ def _execute_v2_late_repair(
     repair_acceptor: Callable[[AcceptedImplementationRepairCandidate], str],
     initial_verification_failure: str | None = None,
     initial_verification_rejection_count: int = 0,
+    initial_rejected_candidate_identity: CandidateIdentity | None = None,
     history_sink: list[GateHistory] | None = None,
 ) -> tuple[AcceptedImplementationRepairCandidate, GateHistory, str]:
-    """Adaptive mode-A repair with CP-2 no-progress semantics and no budget."""
+    """Adaptive mode-A repair with CP-2 no-progress semantics and no budget.
+
+    ``initial_rejected_candidate_identity`` seeds cycle detection for a direct
+    upstream rejection in this child gate's candidate space. It is causal
+    state only: no synthetic attempt, review, packet, or routing count is
+    created from it.
+    """
 
     history = _retain_v2_gate_history(
         GateHistory(
@@ -1925,6 +1943,10 @@ def _execute_v2_late_repair(
         ),
         history_sink,
     )
+    if initial_rejected_candidate_identity is not None:
+        history.rejected_candidate_identities.add(
+            initial_rejected_candidate_identity
+        )
     verification_failure = initial_verification_failure
     reviewer_upstream_packet = initial_packet
 
@@ -2251,6 +2273,11 @@ def _replay_v2_checkpoints_conservatively(
                 initial_verification_rejection_count=(
                     1 if verification_failure is not None else 0
                 ),
+                initial_rejected_candidate_identity=(
+                    _candidate_identity("")
+                    if verification_failure is not None
+                    else None
+                ),
                 history_sink=history_sink,
             )
             histories[f"repair:{checkpoint.checkpoint_id}:{len(histories)}"] = (
@@ -2409,8 +2436,40 @@ def execute_v2_pre_closure_review(
                 or full.base_identity != current_target.base_sha
             ):
                 terminal_phase = Phase.FULL_VERIFICATION
-                evidence.full_verification = _run_v2_full_verification(
-                    config, spec, current_target.base_sha
+                verification = _run_v2_full_verification(config, spec)
+                if not verification.passed:
+                    _, repair_history, _ = _execute_v2_late_repair(
+                        config,
+                        spec,
+                        gate_id="full-verification-repair",
+                        accepted_base_context_identity=current_head,
+                        initial_packet=None,
+                        verification_commands=spec.full_verification,
+                        repair_acceptor=repair_acceptor,
+                        initial_verification_failure=_format_verification(verification),
+                        initial_verification_rejection_count=1,
+                        initial_rejected_candidate_identity=_candidate_identity(""),
+                        history_sink=history_sink,
+                    )
+                    replay_histories.append(repair_history)
+                    evidence.invalidate_from_checkpoint(0)
+                    terminal_phase = Phase.CHECKPOINT_REVIEW
+                    replay_histories.extend(
+                        _replay_v2_checkpoints_conservatively(
+                            config,
+                            spec,
+                            originals,
+                            evidence,
+                            repair_acceptor,
+                            history_sink=history_sink,
+                        )
+                    )
+                    # The passing pre-commit repair verification is candidate
+                    # evidence only. Return to the common Full verification
+                    # control point after conservative checkpoint replay.
+                    continue
+                evidence.full_verification = _promote_v2_full_verification(
+                    config, spec, current_target.base_sha, verification
                 )
                 full = evidence.full_verification
             terminal_phase = Phase.PRE_CLOSURE_CUMULATIVE_REVIEW
@@ -2515,11 +2574,8 @@ def execute_v2_pre_closure_review(
                         history_sink=history_sink,
                     )
                 )
-                terminal_phase = Phase.FULL_VERIFICATION
-                evidence.full_verification = _run_v2_full_verification(
-                    config, spec, current_target.base_sha
-                )
-                # Loop rebuilds origin/main...HEAD and invokes a fresh reviewer.
+                # The common loop reruns Full verification before rebuilding
+                # origin/main...HEAD and invoking a fresh reviewer.
                 continue
 
             raise _Blocked(
@@ -3769,18 +3825,17 @@ def _run_one_verification_command(
             check=False,
         )
     except OSError as exc:
-        return VerificationCommandResult(
-            command=command, returncode=-1, stdout="", stderr=str(exc), passed=False
-        )
+        raise RepositoryError(
+            "deterministic verification command could not be executed: "
+            f"{type(exc).__name__} (errno={exc.errno!r}); check executable "
+            "availability and permissions"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
-        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
-        return VerificationCommandResult(
-            command=command,
-            returncode=-1,
-            stdout="",
-            stderr=f"verification command timed out: {stderr}",
-            passed=False,
-        )
+        raise RepositoryError(
+            "deterministic verification command timed out after "
+            f"{config.verification_timeout_seconds:g} seconds; execution "
+            "state is uncertain"
+        ) from exc
     return VerificationCommandResult(
         command=command,
         returncode=completed.returncode,

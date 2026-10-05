@@ -459,6 +459,45 @@ def test_verification_exact_python_uses_harness_interpreter_and_preserves_eviden
 
 
 @pytest.mark.parametrize(
+    ("returncode", "passed"),
+    ((0, True), (7, False), (-9, False)),
+)
+def test_verification_completed_process_uses_real_returncode(
+    env: Env,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    passed: bool,
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("verification-tool", "check")
+
+    monkeypatch.setattr(
+        orch_module.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv,
+            returncode,
+            stdout="completed stdout",
+            stderr="completed stderr",
+        ),
+    )
+
+    result = orch_module._run_one_verification_command(config, original)
+
+    assert result == VerificationCommandResult(
+        command=original,
+        returncode=returncode,
+        stdout="completed stdout",
+        stderr="completed stderr",
+        passed=passed,
+    )
+
+
+@pytest.mark.parametrize(
     "executable",
     ("python3", "python.exe", "py", str(Path(sys.executable).resolve()), "git"),
 )
@@ -488,7 +527,7 @@ def test_verification_noncanonical_executables_are_not_rewritten(
 
 
 @pytest.mark.parametrize("startup_error", (FileNotFoundError, PermissionError))
-def test_verification_harness_interpreter_startup_failure_has_no_fallback(
+def test_verification_oserror_is_execution_uncertainty_without_synthetic_result(
     env: Env,
     monkeypatch: pytest.MonkeyPatch,
     startup_error: type[OSError],
@@ -508,16 +547,122 @@ def test_verification_harness_interpreter_startup_failure_has_no_fallback(
 
     monkeypatch.setattr(orch_module.sys, "executable", missing_interpreter)
     monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+    created_results: list[dict[str, object]] = []
 
-    result = orch_module._run_one_verification_command(config, original)
+    def record_result(**kwargs: object) -> None:
+        created_results.append(kwargs)
+
+    monkeypatch.setattr(orch_module, "VerificationCommandResult", record_result)
+
+    with pytest.raises(repository.RepositoryError) as exc_info:
+        orch_module._run_one_verification_command(config, original)
 
     assert len(attempted) == 1
     assert attempted[0][0] == [missing_interpreter, "-m", "pytest"]
     assert "env" not in attempted[0][1]
     assert "shell" not in attempted[0][1]
-    assert result.command == original
-    assert result.returncode == -1
-    assert not result.passed
+    assert created_results == []
+    assert startup_error.__name__ in str(exc_info.value)
+    assert "availability and permissions" in str(exc_info.value)
+    assert "unusable harness interpreter" not in str(exc_info.value)
+    assert len(str(exc_info.value)) < 200
+
+
+def test_verification_timeout_is_execution_uncertainty_without_captured_output(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    original = ("verification-tool", "check")
+    captured = "unbounded captured output " * 10_000
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(
+            cmd=argv,
+            timeout=config.verification_timeout_seconds,
+            output=captured,
+            stderr=captured,
+        )
+
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+    created_results: list[dict[str, object]] = []
+
+    def record_result(**kwargs: object) -> None:
+        created_results.append(kwargs)
+
+    monkeypatch.setattr(orch_module, "VerificationCommandResult", record_result)
+
+    with pytest.raises(repository.RepositoryError) as exc_info:
+        orch_module._run_one_verification_command(config, original)
+
+    assert created_results == []
+    assert "timed out" in str(exc_info.value)
+    assert "execution state is uncertain" in str(exc_info.value)
+    assert "unbounded captured output" not in str(exc_info.value)
+    assert len(str(exc_info.value)) < 200
+
+
+def test_verification_mixed_failure_then_execution_uncertainty_returns_no_evidence(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    commands = (("first-tool", "check"), ("second-tool", "check"))
+    fingerprint = repository.RepositoryFingerprint(
+        branch="delivery", head_sha="head-sha", content_digest="content-digest"
+    )
+    verified_contexts: list[str] = []
+    call_count = 0
+
+    def fake_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return subprocess.CompletedProcess(argv, 5, stdout="failed", stderr="")
+        raise OSError("second command execution is uncertain")
+
+    monkeypatch.setattr(repository, "capture_fingerprint", lambda repo: fingerprint)
+    monkeypatch.setattr(
+        repository,
+        "verify_fingerprint_unchanged",
+        lambda repo, expected, *, context: verified_contexts.append(context),
+    )
+    monkeypatch.setattr(orch_module.subprocess, "run", fake_run)
+
+    with pytest.raises(repository.RepositoryError):
+        orch_module._run_verification_commands(config, commands)
+
+    assert call_count == 2
+    assert verified_contexts == [
+        "deterministic verification command 'first-tool check'"
+    ]
+
+
+def test_verification_completed_command_still_enforces_repository_mutation_guard(
+    env: Env,
+) -> None:
+    config = _default_config(
+        env,
+        implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    command = (
+        "python",
+        "-c",
+        "from pathlib import Path; "
+        "Path('README.md').write_text('unexpected mutation\\n', encoding='utf-8')",
+    )
+
+    with pytest.raises(repository.RepositoryError, match="python -c"):
+        orch_module._run_verification_commands(config, (command,))
 
 
 def test_checkpoint_and_full_verification_share_python_materialization(
@@ -636,6 +781,38 @@ def _public_dispatch_implementer_code(task_id: str) -> str:
         "    log = pathlib.Path('docs/DEVELOPMENT_LOG.md')\n"
         "    log.write_text(log.read_text(encoding='utf-8') + "
         "'\\n- Public run integration closure.\\n', encoding='utf-8')\n"
+        "elif 'CURRENT_CHECKPOINT:\\nid: CP-1\\n' in prompt:\n"
+        "    pathlib.Path('integration-marker.txt').write_text("
+        "'accepted v2 checkpoint\\n', encoding='utf-8')\n"
+        "else:\n"
+        "    raise SystemExit('unexpected implementer handoff')\n"
+    )
+
+
+def _public_dispatch_full_verification_repair_implementer_code(
+    task_id: str,
+) -> str:
+    return (
+        "import pathlib, sys\n"
+        "prompt = sys.stdin.read()\n"
+        f"assert 'selected_task_id: {task_id}' in prompt\n"
+        "if 'CURRENT_GATE: prospective Task Closure\\n' in prompt:\n"
+        "    task = pathlib.Path('docs/TASK.md')\n"
+        "    text = task.read_bytes().decode('utf-8')\n"
+        "    eol = '\\r\\n' if '\\r\\n' in text else '\\n'\n"
+        "    separator = ('| ID | Status | Evidence | Title |' + eol "
+        "+ '| --- | --- | --- | --- |' + eol)\n"
+        f"    row = '| `{task_id}` | `Done` | PR #1 | Public run integration |' + eol\n"
+        "    assert separator in text and row not in text\n"
+        "    task.write_bytes(text.replace(separator, separator + row, 1).encode('utf-8'))\n"
+        "    log = pathlib.Path('docs/DEVELOPMENT_LOG.md')\n"
+        "    log.write_text(log.read_text(encoding='utf-8') + "
+        "'\\n- Public run integration closure.\\n', encoding='utf-8')\n"
+        "elif 'CURRENT_REPAIR_GATE: full-verification-repair\\n' in prompt:\n"
+        "    assert 'CURRENT_REPAIR_PACKET:\\n(none)\\n' in prompt\n"
+        "    assert 'initial-public-full-failure' in prompt\n"
+        "    pathlib.Path('integration-marker.txt').write_text("
+        "'repaired after full verification\\n', encoding='utf-8')\n"
         "elif 'CURRENT_CHECKPOINT:\\nid: CP-1\\n' in prompt:\n"
         "    pathlib.Path('integration-marker.txt').write_text("
         "'accepted v2 checkpoint\\n', encoding='utf-8')\n"
@@ -1160,6 +1337,367 @@ def test_public_run_executes_real_file_dispatch_pipeline_to_ready_stop(
         "",
         "- Public run integration closure.",
     ]
+
+
+def test_public_run_repairs_full_verification_and_reaches_ready_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    gh_log = tmp_path / "full-repair-gh.jsonl"
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
+    config = OrchestratorConfig(
+        task_id=_TASK_ID,
+        repo=env.work,
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work,
+                _public_dispatch_full_verification_repair_implementer_code(
+                    _TASK_ID
+                ),
+            )
+        ),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+    outcomes = [
+        (True, "initial-checkpoint-pass"),
+        (False, "initial-public-full-failure"),
+        (True, "passing-pre-commit-full-repair"),
+        (True, "replayed-checkpoint-pass"),
+        (True, "authoritative-post-replay-full-pass"),
+    ]
+    produced: list[VerificationEvidence] = []
+    verification_order: list[tuple[tuple[str, ...], ...]] = []
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    initial_checkpoint_evidence: list[orch_module.AcceptedCheckpointEvidence] = []
+    closure_inputs: list[orch_module.V2PreClosureExecutionResult] = []
+    closure_entry_heads: list[str] = []
+
+    def sequenced_verification(
+        current_config: OrchestratorConfig,
+        commands: tuple[tuple[str, ...], ...],
+    ) -> VerificationEvidence:
+        assert current_config.repo == env.work
+        verification_order.append(commands)
+        assert outcomes, "test exhausted public Full verification sequence"
+        passed, marker = outcomes.pop(0)
+        evidence = _cp3_verification(env, commands, passed=passed, marker=marker)
+        produced.append(evidence)
+        return evidence
+
+    real_implementer = orch_module.run_implementer
+    real_reviewer = orch_module.run_structured_reviewer
+    real_checkpoints = orch_module.execute_v2_checkpoints
+    real_closure = orch_module.execute_v2_unpublished_closure
+
+    def capture_implementer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        implementer_prompts.append(prompt)
+        return real_implementer(agent_spec, prompt)
+
+    def capture_reviewer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        return real_reviewer(agent_spec, prompt)
+
+    def capture_checkpoints(*args: object, **kwargs: object) -> object:
+        checkpoint_result = real_checkpoints(*args, **kwargs)  # type: ignore[arg-type]
+        initial_checkpoint_evidence.extend(checkpoint_result.checkpoint_evidence)
+        return checkpoint_result
+
+    def capture_closure(*args: object, **kwargs: object) -> object:
+        pre_closure = args[3]
+        assert isinstance(pre_closure, orch_module.V2PreClosureExecutionResult)
+        closure_inputs.append(pre_closure)
+        closure_entry_heads.append(repository.head_sha(env.work))
+        return real_closure(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", sequenced_verification
+    )
+    monkeypatch.setattr(orch_module, "run_implementer", capture_implementer)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", capture_reviewer)
+    monkeypatch.setattr(orch_module, "execute_v2_checkpoints", capture_checkpoints)
+    monkeypatch.setattr(
+        orch_module, "execute_v2_unpublished_closure", capture_closure
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.STOP
+    assert result.phase is Phase.READY_FOR_HUMAN_MERGE
+    assert result.blocked_reason is None
+    assert result.pr_url == "https://github.com/example/repo/pull/1"
+    assert outcomes == []
+    assert len(produced) == 5
+    assert len(initial_checkpoint_evidence) == 1
+    assert len(closure_inputs) == 1
+    accepted = closure_inputs[0].evidence
+    assert len(accepted.accepted_checkpoints) == 1
+    assert accepted.accepted_checkpoints[0] is not initial_checkpoint_evidence[0]
+    assert accepted.full_verification is not None
+    assert accepted.full_verification.verification is produced[-1]
+    assert accepted.full_verification.verification is not produced[2]
+    assert accepted.full_verification.head_sha == closure_entry_heads[0]
+    assert accepted.full_verification.verification.commands[0].stdout == (
+        "authoritative-post-replay-full-pass"
+    )
+    assert accepted.cumulative_review is not None
+    assert accepted.cumulative_review.reviewed_head_sha == (
+        accepted.full_verification.head_sha
+    )
+    assert "repaired after full verification" in (
+        accepted.cumulative_review.review_patch.diff_text
+    )
+    assert verification_order == [(_verify_true(),)] * 5
+    assert [decision.work_kind for decision in result.routing_decisions] == [
+        AgentWorkKind.CHECKPOINT_IMPLEMENTATION,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+        AgentWorkKind.IMPLEMENTATION_REPAIR,
+        AgentWorkKind.IMPLEMENTATION_REPAIR_REVIEW,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+        AgentWorkKind.PRE_CLOSURE_CUMULATIVE_REVIEW,
+        AgentWorkKind.TASK_CLOSURE_PREPARATION,
+        AgentWorkKind.TASK_CLOSURE_REVIEW,
+        AgentWorkKind.MODE_C_REVIEW,
+    ]
+    assert sum(
+        "CURRENT_GATE:\ncheckpoint_id: CP-1\n" in prompt
+        for prompt in reviewer_prompts
+    ) == 2
+    assert any(
+        "CURRENT_GATE: full-verification-repair\n" in prompt
+        for prompt in reviewer_prompts
+    )
+    assert sum(
+        "REVIEW_PURPOSE: PRE_CLOSURE_CUMULATIVE_REVIEW" in prompt
+        for prompt in reviewer_prompts
+    ) == 1
+    assert any(
+        "CURRENT_REPAIR_GATE: full-verification-repair\n" in prompt
+        for prompt in implementer_prompts
+    )
+    assert any(
+        "CURRENT_GATE: prospective Task Closure\n" in prompt
+        for prompt in implementer_prompts
+    )
+    gh_calls = [
+        json.loads(line)
+        for line in gh_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [call[:2] for call in gh_calls] == [
+        ["pr", "list"],
+        ["pr", "create"],
+        ["pr", "view"],
+        ["pr", "checks"],
+        ["pr", "view"],
+    ]
+    repair_metric = next(
+        metric
+        for metric in result.review_metrics
+        if metric.gate_id == "full-verification-repair"
+    )
+    assert repair_metric.review_iterations == 1
+    assert repair_metric.last_reviewer_verdict is ReviewVerdict.APPROVED
+    assert result.head_sha == repository.remote_branch_sha(
+        env.work, f"autonomous-pr/{_TASK_ID.lower()}"
+    )
+
+
+def test_public_run_does_not_start_downstream_before_full_repair_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    gh_log = tmp_path / "blocked-full-repair-gh.jsonl"
+    reviewer_code = "import sys\nsys.stdin.read()\nprint('APPROVED')\n"
+    config = OrchestratorConfig(
+        task_id=_TASK_ID,
+        repo=env.work,
+        implementer_profiles=_profiles(
+            _implementer_spec(
+                env.work,
+                _public_dispatch_full_verification_repair_implementer_code(
+                    _TASK_ID
+                ),
+            )
+        ),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work, reviewer_code)),
+        delivery_branch="",
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+    outcomes = [
+        (True, "initial-checkpoint-pass"),
+        (False, "initial-public-full-failure"),
+        (True, "passing-pre-commit-full-repair"),
+    ]
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    real_implementer = orch_module.run_implementer
+    real_reviewer = orch_module.run_structured_reviewer
+
+    def sequenced_verification(
+        current_config: OrchestratorConfig,
+        commands: tuple[tuple[str, ...], ...],
+    ) -> VerificationEvidence:
+        assert current_config.repo == env.work
+        passed, marker = outcomes.pop(0)
+        return _cp3_verification(env, commands, passed=passed, marker=marker)
+
+    def capture_implementer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        implementer_prompts.append(prompt)
+        return real_implementer(agent_spec, prompt)
+
+    def block_full_repair_review(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        if "CURRENT_GATE: full-verification-repair\n" in prompt:
+            return _v2_explicit_blocked("full repair review blocked")
+        return real_reviewer(agent_spec, prompt)
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", sequenced_verification
+    )
+    monkeypatch.setattr(orch_module, "run_implementer", capture_implementer)
+    monkeypatch.setattr(
+        orch_module, "run_structured_reviewer", block_full_repair_review
+    )
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.FULL_VERIFICATION
+    assert result.blocked_reason == "full repair review blocked"
+    assert result.pr_url is None
+    assert outcomes == []
+    assert [decision.work_kind for decision in result.routing_decisions] == [
+        AgentWorkKind.CHECKPOINT_IMPLEMENTATION,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+        AgentWorkKind.IMPLEMENTATION_REPAIR,
+        AgentWorkKind.IMPLEMENTATION_REPAIR_REVIEW,
+    ]
+    assert any(
+        "CURRENT_REPAIR_GATE: full-verification-repair\n" in prompt
+        for prompt in implementer_prompts
+    )
+    assert all(
+        "CURRENT_GATE: prospective Task Closure" not in prompt
+        for prompt in implementer_prompts
+    )
+    assert all(
+        "PRE_CLOSURE_CUMULATIVE_REVIEW" not in prompt
+        and "FINAL_CUMULATIVE_AUDIT" not in prompt
+        for prompt in reviewer_prompts
+    )
+    gh_calls = [
+        json.loads(line)
+        for line in gh_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [call[:2] for call in gh_calls] == [["pr", "list"]]
+    assert result.delivery_branch is not None
+    assert result.head_sha == repository.remote_branch_sha(
+        env.work, result.delivery_branch
+    )
+    assert (env.work / "integration-marker.txt").read_text(encoding="utf-8") == (
+        "repaired after full verification\n"
+    )
+    assert _run_git(["status", "--porcelain"], cwd=env.work) != ""
+
+
+@pytest.mark.parametrize(
+    ("failure_name", "failure_message"),
+    [
+        ("timeout", "verification command timed out after 10.000s: python -c"),
+        ("oserror", "could not start verification command python -c: unavailable"),
+    ],
+)
+def test_public_run_full_verification_execution_uncertainty_blocks_before_downstream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_name: str,
+    failure_message: str,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    gh_log = tmp_path / f"full-{failure_name}-gh.jsonl"
+    config = dataclasses.replace(
+        _public_dispatch_config(env, selector=_TASK_ID),
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log),
+    )
+    verification_calls = 0
+    implementer_prompts: list[str] = []
+    reviewer_prompts: list[str] = []
+    real_implementer = orch_module.run_implementer
+    real_reviewer = orch_module.run_structured_reviewer
+
+    def uncertain_full_verification(
+        current_config: OrchestratorConfig,
+        commands: tuple[tuple[str, ...], ...],
+    ) -> VerificationEvidence:
+        nonlocal verification_calls
+        assert current_config.repo == env.work
+        verification_calls += 1
+        if verification_calls == 1:
+            return _cp3_verification(
+                env, commands, passed=True, marker="checkpoint-passed"
+            )
+        raise repository.RepositoryError(failure_message)
+
+    def capture_implementer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> AgentInvocationResult:
+        implementer_prompts.append(prompt)
+        return real_implementer(agent_spec, prompt)
+
+    def capture_reviewer(
+        agent_spec: AgentInvocationSpec, prompt: str
+    ) -> StructuredReviewResult:
+        reviewer_prompts.append(prompt)
+        return real_reviewer(agent_spec, prompt)
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", uncertain_full_verification
+    )
+    monkeypatch.setattr(orch_module, "run_implementer", capture_implementer)
+    monkeypatch.setattr(orch_module, "run_structured_reviewer", capture_reviewer)
+
+    result = run(config)
+
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.FULL_VERIFICATION
+    assert result.blocked_reason == failure_message
+    assert result.pr_url is None
+    assert verification_calls == 2
+    assert [decision.work_kind for decision in result.routing_decisions] == [
+        AgentWorkKind.CHECKPOINT_IMPLEMENTATION,
+        AgentWorkKind.CHECKPOINT_REVIEW,
+    ]
+    assert all(
+        "CURRENT_REPAIR_GATE: full-verification-repair" not in prompt
+        and "CURRENT_GATE: prospective Task Closure" not in prompt
+        for prompt in implementer_prompts
+    )
+    assert all(
+        "full-verification-repair" not in prompt
+        and "PRE_CLOSURE_CUMULATIVE_REVIEW" not in prompt
+        and "FINAL_CUMULATIVE_AUDIT" not in prompt
+        for prompt in reviewer_prompts
+    )
+    gh_calls = [
+        json.loads(line)
+        for line in gh_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [call[:2] for call in gh_calls] == [["pr", "list"]]
+    assert result.delivery_branch is not None
+    assert result.head_sha == repository.remote_branch_sha(
+        env.work, result.delivery_branch
+    )
+    assert "cp 1" in _run_git(["log", "-1", "--format=%s"], cwd=env.work)
 
 
 def test_public_run_repairs_pr129_closure_validation_incident_to_ready_stop(
@@ -4276,6 +4814,30 @@ def _cp3_config(env: Env) -> OrchestratorConfig:
     )
 
 
+def _cp3_verification(
+    env: Env | PublicDispatchEnv,
+    commands: tuple[tuple[str, ...], ...],
+    *,
+    passed: bool,
+    marker: str,
+) -> VerificationEvidence:
+    results = tuple(
+        VerificationCommandResult(
+            command=command,
+            returncode=0 if passed or index > 0 else 1,
+            stdout=marker,
+            stderr="" if passed else marker,
+            passed=passed or index > 0,
+        )
+        for index, command in enumerate(commands)
+    )
+    return VerificationEvidence(
+        commands=results,
+        passed=passed,
+        head_sha=_run_git(["rev-parse", "HEAD"], cwd=env.work).strip(),
+    )
+
+
 def _commit_late_repair(
     env: Env, accepted_heads: list[str]
 ) -> Callable[[orch_module.AcceptedImplementationRepairCandidate], str]:
@@ -4417,6 +4979,205 @@ def test_v2_cumulative_repair_replays_checkpoints_full_verification_and_review(
     }
 
 
+def test_v2_full_verification_failure_repairs_replays_and_promotes_only_final_evidence(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    accepted_heads: list[str] = []
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
+    reviewer_prompts, implementer_prompts, _, _ = _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [
+            _v2_approved(),  # passing implementation repair
+            _v2_approved(),  # conservative replay CP-1
+            _v2_approved(),  # conservative replay CP-2
+            _v2_approved(),  # cumulative review
+        ],
+        implementer_profiles=implementer_profiles,
+        reviewer_profiles=reviewer_profiles,
+    )
+    expected_commands = [
+        spec.full_verification,
+        spec.full_verification,
+        spec.full_verification,
+        spec.checkpoints[0].verification,
+        spec.checkpoints[1].verification,
+        spec.full_verification,
+    ]
+    outcomes = [
+        (False, "initial-full-failure"),
+        (False, "local-repair-failure"),
+        (True, "passing-pre-commit-repair"),
+        (True, "replayed-cp-1"),
+        (True, "replayed-cp-2"),
+        (True, "final-full-verification"),
+    ]
+    observed_commands: list[tuple[tuple[str, ...], ...]] = []
+    produced: list[VerificationEvidence] = []
+
+    def sequenced_verification(
+        config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
+    ) -> VerificationEvidence:
+        assert config.repo == env.work
+        observed_commands.append(commands)
+        assert outcomes, "test exhausted Full verification sequence"
+        passed, marker = outcomes.pop(0)
+        evidence = _cp3_verification(
+            env, commands, passed=passed, marker=marker
+        )
+        produced.append(evidence)
+        return evidence
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", sequenced_verification
+    )
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        _cp3_target(base_sha, spec),
+        checkpoint_result,
+        repair_acceptor=_commit_late_repair(env, accepted_heads),
+    )
+
+    assert result.completed
+    assert result.blocked_reason is None
+    assert outcomes == []
+    assert observed_commands == expected_commands
+    assert implementer_profiles == [
+        ComputeProfile.DELIBERATE,
+        ComputeProfile.CRITICAL,
+    ]
+    assert reviewer_profiles[0] is ComputeProfile.DELIBERATE
+    assert len(accepted_heads) == 1
+    assert len(implementer_prompts) == 2
+    assert "CURRENT_REPAIR_GATE: full-verification-repair" in implementer_prompts[0]
+    assert "CURRENT_REPAIR_PACKET:\n(none)\n" in implementer_prompts[0]
+    assert "CURRENT_VERIFICATION_FAILURE:\n" in implementer_prompts[0]
+    assert "initial-full-failure" in implementer_prompts[0]
+    assert "local-repair-failure" in implementer_prompts[1]
+    assert "CURRENT_GATE: full-verification-repair" in reviewer_prompts[0]
+    assert result.evidence.full_verification is not None
+    assert result.evidence.full_verification.verification is produced[-1]
+    assert result.evidence.full_verification.verification is not produced[0]
+    assert result.evidence.full_verification.verification is not produced[2]
+    assert result.evidence.full_verification.verification.commands[0].stdout == (
+        "final-full-verification"
+    )
+    assert [
+        item.candidate.checkpoint.checkpoint_id
+        for item in result.evidence.accepted_checkpoints
+    ] == ["CP-1", "CP-2"]
+
+
+def test_v2_full_verification_repair_requires_approved_review_before_acceptance(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    implementer_profiles: list[ComputeProfile] = []
+    reviewer_profiles: list[ComputeProfile] = []
+    _install_cp3_reviewer_sequence(
+        env,
+        monkeypatch,
+        [_v2_explicit_blocked("repair review blocked")],
+        implementer_profiles=implementer_profiles,
+        reviewer_profiles=reviewer_profiles,
+    )
+    outcomes = [(False, "initial-full-failure"), (True, "repair-passed")]
+
+    def sequenced_verification(
+        config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
+    ) -> VerificationEvidence:
+        assert config.repo == env.work
+        passed, marker = outcomes.pop(0)
+        return _cp3_verification(env, commands, passed=passed, marker=marker)
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", sequenced_verification
+    )
+    accepted: list[orch_module.AcceptedImplementationRepairCandidate] = []
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        _cp3_target(base_sha, spec),
+        checkpoint_result,
+        repair_acceptor=lambda candidate: accepted.append(candidate) or "unexpected",
+    )
+
+    assert not result.completed
+    assert result.blocked_reason == "repair review blocked"
+    assert result.terminal_phase is Phase.FULL_VERIFICATION
+    assert result.evidence.full_verification is None
+    assert accepted == []
+    assert outcomes == []
+    assert implementer_profiles == [ComputeProfile.DELIBERATE]
+    assert reviewer_profiles == [ComputeProfile.DELIBERATE]
+
+
+def test_v2_full_verification_noop_repair_blocks_before_reverification(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    _install_cp3_reviewer_sequence(env, monkeypatch, [])
+    verification_calls: list[tuple[tuple[str, ...], ...]] = []
+    reviewer_calls: list[str] = []
+    histories: list[GateHistory] = []
+
+    def failed_verification(
+        config: OrchestratorConfig, commands: tuple[tuple[str, ...], ...]
+    ) -> VerificationEvidence:
+        assert config.repo == env.work
+        verification_calls.append(commands)
+        return _cp3_verification(
+            env, commands, passed=False, marker="initial-full-failure"
+        )
+
+    monkeypatch.setattr(
+        orch_module, "_run_verification_commands", failed_verification
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "run_implementer",
+        lambda spec, prompt: AgentInvocationResult("no changes", "", 0, False),
+    )
+    monkeypatch.setattr(
+        orch_module,
+        "run_structured_reviewer",
+        lambda spec, prompt: reviewer_calls.append(prompt) or _v2_approved(),
+    )
+
+    result = orch_module.execute_v2_pre_closure_review(
+        _cp3_config(env),
+        _cp3_target(base_sha, spec),
+        checkpoint_result,
+        repair_acceptor=lambda candidate: "unexpected",
+        history_sink=histories,
+    )
+
+    assert not result.completed
+    assert "reproduced rejected candidate" in (result.blocked_reason or "")
+    assert result.terminal_phase is Phase.FULL_VERIFICATION
+    assert result.evidence.full_verification is None
+    assert verification_calls == [spec.full_verification]
+    assert reviewer_calls == []
+    repair_history = next(
+        history
+        for history in histories
+        if history.context.gate_id == "full-verification-repair"
+    )
+    assert len(repair_history.attempts) == 1
+    assert repair_history.attempts[0].rejection_basis is (
+        CandidateRejectionBasis.REPEATED_IDENTITY
+    )
+
+
 def test_v2_replayed_gate_changes_requested_repairs_and_restarts_from_cp1(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4424,7 +5185,7 @@ def test_v2_replayed_gate_changes_requested_repairs_and_restarts_from_cp1(
     base_sha, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
     assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
     accepted_heads: list[str] = []
-    prompts, implementer_prompts, _, ranges = _install_cp3_reviewer_sequence(
+    prompts, implementer_prompts, commands, ranges = _install_cp3_reviewer_sequence(
         env,
         monkeypatch,
         [
@@ -4455,6 +5216,28 @@ def test_v2_replayed_gate_changes_requested_repairs_and_restarts_from_cp1(
     )
     assert all("choose workflow transitions" not in prompt for prompt in prompts)
     assert len(result.evidence.accepted_checkpoints) == 2
+    checkpoint_review_prompts = [
+        prompt
+        for prompt in prompts
+        if "CURRENT_GATE:\ncheckpoint_id:" in prompt
+    ]
+    assert [
+        "CP-1" if "checkpoint_id: CP-1\n" in prompt else "CP-2"
+        for prompt in checkpoint_review_prompts
+    ] == ["CP-1", "CP-1", "CP-2"]
+    assert commands.count(spec.full_verification) == 2
+    assert result.evidence.full_verification is not None
+    assert result.evidence.full_verification.head_sha == accepted_heads[-1]
+    assert result.evidence.cumulative_review is not None
+    assert result.evidence.cumulative_review.reviewed_head_sha == accepted_heads[-1]
+    assert all(
+        current is not original
+        for current, original in zip(
+            result.evidence.accepted_checkpoints,
+            checkpoint_result.checkpoint_evidence,
+            strict=True,
+        )
+    )
 
 
 def test_v2_origin_main_movement_with_same_target_revalidates_and_rebuilds(
@@ -4806,7 +5589,7 @@ def test_v2_seeded_verification_episode_escalates_repair_not_first_review(
 
     monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
 
-    orch_module._execute_v2_late_repair(
+    _, history, _ = orch_module._execute_v2_late_repair(
         _cp3_config(env),
         spec,
         gate_id="seeded-verification-child-repair",
@@ -4816,6 +5599,7 @@ def test_v2_seeded_verification_episode_escalates_repair_not_first_review(
         initial_packet=None,
         initial_verification_failure="upstream verification failed",
         initial_verification_rejection_count=1,
+        initial_rejected_candidate_identity=orch_module._candidate_identity(""),
         verification_commands=spec.checkpoints[0].verification,
         repair_acceptor=_commit_late_repair(env, []),
     )
@@ -4826,6 +5610,233 @@ def test_v2_seeded_verification_episode_escalates_repair_not_first_review(
         ComputeProfile.CRITICAL,
     ]
     assert reviewer_profiles == [ComputeProfile.DELIBERATE]
+    verification_rejections = [
+        attempt
+        for attempt in history.attempts
+        if attempt.rejection_basis is CandidateRejectionBasis.VERIFICATION_FAILURE
+    ]
+    assert len(verification_rejections) == 1
+    assert len(history.attempts) == 2
+
+
+def test_v2_direct_verification_noop_repair_blocks_from_empty_delta_seed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    histories: list[GateHistory] = []
+    decisions: list[orch_module.RoutingDecisionRecord] = []
+    config = dataclasses.replace(_cp3_config(env), _routing_decisions=decisions)
+    empty_identity = orch_module._candidate_identity("")
+    implementer_calls = 0
+    verification_calls = 0
+    reviewer_calls = 0
+
+    def implementer(
+        spec: AgentInvocationSpec, prompt_text: str
+    ) -> AgentInvocationResult:
+        nonlocal implementer_calls
+        implementer_calls += 1
+        history = histories[0]
+        assert history.rejected_candidate_identities == {empty_identity}
+        assert history.attempts == []
+        assert history.review_iteration == 0
+        assert history.consecutive_changes_requested == 0
+        assert history.latest_valid_repair_packet is None
+        assert history.previous_reviewed_candidate_identity is None
+        assert history.previous_reviewed_candidate_state is None
+        return AgentInvocationResult("no change", "", 0, False)
+
+    def verification(*args: object, **kwargs: object) -> VerificationEvidence:
+        nonlocal verification_calls
+        verification_calls += 1
+        pytest.fail("repeated empty candidate must block before verification")
+
+    def reviewer(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        pytest.fail("repeated empty candidate must block before review")
+
+    monkeypatch.setattr(orch_module, "run_implementer", implementer)
+    monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", reviewer)
+
+    with pytest.raises(orch_module._Blocked, match="reproduced rejected candidate"):
+        orch_module._execute_v2_late_repair(
+            config,
+            spec,
+            gate_id="direct-verification-noop-repair",
+            accepted_base_context_identity=_run_git(
+                ["rev-parse", "HEAD"], cwd=env.work
+            ).strip(),
+            initial_packet=None,
+            initial_verification_failure="upstream verification failed",
+            initial_verification_rejection_count=1,
+            initial_rejected_candidate_identity=empty_identity,
+            verification_commands=spec.checkpoints[0].verification,
+            repair_acceptor=lambda candidate: pytest.fail(
+                f"repeated candidate was accepted: {candidate}"
+            ),
+            history_sink=histories,
+        )
+
+    assert implementer_calls == 1
+    assert verification_calls == 0
+    assert reviewer_calls == 0
+    history = histories[0]
+    assert history.rejected_candidate_identities == {empty_identity}
+    assert history.review_iteration == 0
+    assert history.consecutive_changes_requested == 0
+    assert history.previous_reviewed_candidate_identity is None
+    assert history.previous_reviewed_candidate_state is None
+    assert len(history.attempts) == 1
+    repeated = history.attempts[0]
+    assert repeated.candidate_identity == empty_identity
+    assert repeated.rejection_basis is CandidateRejectionBasis.REPEATED_IDENTITY
+    assert repeated.verification is None
+    assert repeated.review_iteration is None
+    assert repeated.reviewer_verdict is None
+    assert repeated.findings == ()
+    assert repeated.repair_packet is None
+    assert len(decisions) == 1
+    assert decisions[0].work_kind is AgentWorkKind.IMPLEMENTATION_REPAIR
+    assert decisions[0].selected_profile is ComputeProfile.DELIBERATE
+    assert decisions[0].escalation_reasons == ()
+
+
+def test_v2_packet_triggered_noop_late_repair_has_no_empty_delta_seed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _run_git(["checkout", "-q", "-b", "delivery"], cwd=env.work)
+    packet = _v2_changes("packet repair").repair_packet
+    assert packet is not None
+    histories: list[GateHistory] = []
+    verification_calls = 0
+    reviewer_calls = 0
+
+    monkeypatch.setattr(
+        orch_module,
+        "run_implementer",
+        lambda spec, prompt: AgentInvocationResult("no change", "", 0, False),
+    )
+
+    def verification(*args: object, **kwargs: object) -> VerificationEvidence:
+        nonlocal verification_calls
+        verification_calls += 1
+        return _v2_verification(True)
+
+    def reviewer(
+        *args: object, history: GateHistory, **kwargs: object
+    ) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        assert history.rejected_candidate_identities == set()
+        assert history.attempts == []
+        return _v2_explicit_blocked("packet repair reached review")
+
+    monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", reviewer)
+
+    with pytest.raises(orch_module._Blocked, match="packet repair reached review"):
+        orch_module._execute_v2_late_repair(
+            _cp3_config(env),
+            spec,
+            gate_id="packet-noop-repair",
+            accepted_base_context_identity=_run_git(
+                ["rev-parse", "HEAD"], cwd=env.work
+            ).strip(),
+            initial_packet=packet,
+            verification_commands=spec.checkpoints[0].verification,
+            repair_acceptor=lambda candidate: pytest.fail(
+                f"blocked candidate was accepted: {candidate}"
+            ),
+            history_sink=histories,
+        )
+
+    assert verification_calls == 1
+    assert reviewer_calls == 1
+    history = histories[0]
+    assert history.rejected_candidate_identities == set()
+    assert len(history.attempts) == 1
+    assert history.attempts[0].reviewer_verdict is ReviewVerdict.BLOCKED
+
+
+def test_v2_replayed_checkpoint_verification_noop_repair_uses_empty_delta_seed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = _cp3_spec()
+    _, checkpoint_result = _prepared_v2_checkpoint_result(env, spec)
+    assert isinstance(checkpoint_result, orch_module.V2CheckpointExecutionResult)
+    evidence = orch_module.V2ImplementationEvidence(
+        spec_identity=spec.digest,
+        base_identity="base",
+        accepted_checkpoints=list(checkpoint_result.checkpoint_evidence),
+    )
+    histories: list[GateHistory] = []
+    implementer_profiles: list[ComputeProfile] = []
+    verification_calls = 0
+    reviewer_calls = 0
+
+    def verification(*args: object, **kwargs: object) -> VerificationEvidence:
+        nonlocal verification_calls
+        verification_calls += 1
+        if verification_calls > 1:
+            pytest.fail("repeated empty repair must block before verification")
+        return _v2_verification(False)
+
+    def implementer(
+        spec: AgentInvocationSpec, prompt_text: str
+    ) -> AgentInvocationResult:
+        implementer_profiles.append(ComputeProfile(spec.args[-1].upper()))
+        return AgentInvocationResult("no change", "", 0, False)
+
+    def reviewer(*args: object, **kwargs: object) -> StructuredReviewResult:
+        nonlocal reviewer_calls
+        reviewer_calls += 1
+        pytest.fail("repeated empty repair must block before review")
+
+    monkeypatch.setattr(orch_module, "_run_verification_commands", verification)
+    monkeypatch.setattr(orch_module, "run_implementer", implementer)
+    monkeypatch.setattr(orch_module, "_run_routed_v2_designated_review", reviewer)
+
+    with pytest.raises(orch_module._Blocked, match="reproduced rejected candidate"):
+        orch_module._replay_v2_checkpoints_conservatively(
+            _cp3_config(env),
+            spec,
+            checkpoint_result.checkpoint_evidence,
+            evidence,
+            lambda candidate: pytest.fail(
+                f"repeated candidate was accepted: {candidate}"
+            ),
+            history_sink=histories,
+        )
+
+    assert verification_calls == 1
+    assert reviewer_calls == 0
+    assert implementer_profiles == [ComputeProfile.DELIBERATE]
+    replay_history = next(
+        history for history in histories if history.context.gate_id == "replay:CP-1"
+    )
+    assert len(replay_history.attempts) == 1
+    assert (
+        replay_history.attempts[0].rejection_basis
+        is CandidateRejectionBasis.VERIFICATION_FAILURE
+    )
+    repair_history = next(
+        history
+        for history in histories
+        if history.context.gate_id == "replay-repair:CP-1"
+    )
+    empty_identity = orch_module._candidate_identity("")
+    assert repair_history.rejected_candidate_identities == {empty_identity}
+    assert repair_history.previous_reviewed_candidate_identity is None
+    assert repair_history.previous_reviewed_candidate_state is None
+    assert len(repair_history.attempts) == 1
+    assert (
+        repair_history.attempts[0].rejection_basis
+        is CandidateRejectionBasis.REPEATED_IDENTITY
+    )
 
 
 def test_v2_late_repair_records_explicit_blocked_before_terminal_transition(
