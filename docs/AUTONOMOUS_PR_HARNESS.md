@@ -968,9 +968,21 @@ The operational v2 repair flow is:
 review → CHANGES_REQUESTED → implementer repair → deterministic verification → fresh review
 ```
 
-A **repair episode** starts with a `CHANGES_REQUESTED` verdict (or, before a
-gate's first review, with the initial implementation) and ends when a
-candidate that passed deterministic verification is actually reviewed.
+At the deterministic verification subprocess boundary, only a process that
+successfully starts and completes produces a verification-command result. A
+real return code of zero passes that command; every real non-zero return code,
+including a negative operating-system/process return code, is an ordinary
+deterministic candidate-verification rejection. A launch or execution
+`OSError`, or expiration of the configured timeout, is instead verification
+execution uncertainty and fails closed terminally. Those exceptions never
+become a synthetic verification-command result with return code `-1`.
+A deterministic completed failure creates or implies no synthetic reviewer
+result.
+
+A **repair episode** starts with a `CHANGES_REQUESTED` verdict, an initial
+implementation before a gate's first review, or a completed deterministic
+verification rejection that directly creates a child repair gate. It ends when
+a candidate that passed deterministic verification is actually reviewed.
 
 If the deterministic verification of a candidate fails, that candidate is not
 sent to review until verification succeeds. It counts as a rejected candidate
@@ -1134,6 +1146,15 @@ judgment such as "the agent is not making enough progress".
 - **Comparison scope.** Identities are compared only within the same gate,
   fixed spec, and accepted base context. A candidate seen under a different
   context is a different candidate.
+- **Direct verification-triggered child repair.** When a completed
+  verification failure directly creates a child late-repair gate, the
+  unchanged candidate is seeded in that child gate's accepted-base-relative
+  candidate space before the first repair attempt. For a mode-A child repair,
+  the unchanged candidate is the empty uncommitted delta. This seed exists
+  only for no-progress and cycle detection: it creates no synthetic local
+  attempt, verification rejection, reviewer verdict, review iteration,
+  finding, or repair packet. The fingerprint algorithm and the concrete digest
+  of the empty delta remain implementation details, not governance constants.
 - **Rule.** When a repair produces a candidate whose identity equals that of
   any candidate already rejected at the same gate and context, the run ends
   as `BLOCKED`: an exact repair cycle, or no progress. This applies equally to
@@ -1380,14 +1401,31 @@ That review keeps its v1 definition (§8): its input is `origin/main...HEAD`
 before Task Closure exists on the branch, it satisfies the pre-closure
 implementation-review prerequisite, and it is not Mode C.
 
+Full verification has one repair-aware pre-closure control path. A completed
+non-zero result rejects the current implementation candidate and enters the
+existing implementation-repair machinery; it does not synthesize reviewer
+findings or a verdict. Each distinct repair candidate must pass the exact Full
+verification commands and then receive a fresh implementation-repair review.
+Only `APPROVED` reaches the existing acceptance commit/push boundary. The
+accepted repair then starts conservative replay at CP-1; after every declared
+checkpoint has fresh accepted evidence, the orchestrator runs a fresh
+authoritative Full verification on the resulting accepted HEAD, rebuilds
+`origin/main...HEAD`, and obtains a fresh cumulative implementation review.
+
+An `OSError` or timeout while executing Full verification is execution
+uncertainty, not candidate evidence. It remains terminal fail-closed in the
+Full Verification phase and invokes no Full Verification repair implementer
+or reviewer.
+
 A `CHANGES_REQUESTED` from the cumulative review follows the adaptive repair
 contract (§25–§29). A repair invalidates evidence built against the old
 candidate (§33). Once such a repair is made, at least the following happens
 before approval can be reached: deterministic verification and review of the
-repair; commit and push of the accepted repair to the delivery branch; the Full
-verification again; a rebuilt cumulative diff over `origin/main...HEAD`; and a
-fresh cumulative review. An earlier cumulative approval is never carried over
-to a new candidate.
+repair; commit and push of the accepted repair to the delivery branch; the
+conservative checkpoint replay required by §33; return to the same top-level
+Full verification control point; a rebuilt cumulative diff over
+`origin/main...HEAD`; and a fresh cumulative review. An earlier cumulative
+approval is never carried over to a new candidate.
 
 ---
 
@@ -1554,9 +1592,12 @@ which evidence a repair "probably" leaves valid.
   verification results, review approvals, closure review, revalidation, and
   any Mode C audit.
 - Upstream checkpoints that were already completed are not invalidated
-  automatically. If the repair changes the result of a previously approved
-  upstream checkpoint, however, that checkpoint's approval is stale too, and it
-  and every checkpoint and gate after it are replayed.
+  automatically under this general rule. A more specific conservative replay
+  rule can require an earlier boundary: the accepted implementation repair
+  directly triggered by Full verification rejection below invalidates and
+  replays from CP-1. If the repair changes the result of a previously approved
+  upstream checkpoint, that checkpoint's approval is stale too, and it and
+  every checkpoint and gate after it are replayed.
 - When the orchestrator cannot establish deterministically the earliest
   checkpoint a repair affects, it chooses the broader conservative replay, up to
   all relevant checkpoints.
@@ -1565,16 +1606,27 @@ which evidence a repair "probably" leaves valid.
   fewer than needed to exclude stale evidence.
 - If safe replay is impossible, the run ends as `BLOCKED` (§27).
 
+An accepted implementation repair triggered directly by Full verification is
+always treated conservatively as task-wide: all previously accepted
+checkpoint evidence is invalidated from CP-1, together with downstream Full
+verification and cumulative-review evidence. Every declared checkpoint is
+then replayed in order. The passing verification of the uncommitted repair
+candidate establishes eligibility for its fresh repair review only; after the
+repair is accepted and committed and checkpoint replay completes, that earlier
+result is not final accepted Full Verification evidence. Only a new passing
+Full verification bound to the post-replay accepted HEAD may be promoted for
+downstream closure and Mode C.
+
 For an implementation-affecting repair made from a late gate — the
-pre-closure cumulative review, the closure review, or Mode C — that does not
-change the result of an earlier approved checkpoint, the conservative replay
-sequence is:
+pre-closure cumulative review, the closure review, or Mode C — the current
+implementation uses the broader conservative replay from CP-1:
 
 ```text
 repair
 → deterministic verification and review of the repair (§25–§29)
 → APPROVED
 → commit and push the accepted repair to the delivery branch
+→ replay every declared checkpoint from CP-1 with fresh verification and review
 → full verification
 → pre-closure cumulative implementation review (origin/main...HEAD)
 → closure preparation
@@ -1714,6 +1766,16 @@ becomes `CRITICAL` when either:
   in an earlier packet of that causal episode, including a direct upstream
   seed. Non-adjacent repetition such as `A → B → A` therefore escalates, while
   a new basis alone does not.
+
+A direct upstream verification failure contributes exactly one existing
+`seed_verification_rejection_count` to the child repair episode. The rejected-
+identity seed used for no-progress detection (§28) is separate state and does
+not add to that count. The upstream failure is not also inserted into the child
+history as a local `VERIFICATION_FAILURE` attempt; doing so would double-count
+one causal rejection. A later completed non-zero verification of a distinct
+local repair candidate is the first local verification-rejection attempt and
+combines with the single upstream seed under the unchanged threshold above.
+The routing baselines and escalation thresholds are otherwise unchanged.
 
 A deterministic prospective Task Closure validation rejection is not a
 verification rejection and does not increment the verification-rejection
