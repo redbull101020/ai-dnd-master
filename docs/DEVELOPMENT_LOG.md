@@ -7851,3 +7851,19 @@ merge boundaries remain intact. Full pytest passed (3382 passed, 7 skipped);
 mypy passed (138 source files); focused orchestration, routing, documentation,
 and diff checks passed. Process-tree containment and post-publication repair
 remain out of scope. This closure is prospective pending review and Mode C.
+
+## 2026-10-17 — TSK-0046: Prospective Task Closure (draft PR #137)
+
+Delivered MANUAL in draft PR #137: agent, Git/GitHub, isolated-index,
+verification, and Codex identity subprocess failures now fail closed.
+Semantic output remains strict UTF-8; diagnostic-only streams use best-effort
+decoding and excerpts bounded to 4096 source characters (2048 head + 2048 tail,
+plus a fixed marker). Windows/Python 3.12 incomplete text capture now fails
+closed before semantic interpretation or verification evidence creation.
+Existing authority, review, routing, repair, required-CI, publication, and
+human-only merge contracts remain unchanged; no automatic retry was introduced.
+Accepted implementation verification: full pytest 3514 passed, 7 skipped
+(Windows symlink privileges), without warnings; mypy passed for 138 source
+files; `git diff --check` passed. Windows/MXC descendant-process containment
+remains a separate future probe. This closure is prospective pending review
+and human merge.
