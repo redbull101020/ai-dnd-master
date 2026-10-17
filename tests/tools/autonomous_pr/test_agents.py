@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 
 import pytest
@@ -12,6 +13,8 @@ from tools.autonomous_pr.agents import (
     run_implementer,
     run_structured_reviewer,
 )
+from tools.autonomous_pr import agents as agent_module
+from tools.autonomous_pr.agents import AgentProcessFailureKind, run_agent
 from tools.autonomous_pr.model import (
     AgentRole,
     ComputeProfile,
@@ -188,6 +191,158 @@ def test_run_implementer_returns_raw_result() -> None:
 
     assert result.returncode == 0
     assert "implementation notes" in result.stdout
+
+
+def test_agent_bytes_boundary_preserves_input_and_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = AgentInvocationSpec(
+        role=AgentRole.IMPLEMENTER, executable="agent", args=("--fixed",),
+        timeout_seconds=17.0, env={"KEY": "value"},
+    )
+    calls = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, b"notes\xff", b"diagnostic\xfe")
+
+    monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
+    result = run_agent(spec, "Задача")
+    assert calls == [(["agent", "--fixed"], {
+        "input": "Задача".encode("utf-8"), "capture_output": True,
+        "cwd": spec.cwd, "env": {"KEY": "value"}, "timeout": 17.0,
+    })]
+    assert result.stdout == "notes\ufffd"
+    assert result.stderr == "diagnostic\ufffd"
+    assert result.returncode == 0 and result.failure_kind is None
+    assert not result.timed_out
+
+
+@pytest.mark.parametrize("partial", [
+    b"APPROVED\xff", "APPROVED", None,
+    b'CHANGES_REQUESTED\n{"findings": []}', b'BLOCKED\n{}',
+])
+def test_agent_timeout_retains_partial_diagnostics_without_parsing(
+    monkeypatch: pytest.MonkeyPatch, partial: bytes | str | None,
+) -> None:
+    def timeout(argv: list[str], **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(argv, 1, output=partial, stderr=partial)
+
+    def forbidden_parser(output: str) -> None:
+        pytest.fail("timeout output reached semantic parser")
+
+    monkeypatch.setattr(agent_module.subprocess, "run", timeout)
+    monkeypatch.setattr(agent_module, "parse_structured_reviewer_output", forbidden_parser)
+    spec = _python_reviewer("")
+    result = run_agent(spec, "prompt")
+    expected = "" if partial is None else (
+        partial.decode("utf-8", errors="replace") if isinstance(partial, bytes) else partial
+    )
+    assert result.stdout == result.stderr == expected
+    assert result.returncode is None and result.timed_out
+    assert result.failure_kind is AgentProcessFailureKind.TIMEOUT
+    review = run_structured_reviewer(spec, "prompt")
+    assert review.verdict is ReviewVerdict.BLOCKED
+    assert not review.verdict_is_explicit
+    assert review.blocked_reason == "reviewer process timed out"
+    assert review.repair_packet is None and review.blocked_rationale is None
+
+
+@pytest.mark.parametrize("error", [PermissionError, FileNotFoundError, OSError])
+def test_agent_launch_failure_classification_and_no_transcript_reason(
+    monkeypatch: pytest.MonkeyPatch, error: type[OSError],
+) -> None:
+    def failed_launch(argv: list[str], **kwargs: object) -> None:
+        raise error("launch diagnostic " * 1000)
+
+    monkeypatch.setattr(agent_module.subprocess, "run", failed_launch)
+    spec = _python_reviewer("")
+    result = run_agent(spec, "prompt")
+    assert result.failure_kind is AgentProcessFailureKind.LAUNCH_ERROR
+    assert result.returncode is None and not result.timed_out
+    assert len(result.stderr) == 4096 + len(agent_module._DIAGNOSTIC_TRUNCATION_MARKER)
+    review = run_structured_reviewer(spec, "prompt")
+    assert not review.verdict_is_explicit
+    assert "failed to execute" in review.blocked_reason
+    assert "launch diagnostic" not in review.blocked_reason
+
+
+@pytest.mark.parametrize("returncode, stdout, kind", [
+    (0, b"APPROVED\xff", AgentProcessFailureKind.OUTPUT_DECODE_ERROR),
+    (3, b"APPROVED", None),
+    (3, b"APPROVED\xff", None),
+])
+def test_reviewer_failure_status_precedes_semantic_parser(
+    monkeypatch: pytest.MonkeyPatch, returncode: int, stdout: bytes,
+    kind: AgentProcessFailureKind | None,
+) -> None:
+    monkeypatch.setattr(agent_module.subprocess, "run", lambda argv, **kw:
+        subprocess.CompletedProcess(argv, returncode, stdout, b"stderr\xff"))
+    monkeypatch.setattr(agent_module, "parse_structured_reviewer_output", lambda output:
+        pytest.fail("failed process output reached parser"))
+    spec = _python_reviewer("")
+    result = run_agent(spec, "prompt")
+    assert result.failure_kind is kind and not result.timed_out
+    assert result.returncode == (None if kind else returncode)
+    review = run_structured_reviewer(spec, "prompt")
+    assert review.verdict is ReviewVerdict.BLOCKED
+    assert not review.verdict_is_explicit
+    assert review.repair_packet is None and review.blocked_rationale is None
+
+
+def test_successful_reviewer_parses_full_stdout_despite_invalid_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = b" \n" * 3000 + b"APPROVED\n"
+    monkeypatch.setattr(agent_module.subprocess, "run", lambda argv, **kw:
+        subprocess.CompletedProcess(argv, 0, stdout, b"diagnostic\xff"))
+    observed = []
+    original = parse_structured_reviewer_output
+
+    def parse(output: str) -> agent_module.StructuredReviewResult:
+        observed.append(output)
+        return original(output)
+
+    monkeypatch.setattr(agent_module, "parse_structured_reviewer_output", parse)
+    review = run_structured_reviewer(_python_reviewer(""), "prompt")
+    assert observed == [stdout.decode("utf-8")]
+    assert review.verdict is ReviewVerdict.APPROVED and review.verdict_is_explicit
+
+
+@pytest.mark.parametrize("size", [4095, 4096, 4097, 20000])
+def test_terminal_agent_diagnostics_keep_exact_source_budget(
+    monkeypatch: pytest.MonkeyPatch, size: int,
+) -> None:
+    source = "a" * 2048 + "middle" * 4000 + "z" * 2048
+    source = source[:size] if size <= 4096 else source[:size - 2048] + "z" * 2048
+    monkeypatch.setattr(agent_module.subprocess, "run", lambda argv, **kw:
+        subprocess.CompletedProcess(argv, 3, source.encode(), source.encode()))
+    result = run_agent(_python_reviewer(""), "prompt")
+    expected = source if len(source) <= 4096 else (
+        source[:2048] + agent_module._DIAGNOSTIC_TRUNCATION_MARKER + source[-2048:]
+    )
+    assert result.stdout == result.stderr == expected
+    assert result.returncode == 3 and result.failure_kind is None
+
+
+def test_agent_failure_kinds_are_internal_process_failures_only() -> None:
+    assert {kind.value for kind in AgentProcessFailureKind} == {
+        "TIMEOUT", "LAUNCH_ERROR", "OUTPUT_DECODE_ERROR",
+    }
+
+
+def test_timeout_bytes_diagnostics_keep_head_and_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+    output = b"head\xff" + b"x" * 10000 + b"tail\xfe"
+    def timeout(argv: list[str], **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(argv, 1, output=output, stderr=output)
+
+    monkeypatch.setattr(agent_module.subprocess, "run", timeout)
+    result = run_agent(_python_reviewer(""), "prompt")
+    source = output.decode("utf-8", errors="replace")
+    assert result.stdout == result.stderr == (
+        source[:2048] + agent_module._DIAGNOSTIC_TRUNCATION_MARKER + source[-2048:]
+    )
+    assert result.failure_kind is AgentProcessFailureKind.TIMEOUT
 
 
 def _repair_packet_json(*, diagnosis: bool = False) -> str:

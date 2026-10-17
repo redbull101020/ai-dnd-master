@@ -308,6 +308,7 @@ def _directory_alias(alias: Path, target: Path) -> None:
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
         shell=False,
     )
     if completed.returncode != 0:
@@ -582,11 +583,40 @@ def test_version_identity_rejects_nonzero_or_malformed_output(
         launcher._check_codex_identity(Path("codex"))
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("invalid_output", [None, b"codex-cli 9.0", 123])
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_version_identity_rejects_incomplete_text_capture_before_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: str, invalid_output: object, returncode: int,
+) -> None:
+    calls = []
+
+    def incomplete_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        assert kwargs["text"] is True and kwargs["encoding"] == "utf-8"
+        assert "errors" not in kwargs
+        outputs = {"stdout": "codex-cli 9.0", "stderr": "codex-cli 9.0"}
+        outputs[stream] = invalid_output
+        return subprocess.CompletedProcess(argv, returncode, **outputs)
+
+    class ForbiddenIdentityParser:
+        def search(self, output: str) -> None:
+            pytest.fail("incomplete capture reached Codex identity parsing")
+
+    monkeypatch.setattr(launcher.subprocess, "run", incomplete_run)
+    monkeypatch.setattr(launcher, "_CODEX_IDENTITY_PATTERN", ForbiddenIdentityParser())
+    with pytest.raises(launcher.LauncherConfigurationError, match="both stdout and stderr"):
+        launcher._check_codex_identity(Path("codex"))
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize(
     ("failure", "message"),
     [
         (subprocess.TimeoutExpired("codex", 10), "timed out"),
         (OSError("cannot launch"), "cannot launch"),
+        (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid"), "not valid UTF-8"),
     ],
 )
 def test_version_identity_translates_launch_failures(
@@ -598,6 +628,36 @@ def test_version_identity_translates_launch_failures(
     monkeypatch.setattr(launcher.subprocess, "run", fail)
     with pytest.raises(launcher.LauncherConfigurationError, match=message):
         launcher._check_codex_identity(Path("codex"))
+
+
+@pytest.mark.parametrize("failure", ["decode", "stdout", "stderr"])
+def test_identity_decode_failure_stops_launcher_before_runtime_and_delegation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], failure: str,
+) -> None:
+    repo, _ = _repository(tmp_path)
+    monkeypatch.setattr(launcher, "_validate_repository", lambda repo, prefix=None: repo.resolve())
+    monkeypatch.setattr(launcher, "_validate_loaded_package_provenance", lambda repo: None)
+    monkeypatch.setattr(launcher, "_resolve_codex", lambda *args, **kw: tmp_path / "codex.exe")
+    calls = []
+
+    def corrupt_identity(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if failure == "decode":
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        outputs = {"stdout": "codex-cli 9.0", "stderr": "codex-cli 9.0"}
+        outputs[failure] = None
+        return subprocess.CompletedProcess(argv, 0, **outputs)
+
+    monkeypatch.setattr(launcher.subprocess, "run", corrupt_identity)
+    monkeypatch.setattr(launcher, "_prepare_temp_directory", lambda *args, **kw:
+        pytest.fail("identity decode failure prepared runtime directories"))
+    monkeypatch.setattr(launcher, "_delegate", lambda *args, **kw:
+        pytest.fail("identity decode failure delegated to harness"))
+    assert launcher.main(["TSK-0046", "--repo", str(repo)]) == 2
+    assert len(calls) == 1
+    message = "not valid UTF-8" if failure == "decode" else "both stdout and stderr"
+    assert message in capsys.readouterr().err
 
 
 def _runtime_paths(
@@ -628,6 +688,7 @@ def _junction_or_skip(alias: Path, target: Path) -> None:
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
         shell=False,
     )
     if completed.returncode != 0:

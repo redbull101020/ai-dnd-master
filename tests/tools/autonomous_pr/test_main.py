@@ -1,10 +1,13 @@
 import json
+import subprocess
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
 from tools.autonomous_pr import __main__ as main_module
+from tools.autonomous_pr import agents as agent_module
+from tools.autonomous_pr.agents import AgentInvocationSpec
 from tools.autonomous_pr.__main__ import _build_config, _parse_args
 from tools.autonomous_pr.model import (
     AgentRole,
@@ -35,6 +38,36 @@ _BLOCKED_DIAGNOSTIC_KEYS = {
     "required_resolution",
     "review_iteration",
 }
+
+
+@pytest.mark.parametrize("failure", ["timeout", "launch", "decode", "nonzero"])
+def test_process_failure_reporting_never_projects_agent_transcript(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failure: str,
+) -> None:
+    sentinel = b"PRIVATE_AGENT_TRANSCRIPT"
+
+    def failed_process(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 1, output=b"APPROVED", stderr=sentinel)
+        if failure == "launch":
+            raise OSError(sentinel.decode())
+        return subprocess.CompletedProcess(argv, 0 if failure == "decode" else 7,
+            b"APPROVED\xff" if failure == "decode" else b"APPROVED", sentinel)
+
+    monkeypatch.setattr(agent_module.subprocess, "run", failed_process)
+    review = agent_module.run_structured_reviewer(
+        AgentInvocationSpec(role=AgentRole.REVIEWER, executable="reviewer"), "private prompt",
+    )
+    assert sentinel.decode() in review.raw_output
+    assert not review.verdict_is_explicit
+    main_module._report(RunResult(
+        task_id="TSK-9001", phase=Phase.CHECKPOINT_REVIEW, outcome=RunOutcome.BLOCKED,
+        delivery_branch="delivery", head_sha="a" * 40, blocked_reason=review.blocked_reason,
+    ))
+    output = capsys.readouterr().out
+    assert sentinel.decode() not in output and "private prompt" not in output
+    assert "agent_stdout_json" not in output and "agent_stderr_json" not in output
+    assert "review_blocked_json" not in output
 
 
 def _argv(*extra: str) -> list[str]:

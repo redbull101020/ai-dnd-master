@@ -373,6 +373,19 @@ def isolated_reviewer_workspace(repo: Path) -> Iterator[Path]:
         _remove_reviewer_workspace(root)
 
 
+_DIAGNOSTIC_SOURCE_LIMIT = 4096
+_DIAGNOSTIC_TRUNCATION_MARKER = "\n... [diagnostic truncated] ...\n"
+
+
+def _diagnostic_excerpt(source: str) -> str:
+    """Project external output only after semantic classification."""
+
+    if len(source) <= _DIAGNOSTIC_SOURCE_LIMIT:
+        return source
+    half = _DIAGNOSTIC_SOURCE_LIMIT // 2
+    return source[:half] + _DIAGNOSTIC_TRUNCATION_MARKER + source[-half:]
+
+
 def _run(
     args: Sequence[str], *, cwd: Path, timeout: float = _DEFAULT_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess[str]:
@@ -387,7 +400,7 @@ def _run(
     """
 
     try:
-        return subprocess.run(
+        result = subprocess.run(
             list(args),
             cwd=cwd,
             capture_output=True,
@@ -398,12 +411,30 @@ def _run(
         )
     except FileNotFoundError as exc:
         raise RepositoryError(f"required tool not found: {args[0]!r}") from exc
+    except OSError as exc:
+        raise RepositoryError(
+            f"required tool {args[0]!r} could not be executed: "
+            f"{type(exc).__name__} (errno={exc.errno!r}); "
+            "check availability and permissions"
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise RepositoryError(
+            f"required tool {args[0]!r} output is not valid UTF-8"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RepositoryError(
             f"{' '.join(args)!r} timed out after {timeout}s — treated as an "
             "ambiguous side effect: never retried and never assumed to "
             "have succeeded"
         ) from exc
+    # Windows reader-thread decode failures may return incomplete capture
+    # instead of raising UnicodeDecodeError in this thread.
+    if not isinstance(result.stdout, str) or not isinstance(result.stderr, str):
+        raise RepositoryError(
+            f"required tool {args[0]!r} output did not provide UTF-8 text "
+            "for both stdout and stderr"
+        )
+    return result
 
 
 def _git(repo: Path, args: Sequence[str], *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> str:
@@ -411,7 +442,7 @@ def _git(repo: Path, args: Sequence[str], *, timeout: float = _DEFAULT_TIMEOUT_S
     if result.returncode != 0:
         raise RepositoryError(
             f"git {' '.join(args)} failed (exit {result.returncode}): "
-            f"{result.stderr.strip()}"
+            f"{_diagnostic_excerpt(result.stderr.strip())}"
         )
     return result.stdout
 
@@ -427,7 +458,7 @@ def _gh(
     if result.returncode != 0:
         raise RepositoryError(
             f"gh {' '.join(args)} failed (exit {result.returncode}): "
-            f"{result.stderr.strip()}"
+            f"{_diagnostic_excerpt(result.stderr.strip())}"
         )
     return result.stdout
 
@@ -541,16 +572,27 @@ def read_worktree_utf8_file_exact(repo: Path, path: str) -> str:
                     timeout=_DEFAULT_TIMEOUT_SECONDS,
                     check=False,
                 )
+                if not isinstance(result.stdout, str) or not isinstance(result.stderr, str):
+                    raise RepositoryError(
+                        f"isolated-index Git output for {path} did not provide "
+                        "UTF-8 text for both stdout and stderr"
+                    )
                 if result.returncode != 0:
                     raise RepositoryError(
                         f"temporary-index {' '.join(args[1:])} failed "
-                        f"(exit {result.returncode}): {result.stderr.strip()}"
+                        f"(exit {result.returncode}): "
+                        f"{_diagnostic_excerpt(result.stderr.strip())}"
                     )
                 if args[1] == "ls-files":
                     staged = result.stdout
+    except UnicodeDecodeError as exc:
+        raise RepositoryError(
+            f"isolated-index Git output for {path} is not valid UTF-8"
+        ) from exc
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RepositoryError(
-            f"cannot stage working-tree candidate {path} in an isolated index: {exc}"
+            f"cannot stage working-tree candidate {path} in an isolated index: "
+            f"{_diagnostic_excerpt(str(exc))}"
         ) from exc
 
     entries = [item for item in staged.split("\0") if item]
@@ -601,6 +643,11 @@ def _read_utf8_blob_exact(
         )
     except FileNotFoundError as exc:
         raise RepositoryError("required tool not found: 'git'") from exc
+    except OSError as exc:
+        raise RepositoryError(
+            f"Git blob reader could not be executed: {type(exc).__name__} "
+            f"(errno={exc.errno!r}); check availability and permissions"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RepositoryError(
             f"reading blob for {path} at {source_sha} timed out after "
@@ -609,7 +656,8 @@ def _read_utf8_blob_exact(
     if result.returncode != 0:
         raise RepositoryError(
             f"git cat-file failed for {path} at {source_sha} "
-            f"(exit {result.returncode}): {result.stderr!r}"
+            f"(exit {result.returncode}): "
+            f"{_diagnostic_excerpt(result.stderr.decode('utf-8', errors='replace'))}"
         )
     try:
         return result.stdout.decode("utf-8", errors="strict")
@@ -653,7 +701,8 @@ def list_task_files_at_commit(
         fields = metadata.split()
         if not separator or len(fields) != 3:
             raise RepositoryError(
-                f"git ls-tree returned a malformed task entry: {raw_entry!r}"
+                "git ls-tree returned a malformed task entry: "
+                f"{_diagnostic_excerpt(raw_entry)!r}"
             )
         mode, object_type, object_sha = fields
         task_path = Path(path)
@@ -820,7 +869,7 @@ def _ref_exists(repo: Path, ref: str) -> bool:
     raise RepositoryError(
         f"git show-ref --verify --quiet {ref} exited {result.returncode} "
         f"(neither a clean found nor not-found result): "
-        f"{result.stderr.strip()}"
+        f"{_diagnostic_excerpt(result.stderr.strip())}"
     )
 
 
@@ -926,8 +975,9 @@ def require_no_open_pr_for_task(
             )
         if task_id in (provenance_task_id, title_task_id):
             raise RepositoryError(
-                f"open PR #{number} ({url}) already owns selected task "
-                f"{task_id} on head branch {head!r}; MANUAL reconciliation "
+                f"open PR #{number} ({_diagnostic_excerpt(url)}) already owns "
+                f"selected task {task_id} on head branch {_diagnostic_excerpt(head)!r}; "
+                "MANUAL reconciliation "
                 "is required and implicit resume/reuse is forbidden"
             )
 
@@ -2078,7 +2128,8 @@ def pr_required_checks(
             raise RepositoryError(
                 f"gh pr checks --required --json exited {result.returncode}, "
                 f"not one of gh's documented outcomes "
-                f"{sorted(_PR_CHECKS_KNOWN_EXIT_CODES)!r}: {result.stderr.strip()}"
+                f"{sorted(_PR_CHECKS_KNOWN_EXIT_CODES)!r}: "
+                f"{_diagnostic_excerpt(result.stderr.strip())}"
             )
         non_successful_present = any(
             item["bucket"] not in _SUCCESSFUL_CHECK_BUCKETS for item in parsed
@@ -2090,7 +2141,7 @@ def pr_required_checks(
                 "bucket is not itself a successful outcome (pass/"
                 "skipping); an inconsistent/ambiguous checks result is "
                 f"never silently resolved in either direction: "
-                f"{result.stdout!r}"
+                f"{_diagnostic_excerpt(result.stdout)!r}"
             )
         if result.returncode == 1 and not non_successful_present:
             raise RepositoryError(
@@ -2098,7 +2149,7 @@ def pr_required_checks(
                 "successful) but its own JSON output does not show any "
                 "non-successful check; an inconsistent/ambiguous checks "
                 f"result is never silently resolved in either direction: "
-                f"{result.stdout!r}"
+                f"{_diagnostic_excerpt(result.stdout)!r}"
             )
         if result.returncode == 8 and not non_successful_present:
             raise RepositoryError(
@@ -2106,7 +2157,7 @@ def pr_required_checks(
                 "but its own JSON output does not show any pending/"
                 "non-successful check; an inconsistent/ambiguous checks "
                 f"result is never silently resolved in either direction: "
-                f"{result.stdout!r}"
+                f"{_diagnostic_excerpt(result.stdout)!r}"
             )
         return RequiredChecksResult(
             checks=parsed, no_required_checks=False, returncode=result.returncode
@@ -2121,7 +2172,7 @@ def pr_required_checks(
         raise RepositoryError(
             "gh pr checks --required --json returned a non-empty checks array "
             "containing a malformed check object or unknown bucket: "
-            f"{result.stdout!r}"
+            f"{_diagnostic_excerpt(result.stdout)!r}"
         )
     if result.returncode == 1 and _looks_like_no_required_checks_stderr(result.stderr):
         return RequiredChecksResult(
@@ -2140,7 +2191,8 @@ def pr_required_checks(
         "was not valid, well-formed, non-empty checks JSON, and no "
         "recognized 'no required checks' or exact 'no checks reported' "
         "diagnostic was present either: "
-        f"stdout={result.stdout!r} stderr={result.stderr.strip()!r}"
+        f"stdout={_diagnostic_excerpt(result.stdout)!r} "
+        f"stderr={_diagnostic_excerpt(result.stderr.strip())!r}"
     )
 
 
