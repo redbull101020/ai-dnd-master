@@ -30,6 +30,7 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -195,12 +196,20 @@ class AgentProfileConfig:
         return replace(self.spec, args=self.spec.args + selected_args)
 
 
+class AgentProcessFailureKind(Enum):
+    """Internal process failures; completed non-zero exits retain their code."""
+
+    TIMEOUT = "TIMEOUT"
+    LAUNCH_ERROR = "LAUNCH_ERROR"
+    OUTPUT_DECODE_ERROR = "OUTPUT_DECODE_ERROR"
+
+
 @dataclass(frozen=True)
 class AgentInvocationResult:
-    """The raw outcome of one :func:`run_agent` call.
+    """The decoded outcome of one :func:`run_agent` call.
 
-    Expected failure modes (timeout, non-zero exit, failure to launch) are
-    represented here rather than raised, so callers can apply the strict
+    Expected failures (timeout, non-zero exit, launch or semantic decode
+    failure) are represented here rather than raised, so callers can apply the strict
     fail-closed handling §7/§17 require without a fragile exception-based
     control flow.
     """
@@ -209,6 +218,28 @@ class AgentInvocationResult:
     stderr: str
     returncode: int | None
     timed_out: bool
+    failure_kind: AgentProcessFailureKind | None = None
+
+
+_DIAGNOSTIC_SOURCE_LIMIT = 4096
+_DIAGNOSTIC_TRUNCATION_MARKER = "\n... [diagnostic truncated] ...\n"
+
+
+def _diagnostic_excerpt(source: str) -> str:
+    """Bound retained diagnostics, without bounding capture or semantic input."""
+
+    if len(source) <= _DIAGNOSTIC_SOURCE_LIMIT:
+        return source
+    half = _DIAGNOSTIC_SOURCE_LIMIT // 2
+    return source[:half] + _DIAGNOSTIC_TRUNCATION_MARKER + source[-half:]
+
+
+def _decode_diagnostic(output: bytes | str | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
 
 
 class AgentRoleError(Exception):
@@ -232,42 +263,54 @@ def run_agent(spec: AgentInvocationSpec, input_text: str) -> AgentInvocationResu
     structured verdict handling never has to guess whether a
     caught exception means "no verdict" or something else.
 
-    stdin/stdout/stderr are all encoded/decoded as UTF-8 explicitly —
-    ``text=True`` alone decodes using the platform's default locale
-    encoding, which on Windows is a codepage other than UTF-8 and would
-    otherwise corrupt any non-ASCII content passed in ``input_text`` (task
-    detail, plan text) or produced by the external process.
+    Capture bytes so status and role determine decoding. Only successful
+    reviewer stdout is semantic, strict UTF-8 input. Other streams are
+    diagnostic-only and may be decoded best-effort and bounded. Timeout
+    does not prove descendant-process quiescence.
     """
 
     env = dict(spec.env) if spec.env is not None else None
     try:
         completed = subprocess.run(
             [spec.executable, *spec.args],
-            input=input_text,
+            input=input_text.encode("utf-8", errors="strict"),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
             cwd=spec.cwd,
             env=env,
             timeout=spec.timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
         return AgentInvocationResult(
-            stdout=exc.stdout if isinstance(exc.stdout, str) else "",
-            stderr=exc.stderr if isinstance(exc.stderr, str) else "",
+            stdout=_diagnostic_excerpt(_decode_diagnostic(exc.stdout)),
+            stderr=_diagnostic_excerpt(_decode_diagnostic(exc.stderr)),
             returncode=None,
             timed_out=True,
+            failure_kind=AgentProcessFailureKind.TIMEOUT,
         )
     except OSError as exc:
         return AgentInvocationResult(
             stdout="",
-            stderr=str(exc),
+            stderr=_diagnostic_excerpt(str(exc)),
             returncode=None,
             timed_out=False,
+            failure_kind=AgentProcessFailureKind.LAUNCH_ERROR,
         )
+    if spec.role is AgentRole.REVIEWER and completed.returncode == 0:
+        try:
+            stdout = completed.stdout.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return AgentInvocationResult(
+                stdout=_diagnostic_excerpt(_decode_diagnostic(completed.stdout)),
+                stderr=_diagnostic_excerpt(_decode_diagnostic(completed.stderr)),
+                returncode=None,
+                timed_out=False,
+                failure_kind=AgentProcessFailureKind.OUTPUT_DECODE_ERROR,
+            )
+    else:
+        stdout = _diagnostic_excerpt(_decode_diagnostic(completed.stdout))
     return AgentInvocationResult(
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        stdout=stdout,
+        stderr=_diagnostic_excerpt(_decode_diagnostic(completed.stderr)),
         returncode=completed.returncode,
         timed_out=False,
     )
@@ -617,12 +660,19 @@ def run_structured_reviewer(
     _require_role(spec, AgentRole.REVIEWER)
     result = run_agent(spec, review_input_text)
     combined_output = result.stdout + result.stderr
-    if result.timed_out:
+    if result.failure_kind is AgentProcessFailureKind.TIMEOUT or result.timed_out:
         return _blocked_structured_review(combined_output, "reviewer process timed out")
-    if result.returncode is None:
+    if result.failure_kind is AgentProcessFailureKind.OUTPUT_DECODE_ERROR:
+        return _blocked_structured_review(
+            combined_output, "reviewer semantic stdout is not valid UTF-8"
+        )
+    if (
+        result.failure_kind is AgentProcessFailureKind.LAUNCH_ERROR
+        or result.returncode is None
+    ):
         return _blocked_structured_review(
             combined_output,
-            f"reviewer process failed to execute: {result.stderr}".strip(),
+            "reviewer process failed to execute (launch error)",
         )
     if result.returncode != 0:
         return _blocked_structured_review(

@@ -280,8 +280,21 @@ another task.
 | Wrong or missing `.venv` | Create/install the repository environment through the documented setup, then invoke the launcher with that `.venv` Python. Do not use system Python. |
 | Codex not found | Install/configure Codex outside the launcher or pass the intended executable with `--codex` or `AUTONOMOUS_PR_CODEX_EXE`. |
 | Multiple Windows fallback candidates | Choose the intended concrete executable explicitly with `--codex`; the launcher never guesses. |
-| `codex --version` failure, timeout, or malformed identity | Verify the selected executable manually and correct the path/installation. The launcher does not update or replace it. |
+| `codex --version` failure, timeout, malformed identity, or invalid UTF-8 | Verify the selected executable manually and correct the path/installation or output encoding. Identity decoding fails before harness delegation; the launcher does not update or replace it. |
 | Repository `.codex` refused | Remove the repository-local configuration from this execution boundary or use a separately reviewed future change; the launcher never ignores the guard. |
 | Local runtime `HEAD` is behind or ahead of captured `origin/main` | Leave the invocation `BLOCKED`, update the selected checkout manually outside it, then issue a new explicit `AUTONOMOUS_PR` invocation. Branch name is not the invariant; exact commit SHA is. |
 | Runtime root or pip-cache validation/probe fails | Remove a file/link/junction collision or correct host temp-path permissions so both launcher-owned directories are real, outside the repository, exact parent/child, writable, and removable. |
 | Outer-host permissions are insufficient | The outer Codex requests approval for the single launcher command before execution. If escalation is unavailable, forbidden, or denied, stop fail-closed; the launcher does not request, bypass, or manufacture permission, and there is no direct Git/GitHub fallback. |
+| Implementer/reviewer launch failure or non-zero process exit | Check the configured executable, permissions, and external tool setup. Process output cannot authorize continuation; there is no alternate executable or profile fallback. |
+| Successful reviewer stdout is invalid UTF-8 | Correct the reviewer's stdout encoding to strict UTF-8. No verdict is accepted from corrupted semantic output; stderr is diagnostic only and cannot supply a fallback verdict. |
+| Agent timeout | Inspect the external process state and resolve the cause before starting another run. Partial output cannot supply a verdict, and timeout does not prove all descendants stopped. Process-tree containment is separate work. |
+| Git/GitHub launch or output-decode failure | Check tool availability, execution permissions, and strict UTF-8 stdout/stderr. Treat any uncertain side effect as unresolved; the harness never retries or infers repository/PR/CI facts from lossy output. |
+| Deterministic verification output is invalid UTF-8 | Correct the verification tool's stdout/stderr encoding. This is terminal execution uncertainty, not a completed test rejection eligible for repair. Valid UTF-8 completed non-zero verification retains its existing repair behavior. |
+
+After correcting a terminal process failure, issue a new explicit invocation;
+the stopped run never resumes itself. Agent diagnostic streams may be decoded
+best-effort, including malformed implementer output, but all ordinary candidate
+gates still apply. Oversized retained/reported diagnostic excerpts keep the
+first and last 2048 source characters with a truncation marker; this does not
+limit subprocess capture or memory and does not truncate semantic reviewer
+input before parsing. Raw process transcripts are not CLI decision evidence.

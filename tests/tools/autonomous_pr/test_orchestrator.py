@@ -12,6 +12,7 @@ import pytest
 from tools.autonomous_pr import orchestrator as orch_module
 from tools.autonomous_pr import repository
 from tools.autonomous_pr import task_context
+from tools.autonomous_pr import agents as agent_module
 from tools.autonomous_pr.agents import (
     AgentInvocationResult,
     AgentInvocationSpec,
@@ -603,6 +604,52 @@ def test_verification_timeout_is_execution_uncertainty_without_captured_output(
     assert "execution state is uncertain" in str(exc_info.value)
     assert "unbounded captured output" not in str(exc_info.value)
     assert len(str(exc_info.value)) < 200
+
+
+def test_verification_decode_failure_cannot_manufacture_evidence(
+    env: Env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _default_config(
+        env, implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    def corrupt_run(*args: object, **kwargs: object) -> None:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+
+    monkeypatch.setattr(orch_module.subprocess, "run", corrupt_run)
+    monkeypatch.setattr(orch_module, "VerificationCommandResult", lambda **kw:
+        pytest.fail("decode failure manufactured verification evidence"))
+    with pytest.raises(repository.RepositoryError, match="semantic verification evidence is unusable"):
+        orch_module._run_one_verification_command(config, ("python", "-m", "pytest"))
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("invalid_output", [None, b"unusable output", 123])
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_verification_incomplete_text_capture_cannot_manufacture_evidence(
+    env: Env, monkeypatch: pytest.MonkeyPatch,
+    stream: str, invalid_output: object, returncode: int,
+) -> None:
+    config = _default_config(
+        env, implementer_spec=_implementer_spec(env.work, ""),
+        reviewer_spec=_reviewer_spec(env.work, ""),
+    )
+    calls = []
+
+    def incomplete_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        assert kwargs["text"] is True and kwargs["encoding"] == "utf-8"
+        assert "errors" not in kwargs
+        outputs = {"stdout": "passed", "stderr": ""}
+        outputs[stream] = invalid_output
+        return subprocess.CompletedProcess(argv, returncode, **outputs)
+
+    monkeypatch.setattr(orch_module.subprocess, "run", incomplete_run)
+    monkeypatch.setattr(orch_module, "VerificationCommandResult", lambda **kwargs:
+        pytest.fail("incomplete capture manufactured verification evidence"))
+    with pytest.raises(repository.RepositoryError, match="semantic verification evidence is unusable"):
+        orch_module._run_one_verification_command(config, ("python", "-m", "pytest"))
+    assert len(calls) == 1
 
 
 def test_verification_mixed_failure_then_execution_uncertainty_returns_no_evidence(
@@ -1852,6 +1899,154 @@ def test_public_run_repairs_pr129_closure_validation_incident_to_ready_stop(
         (env.work / "docs" / "TASK.md").read_text(encoding="utf-8")
     )
     assert terminal.tasks[-1].evidence == "PR #1"
+
+
+@pytest.mark.parametrize("role, failure, expected_reason", [
+    (AgentRole.REVIEWER, "timeout", "timed out"),
+    (AgentRole.REVIEWER, "launch", "failed to execute"),
+    (AgentRole.REVIEWER, "decode", "not valid UTF-8"),
+    (AgentRole.REVIEWER, "nonzero", "exited with status 7"),
+    (AgentRole.IMPLEMENTER, "timeout", "timed out"),
+    (AgentRole.IMPLEMENTER, "launch", "failed to execute"),
+    (AgentRole.IMPLEMENTER, "nonzero", "exited with status 7"),
+])
+def test_public_agent_failure_never_authorizes_acceptance_or_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    role: AgentRole, failure: str, expected_reason: str,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    base_sha = repository.head_sha(env.work)
+    gh_log = tmp_path / "agent-failure-gh.jsonl"
+    config = replace(_public_dispatch_config(env, selector=_TASK_ID),
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log))
+    sentinel_code = "# task46-process-sentinel"
+    if role is AgentRole.REVIEWER:
+        config = replace(config, reviewer_profiles=_profiles(_reviewer_spec(env.work, sentinel_code)))
+    else:
+        config = replace(config, implementer_profiles=_profiles(_implementer_spec(env.work, sentinel_code)))
+    real_run = agent_module.subprocess.run
+    failed_calls = []
+
+    def boundary_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes] | subprocess.CompletedProcess[str]:
+        if sentinel_code in argv:
+            failed_calls.append(argv)
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(argv, 1, output=b"APPROVED\xff", stderr=b"private transcript")
+            if failure == "launch":
+                raise PermissionError("private transcript")
+            return subprocess.CompletedProcess(argv, 0 if failure == "decode" else 7,
+                b"APPROVED\xff" if failure == "decode" else b"APPROVED", b"private transcript")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(agent_module.subprocess, "run", boundary_run)
+    result = run(config)
+    assert result.outcome is RunOutcome.BLOCKED
+    assert result.phase is (Phase.CHECKPOINT_REVIEW if role is AgentRole.REVIEWER else Phase.IMPLEMENTATION_CHECKPOINT)
+    assert expected_reason in result.blocked_reason
+    assert "private transcript" not in result.blocked_reason
+    assert result.pr_url is None and result.head_sha == base_sha
+    assert len(failed_calls) == 1
+    assert not result.blocked_reviews
+    assert all(metric.review_iterations == 0 for metric in result.review_metrics)
+    assert [decision.work_kind for decision in result.routing_decisions] == (
+        [AgentWorkKind.CHECKPOINT_IMPLEMENTATION, AgentWorkKind.CHECKPOINT_REVIEW]
+        if role is AgentRole.REVIEWER else [AgentWorkKind.CHECKPOINT_IMPLEMENTATION]
+    )
+    assert [json.loads(line)[:2] for line in gh_log.read_text(encoding="utf-8").splitlines()] == [["pr", "list"]]
+    assert result.delivery_branch is not None
+    with pytest.raises(repository.RepositoryError, match="remote delivery branch.*does not exist"):
+        repository.remote_branch_sha(env.work, result.delivery_branch)
+
+
+def test_public_diagnostic_bytes_still_require_all_ordinary_gates(tmp_path: Path) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    config = replace(_public_dispatch_config(env, selector=_TASK_ID),
+        implementer_profiles=_profiles(_implementer_spec(env.work,
+            _public_dispatch_implementer_code(_TASK_ID) +
+            "sys.stdout.buffer.write(b'notes\\xff')\nsys.stderr.buffer.write(b'error\\xfe')\n")),
+        reviewer_profiles=_profiles(_reviewer_spec(env.work,
+            "import sys\nsys.stdin.read()\nprint('APPROVED')\nsys.stderr.buffer.write(b'diagnostic\\xff')\n")),
+    )
+    result = run(config)
+    assert result.outcome is RunOutcome.STOP and result.phase is Phase.READY_FOR_HUMAN_MERGE
+    assert [metric.gate_id for metric in result.review_metrics] == [
+        "CP-1", "pre-closure-cumulative-review", "prospective-task-closure", "mode-c-final-cumulative-audit",
+    ]
+    assert all(metric.review_iterations == 1 and metric.last_reviewer_verdict is ReviewVerdict.APPROVED
+        for metric in result.review_metrics)
+    assert result.head_sha == repository.remote_branch_sha(env.work, result.delivery_branch)
+
+
+@pytest.mark.parametrize("failure", ["decode", "stdout", "stderr"])
+def test_public_full_verification_decode_failure_is_terminal_without_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    gh_log = tmp_path / "decode-failure-gh.jsonl"
+    config = replace(_public_dispatch_config(env, selector=_TASK_ID),
+        gh_command=_public_dispatch_gh_command(_TASK_ID, command_log=gh_log))
+    original = orch_module._run_one_verification_command
+    calls = 0
+
+    def verification(current_config: OrchestratorConfig, command: tuple[str, ...]) -> VerificationCommandResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return original(current_config, command)
+        def corrupt_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if failure == "decode":
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+            outputs = {"stdout": "passed", "stderr": ""}
+            outputs[failure] = None
+            return subprocess.CompletedProcess(argv, 0, **outputs)
+        with monkeypatch.context() as boundary:
+            boundary.setattr(orch_module.subprocess, "run", corrupt_run)
+            return original(current_config, command)
+
+    monkeypatch.setattr(orch_module, "_run_one_verification_command", verification)
+    result = run(config)
+    assert calls == 2 and result.outcome is RunOutcome.BLOCKED
+    assert result.phase is Phase.FULL_VERIFICATION
+    assert "semantic verification evidence is unusable" in result.blocked_reason
+    assert result.pr_url is None
+    assert [decision.work_kind for decision in result.routing_decisions] == [
+        AgentWorkKind.CHECKPOINT_IMPLEMENTATION, AgentWorkKind.CHECKPOINT_REVIEW,
+    ]
+    assert [json.loads(line)[:2] for line in gh_log.read_text(encoding="utf-8").splitlines()] == [["pr", "list"]]
+    assert result.head_sha == repository.remote_branch_sha(env.work, result.delivery_branch)
+
+
+@pytest.mark.parametrize("failure", ["decode", "launch", "stdout", "stderr"])
+def test_public_repository_process_uncertainty_stops_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    env = _make_public_dispatch_env(tmp_path)
+    base_sha = repository.head_sha(env.work)
+    original = repository.subprocess.run
+    calls = []
+
+    def failed_fetch(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["git", "fetch"]:
+            calls.append(argv)
+            if failure == "decode":
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+            if failure in {"stdout", "stderr"}:
+                outputs = {"stdout": "", "stderr": ""}
+                outputs[failure] = None
+                return subprocess.CompletedProcess(argv, 0, **outputs)
+            raise PermissionError("private process diagnostic")
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(repository.subprocess, "run", failed_fetch)
+    monkeypatch.setattr(orch_module, "run_implementer", lambda *args, **kw:
+        pytest.fail("preflight process failure reached an agent"))
+    monkeypatch.setattr(repository, "create_draft_pull_request", lambda *args, **kw:
+        pytest.fail("preflight failure created a PR"))
+    result = run(_public_dispatch_config(env, selector=_TASK_ID))
+    assert result.outcome is RunOutcome.BLOCKED and result.phase is Phase.PREFLIGHT
+    assert len(calls) == 1 and not result.routing_decisions
+    assert result.pr_url is None
+    assert repository.head_sha(env.work) == base_sha
 
 
 def test_public_run_preserves_metrics_on_explicit_reviewer_blocked(

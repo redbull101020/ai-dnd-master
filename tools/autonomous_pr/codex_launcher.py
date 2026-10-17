@@ -315,7 +315,16 @@ def _check_codex_identity(executable: Path) -> None:
         raise LauncherConfigurationError("Codex --version timed out") from exc
     except OSError as exc:
         raise LauncherConfigurationError(f"Codex --version failed: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise LauncherConfigurationError(
+            "Codex --version output is not valid UTF-8"
+        ) from exc
 
+    if not isinstance(completed.stdout, str) or not isinstance(completed.stderr, str):
+        raise LauncherConfigurationError(
+            "Codex --version output did not provide UTF-8 text "
+            "for both stdout and stderr"
+        )
     if completed.returncode != 0:
         raise LauncherConfigurationError(
             f"Codex --version exited with status {completed.returncode}"

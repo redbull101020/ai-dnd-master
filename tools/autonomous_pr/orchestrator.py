@@ -33,6 +33,7 @@ from .agents import (
     AgentInvocationResult,
     AgentInvocationSpec,
     AgentProfileConfig,
+    AgentProcessFailureKind,
     run_implementer,
     run_structured_reviewer,
 )
@@ -1379,12 +1380,15 @@ def execute_v2_checkpoints(
                 )
             except RepositoryError as exc:
                 return blocked(str(exc))
-            if impl_result.timed_out or impl_result.returncode != 0:
+            if (
+                impl_result.failure_kind is not None
+                or impl_result.timed_out
+                or impl_result.returncode != 0
+            ):
                 return blocked(
                     "implementer failed during v2 checkpoint "
                     f"{checkpoint.checkpoint_id}: "
-                    f"returncode={impl_result.returncode!r} "
-                    f"timed_out={impl_result.timed_out!r}"
+                    f"{_agent_process_failure_reason(impl_result)}"
                 )
 
             try:
@@ -1978,10 +1982,14 @@ def _execute_v2_late_repair(
         repository.verify_branch_head_unchanged(
             config.repo, before, context=f"{gate_id} implementer repair"
         )
-        if result.timed_out or result.returncode != 0:
+        if (
+            result.failure_kind is not None
+            or result.timed_out
+            or result.returncode != 0
+        ):
             raise _Blocked(
                 f"implementer failed during {gate_id}: "
-                f"returncode={result.returncode!r} timed_out={result.timed_out!r}"
+                f"{_agent_process_failure_reason(result)}"
             )
 
         patch = repository.build_checkpoint_patch_uncommitted(config.repo)
@@ -2922,8 +2930,15 @@ def _prepare_v2_unpublished_closure(
         repository.verify_branch_head_unchanged(
             config.repo, before, context="v2 Task Closure implementer invocation"
         )
-        if impl_result.timed_out or impl_result.returncode != 0:
-            raise _Blocked("implementer failed while preparing v2 Task Closure")
+        if (
+            impl_result.failure_kind is not None
+            or impl_result.timed_out
+            or impl_result.returncode != 0
+        ):
+            raise _Blocked(
+                "implementer failed while preparing v2 Task Closure: "
+                f"{_agent_process_failure_reason(impl_result)}"
+            )
         patch = repository.build_checkpoint_patch_uncommitted(config.repo)
         touched = repository.changed_paths(config.repo)
         if strict_closure_only_repair and not set(touched) <= _CLOSURE_ALLOWED_FILES:
@@ -3808,6 +3823,21 @@ def _run_verification_commands(
     )
 
 
+def _agent_process_failure_reason(result: AgentInvocationResult) -> str:
+    """Classify process status without projecting the agent transcript."""
+
+    if result.failure_kind is AgentProcessFailureKind.TIMEOUT or result.timed_out:
+        return "process timed out"
+    if result.failure_kind is AgentProcessFailureKind.OUTPUT_DECODE_ERROR:
+        return "semantic output is not valid UTF-8"
+    if (
+        result.failure_kind is AgentProcessFailureKind.LAUNCH_ERROR
+        or result.returncode is None
+    ):
+        return "process failed to execute (launch error)"
+    return f"process exited with status {result.returncode}"
+
+
 def _run_one_verification_command(
     config: OrchestratorConfig, command: tuple[str, ...]
 ) -> VerificationCommandResult:
@@ -3830,12 +3860,22 @@ def _run_one_verification_command(
             f"{type(exc).__name__} (errno={exc.errno!r}); check executable "
             "availability and permissions"
         ) from exc
+    except UnicodeDecodeError as exc:
+        raise RepositoryError(
+            "deterministic verification output is not valid UTF-8; "
+            "semantic verification evidence is unusable"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RepositoryError(
             "deterministic verification command timed out after "
             f"{config.verification_timeout_seconds:g} seconds; execution "
             "state is uncertain"
         ) from exc
+    if not isinstance(completed.stdout, str) or not isinstance(completed.stderr, str):
+        raise RepositoryError(
+            "deterministic verification output did not provide UTF-8 text "
+            "for both stdout and stderr; semantic verification evidence is unusable"
+        )
     return VerificationCommandResult(
         command=command,
         returncode=completed.returncode,

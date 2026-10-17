@@ -74,6 +74,212 @@ class GitEnv:
     work: Path
 
 
+@pytest.mark.parametrize("error, message", [
+    (FileNotFoundError("missing"), "required tool not found"),
+    (PermissionError("private diagnostic"), "PermissionError"),
+    (OSError("private diagnostic"), "OSError"),
+    (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid"), "not valid UTF-8"),
+    (subprocess.TimeoutExpired("git", 1), "ambiguous side effect"),
+])
+def test_repository_expected_process_failures_are_managed_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    error: BaseException, message: str,
+) -> None:
+    calls = []
+
+    def failed_run(argv: list[str], **kwargs: object) -> None:
+        calls.append(kwargs)
+        raise error
+
+    monkeypatch.setattr(repo_module.subprocess, "run", failed_run)
+    with pytest.raises(RepositoryError, match=message) as caught:
+        repo_module._run(["git", "status"], cwd=tmp_path)
+    assert len(calls) == 1
+    assert calls[0]["text"] is True and calls[0]["encoding"] == "utf-8"
+    assert "errors" not in calls[0]
+    assert "private diagnostic" not in str(caught.value)
+
+
+@pytest.mark.parametrize("boundary", ["git", "gh", "required-ci"])
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("invalid_output", [None, b"unusable output", 123])
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_repository_rejects_incomplete_text_capture_before_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    boundary: str, stream: str, invalid_output: object, returncode: int,
+) -> None:
+    outputs = {
+        "stdout": json.dumps([{"name": "ci", "state": "SUCCESS", "bucket": "pass"}]),
+        "stderr": "no required checks reported",
+    }
+    outputs[stream] = invalid_output
+    calls = []
+
+    def incomplete_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        assert kwargs["text"] is True and kwargs["encoding"] == "utf-8"
+        assert "errors" not in kwargs
+        return subprocess.CompletedProcess(argv, returncode, **outputs)
+
+    monkeypatch.setattr(repo_module.subprocess, "run", incomplete_run)
+    monkeypatch.setattr(repo_module, "_try_parse_checks_json", lambda *args:
+        pytest.fail("incomplete capture reached required-CI parsing"))
+    with pytest.raises(RepositoryError, match="UTF-8 text for both stdout and stderr"):
+        if boundary == "git":
+            repo_module.origin_main_sha(tmp_path)
+        elif boundary == "gh":
+            repo_module._gh(tmp_path, ["pr", "list"])
+        else:
+            repo_module.pr_required_checks(tmp_path, "1")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("boundary", ["git", "gh", "ref", "checks", "blob"])
+def test_repository_error_output_is_bounded_after_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str,
+) -> None:
+    source = "h" * 2048 + "omitted" * 2000 + "t" * 2048
+    result = subprocess.CompletedProcess(["tool"], 3, source, source)
+    monkeypatch.setattr(repo_module, "_run", lambda *args, **kwargs: result)
+    monkeypatch.setattr(repo_module, "_run_gh_pr_checks_required", lambda *args, **kw: result)
+    if boundary == "blob":
+        monkeypatch.setattr(repo_module.subprocess, "run", lambda *args, **kw:
+            subprocess.CompletedProcess(["git"], 3, b"", source.encode()))
+    with pytest.raises(RepositoryError) as caught:
+        if boundary == "git":
+            repo_module._git(tmp_path, ["status"])
+        elif boundary == "gh":
+            repo_module._gh(tmp_path, ["pr", "list"])
+        elif boundary == "ref":
+            repo_module._ref_exists(tmp_path, "refs/heads/test")
+        elif boundary == "checks":
+            repo_module.pr_required_checks(tmp_path, "1")
+        else:
+            repo_module._read_utf8_blob_exact(tmp_path, object_sha="sha", path="file", source_sha="head")
+    message = str(caught.value)
+    assert "h" * 2048 in message and "t" * 2048 in message
+    assert "omitted" not in message
+    assert "diagnostic truncated" in message
+    assert len(message) < 9000  # required-CI reports one excerpt per stream
+
+
+def test_required_ci_semantic_output_is_never_truncated_before_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checks = [{"name": "long-check" * 1000, "state": "SUCCESS", "bucket": "pass"}]
+    result = subprocess.CompletedProcess(["gh"], 0, json.dumps(checks), "no required checks")
+    monkeypatch.setattr(repo_module, "_run_gh_pr_checks_required", lambda *args, **kw: result)
+    observed = repo_module.pr_required_checks(tmp_path, "1")
+    assert observed.checks == checks
+    assert not observed.no_required_checks
+
+
+@pytest.mark.parametrize("error", [PermissionError("denied"), OSError("launch failed")])
+def test_exact_blob_reader_manages_generic_launch_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: OSError,
+) -> None:
+    def failed_run(*args: object, **kwargs: object) -> None:
+        assert "text" not in kwargs and "encoding" not in kwargs
+        raise error
+
+    monkeypatch.setattr(repo_module.subprocess, "run", failed_run)
+    with pytest.raises(RepositoryError, match="Git blob reader could not be executed"):
+        repo_module._read_utf8_blob_exact(tmp_path, object_sha="sha", path="file", source_sha="head")
+
+
+@pytest.mark.parametrize("command", ["add", "ls-files"])
+def test_isolated_index_decode_failure_preserves_real_index(
+    git_env: GitEnv, monkeypatch: pytest.MonkeyPatch, command: str,
+) -> None:
+    work = git_env.work
+    index = work / ".git" / "index"
+    original_index = index.read_bytes()
+    real_run = repo_module.subprocess.run
+    attempted = []
+
+    def corrupt_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["git", command]:
+            attempted.append(args)
+            assert kwargs["env"]["GIT_INDEX_FILE"] != str(index)
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(repo_module.subprocess, "run", corrupt_run)
+    with pytest.raises(RepositoryError, match="isolated-index Git output.*not valid UTF-8"):
+        repo_module.read_worktree_utf8_file_exact(work, "README.md")
+    assert len(attempted) == 1
+    assert index.read_bytes() == original_index
+
+
+@pytest.mark.parametrize("command", ["add", "ls-files"])
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("invalid_output", [None, b"unusable output", 123])
+def test_isolated_index_incomplete_text_capture_stops_before_blob_read(
+    git_env: GitEnv, monkeypatch: pytest.MonkeyPatch,
+    command: str, stream: str, invalid_output: object,
+) -> None:
+    work = git_env.work
+    index = work / ".git" / "index"
+    original_index = index.read_bytes()
+    original_worktree = (work / "README.md").read_bytes()
+    real_run = repo_module.subprocess.run
+    attempted = []
+
+    def incomplete_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[:2] in (["git", "add"], ["git", "ls-files"]):
+            attempted.append(args[1])
+        if args[:2] == ["git", command]:
+            assert kwargs["env"]["GIT_INDEX_FILE"] != str(index)
+            assert kwargs["text"] is True and kwargs["encoding"] == "utf-8"
+            assert "errors" not in kwargs
+            outputs = {"stdout": f"100644 {'a' * 40} 0\tREADME.md\0", "stderr": ""}
+            outputs[stream] = invalid_output
+            return subprocess.CompletedProcess(args, 0, **outputs)
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(repo_module.subprocess, "run", incomplete_run)
+    monkeypatch.setattr(repo_module, "_read_utf8_blob_exact", lambda *args, **kwargs:
+        pytest.fail("incomplete isolated-index capture reached blob reading"))
+    with pytest.raises(RepositoryError, match="isolated-index Git output.*both stdout and stderr"):
+        repo_module.read_worktree_utf8_file_exact(work, "README.md")
+    assert attempted == (["add"] if command == "add" else ["add", "ls-files"])
+    assert index.read_bytes() == original_index
+    assert (work / "README.md").read_bytes() == original_worktree
+
+
+def test_isolated_index_completed_failure_reports_bounded_diagnostics(
+    git_env: GitEnv, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "h" * 2048 + "omitted" * 2000 + "t" * 2048
+    real_run = repo_module.subprocess.run
+
+    def failed_add(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["git", "add"]:
+            return subprocess.CompletedProcess(args, 1, "", source)
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(repo_module.subprocess, "run", failed_add)
+    with pytest.raises(RepositoryError) as caught:
+        repo_module.read_worktree_utf8_file_exact(git_env.work, "README.md")
+    message = str(caught.value)
+    assert "h" * 2048 in message and "t" * 2048 in message
+    assert "omitted" not in message and len(message) < 4500
+
+
+def test_malformed_git_task_entry_reports_bounded_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "h" * 2048 + "omitted" * 2000 + "t" * 2048
+    sha = "a" * 40
+    monkeypatch.setattr(repo_module, "resolve_sha", lambda *args: sha)
+    monkeypatch.setattr(repo_module, "_git", lambda *args: source)
+    with pytest.raises(RepositoryError) as caught:
+        repo_module.list_task_files_at_commit(tmp_path, sha)
+    message = str(caught.value)
+    assert "h" * 2048 in message and "t" * 2048 in message
+    assert "omitted" not in message and len(message) < 4500
+
+
 @pytest.fixture
 def git_env(tmp_path: Path) -> GitEnv:
     origin = tmp_path / "origin.git"

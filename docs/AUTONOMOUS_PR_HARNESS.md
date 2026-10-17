@@ -969,15 +969,59 @@ review → CHANGES_REQUESTED → implementer repair → deterministic verificati
 ```
 
 At the deterministic verification subprocess boundary, only a process that
-successfully starts and completes produces a verification-command result. A
+successfully starts, completes, and supplies strict UTF-8 stdout/stderr
+produces a verification-command result. A
 real return code of zero passes that command; every real non-zero return code,
 including a negative operating-system/process return code, is an ordinary
 deterministic candidate-verification rejection. A launch or execution
-`OSError`, or expiration of the configured timeout, is instead verification
+`OSError`, expiration of the configured timeout, or semantic-output decode
+failure is instead verification
 execution uncertainty and fails closed terminally. Those exceptions never
 become a synthetic verification-command result with return code `-1`.
 A deterministic completed failure creates or implies no synthetic reviewer
 result.
+
+### External-process semantic and diagnostic output (TSK-0046)
+
+Process status precedes output interpretation. Agent stdin is strict UTF-8
+bytes; stdout/stderr are captured as bytes before role-specific decoding.
+Only a completed-zero reviewer stdout is semantic protocol input and must
+decode as strict UTF-8 before verdict/JSON parsing. Its stderr is diagnostic
+only and may be replacement-decoded. Implementer stdout/stderr are also
+diagnostic only: malformed diagnostic bytes alone do not reject a completed-
+zero implementer candidate, which still must pass repository scope,
+verification, and designated review gates.
+
+Agent timeout, launch failure, and successful-reviewer stdout decode failure
+are internal process failures (`TIMEOUT`, `LAUNCH_ERROR`,
+`OUTPUT_DECODE_ERROR`) with no return code. Completed non-zero exits retain
+their actual integer return code. Timeout/non-zero partial output, even an
+`APPROVED` token or valid-looking JSON, never reaches the semantic parser.
+These failures produce non-explicit terminal `BLOCKED`, without synthetic
+reviewer rationale, repair packet, review iteration, retry, or profile fallback.
+
+Git/GitHub stdout and stderr remain strict UTF-8, including required-CI
+special-state recognition from stderr. Parsing sees full semantic strings;
+invalid decoding or launch `OSError` raises `RepositoryError`. The isolated
+index and exact Git blob reader preserve their staging and exact-byte
+contracts. Deterministic verification decode failure is terminal uncertainty,
+never lossy repair evidence; completed non-zero valid UTF-8 retains the existing
+repair behavior. Codex identity decode failure is a launcher configuration
+error before delegation.
+
+Diagnostic-only streams may use best-effort UTF-8 replacement decoding.
+Each external-output excerpt retained as an agent diagnostic or projected
+into a repository error keeps at most 4096 source characters: first 2048
+and last 2048 with a fixed truncation marker when oversized. The marker is
+outside that source-character budget. Successful semantic reviewer output
+is never truncated before parsing. This bounds diagnostic projection, not
+subprocess capture, pipe buffers, memory, tokens, or repair work. Concise
+agent failure reasons and existing CLI diagnostic allowlists do not expose
+raw process transcripts, prompts, argv, environment, or credentials.
+
+Timeout does not prove descendant-process quiescence. Process-tree
+containment remains outside this task; timeout, launch, and semantic decode
+failures never authorize automatic retry, repair, cleanup, or resume.
 
 A **repair episode** starts with a `CHANGES_REQUESTED` verdict, an initial
 implementation before a gate's first review, or a completed deterministic
