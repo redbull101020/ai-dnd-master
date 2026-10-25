@@ -78,6 +78,7 @@
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
 | Packaged ruleset resources / Definition loading boundary | §12.26 |
+| Windows deterministic verification containment (contract; runtime not implemented) | [§13](#13-windows-verification-containment) |
 
 ### Оглавление / Table of contents
 
@@ -240,6 +241,7 @@
   * [12.24. Главный принцип сериализации / Core Serialization Principle](#1224-главный-принцип-сериализации--core-serialization-principle)
   * [12.25. Runtime Validation Policy](#1225-runtime-validation-policy)
   * [12.26. Packaged Ruleset Resources](#1226-packaged-ruleset-resources)
+* [13. Windows Verification Containment](#13-windows-verification-containment)
 
 </details>
 
@@ -13705,3 +13707,48 @@ lookup `ruleset_id="dnd_5e"`, `ruleset_version="5.1"`,
 через production `PackagedDefinitionSource()` без явного `resources_root`, и
 проверка `DefinitionNotFoundError` для отсутствующего Definition. Тест живёт
 в `tests/packaging/`.
+
+---
+
+## 13. Windows Verification Containment
+
+**Статус: канонический контракт отдельно от реализации.** C0 определяет
+требования к будущему Windows backend; этот документационный срез не реализует
+и не включает его. До отдельно reviewed MANUAL implementation действует
+существующий runtime. Предлагаемый diff становится опубликованным каноном
+только после отдельно разрешённой публикации в `main`.
+
+Scope — исключительно deterministic verification subprocesses checkpoint и
+Full verification внутри `AUTONOMOUS_PR`. Это внутренняя tooling/application
+infrastructure boundary, вне игрового Domain; Definitions, State, Commands,
+Events, State Ownership и gameplay randomness не меняются.
+
+H — существующий orchestrator и authoritative owner verification lifecycle;
+единственный дополнительный watcher W подчинён H. На один command invocation
+H создаёт два dedicated unnamed Job Objects: `J_supervision` содержит W и
+payload, nested `J_command` — payload и обычных descendants. H не входит в эти
+Jobs. Atomic suspended launch, restricted handle transfer и проверка membership
+до resume обязательны; uncontained fallback запрещён.
+
+Invariant принятия результата: H самостоятельно подтвердил root exit с
+реальным кодом, сохранил verified exit facts, checked-закрыл соответствующие
+process/thread references, подтвердил complete semantic stdout/stderr capture
+и quiescence `J_command` строго до execution deadline. W также обязан принять
+FINISH строго до этого deadline; одного своевременного E недостаточно.
+Затем требуются ACK после освобождения safety-critical capture resources,
+проверенные exit facts W с кодом 0, checked-close его references, quiescence
+`J_supervision` и оставшиеся обязательные closes до cleanup deadline.
+Любая собственная forced-termination попытка H/W необратимо исключает completed
+result; код 0 сам по себе не доказывает cleanup. Любая неопределённость —
+terminal `RepositoryError`, без synthetic
+verification result. Completed nonzero после всех проверок остаётся обычным
+verification rejection. Публичная схема `VerificationCommandResult` не меняется.
+
+Полный нормативный процессный контракт —
+[`AUTONOMOUS_PR_HARNESS.md` §37](AUTONOMOUS_PR_HARNESS.md#37-windows-verification-containment-contract-runtime-not-implemented),
+мотивация — [DEC-0055](DECISIONS.md#dec-0055--windows-deterministic-verification-has-an-owned-containment-boundary).
+Он не распространяется на `run_agent()`, Codex/MXC или Git/GitHub subprocesses,
+не меняет non-Windows execution и не утверждает universal process-tree
+containment, rollback побочных эффектов или hard-real-time native completion.
+Native validation требует отдельного explicit approval; публикация C0 сама
+по себе не разрешает implementation, native tests или production wiring.
