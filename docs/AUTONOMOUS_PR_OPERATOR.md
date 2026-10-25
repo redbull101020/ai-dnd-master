@@ -273,6 +273,41 @@ requires separate human authorization. A new run likewise requires a new
 explicit user instruction; the operator must not infer a retry or select
 another task.
 
+## Future Windows verification containment
+
+C0 defines a separate canonical contract in
+[Architecture §13](ARCHITECTURE.md#13-windows-verification-containment) and
+[Harness §37](AUTONOMOUS_PR_HARNESS.md#37-windows-verification-containment-contract-runtime-not-implemented).
+This proposed diff becomes published canon only through separately authorized
+review and merge to `main`; canonical publication is distinct from runtime
+delivery. The backend is **not implemented or enabled** by C0. Until separately
+reviewed MANUAL implementation, the existing timeout/capture behavior remains,
+and timeout does not prove descendant quiescence.
+
+The future H/W and dedicated-Job boundary applies only to deterministic
+verification. It does not make Agent/Codex/MXC timeouts safe or establish
+agent-tree containment. Any real Windows Job/pipe/process containment test
+requires separate explicit approval of the exact runtime command, environment
+and independent safety/cleanup plan under Harness §37.11. Default pytest/CI
+must not discover dangerous native tests automatically; mock success or skipped
+native cases are not proof. C0 publication alone permits neither those tests
+nor production wiring, Probe A/B or a live autonomous pilot.
+
+Verification execution uncertainty remains terminal: no automatic retry,
+repair, resumed run or reviewer/profile fallback. A responsive future backend
+may perform only the new contract's owned-Job cleanup; successful cleanup is
+not inferred from timeout or a termination request. No new CLI flag, workflow
+status or merge authority is introduced. The TSK-0046 troubleshooting guidance
+below still describes existing runtime behavior.
+
+The future W must accept FINISH strictly before the execution deadline, even
+when H established timely semantic completion. Own H/W forced-termination
+attempts irreversibly prohibit completed evidence; their Job termination code
+is reserved and nonzero. Code 0 alone proves neither cleanup nor normal worker
+finalization, and arbitrary foreign forced-zero exits cannot always be detected.
+Verified exit facts are cached before checked process-reference retirement and
+final Job sampling; the required native proof remains separately gated.
+
 ## Troubleshooting
 
 | Failure | Required operator action |
