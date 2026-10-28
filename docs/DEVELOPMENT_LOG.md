@@ -7867,3 +7867,19 @@ Accepted implementation verification: full pytest 3514 passed, 7 skipped
 files; `git diff --check` passed. Windows/MXC descendant-process containment
 remains a separate future probe. This closure is prospective pending review
 and human merge.
+
+## 2026-10-28 — TSK-0048: Prospective Task Closure (draft PR #139)
+
+Prepared MANUAL delivery in draft PR #139, implementation HEAD `2542ce2f018a5760c40d3e198a8d84fb5fbaf8e7`: the first dormant Windows verification Job ownership foundation under canonical C0 Architecture §13, Harness §37 and DEC-0055.
+
+Added checked Win32 ctypes ABI declarations and lazy API binding, ownership of two fresh unnamed empty Job Objects with exact KILL_ON_JOB_CLOSE configuration/readback, explicit preassignment handle accounting, fail-closed rollback and one-shot release, bounded diagnostics, and fake Win32 fault-injection/concurrency regressions.
+
+Independent implementation review approved the cumulative three-file candidate after CR-1 (separate uint32 WinError and nonnegative int32 errno validation) and CR-2 (atomic concurrent-release ownership) were resolved.
+
+Local verification: 189 focused tests passed; full pytest 3703 passed, 7 skipped due to existing Windows symlink privilege restrictions; configured mypy passed for 140 files; git diff checks passed.
+
+GitHub Actions workflow #40730252658 passed on ubuntu-latest: pytest for Python 3.12, 3.13 and 3.14, plus typecheck.
+
+No actual Windows Job/process containment tests, process creation/assignment, worker W, IPC, deadlines, quiescence or production orchestrator wiring were delivered. Native Windows validation requires separate explicit authorization. All 19 umbrella TSK-0047 acceptance cases remain open; this slice provides prerequisites only for cases 5, 12, 18 and 19. Gameplay, non-Windows verification behavior, public results, dependencies and Agent/Codex/MXC execution remain unchanged.
+
+This Task Closure is prospective and subject to independent Closure Review and separately authorized publication and human merge. TSK-0048 is not authoritative Done on main until the reviewed closure is merged.
