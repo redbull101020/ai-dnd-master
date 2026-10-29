@@ -11,7 +11,8 @@ from __future__ import annotations
 import ctypes
 import sys
 from collections.abc import Callable
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol
 
 from . import _windows_verification_native as native
 from ._windows_verification_native import (
@@ -144,6 +145,124 @@ def validate_abi() -> None:
         raise WindowsVerificationError(
             Stage.PREFLIGHT, Category.UNSUPPORTED_PLATFORM, cleanup_confirmed=True
         )
+
+
+def _validate_distinct_handles(values: tuple[int, ...]) -> None:
+    # Numeric/structural checks only; these are borrowed values, not OS evidence.
+    for value in values:
+        native.checked_handle(value, Stage.PREFLIGHT)
+    if len(set(values)) != len(values):
+        raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkerLaunchInputs:
+    """Closed W input labels; no provenance, rights or membership attestation."""
+
+    supervision_job: int = field(repr=False)
+    bootstrap_mapping: int = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_distinct_handles((self.supervision_job, self.bootstrap_mapping))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PayloadLaunchInputs:
+    """Closed payload labels; stream and Job roles remain caller assertions."""
+
+    supervision_job: int = field(repr=False)
+    command_job: int = field(repr=False)
+    stdin: int = field(repr=False)
+    stdout: int = field(repr=False)
+    stderr: int = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_distinct_handles((
+            self.supervision_job, self.command_job, self.stdin, self.stdout, self.stderr,
+        ))
+
+
+class _HandleValues(ctypes.Array):
+    """Private persistent HANDLE storage with no Python item-write interface.
+
+    ctypes memory is not a security boundary against arbitrary pointer writes.
+    Only the future trusted transaction may borrow these private buffers; no
+    public pointer/use interface or initialized attribute resource exists here.
+    """
+
+    _type_ = HANDLE
+    _length_ = 0
+
+    def __setitem__(self, index: Any, value: Any) -> None:
+        raise TypeError("immutable_handle_values")
+
+    def __repr__(self) -> str:
+        return "HandleValues()"
+
+
+class _OneHandleValues(_HandleValues):
+    _length_ = 1
+
+
+class _TwoHandleValues(_HandleValues):
+    _length_ = 2
+
+
+class _ThreeHandleValues(_HandleValues):
+    _length_ = 3
+
+
+@dataclass(frozen=True, slots=True)
+class _LaunchAttributeValues:
+    """Pins Python storage only; does not own, configure or close OS handles.
+
+    The startup structure is private writable transaction storage. In CP-2a
+    its list pointer remains NULL: this is not a prepared attribute resource.
+    """
+
+    role: Literal["worker", "payload"]
+    _job_values: _HandleValues = field(repr=False)
+    _inherited_values: _HandleValues = field(repr=False)
+    _startup_info: STARTUPINFOEXW = field(repr=False)
+
+
+def prepare_worker_values(inputs: WorkerLaunchInputs) -> _LaunchAttributeValues:
+    """Prepare W's fixed one-Job/one-mapping values without any native call."""
+    if type(inputs) is not WorkerLaunchInputs:
+        raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+    # Revalidate at the preparation boundary, before narrowing into ctypes,
+    # even if a caller bypassed the frozen input object's normal constructor.
+    _validate_distinct_handles((inputs.supervision_job, inputs.bootstrap_mapping))
+    validate_abi()
+    jobs = _OneHandleValues.from_buffer_copy(HANDLE(inputs.supervision_job))
+    inherited = _OneHandleValues.from_buffer_copy(HANDLE(inputs.bootstrap_mapping))
+    startup = STARTUPINFOEXW()
+    startup.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
+    # W has no invented standard-I/O policy; reserved fields/list stay zero.
+    return _LaunchAttributeValues("worker", jobs, inherited, startup)
+
+
+def prepare_payload_values(inputs: PayloadLaunchInputs) -> _LaunchAttributeValues:
+    """Prepare fixed supervision/command and stdin/stdout/stderr order only."""
+    if type(inputs) is not PayloadLaunchInputs:
+        raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+    _validate_distinct_handles((
+        inputs.supervision_job, inputs.command_job, inputs.stdin, inputs.stdout, inputs.stderr,
+    ))
+    validate_abi()
+    jobs = _TwoHandleValues.from_buffer_copy(
+        (HANDLE * 2)(inputs.supervision_job, inputs.command_job)
+    )
+    inherited = _ThreeHandleValues.from_buffer_copy(
+        (HANDLE * 3)(inputs.stdin, inputs.stdout, inputs.stderr)
+    )
+    startup = STARTUPINFOEXW()
+    startup.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
+    startup.StartupInfo.hStdInput = inputs.stdin
+    startup.StartupInfo.hStdOutput = inputs.stdout
+    startup.StartupInfo.hStdError = inputs.stderr
+    return _LaunchAttributeValues("payload", jobs, inherited, startup)
 
 
 class AttributeNativeApi(Protocol):

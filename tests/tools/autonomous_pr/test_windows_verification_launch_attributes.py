@@ -1,12 +1,16 @@
-"""CP-1 only: portable ctypes and injected fake API, including on Windows."""
+"""CP-1 / CP-2a: pure ctypes and injected fake API, including on Windows."""
 
 from __future__ import annotations
 
 import ast
 import ctypes
+import gc
 import importlib.util
 import sys
 import _ctypes
+import weakref
+from dataclasses import FrozenInstanceError, fields
+from itertools import combinations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -617,3 +621,258 @@ def test_dormant_boundary_and_native_symbol_surface() -> None:
         if isinstance(node, ast.Attribute):
             assert node.attr not in {"CreateProcessW", "ResumeThread", "AssignProcessToJobObject",
                                      "IsProcessInJob", "TerminateJobObject", "CloseHandle"}
+
+
+WORKER_HANDLES = {"supervision_job": 0x1100, "bootstrap_mapping": 0x4400}
+PAYLOAD_HANDLES = {
+    "supervision_job": 0x1100, "command_job": 0x2200,
+    "stdin": 0x5500, "stdout": 0x6600, "stderr": 0x7700,
+}
+ROLE_CASES = (
+    (attributes.WorkerLaunchInputs, attributes.prepare_worker_values, WORKER_HANDLES),
+    (attributes.PayloadLaunchInputs, attributes.prepare_payload_values, PAYLOAD_HANDLES),
+)
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+def test_role_shapes_are_closed_keyword_only_frozen_and_redacted(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+) -> None:
+    inputs = input_type(**handles)
+    assert {field.name for field in fields(inputs)} == set(handles)
+    assert all(field.kw_only and not field.repr for field in fields(inputs))
+    assert repr(inputs) == f"{input_type.__name__}()"
+    assert not hasattr(inputs, "__dict__")
+    for name in handles:
+        with pytest.raises(FrozenInstanceError):
+            setattr(inputs, name, 0x9900)
+        with pytest.raises(FrozenInstanceError):
+            delattr(inputs, name)
+    prepared = prepare(inputs)
+    assert repr(prepared) in (
+        "_LaunchAttributeValues(role='worker')", "_LaunchAttributeValues(role='payload')",
+    )
+    assert not hasattr(prepared, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        prepared._job_values = None
+    with pytest.raises(FrozenInstanceError):
+        prepared.role = "other"
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+def test_missing_extra_and_unlabeled_fields_are_rejected(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+) -> None:
+    for missing in handles:
+        incomplete = {name: value for name, value in handles.items() if name != missing}
+        with pytest.raises(TypeError):
+            input_type(**incomplete)
+    for extra in ("other", "job_handles", "inherited_handles", "role"):
+        with pytest.raises(TypeError) as caught:
+            input_type(**handles, **{extra: 0x12345678})
+        assert "305419896" not in str(caught.value)
+    with pytest.raises(TypeError):
+        input_type(*handles.values())
+    with pytest.raises(TypeError):
+        input_type(handles)
+
+
+class IntegerSubclass(int):
+    pass
+
+
+class UntrustedHandle:
+    def __bool__(self) -> bool:
+        raise AssertionError("must not test handle truthiness")
+
+    def __int__(self) -> int:
+        raise AssertionError("must not coerce handles")
+
+    def __repr__(self) -> str:
+        raise AssertionError("must not render a rejected handle")
+
+
+INVALID_HANDLE_VALUES = (
+    0, -1, -2, -3, -4, -5, -(1 << 63),
+    1 << 63, (1 << 64) - 1, 1 << 64, 1 << 200,
+    None, True, False, 4352.0, "secret handle/argv/env", b"secret",
+    ctypes.c_void_p(0x1100), ctypes.c_uint64(0x1100), IntegerSubclass(0x1100),
+    [], {}, (0x1100,), UntrustedHandle(),
+)
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+@pytest.mark.parametrize("bad", INVALID_HANDLE_VALUES)
+def test_every_role_field_rejects_invalid_numbers_and_python_types(
+    input_type: Any, prepare: Any, handles: dict[str, int], bad: Any,
+) -> None:
+    for name in handles:
+        candidate = dict(handles)
+        candidate[name] = bad
+        with pytest.raises(WindowsVerificationError) as caught:
+            input_type(**candidate)
+        assert caught.value.stage is Stage.PREFLIGHT
+        assert caught.value.category is Category.INVALID_HANDLE
+        assert str(caught.value) == "preflight/invalid_handle"
+        assert "secret" not in repr(caught.value)
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+def test_all_duplicate_and_cross_list_overlap_pairs_are_rejected(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+) -> None:
+    for first, second in combinations(handles, 2):
+        candidate = dict(handles)
+        candidate[second] = candidate[first]
+        with pytest.raises(WindowsVerificationError) as caught:
+            input_type(**candidate)
+        assert caught.value.stage is Stage.PREFLIGHT
+        assert caught.value.category is Category.OWNERSHIP
+        assert str(caught.value) == "preflight/ownership"
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+def test_preparation_revalidates_before_ctypes_narrowing(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+) -> None:
+    for name in handles:
+        inputs = input_type(**handles)
+        # A forged/deserialized object must not make bool/overflow valid by
+        # converting it to a HANDLE. This bypass is outside the normal API.
+        object.__setattr__(inputs, name, True)
+        with pytest.raises(WindowsVerificationError) as caught:
+            prepare(inputs)
+        assert caught.value.category is Category.INVALID_HANDLE
+    inputs = input_type(**handles)
+    names = list(handles)
+    object.__setattr__(inputs, names[-1], handles[names[0]])
+    with pytest.raises(WindowsVerificationError) as caught:
+        prepare(inputs)
+    assert caught.value.category is Category.OWNERSHIP
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+def test_prepare_does_not_accept_arbitrary_lists_mappings_objects_or_subclasses(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+) -> None:
+    class ExtraInputs(input_type):
+        pass
+    for candidate in (None, list(handles.values()), tuple(handles.values()), handles,
+                      SimpleNamespace(**handles), ExtraInputs(**handles)):
+        with pytest.raises(WindowsVerificationError) as caught:
+            prepare(candidate)
+        assert caught.value.stage is Stage.PREFLIGHT
+        assert caught.value.category is Category.OWNERSHIP
+    other = (attributes.PayloadLaunchInputs(**PAYLOAD_HANDLES)
+             if input_type is attributes.WorkerLaunchInputs else
+             attributes.WorkerLaunchInputs(**WORKER_HANDLES))
+    with pytest.raises(WindowsVerificationError):
+        prepare(other)
+
+
+def test_worker_values_have_only_supervision_and_bootstrap_without_stdio_policy() -> None:
+    prepared = attributes.prepare_worker_values(attributes.WorkerLaunchInputs(**WORKER_HANDLES))
+    assert prepared.role == "worker"
+    assert list(prepared._job_values) == [0x1100]
+    assert list(prepared._inherited_values) == [0x4400]
+    assert ctypes.sizeof(prepared._job_values) == 8
+    assert ctypes.sizeof(prepared._inherited_values) == 8
+    startup = prepared._startup_info
+    expected = attributes.STARTUPINFOEXW()
+    expected.StartupInfo.cb = 112
+    assert bytes(startup) == bytes(expected)
+    assert startup.lpAttributeList is None
+    assert startup.StartupInfo.dwFlags == 0
+    assert startup.StartupInfo.hStdInput is None
+    assert startup.StartupInfo.hStdOutput is None
+    assert startup.StartupInfo.hStdError is None
+
+
+def test_payload_values_fix_job_stream_order_and_exact_stdio_fields() -> None:
+    # Keyword insertion/numeric order must not define the two native orders.
+    inputs = attributes.PayloadLaunchInputs(
+        stderr=0x3300, command_job=0x2200, stdout=0x4400,
+        stdin=0x5500, supervision_job=0x6600,
+    )
+    prepared = attributes.prepare_payload_values(inputs)
+    assert prepared.role == "payload"
+    assert list(prepared._job_values) == [0x6600, 0x2200]
+    assert list(prepared._inherited_values) == [0x5500, 0x4400, 0x3300]
+    assert ctypes.sizeof(prepared._job_values) == 16
+    assert ctypes.sizeof(prepared._inherited_values) == 24
+    expected = attributes.STARTUPINFOEXW()
+    expected.StartupInfo.cb = 112
+    expected.StartupInfo.dwFlags = 0x100
+    expected.StartupInfo.hStdInput = 0x5500
+    expected.StartupInfo.hStdOutput = 0x4400
+    expected.StartupInfo.hStdError = 0x3300
+    assert bytes(prepared._startup_info) == bytes(expected)
+    assert prepared._startup_info.lpAttributeList is None
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+def test_value_storage_is_persistent_aligned_redacted_and_item_immutable(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+) -> None:
+    inputs = input_type(**handles)
+    prepared = prepare(inputs)
+    storage = (prepared._job_values, prepared._inherited_values, prepared._startup_info)
+    refs = tuple(weakref.ref(value) for value in storage)
+    snapshots = tuple(bytes(value) for value in storage)
+    addresses = tuple(ctypes.addressof(value) for value in storage)
+    assert all(address % 8 == 0 for address in addresses)
+    for values in (prepared._job_values, prepared._inherited_values):
+        assert repr(values) == "HandleValues()"
+        assert values._type_ is attributes.HANDLE
+        with pytest.raises(TypeError, match="immutable_handle_values"):
+            values[0] = 0x9900
+        with pytest.raises(TypeError, match="immutable_handle_values"):
+            values[:] = [0x9900] * len(values)
+    rendered = repr(inputs) + repr(prepared) + repr(prepared._job_values) + repr(prepared._inherited_values)
+    assert "0x" not in rendered
+    assert all(str(handle) not in rendered for handle in handles.values())
+    del inputs, storage, values
+    gc.collect()
+    assert all(ref() is not None for ref in refs)
+    assert tuple(bytes(ref()) for ref in refs) == snapshots
+    assert tuple(ctypes.addressof(ref()) for ref in refs) == addresses
+
+
+@pytest.mark.parametrize("input_type,prepare,handles", ROLE_CASES)
+def test_each_preparation_owns_separate_python_storage_only(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+) -> None:
+    inputs = input_type(**handles)
+    first = prepare(inputs)
+    second = prepare(inputs)
+    for name in ("_job_values", "_inherited_values", "_startup_info"):
+        assert getattr(first, name) is not getattr(second, name)
+        assert bytes(getattr(first, name)) == bytes(getattr(second, name))
+    second._startup_info.StartupInfo.cb = 0
+    assert first._startup_info.StartupInfo.cb == 112
+
+
+def test_structurally_valid_labels_are_not_os_capability_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Any path to checked native acquisition/operations is forbidden here too,
+    # even if it would otherwise use this test module's fake DLL.
+    monkeypatch.setattr(attributes, "load_native_api", forbidden_native)
+    monkeypatch.setattr(attributes, "CheckedAttributeApi", forbidden_native)
+    monkeypatch.setattr(attributes.native, "load_native_api", forbidden_native)
+    monkeypatch.setattr(attributes.native, "CheckedJobApi", forbidden_native)
+    # Numeric edge values are deliberately not claims about real OS objects.
+    worker = attributes.prepare_worker_values(attributes.WorkerLaunchInputs(
+        supervision_job=1, bootstrap_mapping=(1 << 63) - 1,
+    ))
+    assert list(worker._job_values) == [1]
+    assert list(worker._inherited_values) == [(1 << 63) - 1]
+    # Swapping valid labels cannot be detected without a trusted OS ledger.
+    payload = attributes.prepare_payload_values(attributes.PayloadLaunchInputs(
+        supervision_job=0x2200, command_job=0x1100,
+        stdin=0x5500, stdout=0x6600, stderr=0x7700,
+    ))
+    assert list(payload._job_values) == [0x2200, 0x1100]
+    for prepared in (worker, payload):
+        assert prepared._startup_info.lpAttributeList is None
+        assert not hasattr(prepared, "release")
+        assert not hasattr(prepared, "launch")
+    assert not hasattr(attributes, "PreparedLaunchAttributes")
