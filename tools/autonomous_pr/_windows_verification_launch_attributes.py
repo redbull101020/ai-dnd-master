@@ -1,9 +1,9 @@
 """Dormant x64 startup/creation-attribute ABI (Architecture §13 / Harness §37).
 
-Import is portable and loads no DLL. These checked primitives neither allocate
-an attribute list nor own its lifetime or borrowed handles. A future transaction
-must pin buffers, track successful initialization, and serialize use/retirement.
-There is no process launcher or production integration here.
+Import is portable and loads no DLL. The role-specific transaction owns only an
+initialized attribute list and its pinned Python storage, never borrowed handles.
+It exposes no process-use interface; future launch must serialize pointer use
+against retirement. There is no process launcher or production integration here.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import ctypes
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
+from threading import Lock
 from typing import Any, Literal, Protocol
 
 from . import _windows_verification_native as native
@@ -186,7 +188,7 @@ class _HandleValues(ctypes.Array):
     """Private persistent HANDLE storage with no Python item-write interface.
 
     ctypes memory is not a security boundary against arbitrary pointer writes.
-    Only the future trusted transaction may borrow these private buffers; no
+    Only the trusted attribute transaction may borrow these private buffers; no
     public pointer/use interface or initialized attribute resource exists here.
     """
 
@@ -216,8 +218,8 @@ class _ThreeHandleValues(_HandleValues):
 class _LaunchAttributeValues:
     """Pins Python storage only; does not own, configure or close OS handles.
 
-    The startup structure is private writable transaction storage. In CP-2a
-    its list pointer remains NULL: this is not a prepared attribute resource.
+    Pure preparation leaves the private startup list pointer NULL. The checked
+    transaction fills it only after both updates; values alone are no resource.
     """
 
     role: Literal["worker", "payload"]
@@ -269,7 +271,8 @@ class AttributeNativeApi(Protocol):
     def required_size(self) -> int: ...
 
     def initialize_attribute_list(
-        self, attribute_list: ctypes.c_void_p, size: SIZE_T
+        self, attribute_list: ctypes.c_void_p, size: SIZE_T,
+        *, _outcome: _InitializationOutcome | None = None,
     ) -> None: ...
 
     def update_attribute(
@@ -367,12 +370,13 @@ class CheckedAttributeApi:
         return size.value
 
     def initialize_attribute_list(
-        self, attribute_list: ctypes.c_void_p, size: SIZE_T
+        self, attribute_list: ctypes.c_void_p, size: SIZE_T,
+        *, _outcome: _InitializationOutcome | None = None,
     ) -> None:
         """On return initialization succeeded; size remains an in/out scalar.
 
-        The future owner must record that fact BEFORE validating the returned
-        size or doing other fallible work, so those failures still delete once.
+        An owned transaction preregisters _outcome; record valid native success
+        before returning to fallible Python-side size/setup/publication work.
         """
         _checked_pointer(attribute_list, Stage.PREFLIGHT)
         if type(size) is not SIZE_T or not 0 < size.value <= MAX_ATTRIBUTE_LIST_BYTES:
@@ -381,6 +385,15 @@ class CheckedAttributeApi:
             self._initialize, Stage.PREFLIGHT,
             attribute_list, ATTRIBUTE_COUNT, 0, ctypes.byref(size),
         )
+        if type(status) is int and status == 0:
+            failure = self._failure()
+            if _outcome is not None:
+                _outcome.state = "failed"
+            raise failure
+        if type(status) is int and -(1 << 31) <= status < (1 << 31):
+            if _outcome is not None:
+                _outcome.state = "initialized"
+            return
         self._check_status(status)
 
     def update_attribute(
@@ -443,3 +456,217 @@ def load_native_api(
         failure.cleanup_confirmed = True
         raise failure from None
     return CheckedAttributeApi(dll, reader)
+
+
+@dataclass(slots=True)
+class _InitializationOutcome:
+    # Written at the checked native boundary, before returning to the builder.
+    # An interrupted/malformed wrapper return cannot prove initialization failed.
+    state: Literal["pending", "failed", "initialized"] = "pending"
+
+
+class _AttributeState(str, Enum):
+    BUILDING = "building"
+    READY = "ready"
+    RETIRING = "retiring"
+    RETIRED = "retired"
+    UNCERTAIN = "uncertain"
+
+
+@dataclass(eq=False, slots=True, weakref_slot=True, repr=False)
+class _AttributeResource:
+    api: AttributeNativeApi
+    buffer: ctypes.Array | None
+    values: _LaunchAttributeValues | None
+    outcome: _InitializationOutcome = field(default_factory=_InitializationOutcome)
+    state: _AttributeState = _AttributeState.BUILDING
+    initialization_attempted: bool = False
+    lock: Any = field(default_factory=Lock)
+
+    def __repr__(self) -> str:
+        return f"AttributeResource(state='{self.state.value}')"
+
+
+# Register BEFORE initialization, so retaining an uncertain resource never needs
+# a fallible insertion during error handling. UNCERTAIN entries are the private
+# process-lifetime quarantine; no finalizer, retry or public drain exists.
+_RESOURCE_LOCK = Lock()
+_PINNED_RESOURCES: set[_AttributeResource] = set()
+
+
+def _register_resource(resource: _AttributeResource) -> None:
+    with _RESOURCE_LOCK:
+        _PINNED_RESOURCES.add(resource)
+
+
+def _discard_resource(resource: _AttributeResource) -> None:
+    # Used only after confirmed unsuccessful Initialize or normally returned VOID
+    # Delete (or before initialization was attempted). No native resource is live.
+    with resource.lock:
+        if resource.values is not None:
+            resource.values._startup_info.lpAttributeList = None
+            resource.values._startup_info.StartupInfo.cb = 0
+        resource.buffer = None
+        resource.values = None
+        resource.state = _AttributeState.RETIRED
+    with _RESOURCE_LOCK:
+        _PINNED_RESOURCES.discard(resource)
+
+
+def _resource_pointer(resource: _AttributeResource) -> ctypes.c_void_p:
+    if resource.buffer is None:
+        raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+    # Unlike cast(buffer), this pointer creates no independent buffer owner.
+    return ctypes.c_void_p(ctypes.addressof(resource.buffer))
+
+
+def _retire_resource(
+    resource: _AttributeResource, *, only_ready: bool,
+) -> WindowsVerificationError | None:
+    with resource.lock:
+        eligible = resource.state is _AttributeState.READY or (
+            not only_ready and resource.state is _AttributeState.BUILDING
+        )
+        if not eligible or resource.outcome.state != "initialized":
+            return WindowsVerificationError(
+                Stage.CLOSE, Category.OWNERSHIP,
+                cleanup_confirmed=resource.state is _AttributeState.RETIRED,
+            )
+        # Claim the attempt while locked, then release before invoking external
+        # code. Concurrent/reentrant contenders cannot wait for or repeat Delete.
+        resource.state = _AttributeState.RETIRING
+    try:
+        resource.api.delete_attribute_list(_resource_pointer(resource))
+        _discard_resource(resource)
+    except BaseException as error:
+        with resource.lock:
+            resource.state = _AttributeState.UNCERTAIN
+        return sanitized_error(error, Stage.CLEANUP, Category.UNCERTAIN_STATE)
+    return None
+
+
+class PreparedLaunchAttributes:
+    """Opaque, fully configured attribute-list owner; no process-use interface.
+
+    Owns only initialized list storage and its Python backing buffers. Job and
+    stream handles remain borrowed. Future launch must serialize use against
+    retirement explicitly; no pointer, handle getter or transfer exists here.
+    """
+
+    __slots__ = ("_resource",)
+
+    def __init__(self, resource: _AttributeResource) -> None:
+        if type(resource) is not _AttributeResource:
+            raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+        with resource.lock:
+            if resource.state is not _AttributeState.READY:
+                raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+        self._resource = resource
+
+    def __repr__(self) -> str:
+        return "PreparedLaunchAttributes()"
+
+    @property
+    def ownership(self) -> _AttributeState:
+        with self._resource.lock:
+            return self._resource.state
+
+    def release(self) -> None:
+        """One explicit VOID deletion attempt; no OS quiescence claim."""
+        failure = _retire_resource(self._resource, only_ready=True)
+        if failure is not None:
+            raise failure from None
+
+
+def _allocate_attribute_buffer(size: int) -> ctypes.Array:
+    # uint64 storage supplies alignment without guessing the opaque native layout.
+    return (ctypes.c_uint64 * ((size + 7) // 8))()
+
+
+def _complete_startup(resource: _AttributeResource) -> None:
+    if resource.values is None:
+        raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+    startup = resource.values._startup_info
+    startup.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
+    startup.lpAttributeList = _resource_pointer(resource).value
+
+
+def _build_attributes(
+    inputs: WorkerLaunchInputs | PayloadLaunchInputs, api: AttributeNativeApi,
+    *, role: Literal["worker", "payload"],
+) -> PreparedLaunchAttributes:
+    resource: _AttributeResource | None = None
+    try:
+        if role == "worker":
+            values = prepare_worker_values(inputs)  # type: ignore[arg-type]
+        else:
+            values = prepare_payload_values(inputs)  # type: ignore[arg-type]
+        for name in ("required_size", "initialize_attribute_list", "update_attribute", "delete_attribute_list"):
+            if not callable(getattr(api, name, None)):
+                raise WindowsVerificationError(Stage.PREFLIGHT, Category.OS_API)
+        required = api.required_size()
+        if type(required) is not int or not 0 < required <= MAX_ATTRIBUTE_LIST_BYTES:
+            raise WindowsVerificationError(Stage.PREFLIGHT, Category.RESOURCE)
+        buffer = _allocate_attribute_buffer(required)
+        if (not isinstance(buffer, ctypes.Array)
+                or not required <= ctypes.sizeof(buffer) <= MAX_ATTRIBUTE_LIST_BYTES
+                or ctypes.addressof(buffer) % 8 != 0
+                or any(bytes(buffer))):
+            raise WindowsVerificationError(Stage.PREFLIGHT, Category.RESOURCE)
+        resource = _AttributeResource(api, buffer, values)
+        _register_resource(resource)
+        size = SIZE_T(required)
+        resource.initialization_attempted = True
+        api.initialize_attribute_list(
+            _resource_pointer(resource), size, _outcome=resource.outcome,
+        )
+        if resource.outcome.state != "initialized" or size.value != required:
+            raise WindowsVerificationError(Stage.PREFLIGHT, Category.UNCERTAIN_STATE)
+        api.update_attribute(
+            _resource_pointer(resource), PROC_THREAD_ATTRIBUTE_JOB_LIST,
+            ctypes.c_void_p(ctypes.addressof(values._job_values)),
+            ctypes.sizeof(values._job_values),
+        )
+        api.update_attribute(
+            _resource_pointer(resource), PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            ctypes.c_void_p(ctypes.addressof(values._inherited_values)),
+            ctypes.sizeof(values._inherited_values),
+        )
+        _complete_startup(resource)
+        with resource.lock:
+            resource.state = _AttributeState.READY
+        return PreparedLaunchAttributes(resource)
+    except BaseException as error:
+        primary = error if isinstance(error, WindowsVerificationError) else sanitized_error(
+            error, Stage.PREFLIGHT,
+            Category.RESOURCE if isinstance(error, MemoryError) else Category.UNCERTAIN_STATE,
+        )
+        if resource is None:
+            primary.cleanup_confirmed = True
+        elif resource.outcome.state == "initialized":
+            secondary = _retire_resource(resource, only_ready=False)
+            if secondary is not None:
+                primary.cleanup_failures = (secondary.diagnostic(),)
+            primary.cleanup_confirmed = resource.state is _AttributeState.RETIRED
+        elif resource.outcome.state == "failed" or not resource.initialization_attempted:
+            _discard_resource(resource)
+            primary.cleanup_confirmed = True
+        else:
+            # The checked boundary never confirmed success or failure. Do not
+            # Delete an unproven list, release its buffers or report cleanup.
+            with resource.lock:
+                resource.state = _AttributeState.UNCERTAIN
+            primary.cleanup_confirmed = False
+        raise primary from None
+
+
+def prepare_worker_attributes(
+    inputs: WorkerLaunchInputs, api: AttributeNativeApi,
+) -> PreparedLaunchAttributes:
+    return _build_attributes(inputs, api, role="worker")
+
+
+def prepare_payload_attributes(
+    inputs: PayloadLaunchInputs, api: AttributeNativeApi,
+) -> PreparedLaunchAttributes:
+    return _build_attributes(inputs, api, role="payload")

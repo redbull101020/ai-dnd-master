@@ -1,4 +1,4 @@
-"""CP-1 / CP-2a: pure ctypes and injected fake API, including on Windows."""
+"""TSK-0049: pure ctypes and injected fake API, including on Windows."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import weakref
 from dataclasses import FrozenInstanceError, fields
 from itertools import combinations
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 from typing import Any
 
@@ -599,7 +600,8 @@ def test_fresh_import_with_blocked_loaders_and_no_windows_symbols(monkeypatch: p
     monkeypatch.setitem(sys.modules, name, module)
     spec.loader.exec_module(module)
     module.validate_abi()
-    assert not hasattr(module, "PreparedLaunchAttributes")
+    assert not hasattr(module.PreparedLaunchAttributes, "launch")
+    assert not hasattr(module.PreparedLaunchAttributes, "pointer")
 
 
 def test_dormant_boundary_and_native_symbol_surface() -> None:
@@ -875,4 +877,456 @@ def test_structurally_valid_labels_are_not_os_capability_proof(monkeypatch: pyte
         assert prepared._startup_info.lpAttributeList is None
         assert not hasattr(prepared, "release")
         assert not hasattr(prepared, "launch")
-    assert not hasattr(attributes, "PreparedLaunchAttributes")
+    assert not isinstance(worker, attributes.PreparedLaunchAttributes)
+    assert not isinstance(payload, attributes.PreparedLaunchAttributes)
+
+
+class TransactionDLL(FakeDLL):
+    """Inspect actual arguments/storage without retaining the borrowed buffers."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.counts: dict[str, int] = {}
+        self.outcomes: dict[tuple[str, int], Any] = {}
+        self.callbacks: dict[tuple[str, int], Any] = {}
+        self.expected_jobs: list[int] = [0x1100]
+        self.expected_inherited: list[int] = [0x4400]
+        self.refs: tuple[Any, ...] = ()
+        self.resource_ref: Any = None
+        self.pointer: int | None = None
+        self.update_values: list[tuple[int, list[int], int]] = []
+
+    def inspect_live_storage(self) -> None:
+        gc.collect()
+        assert self.resource_ref() in attributes._PINNED_RESOURCES
+        assert all(ref() is not None for ref in self.refs)
+        assert list(self.refs[1]()) == self.expected_jobs
+        assert list(self.refs[2]()) == self.expected_inherited
+
+    def call(self, name: str, args: tuple[Any, ...]) -> Any:
+        self.calls.append((name, args))
+        count = self.counts.get(name, 0) + 1
+        self.counts[name] = count
+        self.error = 900  # The next native call would replace an uncopied error.
+        if name == INITIALIZE:
+            assert args[1:3] == (2, 0)
+            size = ctypes.cast(args[3], ctypes.POINTER(attributes.SIZE_T))
+            if args[0] is None:
+                assert count == 1 and size.contents.value == 0
+                size.contents.value = self.length
+                self.error = 122
+            else:
+                assert count == 2 and size.contents.value == self.length
+                self.pointer = args[0].value
+                assert self.pointer is not None and self.pointer % 8 == 0
+                resources = [resource for resource in attributes._PINNED_RESOURCES
+                             if resource.buffer is not None
+                             and ctypes.addressof(resource.buffer) == self.pointer]
+                assert len(resources) == 1, "storage was not pinned before Initialize"
+                resource = resources[0]
+                assert resource.initialization_attempted
+                assert resource.outcome.state == "pending"
+                assert resource.state.value == "building"
+                assert resource.values is not None
+                # No strong references in the fake ledger: quarantine tests must
+                # prove that the production registry itself pins native storage.
+                self.refs = tuple(weakref.ref(value) for value in (
+                    resource.buffer, resource.values._job_values,
+                    resource.values._inherited_values, resource.values._startup_info,
+                ))
+                self.resource_ref = weakref.ref(resource)
+                assert not any(bytes(resource.buffer))
+                assert ctypes.sizeof(resource.buffer) >= self.length
+                assert resource.values._startup_info.lpAttributeList is None
+                self.inspect_live_storage()
+                if self.initialized_length is not None:
+                    size.contents.value = self.initialized_length
+        elif name == UPDATE:
+            assert args[0].value == self.pointer
+            assert args[1] == 0 and args[5:] == (None, None)
+            assert count in (1, 2)
+            expected_key = 0x2000D if count == 1 else 0x20002
+            expected_values = self.expected_jobs if count == 1 else self.expected_inherited
+            assert args[2] == expected_key
+            assert args[3].value == ctypes.addressof(self.refs[count]())
+            assert args[4] == len(expected_values) * 8
+            actual = list(ctypes.cast(args[3], ctypes.POINTER(attributes.HANDLE * len(expected_values))).contents)
+            assert actual == expected_values
+            self.update_values.append((args[2], actual, args[4]))
+            assert self.resource_ref().outcome.state == "initialized"
+            self.inspect_live_storage()
+        elif name == DELETE:
+            assert args[0].value == self.pointer
+            assert self.resource_ref().state.value == "retiring"
+            assert self.resource_ref().outcome.state == "initialized"
+            self.inspect_live_storage()
+        else:
+            raise AssertionError("unexpected native operation")
+        callback = self.callbacks.get((name, count))
+        if callback is not None:
+            callback()
+        if (name, count) in self.outcomes:
+            self.error = 700 + count
+            result = self.outcomes[(name, count)]
+            if isinstance(result, BaseException):
+                raise result
+            return result
+        return (0 if args[0] is None else 1) if name == INITIALIZE else None if name == DELETE else 1
+
+
+TRANSACTION_CASES = (
+    (attributes.WorkerLaunchInputs, attributes.prepare_worker_attributes, WORKER_HANDLES,
+     [0x1100], [0x4400]),
+    (attributes.PayloadLaunchInputs, attributes.prepare_payload_attributes, PAYLOAD_HANDLES,
+     [0x1100, 0x2200], [0x5500, 0x6600, 0x7700]),
+)
+
+
+def transaction_dll(jobs: list[int], inherited: list[int]) -> TransactionDLL:
+    dll = TransactionDLL()
+    dll.expected_jobs = jobs
+    dll.expected_inherited = inherited
+    return dll
+
+
+@pytest.mark.parametrize("input_type,prepare,handles,jobs,inherited", TRANSACTION_CASES)
+@pytest.mark.parametrize("length", [128, 129, 65_536])
+def test_transaction_success_exact_call_order_arguments_storage_and_void_retirement(
+    input_type: Any, prepare: Any, handles: dict[str, int],
+    jobs: list[int], inherited: list[int], length: int,
+) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = transaction_dll(jobs, inherited)
+    dll.length = length
+    owner = prepare(input_type(**handles), api(dll))
+    assert owner.ownership.value == "ready"
+    assert repr(owner) == "PreparedLaunchAttributes()"
+    assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error", INITIALIZE, UPDATE, UPDATE]
+    assert dll.update_values == [(0x2000D, jobs, len(jobs) * 8), (0x20002, inherited, len(inherited) * 8)]
+    assert len(attributes._PINNED_RESOURCES - before) == 1
+    dll.inspect_live_storage()
+    startup = dll.refs[3]()
+    expected = attributes.STARTUPINFOEXW()
+    expected.StartupInfo.cb = 112
+    expected.lpAttributeList = dll.pointer
+    if len(inherited) == 3:
+        expected.StartupInfo.dwFlags = 0x100
+        expected.StartupInfo.hStdInput, expected.StartupInfo.hStdOutput, expected.StartupInfo.hStdError = inherited
+    assert bytes(startup) == bytes(expected)
+    assert not hasattr(owner, "pointer") and not hasattr(owner, "handles")
+    assert not hasattr(owner, "launch") and not hasattr(owner, "__enter__")
+    assert "0x" not in repr(attributes._PINNED_RESOURCES)
+    owner.release()
+    assert owner.ownership.value == "retired"
+    assert attributes._PINNED_RESOURCES == before
+    assert startup.lpAttributeList is None and startup.StartupInfo.cb == 0
+    assert dll.resource_ref().buffer is None and dll.resource_ref().values is None
+    assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error", INITIALIZE, UPDATE, UPDATE, DELETE]
+    with pytest.raises(WindowsVerificationError) as caught:
+        owner.release()
+    assert caught.value.category is Category.OWNERSHIP and caught.value.cleanup_confirmed
+    assert dll.counts[DELETE] == 1
+
+
+@pytest.mark.parametrize("count,status", [(1, 1), (1, True), (1, None), (2, 0)])
+def test_transaction_initialize_failure_never_updates_or_deletes_uninitialized_list(count: int, status: Any) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    dll.outcomes[(INITIALIZE, count)] = status
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.cleanup_confirmed
+    assert attributes._PINNED_RESOURCES == before
+    assert UPDATE not in dll.counts and DELETE not in dll.counts
+    if count == 2:
+        assert caught.value.winerror == 702
+        assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error", INITIALIZE, "last_error"]
+    else:
+        assert [name for name, _ in dll.calls] == [INITIALIZE]
+
+
+@pytest.mark.parametrize("count", [1, 2])
+@pytest.mark.parametrize("status", [0, None, True, 1 << 31])
+def test_failed_update_deletes_once_preserving_first_numeric_cause(count: int, status: Any) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    dll.outcomes[(UPDATE, count)] = status
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.cleanup_confirmed
+    assert caught.value.winerror == (700 + count if status == 0 and type(status) is int else None)
+    assert caught.value.category is (Category.OS_API if type(status) is int and status == 0 else Category.UNCERTAIN_STATE)
+    expected = [INITIALIZE, "last_error", INITIALIZE] + [UPDATE] * count
+    if type(status) is int and status == 0:
+        expected += ["last_error"]
+    assert [name for name, _ in dll.calls] == expected + [DELETE]
+    assert dll.counts[DELETE] == 1 and attributes._PINNED_RESOURCES == before
+
+
+@pytest.mark.parametrize("length", [0, 127, 129, 65_537])
+def test_second_initialize_unexpected_length_retires_before_any_update(length: int) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    dll.initialized_length = length
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.category is Category.UNCERTAIN_STATE
+    assert caught.value.cleanup_confirmed
+    assert UPDATE not in dll.counts and dll.counts[DELETE] == 1
+    assert attributes._PINNED_RESOURCES == before
+
+
+@pytest.mark.parametrize("status", [-1, -(1 << 31), (1 << 31) - 1])
+def test_transaction_accepts_signed_nonzero_initialize_and_update(status: int) -> None:
+    dll = TransactionDLL()
+    for name, count in ((INITIALIZE, 2), (UPDATE, 1), (UPDATE, 2)):
+        dll.outcomes[(name, count)] = status
+    owner = attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    owner.release()
+    assert dll.counts[DELETE] == 1
+
+
+@pytest.mark.parametrize("point", ["startup", "publication", "first_update", "second_update"])
+@pytest.mark.parametrize("fault", [MemoryError, KeyboardInterrupt, SystemExit])
+def test_post_initialize_python_failure_uses_the_same_one_shot_cleanup(
+    monkeypatch: pytest.MonkeyPatch, point: str, fault: Any,
+) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise fault("secret source error/argv/env/pointer")
+    if point == "startup":
+        monkeypatch.setattr(attributes, "_complete_startup", fail)
+    elif point == "publication":
+        monkeypatch.setattr(attributes, "PreparedLaunchAttributes", fail)
+    else:
+        dll.callbacks[(UPDATE, 1 if point == "first_update" else 2)] = fail
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.category is (Category.RESOURCE if fault is MemoryError else Category.UNCERTAIN_STATE)
+    assert caught.value.cleanup_confirmed
+    assert "secret" not in str(caught.value) + repr(caught.value)
+    assert dll.counts[DELETE] == 1
+    assert attributes._PINNED_RESOURCES == before
+
+
+@pytest.mark.parametrize("point", ["first_update", "second_update", "publication"])
+@pytest.mark.parametrize("fault", [OSError, KeyboardInterrupt, MemoryError])
+def test_uncertain_delete_quarantines_buffers_even_after_constructor_failure(
+    monkeypatch: pytest.MonkeyPatch, point: str, fault: Any,
+) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    cleanup = fault("secret cleanup pointer/argv")
+    cleanup.winerror = 0xFFFFFFFF
+    cleanup.errno = (1 << 31) - 1
+    dll.outcomes[(DELETE, 1)] = cleanup
+    if point == "publication":
+        def fail(*args: Any) -> Any:
+            raise MemoryError("secret constructor")
+        monkeypatch.setattr(attributes, "PreparedLaunchAttributes", fail)
+    else:
+        dll.outcomes[(UPDATE, 1 if point == "first_update" else 2)] = 0
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    failure = caught.value
+    assert failure.cleanup_confirmed is False
+    assert failure.winerror == (None if point == "publication" else 701 if point == "first_update" else 702)
+    assert len(failure.cleanup_failures) == 1
+    secondary = failure.cleanup_failures[0]
+    assert secondary.stage is Stage.CLEANUP and secondary.category is Category.UNCERTAIN_STATE
+    assert secondary.winerror == 0xFFFFFFFF and secondary.errno == (1 << 31) - 1
+    assert "secret" not in str(failure) + repr(failure.cleanup_failures)
+    assert dll.counts[DELETE] == 1
+    # Remove exception traceback roots: the registry must retain storage itself.
+    failure.__traceback__ = None
+    failure.__context__ = None
+    failure.__cause__ = None
+    cleanup.__traceback__ = None
+    cleanup.__context__ = None
+    cleanup.__cause__ = None
+    gc.collect()
+    assert len(attributes._PINNED_RESOURCES - before) == 1
+    assert dll.resource_ref().state.value == "uncertain"
+    dll.inspect_live_storage()
+
+
+@pytest.mark.parametrize("status", [None, True, 1 << 31, KeyboardInterrupt("secret init")])
+def test_unknown_initialization_never_deletes_or_unpins_an_unproven_list(status: Any) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    dll.outcomes[(INITIALIZE, 2)] = status
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.cleanup_confirmed is False
+    assert DELETE not in dll.counts and UPDATE not in dll.counts
+    assert len(attributes._PINNED_RESOURCES - before) == 1
+    assert dll.resource_ref().state.value == "uncertain"
+    dll.inspect_live_storage()
+
+
+def test_release_wrapper_failure_is_terminal_and_cannot_be_retried() -> None:
+    dll = TransactionDLL()
+    owner = attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    dll.outcomes[(DELETE, 1)] = OSError("secret cleanup")
+    with pytest.raises(WindowsVerificationError) as caught:
+        owner.release()
+    assert not caught.value.cleanup_confirmed and caught.value.category is Category.UNCERTAIN_STATE
+    assert owner.ownership.value == "uncertain"
+    dll.inspect_live_storage()
+    with pytest.raises(WindowsVerificationError) as caught:
+        owner.release()
+    assert caught.value.category is Category.OWNERSHIP and not caught.value.cleanup_confirmed
+    assert dll.counts[DELETE] == 1
+
+
+def test_release_claim_prevents_concurrent_and_reentrant_double_delete() -> None:
+    dll = TransactionDLL()
+    owner = attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    entered, resume = Event(), Event()
+    failures = []
+    def deletion_callback() -> None:
+        with pytest.raises(WindowsVerificationError) as caught:
+            owner.release()
+        assert not caught.value.cleanup_confirmed
+        entered.set()
+        assert resume.wait(5)
+    dll.callbacks[(DELETE, 1)] = deletion_callback
+    def release() -> None:
+        try:
+            owner.release()
+        except BaseException as error:
+            failures.append(error)
+    thread = Thread(target=release)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        assert owner.ownership.value == "retiring"
+        with pytest.raises(WindowsVerificationError) as caught:
+            owner.release()
+        assert caught.value.category is Category.OWNERSHIP
+        assert not caught.value.cleanup_confirmed
+    finally:
+        resume.set()
+        thread.join(5)
+    assert not thread.is_alive() and failures == []
+    assert owner.ownership.value == "retired" and dll.counts[DELETE] == 1
+
+
+@pytest.mark.parametrize("length", [0, 65_537, (1 << 64) - 1])
+def test_transaction_rejects_sizing_length_before_allocation_or_initialization(length: int) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    dll.length = length
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.category is Category.RESOURCE and caught.value.cleanup_confirmed
+    assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error"]
+    assert attributes._PINNED_RESOURCES == before
+
+
+def test_transaction_rejects_unexpected_sizing_error_before_allocation() -> None:
+    dll = TransactionDLL()
+    dll.outcomes[(INITIALIZE, 1)] = 0  # Injected error is 701, not expected 122.
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.winerror == 701 and caught.value.cleanup_confirmed
+    assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error"]
+
+
+@pytest.mark.parametrize("fault", ["memory", "unaligned", "short", "oversized", "nonzero"])
+def test_allocation_faults_stop_before_native_initialize(monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    def allocate(size: int) -> Any:
+        if fault == "memory":
+            raise MemoryError("secret allocation")
+        if fault == "unaligned":
+            return (ctypes.c_ubyte * size).from_buffer((ctypes.c_uint64 * 17)(), 1)
+        if fault == "short":
+            return (ctypes.c_uint64 * 1)()
+        if fault == "oversized":
+            return (ctypes.c_uint64 * 8193)()
+        return (ctypes.c_uint64 * 16)(1)
+    monkeypatch.setattr(attributes, "_allocate_attribute_buffer", allocate)
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.category is Category.RESOURCE and caught.value.cleanup_confirmed
+    assert "secret" not in str(caught.value)
+    assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error"]
+    assert attributes._PINNED_RESOURCES == before
+
+
+@pytest.mark.parametrize("after_registration", [False, True])
+def test_registration_fault_precedes_initialization_and_leaves_no_native_resource(
+    monkeypatch: pytest.MonkeyPatch, after_registration: bool,
+) -> None:
+    before = set(attributes._PINNED_RESOURCES)
+    original = attributes._register_resource
+    def fail(resource: Any) -> None:
+        if after_registration:
+            original(resource)
+        raise MemoryError("secret ledger")
+    monkeypatch.setattr(attributes, "_register_resource", fail)
+    dll = TransactionDLL()
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    assert caught.value.cleanup_confirmed
+    assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error"]
+    assert attributes._PINNED_RESOURCES == before
+
+
+def test_transaction_rejects_bad_role_input_or_api_before_sizing() -> None:
+    dll = TransactionDLL()
+    checked = api(dll)
+    with pytest.raises(WindowsVerificationError):
+        attributes.prepare_worker_attributes(attributes.PayloadLaunchInputs(**PAYLOAD_HANDLES), checked)
+    inputs = attributes.WorkerLaunchInputs(**WORKER_HANDLES)
+    object.__setattr__(inputs, "supervision_job", True)
+    with pytest.raises(WindowsVerificationError):
+        attributes.prepare_worker_attributes(inputs, checked)
+    with pytest.raises(WindowsVerificationError):
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), object())
+    assert dll.calls == []
+
+
+@pytest.mark.parametrize("fault", [MemoryError, KeyboardInterrupt])
+def test_initialization_success_is_recorded_before_checked_wrapper_returns(fault: Any) -> None:
+    class InterruptedApi(attributes.CheckedAttributeApi):
+        def initialize_attribute_list(self, *args: Any, **kwargs: Any) -> None:
+            super().initialize_attribute_list(*args, **kwargs)
+            raise fault("secret after successful initialize")
+    before = set(attributes._PINNED_RESOURCES)
+    dll = TransactionDLL()
+    checked = InterruptedApi(dll, dll.last_error)
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), checked)
+    assert caught.value.cleanup_confirmed
+    assert [name for name, _ in dll.calls] == [INITIALIZE, "last_error", INITIALIZE, DELETE]
+    assert attributes._PINNED_RESOURCES == before
+
+
+@pytest.mark.parametrize("result", [None, 0, 1, False])
+def test_transaction_void_retirement_has_no_invented_bool_check(result: Any) -> None:
+    dll = TransactionDLL()
+    owner = attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), api(dll))
+    dll.outcomes[(DELETE, 1)] = result
+    owner.release()
+    assert owner.ownership.value == "retired"
+    assert [name for name, _ in dll.calls][-1] == DELETE
+    assert dll.counts[DELETE] == 1
+
+
+@pytest.mark.parametrize("size", [True, None, "128", 0, -1, 65_537])
+def test_injected_sizing_result_cannot_bypass_resource_limit(size: Any) -> None:
+    class BadSizingApi:
+        def required_size(self) -> Any:
+            return size
+        initialize_attribute_list = staticmethod(forbidden_native)
+        update_attribute = staticmethod(forbidden_native)
+        delete_attribute_list = staticmethod(forbidden_native)
+    before = set(attributes._PINNED_RESOURCES)
+    with pytest.raises(WindowsVerificationError) as caught:
+        attributes.prepare_worker_attributes(attributes.WorkerLaunchInputs(**WORKER_HANDLES), BadSizingApi())
+    assert caught.value.category is Category.RESOURCE and caught.value.cleanup_confirmed
+    assert attributes._PINNED_RESOURCES == before
