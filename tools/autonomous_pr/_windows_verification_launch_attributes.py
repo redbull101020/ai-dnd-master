@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import ctypes
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Lock
@@ -24,10 +25,10 @@ from ._windows_verification_native import (
     SIZE_T,
     WCHAR,
     Category,
+    FailureDiagnostic,
     NativePlatform,
     Stage,
     WindowsVerificationError,
-    sanitized_error,
 )
 
 
@@ -288,6 +289,50 @@ def _checked_pointer(value: ctypes.c_void_p, stage: Stage) -> None:
         raise WindowsVerificationError(stage, Category.UNCERTAIN_STATE)
 
 
+def _bounded_exception(
+    error: BaseException, stage: Stage, category: Category,
+) -> WindowsVerificationError:
+    # Wrapper metadata is untrusted too: reading a property may itself raise a
+    # BaseException. Never render the source exception or let accessors replace
+    # the first failure. The existing error class applies the two numeric ranges.
+    try:
+        winerror = getattr(error, "winerror", None)
+    except BaseException:
+        winerror = None
+    try:
+        errno = getattr(error, "errno", None)
+    except BaseException:
+        errno = None
+    return WindowsVerificationError(stage, category, winerror=winerror, errno=errno)
+
+
+def _primary_exception(error: BaseException) -> WindowsVerificationError:
+    if type(error) is not WindowsVerificationError:
+        return _bounded_exception(
+            error, Stage.PREFLIGHT,
+            Category.RESOURCE if isinstance(error, MemoryError) else Category.UNCERTAIN_STATE,
+        )
+    # Preserve a canonical checked cause itself, but do not trust the class name
+    # alone: injected wrappers can mutate its text, metadata, notes or ranges.
+    # This boundary prepares attributes; a wrapper cannot attest another stage
+    # or a timeout. No execution/deadline operation occurs here.
+    stage = Stage.PREFLIGHT
+    category = error.category if type(error.category) is Category else Category.UNCERTAIN_STATE
+    bounded = _bounded_exception(error, stage, category)
+    notes = getattr(error, "__notes__", None)
+    if (error.stage is stage and error.category is category
+            and type(error.args) is tuple and len(error.args) == 1
+            and type(error.args[0]) is str and error.args == bounded.args
+            and error.winerror is bounded.winerror and error.errno is bounded.errno
+            and error.strerror is None and error.filename is None and error.filename2 is None
+            and (notes is None or type(notes) is list and len(notes) == 0)
+            and error.timed_out is False
+            and type(error.cleanup_failures) is tuple and len(error.cleanup_failures) == 0
+            and type(error.unresolved_jobs) is tuple and len(error.unresolved_jobs) == 0):
+        return error
+    return bounded
+
+
 class CheckedAttributeApi:
     """Exactly three native symbols, injected independently of the Job API.
 
@@ -297,7 +342,7 @@ class CheckedAttributeApi:
 
     def __init__(self, dll: Any, last_error: Callable[[], int]) -> None:
         validate_abi()
-        signatures = (
+        signatures: tuple[tuple[str, Any, list[Any]], ...] = (
             ("InitializeProcThreadAttributeList", BOOL,
              [LPPROC_THREAD_ATTRIBUTE_LIST, DWORD, DWORD, ctypes.POINTER(SIZE_T)]),
             ("UpdateProcThreadAttribute", BOOL,
@@ -306,7 +351,7 @@ class CheckedAttributeApi:
             ("DeleteProcThreadAttributeList", None, [LPPROC_THREAD_ATTRIBUTE_LIST]),
         )
         self._last_error = last_error
-        functions = []
+        functions: list[Any] = []
         try:
             if not callable(last_error):
                 raise TypeError
@@ -319,8 +364,12 @@ class CheckedAttributeApi:
                 if function.restype is not result or function.argtypes != arguments:
                     raise TypeError
                 functions.append(function)
-        except Exception as error:
-            failure = sanitized_error(error, Stage.PREFLIGHT, Category.OS_API)
+            self._bindings: tuple[tuple[Any, Any, tuple[Any, ...]], ...] = tuple(
+                (function, result, tuple(arguments))
+                for function, (_, result, arguments) in zip(functions, signatures)
+            )
+        except BaseException as error:
+            failure = _bounded_exception(error, Stage.PREFLIGHT, Category.OS_API)
             failure.cleanup_confirmed = True
             raise failure from None
         self._initialize, self._update, self._delete = functions
@@ -330,7 +379,7 @@ class CheckedAttributeApi:
         # any further native call (including a future owner's cleanup).
         try:
             code = self._last_error()
-        except Exception:
+        except BaseException:
             return WindowsVerificationError(Stage.PREFLIGHT, Category.UNCERTAIN_STATE)
         if type(code) is not int or not 0 <= code <= 0xFFFFFFFF:
             return WindowsVerificationError(Stage.PREFLIGHT, Category.UNCERTAIN_STATE)
@@ -338,13 +387,27 @@ class CheckedAttributeApi:
 
     def _invoke(self, function: Any, stage: Stage, *args: Any) -> Any:
         try:
+            # ctypes function signatures are mutable. Check the captured symbol
+            # again at each call, against an independent immutable signature.
+            for bound, result, arguments in self._bindings:
+                if function is bound:
+                    actual = function.argtypes
+                    if (not callable(function) or function.restype is not result
+                            or type(actual) not in (list, tuple)
+                            or len(actual) != len(arguments)
+                            or any(given is not expected for given, expected in zip(actual, arguments))):
+                        raise TypeError
+                    break
+            else:
+                raise TypeError
             return function(*args)
-        except Exception as error:
+        except BaseException as error:
             category = (
                 Category.UNCERTAIN_STATE if stage is Stage.CLEANUP else
-                Category.RESOURCE if isinstance(error, MemoryError) else Category.OS_API
+                Category.RESOURCE if isinstance(error, MemoryError) else
+                Category.OS_API if isinstance(error, Exception) else Category.UNCERTAIN_STATE
             )
-            raise sanitized_error(error, stage, category) from None
+            raise _bounded_exception(error, stage, category) from None
 
     def _check_status(self, status: object) -> None:
         if type(status) is int and status == 0:
@@ -433,8 +496,8 @@ def load_native_api(
                 sys.platform, sys.implementation.name,
                 version().major if sys.platform == "win32" and version is not None else 0,
             )
-        except Exception as error:
-            failure = sanitized_error(error, Stage.PREFLIGHT, Category.OS_API)
+        except BaseException as error:
+            failure = _bounded_exception(error, Stage.PREFLIGHT, Category.OS_API)
             failure.cleanup_confirmed = True
             raise failure from None
     if (host.platform != "win32" or host.implementation != "cpython"
@@ -451,8 +514,8 @@ def load_native_api(
         )
     try:
         dll = loader("kernel32.dll", use_last_error=True)
-    except Exception as error:
-        failure = sanitized_error(error, Stage.PREFLIGHT, Category.OS_API)
+    except BaseException as error:
+        failure = _bounded_exception(error, Stage.PREFLIGHT, Category.OS_API)
         failure.cleanup_confirmed = True
         raise failure from None
     return CheckedAttributeApi(dll, reader)
@@ -479,9 +542,22 @@ class _AttributeResource:
     buffer: ctypes.Array | None
     values: _LaunchAttributeValues | None
     outcome: _InitializationOutcome = field(default_factory=_InitializationOutcome)
-    state: _AttributeState = _AttributeState.BUILDING
+    _state: _AttributeState = _AttributeState.BUILDING
+    quarantined: bool = False
+    lock_failure: FailureDiagnostic | None = None
     initialization_attempted: bool = False
     lock: Any = field(default_factory=Lock)
+
+    @property
+    def state(self) -> _AttributeState:
+        # A monotonic fail-closed latch is readable without a damaged mutex.
+        # Keep the last locked state/claim intact rather than overwriting it
+        # unsafely while another caller may still be completing retirement.
+        return _AttributeState.UNCERTAIN if self.quarantined else self._state
+
+    @state.setter
+    def state(self, state: _AttributeState) -> None:
+        self._state = state
 
     def __repr__(self) -> str:
         return f"AttributeResource(state='{self.state.value}')"
@@ -492,20 +568,71 @@ class _AttributeResource:
 # process-lifetime quarantine; no finalizer, retry or public drain exists.
 _RESOURCE_LOCK = Lock()
 _PINNED_RESOURCES: set[_AttributeResource] = set()
+_UNKNOWN_CLEANUP = FailureDiagnostic(Stage.CLEANUP, Category.UNCERTAIN_STATE, None, None)
+
+
+def _cleanup_diagnostic(error: BaseException) -> FailureDiagnostic:
+    try:
+        return _bounded_exception(error, Stage.CLEANUP, Category.UNCERTAIN_STATE).diagnostic()
+    except BaseException:
+        # A second failure while building secondary diagnostics cannot replace
+        # the primary error. This immutable fallback is allocated on import.
+        return _UNKNOWN_CLEANUP
+
+
+@contextmanager
+def _resource_guard(resource: _AttributeResource) -> Iterator[None]:
+    if resource.quarantined:
+        failure = resource.lock_failure or _UNKNOWN_CLEANUP
+        raise WindowsVerificationError(
+            Stage.CLEANUP, Category.UNCERTAIN_STATE,
+            winerror=failure.winerror, errno=failure.errno,
+        )
+    try:
+        leave = resource.lock.__exit__
+        resource.lock.__enter__()
+    except BaseException as error:
+        # Acquisition may have succeeded before the wrapper raised. Never
+        # guess lock ownership, release it, or attempt another acquisition.
+        resource.quarantined = True
+        resource.lock_failure = _cleanup_diagnostic(error)
+        raise
+    try:
+        if resource.quarantined:
+            raise WindowsVerificationError(Stage.CLEANUP, Category.UNCERTAIN_STATE)
+        yield
+    except BaseException as primary:
+        try:
+            leave(type(primary), primary, primary.__traceback__)
+        except BaseException as error:
+            resource.quarantined = True
+            resource.lock_failure = _cleanup_diagnostic(error)
+        # Preserve the body error even if mutex exit failed as well.
+        raise
+    else:
+        try:
+            leave(None, None, None)
+        except BaseException as error:
+            resource.quarantined = True
+            resource.lock_failure = _cleanup_diagnostic(error)
+            raise
 
 
 def _register_resource(resource: _AttributeResource) -> None:
-    with _RESOURCE_LOCK:
-        _PINNED_RESOURCES.add(resource)
+    try:
+        with _RESOURCE_LOCK:
+            _PINNED_RESOURCES.add(resource)
+    except BaseException as error:
+        resource.quarantined = True
+        resource.lock_failure = _cleanup_diagnostic(error)
+        raise
 
 
 def _discard_resource(resource: _AttributeResource) -> None:
     # Used only after confirmed unsuccessful Initialize or normally returned VOID
     # Delete (or before initialization was attempted). No native resource is live.
-    with resource.lock:
-        if resource.values is not None:
-            resource.values._startup_info.lpAttributeList = None
-            resource.values._startup_info.StartupInfo.cb = 0
+    with _resource_guard(resource):
+        _invalidate_startup(resource)
         resource.buffer = None
         resource.values = None
         resource.state = _AttributeState.RETIRED
@@ -513,8 +640,18 @@ def _discard_resource(resource: _AttributeResource) -> None:
         _PINNED_RESOURCES.discard(resource)
 
 
+def _invalidate_startup(resource: _AttributeResource) -> None:
+    # Invalidate Python-visible startup storage at the irreversible retirement
+    # claim, even if Delete later fails. Backing memory itself stays pinned.
+    if resource.values is not None:
+        resource.values._startup_info.lpAttributeList = None
+        resource.values._startup_info.StartupInfo.cb = 0
+
+
 def _resource_pointer(resource: _AttributeResource) -> ctypes.c_void_p:
-    if resource.buffer is None:
+    if resource.buffer is None or resource.state not in (
+        _AttributeState.BUILDING, _AttributeState.READY, _AttributeState.RETIRING,
+    ):
         raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
     # Unlike cast(buffer), this pointer creates no independent buffer owner.
     return ctypes.c_void_p(ctypes.addressof(resource.buffer))
@@ -523,25 +660,33 @@ def _resource_pointer(resource: _AttributeResource) -> ctypes.c_void_p:
 def _retire_resource(
     resource: _AttributeResource, *, only_ready: bool,
 ) -> WindowsVerificationError | None:
-    with resource.lock:
-        eligible = resource.state is _AttributeState.READY or (
-            not only_ready and resource.state is _AttributeState.BUILDING
-        )
-        if not eligible or resource.outcome.state != "initialized":
-            return WindowsVerificationError(
-                Stage.CLOSE, Category.OWNERSHIP,
-                cleanup_confirmed=resource.state is _AttributeState.RETIRED,
-            )
-        # Claim the attempt while locked, then release before invoking external
-        # code. Concurrent/reentrant contenders cannot wait for or repeat Delete.
-        resource.state = _AttributeState.RETIRING
+    if resource.quarantined:
+        return WindowsVerificationError(Stage.CLOSE, Category.OWNERSHIP)
+    claimed = False
     try:
+        with _resource_guard(resource):
+            eligible = resource.state is _AttributeState.READY or (
+                not only_ready and resource.state is _AttributeState.BUILDING
+            )
+            if not eligible or resource.outcome.state != "initialized":
+                return WindowsVerificationError(
+                    Stage.CLOSE, Category.OWNERSHIP,
+                    cleanup_confirmed=resource.state is _AttributeState.RETIRED,
+                )
+            # Claim and invalidation belong inside the exception boundary too.
+            # Release the lock before external code; contenders cannot repeat
+            # Delete or mistake an in-flight call for confirmed cleanup.
+            claimed = True
+            resource.state = _AttributeState.RETIRING
+            _invalidate_startup(resource)
         resource.api.delete_attribute_list(_resource_pointer(resource))
         _discard_resource(resource)
     except BaseException as error:
-        with resource.lock:
-            resource.state = _AttributeState.UNCERTAIN
-        return sanitized_error(error, Stage.CLEANUP, Category.UNCERTAIN_STATE)
+        if claimed:
+            resource.quarantined = True
+            # Do not reenter fallible invalidation after an invalidation fault.
+            # The irreversible state claim blocks use; all storage stays pinned.
+        return _bounded_exception(error, Stage.CLEANUP, Category.UNCERTAIN_STATE)
     return None
 
 
@@ -558,7 +703,9 @@ class PreparedLaunchAttributes:
     def __init__(self, resource: _AttributeResource) -> None:
         if type(resource) is not _AttributeResource:
             raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
-        with resource.lock:
+        if resource.quarantined:
+            raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
+        with _resource_guard(resource):
             if resource.state is not _AttributeState.READY:
                 raise WindowsVerificationError(Stage.PREFLIGHT, Category.OWNERSHIP)
         self._resource = resource
@@ -568,8 +715,14 @@ class PreparedLaunchAttributes:
 
     @property
     def ownership(self) -> _AttributeState:
-        with self._resource.lock:
-            return self._resource.state
+        if self._resource.quarantined:
+            return _AttributeState.UNCERTAIN
+        try:
+            with _resource_guard(self._resource):
+                return self._resource.state
+        except BaseException:
+            self._resource.quarantined = True
+            return _AttributeState.UNCERTAIN
 
     def release(self) -> None:
         """One explicit VOID deletion attempt; no OS quiescence claim."""
@@ -633,29 +786,36 @@ def _build_attributes(
             ctypes.sizeof(values._inherited_values),
         )
         _complete_startup(resource)
-        with resource.lock:
+        with _resource_guard(resource):
             resource.state = _AttributeState.READY
         return PreparedLaunchAttributes(resource)
     except BaseException as error:
-        primary = error if isinstance(error, WindowsVerificationError) else sanitized_error(
-            error, Stage.PREFLIGHT,
-            Category.RESOURCE if isinstance(error, MemoryError) else Category.UNCERTAIN_STATE,
-        )
-        if resource is None:
-            primary.cleanup_confirmed = True
-        elif resource.outcome.state == "initialized":
-            secondary = _retire_resource(resource, only_ready=False)
-            if secondary is not None:
-                primary.cleanup_failures = (secondary.diagnostic(),)
-            primary.cleanup_confirmed = resource.state is _AttributeState.RETIRED
-        elif resource.outcome.state == "failed" or not resource.initialization_attempted:
-            _discard_resource(resource)
-            primary.cleanup_confirmed = True
-        else:
-            # The checked boundary never confirmed success or failure. Do not
-            # Delete an unproven list, release its buffers or report cleanup.
-            with resource.lock:
-                resource.state = _AttributeState.UNCERTAIN
+        primary = _primary_exception(error)
+        try:
+            if resource is None:
+                primary.cleanup_confirmed = True
+            elif resource.quarantined:
+                primary.cleanup_failures = (resource.lock_failure or _UNKNOWN_CLEANUP,)
+                primary.cleanup_confirmed = False
+            elif resource.outcome.state == "initialized":
+                secondary = _retire_resource(resource, only_ready=False)
+                if secondary is not None:
+                    primary.cleanup_failures = (secondary.diagnostic(),)
+                primary.cleanup_confirmed = resource.state is _AttributeState.RETIRED
+            elif resource.outcome.state == "failed" or not resource.initialization_attempted:
+                _discard_resource(resource)
+                primary.cleanup_confirmed = True
+            else:
+                # No confirmed initialization outcome: do not Delete or unpin.
+                resource.quarantined = True
+                _invalidate_startup(resource)
+                primary.cleanup_confirmed = False
+        except BaseException as cleanup_error:
+            # A bookkeeping/lock-wrapper fault is secondary, including before
+            # Initialize. The preregistered resource remains conservatively held.
+            if resource is not None:
+                resource.quarantined = True
+            primary.cleanup_failures = (_cleanup_diagnostic(cleanup_error),)
             primary.cleanup_confirmed = False
         raise primary from None
 
