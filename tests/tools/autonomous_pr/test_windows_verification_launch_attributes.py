@@ -6,6 +6,7 @@ import ast
 import ctypes
 import gc
 import importlib.util
+import re
 import sys
 import _ctypes
 import weakref
@@ -14,7 +15,7 @@ from itertools import combinations
 from pathlib import Path
 from threading import Barrier, Event, Lock, Thread
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 
@@ -590,7 +591,11 @@ def test_missing_acquisition_dependency_fails_before_loading(monkeypatch: pytest
     assert caught.value.cleanup_confirmed is True
 
 
-def test_fresh_import_with_blocked_loaders_and_no_windows_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_fresh_import_with_blocked_loaders_and_no_windows_symbols(
+    monkeypatch: pytest.MonkeyPatch, platform: str,
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.delattr(ctypes, "WinDLL")
     monkeypatch.delattr(ctypes, "get_last_error")
     name = "tools.autonomous_pr._windows_verification_launch_attributes_import_test"
@@ -2153,3 +2158,147 @@ def test_repair_registration_lock_fault_does_not_retry_during_cleanup(
         assert broken.entries == 1
     finally:
         broken.release_test_lock()
+
+
+# CP-3 checks contracts and isolation, without freezing production source text.
+# The task's cumulative changed-file allowlist is audited separately through Git.
+@pytest.mark.parametrize("filename", [
+    "orchestrator.py", "agents.py", "repository.py", "codex_launcher.py",
+])
+def test_cp3_production_dispatch_does_not_activate_native_containment(filename: str) -> None:
+    source = Path(attributes.__file__).with_name(filename).read_text(encoding="utf-8")
+    forbidden_calls = {
+        "CreateProcessW", "CreateProcessA", "ResumeThread", "AssignProcessToJobObject",
+        "TerminateJobObject", "TerminateProcess", "IsProcessInJob",
+        "CreateJobObjectW", "SetInformationJobObject", "QueryInformationJobObject",
+        *FUNCTIONS,
+    }
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            assert "_windows_verification_" not in ast.get_source_segment(source, node)
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in forbidden_calls
+            elif isinstance(node.func, ast.Name):
+                assert node.func.id not in forbidden_calls
+
+
+def test_cp3_public_verification_result_and_error_contracts_are_compatible() -> None:
+    from tools.autonomous_pr.agents import AgentRoleError
+    from tools.autonomous_pr.model import VerificationCommandResult
+    from tools.autonomous_pr.repository import RepositoryError
+
+    expected_types = {
+        "command": tuple[str, ...], "returncode": int,
+        "stdout": str, "stderr": str, "passed": bool,
+    }
+    assert tuple(field.name for field in fields(VerificationCommandResult)) == tuple(expected_types)
+    assert get_type_hints(VerificationCommandResult) == expected_types
+    result = VerificationCommandResult(("python", "-V"), 7, "stdout", "stderr", False)
+    assert (result.command, result.returncode, result.stdout, result.stderr, result.passed) == (
+        ("python", "-V"), 7, "stdout", "stderr", False,
+    )
+    with pytest.raises(FrozenInstanceError):
+        result.passed = True  # type: ignore[misc]
+    assert issubclass(RepositoryError, Exception)
+    assert issubclass(AgentRoleError, Exception)
+    assert issubclass(WindowsVerificationError, OSError)
+    error = WindowsVerificationError(Stage.PREFLIGHT, Category.OS_API, winerror=5)
+    assert error.diagnostic().winerror == 5
+    assert error.stage is Stage.PREFLIGHT and error.category is Category.OS_API
+    assert error.timed_out is False
+
+
+def test_cp3_attribute_foundation_preserves_the_narrow_job_ownership_api() -> None:
+    from tools.autonomous_pr._windows_verification_jobs import PreassignmentJobs
+    from tools.autonomous_pr._windows_verification_native import CheckedJobApi, JobNativeApi
+
+    operations = {"create_job", "configure_job", "query_job_flags", "close_handle"}
+    assert {name for name in vars(JobNativeApi) if not name.startswith("_")} == operations
+    assert {name for name in vars(CheckedJobApi) if not name.startswith("_")} == operations
+    assert {name for name in vars(PreassignmentJobs) if not name.startswith("_")} == {
+        "ownership", "release_preassignment",
+    }
+
+
+def test_cp3_attribute_module_has_only_private_and_standard_library_imports() -> None:
+    tree = ast.parse(Path(attributes.__file__).read_text(encoding="utf-8"))
+    absolute = set()
+    relative = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            absolute.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                relative.add((node.level, node.module, tuple(alias.name for alias in node.names)))
+            else:
+                absolute.add(node.module)
+    assert absolute == {
+        "__future__", "ctypes", "sys", "collections.abc", "contextlib",
+        "dataclasses", "enum", "threading", "typing",
+    }
+    assert relative == {
+        (1, None, ("_windows_verification_native",)),
+        (1, "_windows_verification_native", (
+            "BOOL", "DWORD", "HANDLE", "SIZE_T", "WCHAR", "Category",
+            "FailureDiagnostic", "NativePlatform", "Stage", "WindowsVerificationError",
+        )),
+    }
+
+
+def test_cp3_no_process_containment_capability_probe_or_job_ownership_bridge() -> None:
+    tree = ast.parse(Path(attributes.__file__).read_text(encoding="utf-8"))
+    forbidden = {
+        "CreateProcessW", "CreateProcessA", "ResumeThread", "TerminateProcess",
+        "AssignProcessToJobObject", "TerminateJobObject", "IsProcessInJob",
+        "CreateJobObjectW", "SetInformationJobObject", "QueryInformationJobObject",
+        "GetProcessId", "GetThreadId", "GetHandleInformation", "SetHandleInformation",
+        "DuplicateHandle", "OpenProcess", "CloseHandle", "WaitForSingleObject",
+        "WaitForMultipleObjects", "CreateNamedPipeW", "CreatePipe", "ReadFile",
+        "WriteFile", "CancelIoEx", "PreassignmentJobs", "release_preassignment",
+        "subprocess", "importlib", "__import__", "eval", "exec",
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            assert node.id not in forbidden
+        elif isinstance(node, ast.Attribute):
+            assert node.attr not in forbidden
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            assert node.value not in forbidden
+    owner = next(node for node in tree.body
+                 if isinstance(node, ast.ClassDef) and node.name == "PreparedLaunchAttributes")
+    assert {node.name for node in owner.body
+            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")} == {
+        "ownership", "release",
+    }
+
+
+@pytest.mark.parametrize("namespace,name", [
+    (ctypes, "WinDLL"), (ctypes, "OleDLL"), (ctypes, "CDLL"), (ctypes, "PyDLL"),
+    (ctypes, "get_last_error"), (ctypes, "_dlopen"),
+    (_ctypes, "LoadLibrary"), (_ctypes, "dlopen"),
+])
+def test_cp3_every_native_constructor_and_error_reader_is_blocked(namespace: Any, name: str) -> None:
+    assert getattr(namespace, name) is forbidden_native
+    with pytest.raises(AssertionError, match="native DLL/Win32"):
+        getattr(namespace, name)("kernel32.dll")
+
+
+@pytest.mark.parametrize("name", ["windll", "oledll", "cdll", "pydll"])
+def test_cp3_every_cached_native_library_loader_is_blocked(name: str) -> None:
+    assert isinstance(getattr(ctypes, name), ForbiddenLibraries)
+    with pytest.raises(AssertionError, match="native DLL/Win32"):
+        getattr(ctypes, name).kernel32
+
+
+def test_cp3_all_nineteen_harness_acceptance_obligations_remain_traceable() -> None:
+    root = Path(__file__).resolve().parents[3]
+    # Canonical obligations outlive any standalone task's metadata and closure.
+    harness = (root / "docs/AUTONOMOUS_PR_HARNESS.md").read_text(encoding="utf-8")
+    traceability = harness.split("### 37.12. Binding coverage and acceptance traceability\n", 1)[1]
+    rows = [line.strip("| ").split("|") for line in traceability.splitlines()
+            if re.match(r"^\| \d+ \|", line)]
+    assert [int(row[0]) for row in rows] == list(range(1, 20))
+    assert all(len(row) == 3 and all(cell.strip() for cell in row) for row in rows)
+    assert "Required native facts need native proof." in traceability
+    assert "Every real Windows Job/pipe/process containment test requires\nseparate explicit approval" in harness
