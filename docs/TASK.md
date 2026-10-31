@@ -305,3 +305,4 @@ Concrete known constraints.
 | `TSK-0046` | `Done` | PR #137 | Harden AUTONOMOUS_PR external-process failure and diagnostic boundaries |
 | `TSK-0048` | `Done` | PR #139 | Establish isolated Windows verification Job ownership foundation |
 | `TSK-0049` | `Done` | PR #141 | Establish isolated Windows verification launch-attribute foundation |
+| `TSK-0050` | `Done` | PR #142 | Establish single-owner Windows verification prelaunch lifecycle gate |
