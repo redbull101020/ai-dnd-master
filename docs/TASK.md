@@ -304,3 +304,4 @@ Concrete known constraints.
 | `TSK-0045` | `Done` | PR #135 | Repair deterministic Full Verification failures in-process |
 | `TSK-0046` | `Done` | PR #137 | Harden AUTONOMOUS_PR external-process failure and diagnostic boundaries |
 | `TSK-0048` | `Done` | PR #139 | Establish isolated Windows verification Job ownership foundation |
+| `TSK-0049` | `Done` | PR #141 | Establish isolated Windows verification launch-attribute foundation |

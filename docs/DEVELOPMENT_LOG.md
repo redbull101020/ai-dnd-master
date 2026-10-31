@@ -7883,3 +7883,15 @@ GitHub Actions workflow #40730252658 passed on ubuntu-latest: pytest for Python 
 No actual Windows Job/process containment tests, process creation/assignment, worker W, IPC, deadlines, quiescence or production orchestrator wiring were delivered. Native Windows validation requires separate explicit authorization. All 19 umbrella TSK-0047 acceptance cases remain open; this slice provides prerequisites only for cases 5, 12, 18 and 19. Gameplay, non-Windows verification behavior, public results, dependencies and Agent/Codex/MXC execution remain unchanged.
 
 This Task Closure is prospective and subject to independent Closure Review and separately authorized publication and human merge. TSK-0048 is not authoritative Done on main until the reviewed closure is merged.
+
+## 2026-10-30 — TSK-0049: Prospective Task Closure (draft PR #141)
+
+Prepared MANUAL delivery in draft PR #141: portable Win64 `STARTUPINFOW` / `STARTUPINFOEXW` ABI and checked attribute API, Worker/Payload role-specific `JOB_LIST` / `HANDLE_LIST` preparation, and initialized attribute-list ownership with persistent backing storage. Bounded aligned allocation, one-shot cleanup, process-lifetime quarantine on teardown uncertainty, fake fault-injection/concurrency tests and bounded diagnostics form a private, dormant integration boundary.
+
+TSK-0048 Job ownership, existing production dispatch and `subprocess.run`, and public results/errors remain unchanged. No production dependencies, gameplay, Architecture, Roadmap or C0 changes were introduced. TSK-0049 retains metadata `execution_approval: draft`.
+
+Verification: focused pytest 674 passed; full pytest 4180 passed, 7 skipped (existing Windows filesystem-link/platform cases); configured mypy PASS for 141 source files; canonical parser PASS for the published draft and a temporary approved-metadata copy held only in memory (CP-1–CP-3); git diff checks PASS. The full pytest result is the existing run on identical implementation tree `6e81c3d10a31b2c0b79c4688bc010a9774210b63`, not a new independent post-commit run. Independent pre-closure cumulative implementation review APPROVED the implementation.
+
+Actual `CreateProcessW` / suspended creation, the H-owned nonempty Job lifecycle, Worker W and bootstrap, pipes/IPC, capability rights/provenance and real inheritance, membership/outer-Job nesting, deadlines, forced termination and quiescence remain deferred. Native validation requires its own exact plan and explicit authorization under Harness §37.11; no real Win32 Job/process containment tests were run and no native containment proof is claimed. All 19 TSK-0047 end-to-end acceptance cases remain open.
+
+This Task Closure is prospective, awaiting independent Closure Review, separately authorized publication and human merge. TSK-0049 is not authoritative Done on main until the reviewed closure is merged.
