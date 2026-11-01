@@ -74,6 +74,7 @@
 | Initial Combat placement contract, `PlaceCombatantCommand`/`CombatantPlaced` V1 (TSK-0021, decision-only) | §3.36 |
 | Authoritative Monster walking-speed source (TSK-0039) | §3.37 |
 | Minimal Monster voluntary Movement contract (TSK-0040) | §3.38 |
+| Character walking-speed State and voluntary Movement, current State schema V11 (TSK-0051) | §3.39, §12.13 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -1304,9 +1305,8 @@ proficiency и другие proficiency categories остаются deferred.
 
 Этот раздел фиксирует только Phase 2 foundation field set. Более поздние
 Phase 3 consumers расширили CharacterState: `weapon_proficiencies` (§3.29) и
-реализованные death-save/lifecycle facts (§3.34, TSK-0017). Контракт §3.39
-определяет дальнейший `walking_speed` как планируемый, ещё не реализованный
-источник скорости персонажа (TSK-0051). Точные контракты остаются в этих
+реализованные death-save/lifecycle facts (§3.34, TSK-0017) и
+`walking_speed` (§3.39, TSK-0051), реализованный источник скорости персонажа. Точные контракты остаются в этих
 специализированных разделах, а не в историческом Phase 2 field set.
 
 ---
@@ -7636,7 +7636,7 @@ actionSpent: bool
 V8 keeps every existing V7 Combat field unchanged: `id`, `round`, `order`,
 `activeIndex`, `positions`, plus the new required `actionSpent`. At TSK-0015 delivery the writer emitted exact V8
 (`SCHEMA_VERSION = SCHEMA_V8_VERSION` then); the current production writer is
-V10 (§12.13), while V11 is planned, not implemented. The historical V1–V7 wire
+V11 (§12.13), including Character walking speed (§3.39). The historical V1–V7 wire
 shapes are not retroactively extended, and their strict field-set rejection
 of `actionSpent`/`positions`/etc. as appropriate remains unchanged (§12.13).
 
@@ -7724,7 +7724,7 @@ Implementation status: **Contract defined by TSK-0016 (architecture-only);
 production implementation delivered by TSK-0017.** Command, Event, resolver,
 applier, Application handler, and State schema writer behavior for this
 narrow Character Death Save slice are implemented in production. The current
-production State schema writer is exact V10 (§12.13), preserving this
+production State schema writer is exact V11 (§12.13), preserving this
 section's additive V9 lifecycle contract and adding §3.38 Movement expenditure.
 
 This section resolves the architectural questions required for the minimal
@@ -8509,7 +8509,7 @@ For ordinary Healing (§3.20):
 
 #### State schema V9 target contract
 
-The current production State schema writer is exact V10 (§3.38, §12.13).
+The current production State schema writer is exact V11 (§3.39, §12.13).
 It preserves the V9 contract implemented by TSK-0017: additive over V8,
 adding only the four Character
 death-save/lifecycle fields above. V9 does not change any root `state` key,
@@ -8621,8 +8621,8 @@ production implementation delivered by TSK-0019.** `EndCombatCommand`/
 `CombatEnded` V1 builder/applier, and `EndCombatHandler` are implemented in
 production, confirmed through deterministic Domain/Application tests and a
 real-adapter/filesystem `StartCombat → EndCombat → reload → StartCombat`
-round trip. The current production State schema writer is exact V10
-(§3.38, §12.13); this section introduced no new schema version, confirmed
+round trip. The current production State schema writer is exact V11
+(§3.39, §12.13); this section introduced no new schema version, confirmed
 by that same round trip (see "Persistence" below).
 
 This section resolves the architectural questions DEF-0015 and Roadmap
@@ -8850,7 +8850,7 @@ builder/applier, and `PlaceCombatantHandler` are implemented in production,
 confirmed through deterministic Domain/Application tests and a
 real-adapter/filesystem round trip that persists a new `CombatPosition`
 alongside an existing one and reloads both correctly. The current
-production State schema writer is exact V10 (§3.38, §12.13); this
+production State schema writer is exact V11 (§3.39, §12.13); this
 section introduced no new schema version, confirmed by that same round
 trip (see "State schema" below).
 
@@ -9112,7 +9112,7 @@ save. No new atomicity guarantee is introduced.
 
 No State schema V10 is introduced. `positions` is already a persisted
 field of the existing Combat wire shape since State schema V7 (§3.30); the
-current production writer is State schema V10 (§3.38, §12.13). This section
+current production writer is State schema V11 (§3.39, §12.13). This section
 changes the *content* one Command may add to an already-existing
 `positions` array, not the wire schema itself; the existing V7/V8/V9
 serializer contract (§§3.30, 3.33, 3.34, 12.9, 12.13) is unchanged.
@@ -9263,8 +9263,8 @@ one active Combat participant
 → cumulative movement for the current turn must remain within walking_speed
 ```
 
-A Character is explicitly unsupported by this slice because no authoritative
-Character walking-speed source exists yet. No temporary Character or universal
+A Character was explicitly unsupported by the original TSK-0040 slice;
+§3.39 now supplies its authoritative walking-speed source and consumer. No temporary Character or universal
 `30 ft` default is introduced.
 
 `MoveCombatantCommand` is Combat-only. Absence of `CombatState` is a failed
@@ -9636,7 +9636,7 @@ it does not individually reset Movement fields.
 #### Persistence and atomicity
 
 The persistence consequence is the additive State schema V10 contract in
-§12.13. TSK-0040 implements this contract with the current exact V10 writer.
+§12.13. TSK-0040 implemented this contract with the V10 writer; current V11 (§3.39) preserves it.
 
 One successful Move is one logical transaction:
 
@@ -9697,11 +9697,11 @@ sufficient for the evidenced first consumer.
 
 ### 3.39. Character walking-speed source and voluntary Combat Movement (TSK-0051)
 
-**Implementation status:** contract defined; production implementation pending TSK-0051. **Current production writer remains exact V10 until TSK-0051 is delivered.**
+**Implementation status:** implemented (TSK-0051): Character speed State, strict V11 persistence, Character Movement through the existing handler/Event, and deterministic real-adapter Move → Attack → Move with fresh filesystem reloads. **Current production writer is exact V11.**
 
 #### Narrow use case and authoritative source
 
-The first Character voluntary walking Movement consumer is an active, positioned Character in Combat. Section §3.39 **extends** the original Monster-only §3.38 policy for Character actors **only after TSK-0051 implementation**; §3.38's original Character rejection is historical scope, not an immutable prohibition. Until delivery, the current handler still rejects Characters and uses the V10 writer. No authoritative Character speed source exists in current production, and an implicit universal 30-foot speed would invent a rule. For this consumer, extend the existing `CharacterState` projection under `Creature / CreatureDomain` ownership with an appended field (after `dead` so prior positional construction remains valid):
+The first Character voluntary walking Movement consumer is an active, positioned Character in Combat. Section §3.39 **extends** the original Monster-only §3.38 policy for Character actors **as implemented by TSK-0051**; §3.38's original Character rejection is historical scope, not an immutable prohibition. The handler now reads explicit Character speed without a universal 30-foot default. This consumer extends the existing `CharacterState` projection under `Creature / CreatureDomain` ownership with an appended field (after `dead` so prior positional construction remains valid):
 
 ```python
 walking_speed: int | None = None
@@ -9760,9 +9760,9 @@ StateStore.load(campaign_id)
 
 The new Character path performs **no MonsterDefinition lookup** while retaining the existing handler `DefinitionSource` constructor dependency for the Monster path. Monster paths retain their existing `DEFINITION_NOT_FOUND`/`INVALID_STATE`/`ACTION_NOT_AVAILABLE` error precedence and the same `DefinitionSource` dependency; do not move Monster HP/speed checks across its Definition lookup. No new `ErrorCode` or broad Creature Movement policy is introduced. Character 0-HP Movement rejection is a concrete movement-eligibility rule, not a generic lifecycle or targetability rule.
 
-#### Planned State schema V11
+#### Implemented State schema V11
 
-New Character walking speed requires **V11**, specified under §12.13 below. Contract publication does not change the production writer: V10 stays active until TSK-0051 implements V11 together with code, tests, and documentation status updates.
+Character walking speed is persisted by the current exact **V11** writer (TSK-0051). The exact additive contract and historical readers are specified in §12.13.
 
 #### Exclusions
 
@@ -12624,8 +12624,8 @@ StateStoreError
 
 `StateSerializer` является чистой Infrastructure-границей между
 `StateSnapshot` и каноническим JSON-compatible mapping и не выполняет
-filesystem I/O. Текущий production writer — exact State schema V10
-(`SCHEMA_V10_VERSION`), additive over V9; его точный field-by-field контракт
+filesystem I/O. Текущий production writer — exact State schema V11
+(`SCHEMA_V11_VERSION`), additive over V10; его точный field-by-field контракт
 (top-level `inventories`, `equipment`, Character `weaponProficiencies` —
 §3.29; non-null `combat.positions` — §3.30; non-null `combat.actionSpent` —
 §3.33; required Character `deathSaveSuccesses`/`deathSaveFailures`/
@@ -12680,12 +12680,13 @@ envelope-форму; это не current writer shape:
 }
 ```
 
-JSON использует camelCase. The current V10 writer always emits
-`schemaVersion: 10` and the exact V7 top-level state fields defined in
+JSON использует camelCase. The current V11 writer always emits
+`schemaVersion: 11` and the exact V7 top-level state fields defined in
 §3.30 (`campaign`, `creatures`, `characters`, `inventories`, `equipment`,
 `combat`), additionally requiring `actionSpent` inside a non-null `combat`
 (§3.33) and `movementSpent` (§3.38), and requiring `deathSaveSuccesses`, `deathSaveFailures`,
-`deathSaveStable`, and `dead` on every Character entry (§3.34). V6
+`deathSaveStable`, and `dead` on every Character entry (§3.34), plus required
+`walkingSpeed` (§3.39). V6
 preserves the V5 campaign, creature, and combat shapes and preserves the
 pre-existing Character fields/semantics, while adding the V6 Character
 `weaponProficiencies` field and the top-level `inventories`/`equipment`
@@ -12719,8 +12720,9 @@ V8 с теми же V7 полями плюс обязательным `actionSpe
 `combat` (exact field-by-field контракт — §3.33, без Character death-save
 полей), legacy V9 с теми же V8 полями плюс обязательными Character
 `deathSaveSuccesses`, `deathSaveFailures`, `deathSaveStable` и `dead`
-(exact field-by-field контракт — §3.34), и current V10 с теми же V9
-полями плюс обязательным Combat `movementSpent` (§3.38). V1–V9 сохраняют
+(exact field-by-field контракт — §3.34), и historical V10 с теми же V9
+полями плюс обязательным Combat `movementSpent` (§3.38), и current V11 с
+обязательным Character `walkingSpeed` (§3.39). V1–V10 сохраняют
 свои exact historical shapes без retroactive расширения новыми полями. Поле
 `characters` в V1 является unknown и запрещено. Успешное чтение V1 создаёт
 `StateSnapshot.characters=()` и не придумывает level или proficiency
@@ -12999,15 +13001,17 @@ Command Schema Version
 
 — четыре независимых механизма версионирования.
 
-Current State schema — exact integer `schemaVersion = 10` (§3.38/§12.13,
-TSK-0040), strictly additive over V9 Character lifecycle (§3.34/TSK-0017),
+Current State schema — exact integer `schemaVersion = 11` (§3.39/§12.13,
+TSK-0051), strictly additive over V10 Movement expenditure and V9 Character lifecycle (§3.34/TSK-0017),
 V8 `combat.actionSpent` (§3.33/TSK-0015), V7 `combat.positions`
 (§3.30/TSK-0010), and V6 Inventory/Equipment plus Character
 `weaponProficiencies` (§3.29/TSK-0004). The production writer emits only
-exact V10. Reader also accepts exact legacy integer `schemaVersion = 1`
-through `schemaVersion = 9`; other values are rejected, and `bool` is not
+exact V11. Reader also accepts exact legacy integer `schemaVersion = 1`
+through `schemaVersion = 10`; other values are rejected, and `bool` is not
 an integer schema version. V10 adds only non-null Combat `movementSpent`;
-V5–V9 Combat decodes with `movement_spent=0`. This is a storage schema
+V5–V9 Combat decodes with `movement_spent=0`. V11 adds required Character
+`walkingSpeed`; legacy V2–V10 Characters decode with `walking_speed=None`.
+This is a storage schema
 version, not a revision of current State or a concurrency-control mechanism.
 
 ---
@@ -13046,9 +13050,10 @@ Migration
 State v3
 ```
 
-Текущие production migration paths читают exact legacy V1–V9 и current V10
+Текущие production migration paths читают exact legacy V1–V10 и current V11
 согласно их фиксированным wire-контрактам; production writer выпускает exact
-V10 (§3.38), реализованный TSK-0040, additive поверх exact V9 (§3.34),
+V11 (§3.39), реализованный TSK-0051, additive поверх exact
+V10 (§3.38), реализованного TSK-0040, additive поверх exact V9 (§3.34),
 реализованного TSK-0017, additive поверх exact V8 (§3.33),
 реализованного TSK-0015, которая, в свою очередь, additive поверх exact V7
 (§3.30), реализованного TSK-0010, которая, в свою очередь, additive поверх
@@ -13082,7 +13087,7 @@ V6 обязан сохранять свои реальные `weaponProficiencie
 proficiency, tactical placement, Action-expenditure или death-save/lifecycle
 facts из class, Creature Definition, level либо других старых данных.
 Успешно загруженный V1–V5 snapshot при следующем сохранении записывается
-текущим V10 writer как exact V10: projections, отсутствовавшие в исходной версии, получают
+текущим V11 writer как exact V11: projections, отсутствовавшие в исходной версии, получают
 canonical empty/false defaults, как указано выше (`positions = ()`,
 `action_spent = False`, `deathSaveSuccesses = 0`, `deathSaveFailures = 0`,
 `deathSaveStable = False`, `dead = False` включительно). Успешно загруженный
@@ -13108,7 +13113,7 @@ additive Action-expenditure contract над V7: сохраняет все V7 п�
 только обязательный `combat.actionSpent: bool` внутри non-null `combat`; V7
 остаётся exact historical Combat shape без `actionSpent`. State schema V9
 (§3.34, TSK-0017) — additive Character death-save/lifecycle contract над V8
-и является историческим additive-предшественником current V10: сохраняет все V8 поля без изменений и
+и является историческим additive-предшественником V10/V11: сохраняет все V8 поля без изменений и
 добавляет только `deathSaveSuccesses`/`deathSaveFailures`/`deathSaveStable`/
 `dead` к каждому Character; не меняет ни один root `state` key и не меняет
 `CreatureState`/`CombatState`/Inventory/Equipment wire shapes; V8 остаётся
@@ -13131,7 +13136,7 @@ Save progress actually happened in that legacy game.
 #### State schema V10 — turn-local Movement expenditure (TSK-0040)
 
 Architecture §3.38 / DEC-0054 define the additive State schema implemented
-by TSK-0040. The **current production writer is exact V10**.
+by TSK-0040. The **current production writer is exact V11** (§3.39), preserving V10 Movement expenditure.
 
 V10 is strictly additive over exact V9. The top-level envelope, root `state`
 keys, Campaign, Creature, Character, Inventory, Equipment, and
@@ -13204,8 +13209,8 @@ The V5–V9 default is canonical compatibility, not reconstructed history:
 voluntary Movement expenditure did not exist as an authoritative persisted
 fact in those schemas and no durable Event replay exists to recover it.
 
-With V10 as the current writer, successfully loaded legacy
-snapshots are saved as exact V10 while preserving every real value their
+With V11 as the current writer, successfully loaded legacy
+snapshots are saved as exact V11 while preserving every real value their
 source schema already carried and materializing only the documented
 compatibility defaults. Historical V1–V9 wire schemas are never retroactively
 extended and continue to reject `movementSpent` where it was not defined.
@@ -13215,56 +13220,9 @@ reader branches remain explicit and must be extended deliberately so V10
 inherits V9 behavior before adding only this one Combat field.
 
 
-#### Planned State schema V11
+#### Current State schema V11 — Character walking speed (TSK-0051)
 
-New Character walking speed requires **V11**, specified under §12.13 below. Contract publication does not change the production writer: V10 stays active until TSK-0051 implements V11 together with code, tests, and documentation status updates.
-
-#### Exclusions
-
-No Character creation UI/API, speed-calculation provenance or update Command, racial/class traits, temporary/modified speed, additional movement modes, Dash, Disengage, forced movement, Opportunity Attacks, Reactions, pathfinding, grid/hex, collision, occupancy, cover/visibility, terrain, generic geometry, MovementEngine, database, LLM, EventStore or replay. Absence of Opportunity Attack adjudication is not a gameplay declaration that voluntary Movement never provokes one (§3.38).
-
-### 3.40. Goblin Scimitar in-Combat melee reach (TSK-0052)
-
-**Implementation status:** contract defined; production implementation and real-adapter encounter regression pending TSK-0052. Depends on the authoritative Character Movement continuation TSK-0051 for the complete scenario; the independent Goblin reach gate itself does not change Movement.
-
-#### Exact consumer and spatial source
-
-The additional melee gate applies **only** when an existing `AttackCommand` matches **all** four logical identities: `StateSnapshot.campaign.ruleset_id == "dnd_5e"`, `ruleset_version == "5.1"`, attacking `actor_creature.definition_id == MonsterDefinition.id == "goblin"`, selected unique `MonsterAttackDefinition.action_id == "scimitar"`, **and** `StateSnapshot.combat is not None`. The packaged Goblin is the real production consumer, but a handler uses identity and does not attempt to prove which adapter/file produced a returned Definition. This does not create a global Monster reach rule for future/custom actions and does not add `reach` or `melee` fields to `MonsterAttackDefinition`, `AttackPayload`, `CombatState`, or the packaged Goblin. No additional Definition resources are introduced.
-
-Use existing Combat-owned `CombatState.positions`, `combat.order`, `is_within_melee_reach`, and `DND_5E_FIRST_CONSUMER_MELEE_REACH_FEET == 5` (§3.30). Reach is `dx² + dy² <= 25` inclusive, using the existing integer-foot coordinates; negative coordinates and multiple combatants at one point retain the existing occupancy-free semantics. Do not use Movement's `ceil(sqrt(...))` to replace the established melee reach predicate. Only the two endpoint positions matter; collision/visibility/line-of-sight remain unimplemented.
-
-#### Validation precedence and failures
-
-Within `AttackHandler`, retain all current guards before routing: actor existence, in-Combat active-turn, spent ordinary Action; then Monster Definition selection, positive actor HP, Monster-only payload validation, exactly-one-supported-action, target Creature existence, and target CharacterState requirement, in their **existing** order. Add the Goblin-specific spatial checks **after valid target category and before AC computation, attack roll mode derivation, DiceEngine use or any Event/State/persistence side effect**:
-
-```text
-actor CombatPosition missing
-  → ACTION_NOT_AVAILABLE, entity_id=actor_id, field="position"
-target_id not in combat.order
-  → INVALID_TARGET, entity_id=target_id, field="target_id"
-target CombatPosition missing
-  → INVALID_TARGET, entity_id=target_id, field="position"
-target squared distance > 25
-  → OUT_OF_RANGE, entity_id=target_id, field=None
-```
-
-The order above is normative: actor position is tested before target membership; target membership before target position; reach last. Failure produces one existing EngineError, `success=False`, `outcome=None`, no Events, no Event metadata allocation, no DiceEngine call and no `StateStore.save()`; Action and Movement expenditures are unchanged. Distance exactly 5 ft is permitted. Existing `AttackCommand`/`AttackPayload` and all current Event envelopes and causality (`MonsterAttackResolved`, optional `MonsterAttackDamageResolved`/`DamageApplied`/Character lifecycle and `TurnActionSpent`) remain unchanged on accepted attacks. A hit and a miss still spend one ordinary Action in Combat, but only after all gating succeeds. No new State schema version is introduced by this section.
-
-When Combat is absent, the **entire existing** Goblin attack behavior remains unchanged (no new position, membership or reach requirement). Other Monster Definitions/action identities, Character Dagger and Character unarmed attack paths remain unchanged. Monster/Character 0-HP targetability is not altered; it remains explicitly deferred under DEF-0015.
-
-#### End-to-end proof boundary
-
-TSK-0052 must prove the deterministic, headless `Character Dagger vs Goblin Scimitar` Combat flow using real `FilesystemStateStore`, `PackagedDefinitionSource`, and a single seeded `PythonDiceEngine(random.Random(10))`. Under `StartCombatCommand` ordered participants `(character_001, monster_001)`, initiative yields Character 19 versus Goblin 2+2; initial positions are Character `(0,0)` and Goblin `(12,0)`. Character (DEX 10, level 1, dagger proficiency and equipped authoritative `item_001` → `dagger` inventory/equipment source, `walking_speed=20`, HP 20) Moves to `(8,0)`, hits with Dagger d20=14 for 4 damage against Goblin HP 7 (remaining 3), and moves back to `(0,0)`, spending 16 ft. After Character `AdvanceTurn`, an out-of-range Goblin Scimitar Attack at `(12,0)` fails without consuming dice, metadata or State save. Goblin then Moves to `(5,0)` and hits with d20=19 for 3 damage (Character HP 17). Goblin `AdvanceTurn` wraps to round 2 and resets turn resources, then an explicit `EndCombat` retires Combat State. All relevant Commands use real handlers with fresh reloads between accepted transitions. This is a **test scenario**, not a new orchestration interface, engine dispatcher, encounter AI, victory detection or multi-Command transaction. Respect seeded initiative order and the existing automatic Character Death Save trigger when applicable. Assert Event ordering/causality and persisted HP/positions/Action/Movement without inventing a durable event journal.
-
-#### Exclusions
-
-No ranged/thrown/reach variants, Monster action classification framework, reactions or attacks of opportunity, full melee targeting for arbitrary Monsters, cover/visibility/line of sight, movement terrain/collision/path checks, new Attack/Result/Event contracts, AI DM, API, or web UI.
-
-## C. Add to §12.13 after the V10 subsection (before the next section heading)
-
-#### Planned State schema V11 — Character walking speed (TSK-0051)
-
-**Status at contract publication: defined, not implemented; current production writer remains exact V10.** TSK-0051 will activate exact V11 after all V11 reader/writer and regression requirements are delivered. Do not describe V11 as already available in runtime during the documentation-only publication.
+**Implementation status: implemented (TSK-0051); current production writer is exact V11.** V1–V10 retain their exact historical readers. V2–V10 Characters project `walking_speed=None` and save as V11 without inferring speed; V1 has no Character projection. V11 write validation also rejects invalid post-construction mutations of Character speed.
 
 Exact V11 is **strictly additive over exact V10**. It does not change the envelope, root state key set, Campaign/Creature/Combat/Inventory/Equipment/CombatPosition shapes or any existing Character key/value. Every Character object gains one **required** camelCase key:
 
@@ -13283,7 +13241,7 @@ V2–V10 Character: walking_speed = None on read
 V11 Character: walking_speed = decoded walkingSpeed
 ```
 
-Reading legacy V2–V10 does not infer speed from race, class, level or other data. Once the V11 writer ships, a successfully loaded legacy snapshot is saved as exact V11 with `walkingSpeed:null` on every Character unless a supported, explicitly supplied authoritative speed exists. The old Character proficiency, weapon, lifecycle fields and all V10 Combat `positions`, `actionSpent`, `movementSpent`, and other persisted fields must round-trip with no loss. Historical V1–V10 parsers are not reinterpreted by comparing their semantics against a mutable `SCHEMA_VERSION`; historical fixed version sentinels remain fixed. Do not add a migration framework or a parallel source of Character speed.
+Reading legacy V2–V10 does not infer speed from race, class, level or other data. A successfully loaded legacy snapshot is saved as exact V11 with `walkingSpeed:null` on every Character unless a supported, explicitly supplied authoritative speed exists. The old Character proficiency, weapon, lifecycle fields and all V10 Combat `positions`, `actionSpent`, `movementSpent`, and other persisted fields must round-trip with no loss. Historical V1–V10 parsers are not reinterpreted by comparing their semantics against a mutable `SCHEMA_VERSION`; historical fixed version sentinels remain fixed. Do not add a migration framework or a parallel source of Character speed.
 
 ---
 

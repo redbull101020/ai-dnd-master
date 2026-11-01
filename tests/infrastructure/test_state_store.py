@@ -172,7 +172,7 @@ def test_save_load_round_trip_and_exact_location(tmp_path: Path) -> None:
     serialized = state_path.read_text(encoding="utf-8")
     assert serialized.endswith("\n")
     data = json.loads(serialized)
-    assert data["schemaVersion"] == 10
+    assert data["schemaVersion"] == 11
     assert data["state"]["characters"] == []
     assert data["state"]["inventories"] == []
     assert data["state"]["equipment"] == []
@@ -299,7 +299,7 @@ def test_save_load_v9_preserves_prior_state_and_death_save_lifecycle(
 
     state_path = tmp_path / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 10
+    assert data["schemaVersion"] == 11
     assert data["state"]["characters"][0] == {
         "id": "character_001",
         "totalLevel": 5,
@@ -310,6 +310,7 @@ def test_save_load_v9_preserves_prior_state_and_death_save_lifecycle(
         "deathSaveFailures": 1,
         "deathSaveStable": False,
         "dead": False,
+        "walkingSpeed": None,
     }
     assert data["state"]["inventories"] == [
         {
