@@ -118,7 +118,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | `Definition` (база), `ItemDefinition`, `WeaponDefinition`, `MonsterDefinition` | §3.1, §3.1.1 |
 | Monster base walking-speed source (`walking_speed: int | None = None`, feet, after `attacks`; packaged `walkingSpeed` required, Goblin 30 ft/version 1; Monster voluntary Movement implemented in §3.38) | §3.37 |
 | Monster voluntary Movement (`MoveCombatantCommand`, `CombatantMoved` V1, split `movement_spent`, Action-independent, turn reset) + State schema V10 (TSK-0040); Dash, terrain, Reactions/OA deferred | §3.38, §12.13 |
-| Implemented: explicit `CharacterState.walking_speed` (`None`/exact nonnegative int), Character Movement using `MoveCombatantCommand`/`CombatantMoved` V1, exact State schema V11 (TSK-0051). Pending: in-Combat Goblin Scimitar 5-ft reach (TSK-0052). Current production writer is V11. | §3.39, §3.40, §12.13 |
+| Implemented: explicit `CharacterState.walking_speed` (`None`/exact nonnegative int), Character Movement using `MoveCombatantCommand`/`CombatantMoved` V1, exact State schema V11 (TSK-0051). Implemented: narrowly identified in-Combat Goblin Scimitar 5-ft pre-roll reach and seeded two-combatant real-adapter encounter (TSK-0052); broad Targeting/Monster actions/Movement remain open. Current production writer is V11. | §3.39, §3.40, §12.13 |
 | `DamageType` | §3.1.1 |
 | `CreatureState`, `CampaignState`, `StateSnapshot`, `CharacterState` | §3.2.1–§3.2.4 |
 | `DiceEngine`, `DiceRoll` | §1.7.1 |

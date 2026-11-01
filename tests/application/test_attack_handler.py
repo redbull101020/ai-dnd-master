@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -1290,6 +1291,10 @@ def test_monster_attack_at_zero_hp_in_combat_saves_all_consequences_once() -> No
         round=2,
         order=(actor.id, target.id),
         active_index=0,
+        positions=(
+            CombatPosition(creature_id=actor.id, x=0, y=0),
+            CombatPosition(creature_id=target.id, x=3, y=4),
+        ),
     )
     snapshot = make_snapshot(
         creatures=(actor, target),
@@ -1342,6 +1347,10 @@ def test_monster_attack_damage_preserves_existing_combat_state() -> None:
         round=2,
         order=(actor.id, target.id),
         active_index=0,
+        positions=(
+            CombatPosition(creature_id=actor.id, x=0, y=0),
+            CombatPosition(creature_id=target.id, x=3, y=4),
+        ),
     )
     snapshot = make_snapshot(
         creatures=(actor, target),
@@ -1675,6 +1684,10 @@ def test_monster_attack_miss_inside_combat_consumes_and_saves_action() -> None:
         round=1,
         order=(actor.id, target.id),
         active_index=0,
+        positions=(
+            CombatPosition(creature_id=actor.id, x=0, y=0),
+            CombatPosition(creature_id=target.id, x=3, y=4),
+        ),
     )
     snapshot = make_snapshot(
         creatures=(actor, target),
@@ -1720,6 +1733,10 @@ def test_monster_attack_zero_source_damage_inside_combat_consumes_and_saves_acti
         round=1,
         order=(actor.id, target.id),
         active_index=0,
+        positions=(
+            CombatPosition(creature_id=actor.id, x=0, y=0),
+            CombatPosition(creature_id=target.id, x=3, y=4),
+        ),
     )
     snapshot = make_snapshot(
         creatures=(actor, target),
@@ -1766,6 +1783,10 @@ def test_monster_attack_miss_inside_combat_save_failure_propagates_and_keeps_loa
         round=1,
         order=(actor.id, target.id),
         active_index=0,
+        positions=(
+            CombatPosition(creature_id=actor.id, x=0, y=0),
+            CombatPosition(creature_id=target.id, x=3, y=4),
+        ),
     )
     snapshot = make_snapshot(
         creatures=(actor, target),
@@ -3449,3 +3470,136 @@ def test_character_weapon_attack_against_zero_hp_target_still_resolves() -> None
     assert result.events[2].payload["newHp"] == 0
     assert result.events[3].caused_by == result.events[0].event_id
     assert len(store.save_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("positions", "order", "code", "entity_id", "field"),
+    [
+        ((), ("monster_001",), ErrorCode.ACTION_NOT_AVAILABLE, "monster_001", "position"),
+        ((CombatPosition("monster_001", -7, -8),), ("monster_001",),
+         ErrorCode.INVALID_TARGET, "character_001", "target_id"),
+        ((CombatPosition("monster_001", -7, -8),), ("monster_001", "character_001"),
+         ErrorCode.INVALID_TARGET, "character_001", "position"),
+        ((CombatPosition("monster_001", -7, -8), CombatPosition("character_001", -6, -3)),
+         ("monster_001", "character_001"), ErrorCode.OUT_OF_RANGE, "character_001", None),
+    ],
+)
+def test_goblin_scimitar_spatial_rejection_has_no_side_effects(
+    positions: tuple[CombatPosition, ...], order: tuple[str, ...],
+    code: ErrorCode, entity_id: str, field: str | None,
+) -> None:
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), make_character_target()),
+        characters=(make_character(),),
+        combat=CombatState(
+            id="combat_001", round=1, order=order, active_index=0,
+            positions=positions, movement_spent=7,
+        ),
+    )
+    before = deepcopy(snapshot)
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls,
+    )
+    dice = ScriptedDiceEngine(10, calls, fail=True)
+    metadata = FixedEventMetadataProvider(calls, fail=True)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is False
+    assert result.outcome is None
+    assert result.events == ()
+    assert len(result.errors) == 1
+    error = result.errors[0]
+    assert (error.code, error.entity_id, error.field) == (code, entity_id, field)
+    assert calls == ["load", "definition"]
+    assert dice.roll_calls == []
+    assert metadata.next_calls == []
+    assert store.save_calls == []
+    assert snapshot == before
+
+
+@pytest.mark.parametrize("target_xy", [(-4, -4), (-7, -8)])
+@pytest.mark.parametrize("roll", [1, 10])
+def test_goblin_scimitar_reach_boundary_and_overlap_spend_action(
+    target_xy: tuple[int, int], roll: int,
+) -> None:
+    combat = CombatState(
+        id="combat_001", round=1, order=("monster_001", "character_001"),
+        active_index=0, movement_spent=7,
+        positions=(CombatPosition("monster_001", -7, -8),
+                   CombatPosition("character_001", *target_xy)),
+    )
+    snapshot = make_snapshot(
+        creatures=(make_monster_actor(), make_character_target()),
+        characters=(make_character(),), combat=combat,
+    )
+    before = deepcopy(snapshot)
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(
+        make_monster_definition(attacks=(make_scimitar_attack(),)), calls,
+    )
+    dice = ScriptedDiceEngine(roll, calls, additional_rolls=(4,))
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert result.outcome is not None
+    assert result.outcome.hit is (roll == 10)
+    expected_types = ["MonsterAttackResolved"]
+    if roll == 10:
+        expected_types += ["MonsterAttackDamageResolved", "DamageApplied"]
+    assert [event.type for event in result.events] == expected_types + ["TurnActionSpent"]
+    assert result.events[0].caused_by is None
+    assert all(event.command_id == result.command_id for event in result.events)
+    assert result.events[-1].caused_by == result.events[0].event_id
+    if roll == 10:
+        assert result.events[1].caused_by == result.events[0].event_id
+        assert result.events[2].caused_by == result.events[1].event_id
+    assert len(store.save_calls) == 1
+    saved = store.save_calls[0]
+    assert saved.combat is not None
+    assert saved.combat.action_spent is True
+    assert saved.combat.movement_spent == 7
+    assert saved.combat.positions == combat.positions
+    assert next(c for c in saved.creatures if c.id == "character_001").current_hp == (
+        5 if roll == 10 else 11
+    )
+    assert snapshot == before
+
+
+@pytest.mark.parametrize(
+    "mismatch", ["ruleset_id", "ruleset_version", "actor_definition", "definition_id", "action_id", "outside_combat"],
+)
+def test_goblin_scimitar_spatial_gate_leaves_other_identities_unchanged(mismatch: str) -> None:
+    actor = make_monster_actor()
+    definition = make_monster_definition(attacks=(make_scimitar_attack(),))
+    if mismatch == "actor_definition":
+        actor = replace(actor, definition_id="other_monster")
+    if mismatch == "definition_id":
+        definition = replace(definition, id="other_monster")
+    if mismatch == "action_id":
+        definition = replace(definition, attacks=(make_scimitar_attack(action_id="other_attack"),))
+    snapshot = make_snapshot(
+        creatures=(actor, make_character_target()), characters=(make_character(),),
+        combat=None if mismatch == "outside_combat" else CombatState(
+            id="combat_001", round=1, order=(actor.id,), active_index=0,
+        ),
+    )
+    if mismatch in ("ruleset_id", "ruleset_version"):
+        snapshot = replace(snapshot, campaign=replace(snapshot.campaign, **{mismatch: "other"}))
+    calls: list[str] = []
+    store = SpyStateStore(snapshot, calls)
+    definitions = SpyDefinitionSource(definition, calls)
+    dice = ScriptedDiceEngine(1, calls)
+    metadata = FixedEventMetadataProvider(calls)
+
+    result = handle_monster_attack_with(store, definitions, dice, metadata)
+
+    assert result.success is True
+    assert result.outcome is not None and result.outcome.hit is False
+    assert dice.roll_calls == ["1d20"]
+    assert len(store.save_calls) == (0 if mismatch == "outside_combat" else 1)

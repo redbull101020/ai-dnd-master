@@ -704,3 +704,204 @@ def test_split_movement_attack_and_turn_reset_with_real_adapters(
     assert after_turn.characters == (character_state,)
     assert after_turn.inventories == (inventory,)
     assert after_turn.equipment == (equipment,)
+
+
+def test_two_combatant_seeded_headless_encounter(tmp_path: Path) -> None:
+    """Script existing handlers; no dispatcher, victory policy or EventStore.
+
+    Movement does not adjudicate Reactions/Opportunity Attacks, including the
+    Character's retreat after attacking. Neither is claimed to be non-provoking.
+    """
+    from dnd_engine.application.handlers.attack import AttackHandler
+    from dnd_engine.application.handlers.move_combatant import MoveCombatantHandler
+    from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
+    from dnd_engine.domain.commands.move_combatant import (
+        MoveCombatantCommand, MoveCombatantPayload,
+    )
+    from dnd_engine.domain.value_objects.ability import Ability
+    from dnd_engine.infrastructure.definitions.packaged import PackagedDefinitionSource
+
+    class CountingStore(FilesystemStateStore):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.saves = 0
+
+        def save(self, snapshot: StateSnapshot) -> None:
+            super().save(snapshot)
+            self.saves += 1
+
+    class UniqueMetadata:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def next_metadata(self, campaign_id: str) -> EventMetadata:
+            assert campaign_id == "campaign_001"
+            self.calls += 1
+            return EventMetadata(
+                event_id=f"event_{self.calls:06d}", timestamp=FIXED_TIMESTAMP,
+            )
+
+    root = tmp_path / "campaigns"
+    character_id, monster_id = "character_001", "monster_001"
+    character = CreatureState(
+        character_id, "fighter", AbilityScores(16, 10, 14, 10, 10, 10), 20, 20,
+    )
+    monster = CreatureState(
+        monster_id, "goblin", AbilityScores(8, 14, 10, 10, 8, 8), 7, 7,
+    )
+    character_state = CharacterState(
+        character_id, 1, frozenset(), frozenset(), frozenset({"dagger"}),
+        walking_speed=20,
+    )
+    inventory = InventoryState(character_id, (InventoryItemState("item_001", "dagger"),))
+    equipment = EquipmentState(character_id, "item_001")
+    FilesystemStateStore(root).save(StateSnapshot(
+        campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
+        creatures=(character, monster), characters=(character_state,),
+        inventories=(inventory,), equipment=(equipment,),
+    ))
+    store = CountingStore(root)
+    metadata = UniqueMetadata()
+    rng = random.Random(10)
+    dice = PythonDiceEngine(rng)
+    definitions = PackagedDefinitionSource()
+    start = StartCombatHandler(state_store=store, dice=dice, event_metadata_provider=metadata)
+    place = PlaceCombatantHandler(state_store=store, event_metadata_provider=metadata)
+    move = MoveCombatantHandler(state_store=store, definition_source=definitions,
+                                event_metadata_provider=metadata)
+    attack = AttackHandler(state_store=store, definition_source=definitions,
+                           dice=dice, event_metadata_provider=metadata)
+    advance = AdvanceTurnHandler(state_store=store, dice=dice, event_metadata_provider=metadata)
+    end = EndCombatHandler(state_store=store, event_metadata_provider=metadata)
+    state_path = root / "campaign_001" / "state.json"
+    seen_ids: set[str] = set()
+
+    def accepted(handler, command):
+        before_saves, before_metadata = store.saves, metadata.calls
+        result = handler.handle(command)
+        assert result.success and result.errors == ()
+        assert store.saves == before_saves + 1
+        assert metadata.calls == before_metadata + len(result.events)
+        for event in result.events:
+            assert event.event_id not in seen_ids
+            seen_ids.add(event.event_id)
+            assert event.version == 1 and event.actor_id == command.actor_id
+            assert event.campaign_id == "campaign_001"
+            assert event.command_id == command.command_id
+        assert json.loads(state_path.read_text(encoding="utf-8"))["schemaVersion"] == 11
+        # A new adapter for every accepted Command, never the handler's loaded object.
+        loaded = FilesystemStateStore(root).load("campaign_001")
+        assert loaded.characters == (character_state,)
+        assert loaded.inventories == (inventory,) and loaded.equipment == (equipment,)
+        return result, loaded
+
+    def combat_state(loaded, actor, spent, action, positions, round_number=1):
+        combat = loaded.combat
+        assert combat is not None
+        assert combat.order == (character_id, monster_id)
+        assert (combat.active_creature_id, combat.round) == (actor, round_number)
+        assert (combat.movement_spent, combat.action_spent) == (spent, action)
+        assert {p.creature_id: (p.x, p.y) for p in combat.positions} == positions
+
+    result, loaded = accepted(start, StartCombatCommand(
+        "command_start_001", "campaign_001", character_id,
+        StartCombatPayload("combat_001", (character_id, monster_id)),
+    ))
+    combat_state(loaded, character_id, 0, False, {})
+    # Seed 10 consumed exactly the two initiative d20s (19 and 2).
+    expected_rng = random.Random(10)
+    assert (expected_rng.randint(1, 20), expected_rng.randint(1, 20)) == (19, 2)
+    assert rng.getstate() == expected_rng.getstate()
+    assert [e.type for e in result.events] == ["CombatStarted"]
+    assert [(entry["creatureId"], entry["roll"]["selected"], entry["modifier"], entry["total"])
+            for entry in result.events[0].payload["entries"]] == [
+                (character_id, 19, 0, 19), (monster_id, 2, 2, 4),
+            ]
+    positions = {}
+    for index, (creature_id, x) in enumerate(((character_id, 0), (monster_id, 12)), 1):
+        result, loaded = accepted(place, PlaceCombatantCommand(
+            f"command_place_{index:03d}", "campaign_001", character_id,
+            PlaceCombatantPayload("combat_001", creature_id, x, 0),
+        ))
+        positions[creature_id] = (x, 0)
+        combat_state(loaded, character_id, 0, False, positions)
+        assert [e.type for e in result.events] == ["CombatantPlaced"]
+
+    def movement(actor, x, spent, action, index):
+        result, loaded = accepted(move, MoveCombatantCommand(
+            f"command_move_{index:03d}", "campaign_001", actor,
+            MoveCombatantPayload("combat_001", x, 0),
+        ))
+        positions[actor] = (x, 0)
+        combat_state(loaded, actor, spent, action, positions)
+        assert [e.type for e in result.events] == ["CombatantMoved"]
+        return loaded
+
+    def hit_chain(result, prefix, roll, damage_roll, amount, previous_hp, new_hp):
+        assert [e.type for e in result.events] == [
+            prefix + "Resolved", prefix + "DamageResolved", "DamageApplied", "TurnActionSpent",
+        ]
+        attack_event, damage_event, applied, action_event = result.events
+        assert attack_event.caused_by is None
+        assert damage_event.caused_by == attack_event.event_id
+        assert applied.caused_by == damage_event.event_id
+        assert action_event.caused_by == attack_event.event_id
+        assert attack_event.payload["roll"]["selected"] == roll
+        assert damage_event.payload["roll"]["rolls"] == (damage_roll,)
+        assert damage_event.payload["amount"] == amount
+        assert (applied.payload["previousHp"], applied.payload["newHp"]) == (previous_hp, new_hp)
+        assert action_event.payload == {"combatId": "combat_001"}
+
+    movement(character_id, 8, 8, False, 1)
+    result, loaded = accepted(attack, AttackCommand(
+        "command_attack_001", "campaign_001", character_id,
+        AttackPayload(target_id=monster_id, weapon_item_id="item_001",
+                      weapon_ability=Ability.DEXTERITY),
+    ))
+    hit_chain(result, "CharacterWeaponAttack", 14, 4, 4, 7, 3)
+    assert result.events[0].payload["abilityModifier"] == 0
+    assert result.outcome.roll.selected == 14 and result.outcome.total == 16
+    assert result.outcome.target_armor_class == 15
+    combat_state(loaded, character_id, 8, True, positions)
+    assert {c.id: c.current_hp for c in loaded.creatures} == {character_id: 20, monster_id: 3}
+    movement(character_id, 0, 16, True, 2)
+    result, loaded = accepted(advance, AdvanceTurnCommand(
+        "command_advance_001", "campaign_001", character_id, AdvanceTurnPayload("combat_001"),
+    ))
+    combat_state(loaded, monster_id, 0, False, positions)
+    before_bytes, before_rng = state_path.read_bytes(), rng.getstate()
+    before_calls, before_saves = metadata.calls, store.saves
+    rejected = attack.handle(AttackCommand(
+        "command_attack_002", "campaign_001", monster_id, AttackPayload(character_id),
+    ))
+    assert not rejected.success and rejected.outcome is None and rejected.events == ()
+    assert len(rejected.errors) == 1
+    error = rejected.errors[0]
+    assert (error.code, error.entity_id, error.field) == (ErrorCode.OUT_OF_RANGE, character_id, None)
+    assert (metadata.calls, store.saves) == (before_calls, before_saves)
+    assert rng.getstate() == before_rng and state_path.read_bytes() == before_bytes
+    assert FilesystemStateStore(root).load("campaign_001") == loaded
+    movement(monster_id, 5, 7, False, 3)
+    result, loaded = accepted(attack, AttackCommand(
+        "command_attack_003", "campaign_001", monster_id, AttackPayload(character_id),
+    ))
+    hit_chain(result, "MonsterAttack", 19, 1, 3, 20, 17)
+    assert result.events[0].payload["attackBonus"] == 4
+    assert (expected_rng.randint(1, 20), expected_rng.randint(1, 4),
+            expected_rng.randint(1, 20), expected_rng.randint(1, 6)) == (14, 4, 19, 1)
+    assert rng.getstate() == expected_rng.getstate()
+    combat_state(loaded, monster_id, 7, True, positions)
+    assert {c.id: c.current_hp for c in loaded.creatures} == {character_id: 17, monster_id: 3}
+    result, loaded = accepted(advance, AdvanceTurnCommand(
+        "command_advance_002", "campaign_001", monster_id, AdvanceTurnPayload("combat_001"),
+    ))
+    combat_state(loaded, character_id, 0, False, {character_id: (0, 0), monster_id: (5, 0)}, 2)
+    before_end = loaded
+    result, loaded = accepted(end, EndCombatCommand(
+        "command_end_001", "campaign_001", character_id, EndCombatPayload("combat_001"),
+    ))
+    assert [e.type for e in result.events] == ["CombatEnded"]
+    assert loaded.combat is None and loaded.creatures == before_end.creatures
+    assert {c.id: c.current_hp for c in loaded.creatures} == {character_id: 17, monster_id: 3}
+    assert store.saves == 11
+    assert sorted(p.name for p in state_path.parent.iterdir()) == ["state.json"]
