@@ -316,3 +316,4 @@ Concrete known constraints.
 | `TSK-0049` | `Done` | PR #141 | Establish isolated Windows verification launch-attribute foundation |
 | `TSK-0050` | `Done` | PR #142 | Establish single-owner Windows verification prelaunch lifecycle gate |
 | `TSK-0051` | `Done` | PR #144 | Implement Character walking-speed source and voluntary Combat Movement |
+| `TSK-0052` | `Done` | PR #146 | Gate Goblin Scimitar melee reach and prove a two-combatant headless encounter |
