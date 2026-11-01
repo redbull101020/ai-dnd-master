@@ -7907,3 +7907,9 @@ Native `CreateProcessW`, Worker/bootstrap, assigned-Job cleanup, capability prov
 ## 2026-11-01 — Phase 3 Combat contract publication (DEC-0056/0057)
 
 Prepared the reviewed MANUAL documentation publication for the accepted Character walking-speed/Movement and Goblin Scimitar Combat-reach decisions (Architecture §§3.39–3.40 and planned State schema V11). Approved standalone TSK-0051 and TSK-0052 specifications define separately executable gameplay continuations; TSK-0052 waits for authoritative TSK-0051 Done. No production code, active State serializer (V10), supported gameplay behavior, or broad Roadmap completion status changed. Implementation, real-adapter behavioral tests and task closure remain future work.
+
+## 2026-11-01 — MANUAL post-STOP recovery governance proposal
+
+Prepared a separate MANUAL governance proposal prompted by PR #144's accepted implementation `548a5aa`, published Closure `193030e` and later repair `5548539`. The proposed AGENTS procedure replaces the ended autonomous ordering/Mode C with a distinct manual audit while retaining full task verification, fresh independent implementation/Closure/final reviews, exact-content publication, final-SHA CI and separate human authorisations. TASK, Harness and CLAUDE reference that single authority; no runtime, gameplay, State, task status or dependency contract is changed.
+
+Verification uses documentation-reference tests and `git diff --check`. The policy must be separately reviewed and published on authoritative main before any recovery relies on it; this unpublished proposal neither completes PR #144 recovery nor authorises its publication or merge. The existing PR #144 worktree and its uncommitted evidence are preserved separately.

@@ -185,6 +185,15 @@ and does not delete the task file. After authoritative `Done` or `Superseded`
 on main, that file may be removed by a separate reviewed change; terminal
 facts remain sufficient without it.
 
+An ended autonomous delivery may instead use the separately invoked
+[MANUAL post-STOP recovery](../AGENTS.md#manual-post-stop-recovery) only under
+that already-published governance. This does not resume the sequence above
+or claim Mode C. A correct existing prospective terminal row is retained;
+recovery adds factual append-only evidence and follows the required fresh
+verification, independent reviews, manual final audit and human publication/
+merge authorisations. Terminal statuses and dependency satisfaction are
+unchanged; the autonomous terminal-only closure validator is unchanged.
+
 If a delivery merges without its closure, `Done` is not inferred from the
 merged code or PR. A separate reviewed **MANUAL** reconciliation must add the
 terminal row with factual evidence and the factual Development Log entry.

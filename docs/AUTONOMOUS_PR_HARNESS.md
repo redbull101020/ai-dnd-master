@@ -1622,6 +1622,14 @@ established.
   explicit autonomous invocation or through the `MANUAL` workflow, as
   governance permits.
 
+The separately published
+[MANUAL post-STOP recovery](../AGENTS.md#manual-post-stop-recovery) is the
+explicit governance exception for a stopped delivery. Its manual final audit
+may replace the ended run's ordering/Mode C only after all manual recovery
+gates are met; it is not a Mode C verdict or reconstructed typed evidence.
+This adds no harness entrypoint, fallback, resume, status or permission.
+Sections 31-34 continue to govern every autonomous execution unchanged.
+
 Mode C keeps its definition of a final cumulative branch audit built with
 `origin/main...HEAD`; in v2 that `HEAD` is the unpublished local closure
 commit. Moving
