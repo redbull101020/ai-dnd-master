@@ -17,6 +17,7 @@ CANONICAL_FIELDS = (
     "death_save_failures",
     "death_save_stable",
     "dead",
+    "walking_speed",
 )
 
 
@@ -313,3 +314,24 @@ def test_character_state_does_not_limit_weapon_membership_count() -> None:
         character_state(weapon_proficiencies=proficiencies).weapon_proficiencies
         == proficiencies
     )
+
+
+@pytest.mark.parametrize("speed", [None, 0, 30, 10**100])
+def test_walking_speed_preserves_explicit_value(speed: int | None) -> None:
+    character = CharacterState("hero", 1, frozenset(), frozenset(), frozenset(),
+                               0, 0, False, False, speed)
+    assert character.walking_speed == speed
+    assert character_state().walking_speed is None
+
+
+@pytest.mark.parametrize("speed", [True, False, 1.0, "30", [], {}])
+def test_walking_speed_rejects_non_integer(speed: object) -> None:
+    with pytest.raises(TypeError, match="walking_speed"):
+        CharacterState("hero", 1, frozenset(), frozenset(), frozenset(),
+                       walking_speed=speed)  # type: ignore[arg-type]
+
+
+def test_walking_speed_rejects_negative() -> None:
+    with pytest.raises(ValueError, match="walking_speed"):
+        CharacterState("hero", 1, frozenset(), frozenset(), frozenset(),
+                       walking_speed=-1)

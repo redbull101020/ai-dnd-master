@@ -20,45 +20,47 @@ LEGACY_SCHEMA_V3_VERSION = 3
 # decoding). Historical V4 semantics must not be keyed off mutable
 # SCHEMA_VERSION: once a future schema bump moves SCHEMA_VERSION past 4,
 # `schema_version == SCHEMA_VERSION` would stop matching legacy V4 payloads
-# and silently mis-decode them as pre-V4 (§3.21, DEC-0035).
+# and silently mis-decode them as pre-V4 (В§3.21, DEC-0035).
 SCHEMA_V4_VERSION = 4
 # Fixed identity of the V5 state shape (adds the top-level `combat` key,
-# §3.25/DEC-0040). Same rationale as SCHEMA_V4_VERSION above: historical V5
+# В§3.25/DEC-0040). Same rationale as SCHEMA_V4_VERSION above: historical V5
 # semantics compare against this fixed sentinel, never against the mutable
 # SCHEMA_VERSION below.
 SCHEMA_V5_VERSION = 5
 # Fixed identity of the V6 state shape (adds the top-level `inventories` and
-# `equipment` keys plus Character `weaponProficiencies`, §3.29/§12.13). Same
+# `equipment` keys plus Character `weaponProficiencies`, В§3.29/В§12.13). Same
 # rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION above: historical V6
 # semantics compare against this fixed sentinel, never against the mutable
 # SCHEMA_VERSION below.
 SCHEMA_V6_VERSION = 6
 # Fixed identity of the V7 state shape (adds Combat `positions`,
-# §3.30/DEC-0045). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
+# В§3.30/DEC-0045). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
 # SCHEMA_V6_VERSION above: historical V7 semantics compare against this
 # fixed sentinel, never against the mutable SCHEMA_VERSION below. V7 is
-# strictly additive over V6 (§12.13): every other V6 shape/field-set is
+# strictly additive over V6 (В§12.13): every other V6 shape/field-set is
 # unchanged and reused as-is by V7.
 SCHEMA_V7_VERSION = 7
 # Fixed identity of the V8 state shape (adds Combat `actionSpent`,
-# §3.33/DEC-0049). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
+# В§3.33/DEC-0049). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
 # SCHEMA_V6_VERSION/SCHEMA_V7_VERSION above: historical V8 semantics compare
 # against this fixed sentinel, never against the mutable SCHEMA_VERSION
-# below. V8 is strictly additive over V7 (§12.13): every other V7
+# below. V8 is strictly additive over V7 (В§12.13): every other V7
 # shape/field-set is unchanged and reused as-is by V8.
 SCHEMA_V8_VERSION = 8
 # Fixed identity of the V9 state shape (adds four Character death-save/
-# lifecycle fields, §3.34/DEC-0050). V9 is strictly additive over V8 and
+# lifecycle fields, В§3.34/DEC-0050). V9 is strictly additive over V8 and
 # leaves every non-Character wire shape unchanged.
 SCHEMA_V9_VERSION = 9
 # Fixed identity of the additive V10 Combat movement-expenditure shape
-# (§3.38/DEC-0054). Every other wire shape retains exact V9 semantics.
+# (В§3.38/DEC-0054). Every other wire shape retains exact V9 semantics.
 SCHEMA_V10_VERSION = 10
-SCHEMA_VERSION = SCHEMA_V10_VERSION
+# Fixed identity of the additive Character walking-speed shape (§3.39/DEC-0056).
+SCHEMA_V11_VERSION = 11
+SCHEMA_VERSION = SCHEMA_V11_VERSION
 # The V4 Creature shape (with `conditions`) is unchanged by the V5 state-level
 # `combat` addition, the V6 weapon-source additions, the V7 Combat
 # `positions` addition, the V8 Combat `actionSpent` addition, and the V9
-# Character lifecycle addition and V10 Movement expenditure; all seven
+# Character lifecycle addition, V10 Movement expenditure and V11 Character speed; all eight
 # versions decode Creature payloads the same way.
 _CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {
     SCHEMA_V4_VERSION,
@@ -68,14 +70,15 @@ _CREATURE_SCHEMA_VERSIONS_WITH_CONDITIONS = {
     SCHEMA_V8_VERSION,
     SCHEMA_V9_VERSION,
     SCHEMA_V10_VERSION,
+    SCHEMA_V11_VERSION,
 }
 
 _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
 _V2_STATE_FIELDS = {"campaign", "creatures", "characters"}
 _V5_STATE_FIELDS = _V2_STATE_FIELDS | {"combat"}
-# V7–V10 add no new top-level state key: `positions`/`actionSpent`
-# and `movementSpent` live inside `combat`; V9 fields live inside Character. V6–V10
+# V7вЂ“V10 add no new top-level state key: `positions`/`actionSpent`
+# and `movementSpent` live inside `combat`; V9 fields live inside Character. V6вЂ“V10
 # therefore share this exact top-level state field set.
 _V6_STATE_FIELDS = _V5_STATE_FIELDS | {"inventories", "equipment"}
 _CAMPAIGN_FIELDS = {"id", "rulesetId", "rulesetVersion"}
@@ -100,6 +103,7 @@ _V9_CHARACTER_FIELDS = _V6_CHARACTER_FIELDS | {
     "deathSaveStable",
     "dead",
 }
+_V11_CHARACTER_FIELDS = _V9_CHARACTER_FIELDS | {"walkingSpeed"}
 _ABILITY_SCORE_FIELDS = {
     "strength",
     "dexterity",
@@ -110,10 +114,10 @@ _ABILITY_SCORE_FIELDS = {
 }
 _COMBAT_FIELDS = {"id", "round", "order", "activeIndex"}
 # V7 adds `positions` to the existing exact V5/V6 Combat wire shape; V5/V6
-# combat payloads must keep rejecting it (§3.30/DEC-0045, §12.13).
+# combat payloads must keep rejecting it (В§3.30/DEC-0045, В§12.13).
 _V7_COMBAT_FIELDS = _COMBAT_FIELDS | {"positions"}
 # V8 adds `actionSpent` to the existing exact V5/V6/V7 Combat wire shape;
-# V5/V6/V7 combat payloads must keep rejecting it (§3.33/DEC-0049, §12.13).
+# V5/V6/V7 combat payloads must keep rejecting it (В§3.33/DEC-0049, В§12.13).
 _V8_COMBAT_FIELDS = _V7_COMBAT_FIELDS | {"actionSpent"}
 _V10_COMBAT_FIELDS = _V8_COMBAT_FIELDS | {"movementSpent"}
 _COMBAT_POSITION_FIELDS = {"creatureId", "x", "y"}
@@ -205,6 +209,10 @@ def _validate_character(character: CharacterState) -> None:
     if not isinstance(character, CharacterState):
         raise TypeError("snapshot characters must contain only CharacterState values")
     _require_str(character.id, "character.id")
+    if character.walking_speed is not None:
+        speed = _require_int(character.walking_speed, "character.walking_speed")
+        if speed < 0:
+            raise ValueError("character.walking_speed must be non-negative")
     total_level = _require_int(character.total_level, "character.total_level")
     if not 1 <= total_level <= 20:
         raise ValueError("character.total_level must be between 1 and 20")
@@ -392,6 +400,7 @@ def _serialize_character(character: CharacterState) -> dict[str, object]:
         "deathSaveFailures": character.death_save_failures,
         "deathSaveStable": character.death_save_stable,
         "dead": character.dead,
+        "walkingSpeed": character.walking_speed,
     }
 
 
@@ -586,6 +595,7 @@ class StateSerializer:
             SCHEMA_V8_VERSION,
             SCHEMA_V9_VERSION,
             SCHEMA_V10_VERSION,
+            SCHEMA_V11_VERSION,
         }:
             raise ValueError(f"unsupported schemaVersion: {schema_version}")
 
@@ -599,6 +609,7 @@ class StateSerializer:
             SCHEMA_V8_VERSION,
             SCHEMA_V9_VERSION,
             SCHEMA_V10_VERSION,
+            SCHEMA_V11_VERSION,
         }:
             state_fields = _V6_STATE_FIELDS
         elif schema_version == SCHEMA_V5_VERSION:
@@ -653,6 +664,7 @@ class StateSerializer:
             SCHEMA_V8_VERSION,
             SCHEMA_V9_VERSION,
             SCHEMA_V10_VERSION,
+            SCHEMA_V11_VERSION,
         }:
             combat = StateSerializer._deserialize_combat(state["combat"], schema_version)
         else:
@@ -664,6 +676,7 @@ class StateSerializer:
             SCHEMA_V8_VERSION,
             SCHEMA_V9_VERSION,
             SCHEMA_V10_VERSION,
+            SCHEMA_V11_VERSION,
         }:
             inventories_data = state["inventories"]
             if type(inventories_data) is not list:
@@ -771,6 +784,8 @@ class StateSerializer:
         character = _require_mapping(data, f"state.characters[{index}]")
         if schema_version == LEGACY_SCHEMA_V2_VERSION:
             character_fields = _V2_CHARACTER_FIELDS
+        elif schema_version == SCHEMA_V11_VERSION:
+            character_fields = _V11_CHARACTER_FIELDS
         elif schema_version in {SCHEMA_V9_VERSION, SCHEMA_V10_VERSION}:
             character_fields = _V9_CHARACTER_FIELDS
         elif schema_version in {
@@ -818,7 +833,7 @@ class StateSerializer:
             proficiencies.append(ability)
 
         # V1 has no Character projection at all; V2 predates skillProficiencies.
-        # V3 and V4 share the same Character schema (§3.2.4 is unaffected by
+        # V3 and V4 share the same Character schema (В§3.2.4 is unaffected by
         # the V4 Creature-only schema bump), so both decode skillProficiencies.
         skill_proficiencies: list[Skill] = []
         if schema_version != LEGACY_SCHEMA_V2_VERSION:
@@ -848,7 +863,7 @@ class StateSerializer:
                 skill_proficiencies.append(skill)
 
         # V1-V5 predate `weaponProficiencies`; legacy migration always yields
-        # empty weapon-source membership (§12.13), never a synthesized value.
+        # empty weapon-source membership (В§12.13), never a synthesized value.
         weapon_proficiencies: list[str] = []
         if schema_version in {
             SCHEMA_V6_VERSION,
@@ -856,6 +871,7 @@ class StateSerializer:
             SCHEMA_V8_VERSION,
             SCHEMA_V9_VERSION,
             SCHEMA_V10_VERSION,
+            SCHEMA_V11_VERSION,
         }:
             weapon_proficiencies_data = character["weaponProficiencies"]
             if type(weapon_proficiencies_data) is not list:
@@ -878,7 +894,7 @@ class StateSerializer:
         death_save_failures = 0
         death_save_stable = False
         dead = False
-        if schema_version in {SCHEMA_V9_VERSION, SCHEMA_V10_VERSION}:
+        if schema_version in {SCHEMA_V9_VERSION, SCHEMA_V10_VERSION, SCHEMA_V11_VERSION}:
             death_save_successes = _require_int(
                 character["deathSaveSuccesses"],
                 f"state.characters[{index}].deathSaveSuccesses",
@@ -906,6 +922,12 @@ class StateSerializer:
             death_save_failures=death_save_failures,
             death_save_stable=death_save_stable,
             dead=dead,
+            walking_speed=(
+                _require_int(character["walkingSpeed"], "character.walkingSpeed")
+                if schema_version == SCHEMA_V11_VERSION
+                and character["walkingSpeed"] is not None
+                else None
+            ),
         )
 
     @staticmethod
@@ -976,7 +998,7 @@ class StateSerializer:
         if data is None:
             return None
         combat = _require_mapping(data, "state.combat")
-        if schema_version == SCHEMA_V10_VERSION:
+        if schema_version in {SCHEMA_V10_VERSION, SCHEMA_V11_VERSION}:
             combat_fields = _V10_COMBAT_FIELDS
         elif schema_version in {SCHEMA_V8_VERSION, SCHEMA_V9_VERSION}:
             combat_fields = _V8_COMBAT_FIELDS
@@ -1000,6 +1022,7 @@ class StateSerializer:
             SCHEMA_V8_VERSION,
             SCHEMA_V9_VERSION,
             SCHEMA_V10_VERSION,
+            SCHEMA_V11_VERSION,
         }:
             positions_data = combat["positions"]
             if type(positions_data) is not list:
@@ -1011,9 +1034,14 @@ class StateSerializer:
 
         # V5-V7 predate `actionSpent`; a legacy active Combat always decodes
         # to an unspent Action -- a compatibility default, not a recovered
-        # historical fact (§3.33/DEC-0049, §12.13).
+        # historical fact (В§3.33/DEC-0049, В§12.13).
         action_spent = False
-        if schema_version in {SCHEMA_V8_VERSION, SCHEMA_V9_VERSION, SCHEMA_V10_VERSION}:
+        if schema_version in {
+            SCHEMA_V8_VERSION,
+            SCHEMA_V9_VERSION,
+            SCHEMA_V10_VERSION,
+            SCHEMA_V11_VERSION,
+        }:
             action_spent = _require_bool(combat["actionSpent"], "combat.actionSpent")
 
         return CombatState(
@@ -1025,7 +1053,7 @@ class StateSerializer:
             action_spent=action_spent,
             movement_spent=(
                 _require_int(combat["movementSpent"], "combat.movementSpent")
-                if schema_version == SCHEMA_V10_VERSION
+                if schema_version in {SCHEMA_V10_VERSION, SCHEMA_V11_VERSION}
                 else 0
             ),
         )

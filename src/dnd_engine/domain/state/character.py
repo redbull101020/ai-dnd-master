@@ -15,8 +15,14 @@ class CharacterState:
     death_save_failures: int = 0
     death_save_stable: bool = False
     dead: bool = False
+    walking_speed: int | None = None
 
     def __post_init__(self) -> None:
+        if self.walking_speed is not None:
+            if type(self.walking_speed) is not int:
+                raise TypeError("walking_speed must be an int or None")
+            if self.walking_speed < 0:
+                raise ValueError("walking_speed must be non-negative")
         if type(self.total_level) is not int:
             raise TypeError("total_level must be an int")
         if not 1 <= self.total_level <= 20:
