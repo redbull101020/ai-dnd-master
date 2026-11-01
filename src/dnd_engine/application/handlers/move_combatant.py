@@ -48,30 +48,37 @@ class MoveCombatantHandler:
             return reject(ErrorCode.ENTITY_NOT_FOUND, "Combat was not found.", command.payload.combat_id, "combat_id")
         if actor.id != combat.active_creature_id:
             return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Movement actor is not active.", actor.id)
-        if any(c.id == actor.id for c in snapshot.characters):
-            return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Character Movement is unsupported.", actor.id)
-        try:
-            definition = self._definition_source.get_definition(
-                ruleset_id=snapshot.campaign.ruleset_id,
-                ruleset_version=snapshot.campaign.ruleset_version,
-                definition_id=actor.definition_id,
-                expected_type=MonsterDefinition,
-            )
-        except DefinitionNotFoundError:
-            return reject(ErrorCode.DEFINITION_NOT_FOUND, "Movement actor Definition was not found.", actor.definition_id, "definition_id")
-        except DefinitionTypeMismatchError:
-            return reject(ErrorCode.INVALID_STATE, "Movement actor Definition is not a MonsterDefinition.", actor.id, "definition_id")
-        if actor.current_hp == 0:
-            return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Movement actor has 0 current HP.", actor.id)
-        if definition.walking_speed is None:
-            return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Monster has no supported walking speed.", actor.id, "walking_speed")
+        character = next((c for c in snapshot.characters if c.id == actor.id), None)
+        if character is not None:
+            if actor.current_hp <= 0:
+                return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Movement actor has 0 current HP.", actor.id)
+            if character.walking_speed is None:
+                return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Character has no supported walking speed.", actor.id, "walking_speed")
+            walking_speed = character.walking_speed
+        else:
+            try:
+                definition = self._definition_source.get_definition(
+                    ruleset_id=snapshot.campaign.ruleset_id,
+                    ruleset_version=snapshot.campaign.ruleset_version,
+                    definition_id=actor.definition_id,
+                    expected_type=MonsterDefinition,
+                )
+            except DefinitionNotFoundError:
+                return reject(ErrorCode.DEFINITION_NOT_FOUND, "Movement actor Definition was not found.", actor.definition_id, "definition_id")
+            except DefinitionTypeMismatchError:
+                return reject(ErrorCode.INVALID_STATE, "Movement actor Definition is not a MonsterDefinition.", actor.id, "definition_id")
+            if actor.current_hp == 0:
+                return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Movement actor has 0 current HP.", actor.id)
+            if definition.walking_speed is None:
+                return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Monster has no supported walking speed.", actor.id, "walking_speed")
+            walking_speed = definition.walking_speed
         position = next((p for p in combat.positions if p.creature_id == actor.id), None)
         if position is None:
             return reject(ErrorCode.ACTION_NOT_AVAILABLE, "Movement actor has no Combat position.", actor.id, "position")
         if (position.x, position.y) == (command.payload.x, command.payload.y):
             return reject(ErrorCode.INVALID_COMMAND, "Movement destination equals current position.", actor.id, "position")
         outcome = resolve_move_combatant(command, combat, position)
-        if outcome.movement_spent > definition.walking_speed:
+        if outcome.movement_spent > walking_speed:
             return reject(ErrorCode.OUT_OF_RANGE, "Movement exceeds walking speed.", actor.id, "position")
         metadata = self._event_metadata_provider.next_metadata(command.campaign_id)
         event = build_combatant_moved_v1(
