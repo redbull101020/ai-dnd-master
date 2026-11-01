@@ -7921,3 +7921,13 @@ Draft PR #144 delivers explicit Character walking-speed State, exact additive V1
 The supplied authoritative closure evidence records successful full `python -m pytest`, `python -m mypy src/dnd_engine tools/autonomous_pr`, and `git diff --check` at accepted implementation HEAD `548a5aa7944edb5bb3bcb38f2a0d99d64d417582`; the cumulative implementation review accepted that same HEAD against base `11adc5e699ea64e6d0e18fe935e4fa3644b20533`. This final verification supersedes the preceding delivery entry's earlier statement that the full suite was not green; no test counts are claimed here.
 
 The terminal row is prospective: authoritative Done and dependency satisfaction require human merge to main after Closure Review, fresh revalidation, Mode C, publication and required CI. The task specification is retained; no next task is selected.
+
+## 2026-11-01 — MANUAL post-STOP recovery governance proposal
+
+Prepared a separate MANUAL governance proposal prompted by PR #144's accepted implementation `548a5aa`, published Closure `193030e` and later repair `5548539`. The proposed AGENTS procedure replaces the ended autonomous ordering/Mode C with a distinct manual audit while retaining full task verification, fresh independent implementation/Closure/final reviews, exact-content publication, final-SHA CI and separate human authorisations. TASK, Harness and CLAUDE reference that single authority; no runtime, gameplay, State, task status or dependency contract is changed.
+
+Verification uses documentation-reference tests and `git diff --check`. The policy must be separately reviewed and published on authoritative main before any recovery relies on it; this unpublished proposal neither completes PR #144 recovery nor authorises its publication or merge. The existing PR #144 worktree and its uncommitted evidence are preserved separately.
+
+## 2026-11-01 — PR #145: main integration clarification
+
+PR #144 was already merged into main as `0ba2f5cfc1116afe67dcc5f8849429689401a996` before this local integration of PR #145. Its TSK-0051 delivery/Closure records and terminal row are preserved. The recovery policy may be used only after separate publication on authoritative main; it does not retroactively supply governance approval or Mode C evidence for PR #144's earlier merge.

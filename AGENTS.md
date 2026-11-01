@@ -291,6 +291,11 @@ These A/B/C semantics are the only diff ranges this contract defines. `AUTONOMOU
 
 **Pre-closure cumulative implementation review vs. mode C.** Before a prepared Task Closure, the full implementation diff must be reviewed and accepted. That review uses `origin/main...HEAD` as input — built the same way as mode C — but this **pre-closure cumulative implementation review is not mode C**. Mode C is the final cumulative branch audit of the unpublished local Task Closure candidate, performed only after Closure Review and a fresh `origin/main` revalidation. Its `origin/main...HEAD` therefore includes the unpublished closure commit while the remote delivery branch still points to the accepted implementation predecessor. Only the exact Mode-C-approved candidate may then be pushed. Any later local/remote branch commit, rebase, candidate replacement, or movement of `origin/main` makes a completed mode C audit stale immediately, with no materiality exception.
 
+Only the separately invoked **MANUAL post-STOP recovery** below may replace
+that autonomous closure/publication ordering for an ended invocation. Its
+manual final audit is not Mode C; the ordinary A/B/C definitions and every
+active `AUTONOMOUS_PR` gate remain unchanged.
+
 `*.patch` and `*.diff` are gitignored. Never stage or commit the patch file, and never include it in the list of changed files.
 
 ### Pull requests and merge (both modes)
@@ -298,6 +303,99 @@ These A/B/C semantics are the only diff ranges this contract defines. `AUTONOMOU
 Pull requests are opened as drafts unless the user explicitly asks otherwise (`AUTONOMOUS_PR` never asks otherwise mid-run, so its PRs are always draft). Merge and auto-merge always require explicit human authorisation and are never inferred, in either mode.
 
 If the `gh` CLI is not available in the environment, stop and report it. Do not open a pull request through the REST API, and do not read `git credential`, `.git-credentials`, or any other credential store to obtain a token.
+
+### MANUAL post-STOP recovery
+
+This is a bounded procedure within `MANUAL`, not a third development mode or
+an autonomous resume. It requires a separate explicit user instruction naming
+one stopped `AUTONOMOUS_PR` task and its existing open draft delivery PR with
+an already-published prospective Closure or post-closure repair. No harness
+run may remain active.
+
+**Published authority first.** This policy must already be published on
+authoritative `origin/main` before recovery relies on it. A recovery candidate
+may not introduce or change its own governance or permissions. Publish a
+governance change through a separate reviewed `MANUAL` change first; neither
+an uncommitted proposal nor the PR being recovered can authorize itself.
+
+For this procedure only, the following manual gates replace the ended run's
+autonomous prerequisite replay, unpublished-closure ordering and Mode C. They
+do not reconstruct typed orchestrator state or turn a historical result into
+a successful autonomous completion:
+
+1. **Fix and revalidate the target.** Fetch `origin` and record the original
+   authoritative task base `A`, its approved Task Execution Spec/digest,
+   current `origin/main` (`M`), recovery implementation HEAD (`I`),
+   local/delivery/PR HEADs and original implementation/Closure/repair history.
+   Require `A` to be an ancestor of both `I` and `M`; `M` must contain the
+   published recovery policy. `M` need not be an ancestor of `I`. Preserve
+   `A` as task authority and `M` as the current integration/audit base in
+   evidence; do not substitute the current merge base for original `A`.
+   The fixed Task Spec/digest must still match `A` in `M` and the recovery
+   candidate. The task must remain approved, nonterminal on `M` and
+   dependency-satisfied; required refinement is separate reviewed work.
+   At entry and whenever main advances, revalidate the original Task Spec
+   digest, terminal registry, dependencies, applicable architectural contracts,
+   absence of material conflicts and actual safe mergeability of the complete
+   candidate with captured `M`, checking the actual combined result. Record
+   results for the exact base/HEAD/content identities; ancestry or a
+   mergeability flag alone is not proof of safe integration. Material changes
+   to the original requirements or inability to establish safe integration
+   yield `BLOCKED`. Confirm
+   the one task, its authoritative prerequisites, expected working changes,
+   open draft PR and prospective terminal row. Unexpected state, conflicting
+   sources or scope requiring a new architectural/dependency decision blocks
+   recovery; do not rebase, reset, force-push, rewrite history, select another
+   task or weaken a gate.
+2. **Verify the recovered implementation.** Obtain successful evidence bound
+   to its exact SHA and captured base for every Task Execution Spec Full
+   verification command and applicable checkpoint/repair checks. Record actual
+   commands and results. Historical output, equivalent code or an old
+   `APPROVED` alone is not fresh evidence for another SHA.
+3. **Review the implementation independently.** A fresh context, separate
+   from the implementer, must accept the complete cumulative implementation
+   against all binding task and current architectural requirements. Handle
+   implementation-affecting repair as an ordinary separately reviewed and
+   authorised MANUAL checkpoint. After committing it, repeat gate 2's entire
+   Full verification on the resulting implementation SHA, then obtain fresh
+   gate 3 acceptance and repeat all dependent Closure/evidence/final gates.
+   Uncertain implementation impact is treated as implementation-affecting;
+   narrow repair checks or previous verdicts cannot replace this sequence.
+   Every review gate uses an explicit `APPROVED`, `CHANGES_REQUESTED` or
+   `BLOCKED` verdict; only `APPROVED` accepts it. `BLOCKED` stops recovery
+   for a human decision.
+4. **Refresh Closure evidence.** Preserve historical log entries and append
+   factual recovery evidence distinguishing original and recovered SHAs,
+   checks, review results, missing autonomous steps and remaining limits.
+   Keep an already-correct prospective terminal row unchanged; never duplicate
+   it or infer authoritative `Done` before human merge. A fresh independent
+   Closure/evidence review must accept this exact slice after its applicable
+   documentation/process checks pass.
+5. **Perform a distinct manual final audit.** After fresh main/HEAD
+   revalidation, a further fresh independent context must accept the entire
+   exact candidate, including implementation and Closure evidence. Its
+   implementation must still equal the committed SHA accepted by gates 2-3;
+   any dirty final slice must be reviewed Closure/evidence documentation only.
+   Review committed cumulative, uncommitted and combined content separately where
+   applicable; use `review.patch` for the current A/B/C slice and a separately
+   labelled supplemental full diff for a dirty candidate. Record base/HEADs,
+   exact reviewed content/diff identity and actual verdict. Call this a
+   MANUAL recovery audit, never Mode C or `READY_FOR_HUMAN_MERGE`.
+6. **Publish only reviewed content under separate authorisations.** The
+   existing per-action commit, push, PR and human-merge rules still apply.
+   An authorised evidence commit may materialise the exact audited working-tree
+   content only with a recorded new SHA and proof of equality to both the
+   verified implementation and reviewed evidence before push. Any other
+   HEAD/content change or any main movement invalidates the manual final audit
+   without a materiality exception; rebuild and re-review
+   it, repeating the required implementation/evidence gates above. Require
+   successful completion of all repository/task-required and explicitly
+   requested CI on the exact final published SHA; missing, pending, failed
+   or cancelled checks do not satisfy the merge gate.
+   Revalidate main, delivery and PR identity again after CI and before merge.
+   Only then may the report recommend a separately authorised human merge as
+   a documented MANUAL recovery. The stopped run stays stopped; no fabricated
+   orchestrator result, automatic merge or next-task selection is permitted.
 
 ### AUTONOMOUS_PR (bounded exception)
 
