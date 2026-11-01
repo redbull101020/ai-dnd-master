@@ -3,6 +3,8 @@ import random
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from dnd_engine.application.handlers.advance_turn import AdvanceTurnHandler
 from dnd_engine.application.handlers.end_combat import EndCombatHandler
 from dnd_engine.application.handlers.place_combatant import PlaceCombatantHandler
@@ -228,7 +230,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     tmp_path: Path,
 ) -> None:
     """End-to-end production proof for §3.35/TSK-0019: a real FilesystemStateStore
-    and the production V9 StateSerializer take a Combat from absent, through a
+    and the production V11 StateSerializer take a Combat from absent, through a
     real StartCombatHandler (real DiceEngine initiative), to active, then a
     real EndCombatHandler returns it to absent -- each transition observed
     through its own fresh FilesystemStateStore instance and a fresh reload, so
@@ -293,10 +295,10 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
 
     state_path = campaigns_root / "campaign_001" / "state.json"
 
-    # --- initial persisted state: combat absent under the current V9 writer -
+    # --- initial persisted state: combat absent under the current V11 writer -
 
     initial_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert initial_raw["schemaVersion"] == SCHEMA_VERSION == 10
+    assert initial_raw["schemaVersion"] == SCHEMA_VERSION == 11
     assert initial_raw["state"]["combat"] is None
 
     # --- Start Combat -> save -> fresh reload -> CombatState present -------
@@ -338,7 +340,7 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     assert after_start.combat.id == "combat_001"
 
     started_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert started_raw["schemaVersion"] == SCHEMA_VERSION == 10
+    assert started_raw["schemaVersion"] == SCHEMA_VERSION == 11
     assert started_raw["state"]["combat"] is not None
 
     # --- End Combat -> save -> fresh reload -> combat absent again ----------
@@ -390,10 +392,10 @@ def test_start_combat_then_end_combat_round_trips_through_fresh_reloads_and_reop
     assert after_end.inventories[0].items == inventory.items
     assert after_end.equipment[0].equipped_weapon_id == "item_001"
 
-    # --- current production V9 persistence contract: no schema bump --------
+    # --- current production V11 persistence contract: no schema bump --------
 
     ended_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert ended_raw["schemaVersion"] == SCHEMA_VERSION == 10
+    assert ended_raw["schemaVersion"] == SCHEMA_VERSION == 11
     assert ended_raw["state"]["combat"] is None
     assert ended_raw.keys() == initial_raw.keys()
     assert ended_raw["state"].keys() == initial_raw["state"].keys()
@@ -437,13 +439,13 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
     tmp_path: Path,
 ) -> None:
     """Real-adapter production proof for §3.36/TSK-0022: a real
-    FilesystemStateStore and the production V9 StateSerializer persist a new
+    FilesystemStateStore and the production V11 StateSerializer persist a new
     CombatPosition written by a real PlaceCombatantHandler, visible after a
     fresh reload, alongside an existing pre-populated CombatPosition. The
     writer canonically sorts combat.positions by creature_id on serialize, so
     this test checks persisted position values/identity rather than assuming
     input tuple order survives a save/reload. No schema bump or unrelated
-    wire-shape change occurs: schemaVersion stays 10 and the raw JSON top-level
+    wire-shape change occurs: schemaVersion stays 11 and the raw JSON top-level
     and state keys are unchanged before and after placement."""
     campaigns_root = tmp_path / "campaigns"
     character = CreatureState(
@@ -493,7 +495,7 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
 
     state_path = campaigns_root / "campaign_001" / "state.json"
     before_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert before_raw["schemaVersion"] == SCHEMA_VERSION == 10
+    assert before_raw["schemaVersion"] == SCHEMA_VERSION == 11
 
     # --- Place Combatant -> save -> fresh reload -> new position present ---
 
@@ -552,10 +554,10 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
     # unrelated Creature state untouched
     assert after_place.creatures == snapshot.creatures
 
-    # --- current production V9 persistence contract: no schema bump --------
+    # --- current production V11 persistence contract: no schema bump --------
 
     after_raw = json.loads(state_path.read_text(encoding="utf-8"))
-    assert after_raw["schemaVersion"] == SCHEMA_VERSION == 10
+    assert after_raw["schemaVersion"] == SCHEMA_VERSION == 11
     assert after_raw.keys() == before_raw.keys()
     assert after_raw["state"].keys() == before_raw["state"].keys()
     assert after_raw["state"]["combat"].keys() == before_raw["state"]["combat"].keys()
@@ -578,7 +580,10 @@ def test_place_combatant_persists_new_position_through_fresh_reload(
     ) == ["state.json"]
 
 
-def test_monster_split_movement_attack_and_turn_reset_with_real_adapters(tmp_path: Path) -> None:
+@pytest.mark.parametrize("character_actor", [False, True], ids=["monster", "character"])
+def test_split_movement_attack_and_turn_reset_with_real_adapters(
+    tmp_path: Path, character_actor: bool,
+) -> None:
     from dnd_engine.application.handlers.attack import AttackHandler
     from dnd_engine.application.handlers.move_combatant import MoveCombatantHandler
     from dnd_engine.domain.commands.attack import AttackCommand, AttackPayload
@@ -607,12 +612,21 @@ def test_monster_split_movement_attack_and_turn_reset_with_real_adapters(tmp_pat
     goblin = definitions.get_definition(ruleset_id="dnd_5e", ruleset_version="5.1",
                                          definition_id="goblin", expected_type=MonsterDefinition)
     assert goblin.walking_speed == 30
-    actor = CreatureState("monster_001", "goblin", goblin.ability_scores, 7, 7)
-    target = CreatureState("character_001", "fighter", goblin.ability_scores, 20, 20)
+    monster = CreatureState("monster_001", "goblin", goblin.ability_scores, 7, 7)
+    character = CreatureState("character_001", "fighter", goblin.ability_scores, 20, 20)
+    actor, target = (character, monster) if character_actor else (monster, character)
+    character_state = CharacterState(
+        character.id, 1, frozenset(), frozenset(), frozenset({"dagger"}),
+        walking_speed=30 if character_actor else None,
+    )
+    inventory = InventoryState(character.id, (InventoryItemState("item_001", "dagger"),))
+    equipment = EquipmentState(character.id, "item_001")
     FilesystemStateStore(root).save(StateSnapshot(
         campaign=CampaignState("campaign_001", "dnd_5e", "5.1"),
         creatures=(actor, target),
-        characters=(CharacterState(target.id, 1, frozenset(), frozenset(), frozenset()),),
+        characters=(character_state,),
+        inventories=(inventory,),
+        equipment=(equipment,),
         combat=CombatState("combat_001", 1, (actor.id,target.id), 0),
     ))
     for creature_id, x in [(actor.id,0), (target.id,5)]:
@@ -629,13 +643,32 @@ def test_monster_split_movement_attack_and_turn_reset_with_real_adapters(tmp_pat
                 "command_move_001", "campaign_001", actor.id, MoveCombatantPayload("combat_001", x,y)))
         assert result.success and len(result.events) == 1 and store.saves == 1
         loaded = FilesystemStateStore(root).load("campaign_001")
-        assert loaded.combat.positions == (CombatPosition(target.id,5,0), CombatPosition(actor.id,x,y))
+        assert loaded.combat.positions == tuple(sorted(
+            (CombatPosition(target.id, 5, 0), CombatPosition(actor.id, x, y)),
+            key=lambda position: position.creature_id,
+        ))
+        assert loaded.characters == (character_state,)
+        assert loaded.creatures == (character, monster)
+        assert loaded.inventories == (inventory,)
+        assert loaded.equipment == (equipment,)
+        event = result.events[0]
+        assert (event.type, event.version, event.actor_id, event.caused_by) == (
+            "CombatantMoved", 1, actor.id, None,
+        )
+        assert metadata.calls == ["campaign_001"]
         assert loaded.combat.movement_spent == spent
         assert loaded.combat.action_spent is action_spent
         wire = json.loads((root / "campaign_001" / "state.json").read_text(encoding="utf-8"))
-        assert wire["schemaVersion"] == 10
+        assert wire["schemaVersion"] == 11
         assert set(wire["state"]["combat"]) == {"id","round","order","activeIndex","positions","actionSpent","movementSpent"}
         assert wire["state"]["combat"]["movementSpent"] == spent
+        assert wire["state"]["combat"]["actionSpent"] is action_spent
+        assert wire["state"]["characters"][0]["walkingSpeed"] == character_state.walking_speed
+        assert set(wire["state"]["characters"][0]) == {
+            "id", "totalLevel", "savingThrowProficiencies", "skillProficiencies",
+            "weaponProficiencies", "deathSaveSuccesses", "deathSaveFailures",
+            "deathSaveStable", "dead", "walkingSpeed",
+        }
 
     move(3,4,5,False)
     attack_store = CountingStore(root)
@@ -664,5 +697,10 @@ def test_monster_split_movement_attack_and_turn_reset_with_real_adapters(tmp_pat
     after_turn = FilesystemStateStore(root).load("campaign_001")
     assert store.saves == 1 and after_turn.combat.movement_spent == 0
     assert after_turn.combat.action_spent is False
-    assert after_turn.combat.positions == (
-        CombatPosition(target.id,5,0), CombatPosition(actor.id,-20,0))
+    assert after_turn.combat.positions == tuple(sorted(
+        (CombatPosition(target.id, 5, 0), CombatPosition(actor.id, -20, 0)),
+        key=lambda position: position.creature_id,
+    ))
+    assert after_turn.characters == (character_state,)
+    assert after_turn.inventories == (inventory,)
+    assert after_turn.equipment == (equipment,)
