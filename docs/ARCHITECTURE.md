@@ -13220,53 +13220,6 @@ reader branches remain explicit and must be extended deliberately so V10
 inherits V9 behavior before adding only this one Combat field.
 
 
-#### Implemented State schema V11
-
-Character walking speed is persisted by the current exact **V11** writer (TSK-0051). The exact additive contract and historical readers are specified in §12.13.
-
-#### Exclusions
-
-No Character creation UI/API, speed-calculation provenance or update Command, racial/class traits, temporary/modified speed, additional movement modes, Dash, Disengage, forced movement, Opportunity Attacks, Reactions, pathfinding, grid/hex, collision, occupancy, cover/visibility, terrain, generic geometry, MovementEngine, database, LLM, EventStore or replay. Absence of Opportunity Attack adjudication is not a gameplay declaration that voluntary Movement never provokes one (§3.38).
-
-### 3.40. Goblin Scimitar in-Combat melee reach (TSK-0052)
-
-**Implementation status:** contract defined; production implementation and real-adapter encounter regression pending TSK-0052. Depends on the authoritative Character Movement continuation TSK-0051 for the complete scenario; the independent Goblin reach gate itself does not change Movement.
-
-#### Exact consumer and spatial source
-
-The additional melee gate applies **only** when an existing `AttackCommand` matches **all** four logical identities: `StateSnapshot.campaign.ruleset_id == "dnd_5e"`, `ruleset_version == "5.1"`, attacking `actor_creature.definition_id == MonsterDefinition.id == "goblin"`, selected unique `MonsterAttackDefinition.action_id == "scimitar"`, **and** `StateSnapshot.combat is not None`. The packaged Goblin is the real production consumer, but a handler uses identity and does not attempt to prove which adapter/file produced a returned Definition. This does not create a global Monster reach rule for future/custom actions and does not add `reach` or `melee` fields to `MonsterAttackDefinition`, `AttackPayload`, `CombatState`, or the packaged Goblin. No additional Definition resources are introduced.
-
-Use existing Combat-owned `CombatState.positions`, `combat.order`, `is_within_melee_reach`, and `DND_5E_FIRST_CONSUMER_MELEE_REACH_FEET == 5` (§3.30). Reach is `dx² + dy² <= 25` inclusive, using the existing integer-foot coordinates; negative coordinates and multiple combatants at one point retain the existing occupancy-free semantics. Do not use Movement's `ceil(sqrt(...))` to replace the established melee reach predicate. Only the two endpoint positions matter; collision/visibility/line-of-sight remain unimplemented.
-
-#### Validation precedence and failures
-
-Within `AttackHandler`, retain all current guards before routing: actor existence, in-Combat active-turn, spent ordinary Action; then Monster Definition selection, positive actor HP, Monster-only payload validation, exactly-one-supported-action, target Creature existence, and target CharacterState requirement, in their **existing** order. Add the Goblin-specific spatial checks **after valid target category and before AC computation, attack roll mode derivation, DiceEngine use or any Event/State/persistence side effect**:
-
-```text
-actor CombatPosition missing
-  → ACTION_NOT_AVAILABLE, entity_id=actor_id, field="position"
-target_id not in combat.order
-  → INVALID_TARGET, entity_id=target_id, field="target_id"
-target CombatPosition missing
-  → INVALID_TARGET, entity_id=target_id, field="position"
-target squared distance > 25
-  → OUT_OF_RANGE, entity_id=target_id, field=None
-```
-
-The order above is normative: actor position is tested before target membership; target membership before target position; reach last. Failure produces one existing EngineError, `success=False`, `outcome=None`, no Events, no Event metadata allocation, no DiceEngine call and no `StateStore.save()`; Action and Movement expenditures are unchanged. Distance exactly 5 ft is permitted. Existing `AttackCommand`/`AttackPayload` and all current Event envelopes and causality (`MonsterAttackResolved`, optional `MonsterAttackDamageResolved`/`DamageApplied`/Character lifecycle and `TurnActionSpent`) remain unchanged on accepted attacks. A hit and a miss still spend one ordinary Action in Combat, but only after all gating succeeds. No new State schema version is introduced by this section.
-
-When Combat is absent, the **entire existing** Goblin attack behavior remains unchanged (no new position, membership or reach requirement). Other Monster Definitions/action identities, Character Dagger and Character unarmed attack paths remain unchanged. Monster/Character 0-HP targetability is not altered; it remains explicitly deferred under DEF-0015.
-
-#### End-to-end proof boundary
-
-TSK-0052 must prove the deterministic, headless `Character Dagger vs Goblin Scimitar` Combat flow using real `FilesystemStateStore`, `PackagedDefinitionSource`, and a single seeded `PythonDiceEngine(random.Random(10))`. Under `StartCombatCommand` ordered participants `(character_001, monster_001)`, initiative yields Character 19 versus Goblin 2+2; initial positions are Character `(0,0)` and Goblin `(12,0)`. Character (DEX 10, level 1, dagger proficiency and equipped authoritative `item_001` → `dagger` inventory/equipment source, `walking_speed=20`, HP 20) Moves to `(8,0)`, hits with Dagger d20=14 for 4 damage against Goblin HP 7 (remaining 3), and moves back to `(0,0)`, spending 16 ft. After Character `AdvanceTurn`, an out-of-range Goblin Scimitar Attack at `(12,0)` fails without consuming dice, metadata or State save. Goblin then Moves to `(5,0)` and hits with d20=19 for 3 damage (Character HP 17). Goblin `AdvanceTurn` wraps to round 2 and resets turn resources, then an explicit `EndCombat` retires Combat State. All relevant Commands use real handlers with fresh reloads between accepted transitions. This is a **test scenario**, not a new orchestration interface, engine dispatcher, encounter AI, victory detection or multi-Command transaction. Respect seeded initiative order and the existing automatic Character Death Save trigger when applicable. Assert Event ordering/causality and persisted HP/positions/Action/Movement without inventing a durable event journal.
-
-#### Exclusions
-
-No ranged/thrown/reach variants, Monster action classification framework, reactions or attacks of opportunity, full melee targeting for arbitrary Monsters, cover/visibility/line of sight, movement terrain/collision/path checks, new Attack/Result/Event contracts, AI DM, API, or web UI.
-
-## C. Add to §12.13 after the V10 subsection (before the next section heading)
-
 #### Current State schema V11 — Character walking speed (TSK-0051)
 
 **Implementation status: implemented (TSK-0051); current production writer is exact V11.** V1–V10 retain their exact historical readers. V2–V10 Characters project `walking_speed=None` and save as V11 without inferring speed; V1 has no Character projection. V11 write validation also rejects invalid post-construction mutations of Character speed.

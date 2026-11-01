@@ -20,39 +20,39 @@ LEGACY_SCHEMA_V3_VERSION = 3
 # decoding). Historical V4 semantics must not be keyed off mutable
 # SCHEMA_VERSION: once a future schema bump moves SCHEMA_VERSION past 4,
 # `schema_version == SCHEMA_VERSION` would stop matching legacy V4 payloads
-# and silently mis-decode them as pre-V4 (В§3.21, DEC-0035).
+# and silently mis-decode them as pre-V4 (§3.21, DEC-0035).
 SCHEMA_V4_VERSION = 4
 # Fixed identity of the V5 state shape (adds the top-level `combat` key,
-# В§3.25/DEC-0040). Same rationale as SCHEMA_V4_VERSION above: historical V5
+# §3.25/DEC-0040). Same rationale as SCHEMA_V4_VERSION above: historical V5
 # semantics compare against this fixed sentinel, never against the mutable
 # SCHEMA_VERSION below.
 SCHEMA_V5_VERSION = 5
 # Fixed identity of the V6 state shape (adds the top-level `inventories` and
-# `equipment` keys plus Character `weaponProficiencies`, В§3.29/В§12.13). Same
+# `equipment` keys plus Character `weaponProficiencies`, §3.29/§12.13). Same
 # rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION above: historical V6
 # semantics compare against this fixed sentinel, never against the mutable
 # SCHEMA_VERSION below.
 SCHEMA_V6_VERSION = 6
 # Fixed identity of the V7 state shape (adds Combat `positions`,
-# В§3.30/DEC-0045). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
+# §3.30/DEC-0045). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
 # SCHEMA_V6_VERSION above: historical V7 semantics compare against this
 # fixed sentinel, never against the mutable SCHEMA_VERSION below. V7 is
-# strictly additive over V6 (В§12.13): every other V6 shape/field-set is
+# strictly additive over V6 (§12.13): every other V6 shape/field-set is
 # unchanged and reused as-is by V7.
 SCHEMA_V7_VERSION = 7
 # Fixed identity of the V8 state shape (adds Combat `actionSpent`,
-# В§3.33/DEC-0049). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
+# §3.33/DEC-0049). Same rationale as SCHEMA_V4_VERSION/SCHEMA_V5_VERSION/
 # SCHEMA_V6_VERSION/SCHEMA_V7_VERSION above: historical V8 semantics compare
 # against this fixed sentinel, never against the mutable SCHEMA_VERSION
-# below. V8 is strictly additive over V7 (В§12.13): every other V7
+# below. V8 is strictly additive over V7 (§12.13): every other V7
 # shape/field-set is unchanged and reused as-is by V8.
 SCHEMA_V8_VERSION = 8
 # Fixed identity of the V9 state shape (adds four Character death-save/
-# lifecycle fields, В§3.34/DEC-0050). V9 is strictly additive over V8 and
+# lifecycle fields, §3.34/DEC-0050). V9 is strictly additive over V8 and
 # leaves every non-Character wire shape unchanged.
 SCHEMA_V9_VERSION = 9
 # Fixed identity of the additive V10 Combat movement-expenditure shape
-# (В§3.38/DEC-0054). Every other wire shape retains exact V9 semantics.
+# (§3.38/DEC-0054). Every other wire shape retains exact V9 semantics.
 SCHEMA_V10_VERSION = 10
 # Fixed identity of the additive Character walking-speed shape (§3.39/DEC-0056).
 SCHEMA_V11_VERSION = 11
@@ -77,9 +77,9 @@ _ROOT_FIELDS = {"schemaVersion", "campaignId", "state"}
 _V1_STATE_FIELDS = {"campaign", "creatures"}
 _V2_STATE_FIELDS = {"campaign", "creatures", "characters"}
 _V5_STATE_FIELDS = _V2_STATE_FIELDS | {"combat"}
-# V7вЂ“V10 add no new top-level state key: `positions`/`actionSpent`
-# and `movementSpent` live inside `combat`; V9 fields live inside Character. V6вЂ“V10
-# therefore share this exact top-level state field set.
+# V7–V11 add no new top-level state key: `positions`/`actionSpent` and
+# `movementSpent` live inside `combat`; V9/V11 fields live inside Character.
+# V6–V11 therefore share this exact top-level state field set.
 _V6_STATE_FIELDS = _V5_STATE_FIELDS | {"inventories", "equipment"}
 _CAMPAIGN_FIELDS = {"id", "rulesetId", "rulesetVersion"}
 _CREATURE_FIELDS = {
@@ -114,10 +114,10 @@ _ABILITY_SCORE_FIELDS = {
 }
 _COMBAT_FIELDS = {"id", "round", "order", "activeIndex"}
 # V7 adds `positions` to the existing exact V5/V6 Combat wire shape; V5/V6
-# combat payloads must keep rejecting it (В§3.30/DEC-0045, В§12.13).
+# combat payloads must keep rejecting it (§3.30/DEC-0045, §12.13).
 _V7_COMBAT_FIELDS = _COMBAT_FIELDS | {"positions"}
 # V8 adds `actionSpent` to the existing exact V5/V6/V7 Combat wire shape;
-# V5/V6/V7 combat payloads must keep rejecting it (В§3.33/DEC-0049, В§12.13).
+# V5/V6/V7 combat payloads must keep rejecting it (§3.33/DEC-0049, §12.13).
 _V8_COMBAT_FIELDS = _V7_COMBAT_FIELDS | {"actionSpent"}
 _V10_COMBAT_FIELDS = _V8_COMBAT_FIELDS | {"movementSpent"}
 _COMBAT_POSITION_FIELDS = {"creatureId", "x", "y"}
@@ -833,7 +833,7 @@ class StateSerializer:
             proficiencies.append(ability)
 
         # V1 has no Character projection at all; V2 predates skillProficiencies.
-        # V3 and V4 share the same Character schema (В§3.2.4 is unaffected by
+        # V3 and V4 share the same Character schema (§3.2.4 is unaffected by
         # the V4 Creature-only schema bump), so both decode skillProficiencies.
         skill_proficiencies: list[Skill] = []
         if schema_version != LEGACY_SCHEMA_V2_VERSION:
@@ -863,7 +863,7 @@ class StateSerializer:
                 skill_proficiencies.append(skill)
 
         # V1-V5 predate `weaponProficiencies`; legacy migration always yields
-        # empty weapon-source membership (В§12.13), never a synthesized value.
+        # empty weapon-source membership (§12.13), never a synthesized value.
         weapon_proficiencies: list[str] = []
         if schema_version in {
             SCHEMA_V6_VERSION,
@@ -1034,7 +1034,7 @@ class StateSerializer:
 
         # V5-V7 predate `actionSpent`; a legacy active Combat always decodes
         # to an unspent Action -- a compatibility default, not a recovered
-        # historical fact (В§3.33/DEC-0049, В§12.13).
+        # historical fact (§3.33/DEC-0049, §12.13).
         action_spent = False
         if schema_version in {
             SCHEMA_V8_VERSION,
