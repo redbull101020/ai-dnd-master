@@ -118,6 +118,7 @@ State/Value Objects **полные, минимальные и закрытые**
 | `Definition` (база), `ItemDefinition`, `WeaponDefinition`, `MonsterDefinition` | §3.1, §3.1.1 |
 | Monster base walking-speed source (`walking_speed: int | None = None`, feet, after `attacks`; packaged `walkingSpeed` required, Goblin 30 ft/version 1; Monster voluntary Movement implemented in §3.38) | §3.37 |
 | Monster voluntary Movement (`MoveCombatantCommand`, `CombatantMoved` V1, split `movement_spent`, Action-independent, turn reset) + State schema V10 (TSK-0040); Character Movement, Dash, terrain, Reactions/OA deferred | §3.38, §12.13 |
+| Next approved Phase 3 Combat contracts (not implemented): explicit `CharacterState.walking_speed`, Character Movement using `MoveCombatantCommand`/`CombatantMoved` V1, planned State schema V11 (TSK-0051); in-Combat Goblin Scimitar 5-ft reach (TSK-0052). Current production writer remains V10. | §3.39, §3.40, §12.13 |
 | `DamageType` | §3.1.1 |
 | `CreatureState`, `CampaignState`, `StateSnapshot`, `CharacterState` | §3.2.1–§3.2.4 |
 | `DiceEngine`, `DiceRoll` | §1.7.1 |
