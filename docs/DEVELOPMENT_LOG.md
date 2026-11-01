@@ -7908,8 +7908,26 @@ Native `CreateProcessW`, Worker/bootstrap, assigned-Job cleanup, capability prov
 
 Prepared the reviewed MANUAL documentation publication for the accepted Character walking-speed/Movement and Goblin Scimitar Combat-reach decisions (Architecture §§3.39–3.40 and planned State schema V11). Approved standalone TSK-0051 and TSK-0052 specifications define separately executable gameplay continuations; TSK-0052 waits for authoritative TSK-0051 Done. No production code, active State serializer (V10), supported gameplay behavior, or broad Roadmap completion status changed. Implementation, real-adapter behavioral tests and task closure remain future work.
 
+## 2026-11-01 — TSK-0051: Character walking speed and voluntary Combat Movement
+
+Implemented explicit Character walking-speed State and exact additive V11 persistence, retaining strict V1–V10 readers and unknown legacy speed without a fallback. The existing Movement handler now supports Characters through unchanged Command/Result/CombatantMoved V1 and Combat-owned positions/expenditure, preserving Monster Definition lookup, Action independence, turn reset and single-save snapshot ownership. Real filesystem adapters prove Character and Monster Move → Attack → Move, exact budget, rejection beyond budget and fresh-reload preservation of speed, proficiency, lifecycle, Inventory and Equipment. Architecture, Roadmap and CLAUDE status now reflect V11; broad Movement stays open.
+
+Verification: 447 affected tests passed; the broader Architecture/Domain/Application/Infrastructure/Integration run passed all 2573 tests; configured mypy passed for 141 source files; `git diff --check` passed. The full-suite attempt was stopped after failures/errors in autonomous-tooling tests; the isolated first failure reports Windows sandbox denial of symlink/junction creation. The full suite is not green; no verification gate or test was weakened. Character speed authoring or changes during play, Dash, terrain, movement modes, Reactions/OA and TSK-0052 Goblin reach/two-sided encounter remain deferred. Task Closure and publication remain separate workflow steps.
+
+## 2026-11-01 — TSK-0051: Prospective Task Closure (draft PR #144)
+
+Draft PR #144 delivers explicit Character walking-speed State, exact additive V11 persistence with strict V1–V10 readers, and Character voluntary Combat Movement through the existing Command/Result/CombatantMoved V1. Monster Definition lookup, Combat-owned position/expenditure, Action independence and snapshot-save boundaries are preserved; broad Movement remains open. Gameplay speed authoring/modification, Dash, terrain, Reactions/OA and TSK-0052 Goblin reach/two-sided encounter remain out of scope.
+
+The supplied authoritative closure evidence records successful full `python -m pytest`, `python -m mypy src/dnd_engine tools/autonomous_pr`, and `git diff --check` at accepted implementation HEAD `548a5aa7944edb5bb3bcb38f2a0d99d64d417582`; the cumulative implementation review accepted that same HEAD against base `11adc5e699ea64e6d0e18fe935e4fa3644b20533`. This final verification supersedes the preceding delivery entry's earlier statement that the full suite was not green; no test counts are claimed here.
+
+The terminal row is prospective: authoritative Done and dependency satisfaction require human merge to main after Closure Review, fresh revalidation, Mode C, publication and required CI. The task specification is retained; no next task is selected.
+
 ## 2026-11-01 — MANUAL post-STOP recovery governance proposal
 
 Prepared a separate MANUAL governance proposal prompted by PR #144's accepted implementation `548a5aa`, published Closure `193030e` and later repair `5548539`. The proposed AGENTS procedure replaces the ended autonomous ordering/Mode C with a distinct manual audit while retaining full task verification, fresh independent implementation/Closure/final reviews, exact-content publication, final-SHA CI and separate human authorisations. TASK, Harness and CLAUDE reference that single authority; no runtime, gameplay, State, task status or dependency contract is changed.
 
 Verification uses documentation-reference tests and `git diff --check`. The policy must be separately reviewed and published on authoritative main before any recovery relies on it; this unpublished proposal neither completes PR #144 recovery nor authorises its publication or merge. The existing PR #144 worktree and its uncommitted evidence are preserved separately.
+
+## 2026-11-01 — PR #145: main integration clarification
+
+PR #144 was already merged into main as `0ba2f5cfc1116afe67dcc5f8849429689401a996` before this local integration of PR #145. Its TSK-0051 delivery/Closure records and terminal row are preserved. The recovery policy may be used only after separate publication on authoritative main; it does not retroactively supply governance approval or Mode C evidence for PR #144's earlier merge.

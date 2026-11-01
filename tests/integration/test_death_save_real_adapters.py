@@ -82,7 +82,7 @@ def test_v9_state_store_round_trip_preserves_character_lifecycle_state(
     """Part A (TSK-0017): a StateSnapshot carrying valid, non-default
     Character death-save/lifecycle facts survives one exact save -> load
     round-trip through the real FilesystemStateStore/StateSerializer, and
-    the on-disk JSON is exact production State schema V9 (§3.34, §12.13)."""
+    the on-disk JSON is exact production State schema V11 (§3.34, §12.13)."""
     campaigns_root = tmp_path / "campaigns"
     creature = make_creature(
         creature_id="character_001",
@@ -111,7 +111,7 @@ def test_v9_state_store_round_trip_preserves_character_lifecycle_state(
 
     FilesystemStateStore(campaigns_root).save(original)
 
-    # fresh StateStore instance: only what production V9 actually wrote to
+    # fresh StateStore instance: only what production V11 actually wrote to
     # disk is being observed
     loaded = FilesystemStateStore(campaigns_root).load("campaign_001")
 
@@ -124,7 +124,7 @@ def test_v9_state_store_round_trip_preserves_character_lifecycle_state(
 
     state_path = campaigns_root / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 10
+    assert data["schemaVersion"] == 11
     assert data["state"]["characters"][0]["deathSaveSuccesses"] == 1
     assert data["state"]["characters"][0]["deathSaveFailures"] == 1
     assert data["state"]["characters"][0]["deathSaveStable"] is False
@@ -230,7 +230,7 @@ def test_advance_turn_rolls_automatic_death_save_and_persists_through_real_files
 
     state_path = campaigns_root / "campaign_001" / "state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    assert data["schemaVersion"] == 10
+    assert data["schemaVersion"] == 11
 
 
 def test_damage_at_zero_hp_records_death_save_failure_through_real_filesystem(

@@ -315,3 +315,4 @@ Concrete known constraints.
 | `TSK-0048` | `Done` | PR #139 | Establish isolated Windows verification Job ownership foundation |
 | `TSK-0049` | `Done` | PR #141 | Establish isolated Windows verification launch-attribute foundation |
 | `TSK-0050` | `Done` | PR #142 | Establish single-owner Windows verification prelaunch lifecycle gate |
+| `TSK-0051` | `Done` | PR #144 | Implement Character walking-speed source and voluntary Combat Movement |

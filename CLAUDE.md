@@ -117,8 +117,8 @@ State/Value Objects **полные, минимальные и закрытые**
 | `AbilityScores` | §1.2.1 |
 | `Definition` (база), `ItemDefinition`, `WeaponDefinition`, `MonsterDefinition` | §3.1, §3.1.1 |
 | Monster base walking-speed source (`walking_speed: int | None = None`, feet, after `attacks`; packaged `walkingSpeed` required, Goblin 30 ft/version 1; Monster voluntary Movement implemented in §3.38) | §3.37 |
-| Monster voluntary Movement (`MoveCombatantCommand`, `CombatantMoved` V1, split `movement_spent`, Action-independent, turn reset) + State schema V10 (TSK-0040); Character Movement, Dash, terrain, Reactions/OA deferred | §3.38, §12.13 |
-| Next approved Phase 3 Combat contracts (not implemented): explicit `CharacterState.walking_speed`, Character Movement using `MoveCombatantCommand`/`CombatantMoved` V1, planned State schema V11 (TSK-0051); in-Combat Goblin Scimitar 5-ft reach (TSK-0052). Current production writer remains V10. | §3.39, §3.40, §12.13 |
+| Monster voluntary Movement (`MoveCombatantCommand`, `CombatantMoved` V1, split `movement_spent`, Action-independent, turn reset) + State schema V10 (TSK-0040); Dash, terrain, Reactions/OA deferred | §3.38, §12.13 |
+| Implemented: explicit `CharacterState.walking_speed` (`None`/exact nonnegative int), Character Movement using `MoveCombatantCommand`/`CombatantMoved` V1, exact State schema V11 (TSK-0051). Pending: in-Combat Goblin Scimitar 5-ft reach (TSK-0052). Current production writer is V11. | §3.39, §3.40, §12.13 |
 | `DamageType` | §3.1.1 |
 | `CreatureState`, `CampaignState`, `StateSnapshot`, `CharacterState` | §3.2.1–§3.2.4 |
 | `DiceEngine`, `DiceRoll` | §1.7.1 |
@@ -195,7 +195,7 @@ Damage +2); ordinary successful `HealingHandler` Healing при переходе
 (`death_save_successes = 0`, `death_save_failures = 0`,
 `death_save_stable = False`) — `dead` этим путём не воскрешается и не
 трогается; Healing против уже `dead` Character отклоняется
-`ErrorCode.INVALID_TARGET` до resolution. Текущий production writer — State schema V10
+`ErrorCode.INVALID_TARGET` до resolution. Текущий production writer — State schema V11
 (`deathSaveSuccesses`/`deathSaveFailures`/`deathSaveStable`/`dead` на каждом
 Character), V1–V8 читаются с canonical compatibility defaults `0`/`0`/
 `False`/`False`. Monster Death Saves, Monster death/lifecycle policy,
@@ -227,11 +227,13 @@ existence/id-match, затем placement-subject lookup, затем
 в production. `apply_combatant_placed_v1` добавляет ровно один новый
 `CombatPosition` к существующему `CombatState.positions` tuple, не меняя
 `id`/`round`/`order`/`active_index`/`action_spent`; State schema не менялась
-(current writer — V10) — подтверждено real-adapter/filesystem round
+(current writer — V11) — подтверждено real-adapter/filesystem round
 trip. Это initial tactical placement.
 Monster voluntary Movement реализовано в §3.38: authoritative walking speed,
 split `movement_spent`, `CombatantMoved` V1, независимость от Action и reset
-при смене хода. Character Movement, Dash/Disengage, forced movement,
+при смене хода. Character Movement реализовано в §3.39: явная скорость
+`CharacterState.walking_speed`, без default, с тем же бюджетом и Event.
+Dash/Disengage, forced movement,
 terrain/pathfinding/collision, occupancy/footprint, elevation, Reactions и
 Opportunity Attacks остаются deferred; отсутствие OA Events не означает,
 что Movement никогда не провоцирует Opportunity Attacks.

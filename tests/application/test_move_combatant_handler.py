@@ -90,7 +90,7 @@ def command(x=3, y=4, actor_id="monster_001", combat_id="combat_001"):
     ("combat", ErrorCode.ENTITY_NOT_FOUND, "combat_001", "combat_id", False),
     ("mismatch", ErrorCode.ENTITY_NOT_FOUND, "combat_absent", "combat_id", False),
     ("inactive", ErrorCode.ACTION_NOT_AVAILABLE, "monster_001", None, False),
-    ("character", ErrorCode.ACTION_NOT_AVAILABLE, "monster_001", None, False),
+    ("character", ErrorCode.ACTION_NOT_AVAILABLE, "monster_001", "walking_speed", False),
     ("missing_definition", ErrorCode.DEFINITION_NOT_FOUND, "goblin", "definition_id", True),
     ("wrong_definition", ErrorCode.INVALID_STATE, "monster_001", "definition_id", True),
     ("hp", ErrorCode.ACTION_NOT_AVAILABLE, "monster_001", None, True),
@@ -195,3 +195,140 @@ def test_dependency_shape():
     assert set(inspect.signature(MoveCombatantHandler).parameters) == {
         "state_store", "definition_source", "event_metadata_provider",
     }
+
+
+def setup_character(speed=30):
+    store, definitions, metadata, handler = setup()
+    actor = replace(store.snapshot.creatures[0], id="character_001", definition_id="no_monster_definition")
+    store.snapshot = replace(
+        store.snapshot, creatures=(actor,),
+        characters=(CharacterState(actor.id, 1, frozenset(), frozenset(), frozenset(), walking_speed=speed),),
+        combat=replace(store.snapshot.combat, order=(actor.id,),
+                       positions=(CombatPosition(actor.id, 0, 0),)),
+    )
+    # Any accidental Definition lookup must fail even for an otherwise valid Move.
+    definitions.failure = AssertionError("Character must not look up a Monster Definition")
+    return store, definitions, metadata, handler
+
+
+@pytest.mark.parametrize("case,code,entity,field", [
+    ("actor", ErrorCode.ENTITY_NOT_FOUND, "character_absent", None),
+    ("combat", ErrorCode.ENTITY_NOT_FOUND, "combat_001", "combat_id"),
+    ("mismatch", ErrorCode.ENTITY_NOT_FOUND, "combat_absent", "combat_id"),
+    ("inactive", ErrorCode.ACTION_NOT_AVAILABLE, "character_001", None),
+    ("hp", ErrorCode.ACTION_NOT_AVAILABLE, "character_001", None),
+    ("speed", ErrorCode.ACTION_NOT_AVAILABLE, "character_001", "walking_speed"),
+    ("position", ErrorCode.ACTION_NOT_AVAILABLE, "character_001", "position"),
+    ("noop", ErrorCode.INVALID_COMMAND, "character_001", "position"),
+    ("zero_speed", ErrorCode.OUT_OF_RANGE, "character_001", "position"),
+    ("budget", ErrorCode.OUT_OF_RANGE, "character_001", "position"),
+    ("spent_above_speed", ErrorCode.OUT_OF_RANGE, "character_001", "position"),
+])
+def test_character_rejections_and_precedence(case, code, entity, field):
+    store, definitions, metadata, handler = setup_character()
+    s = store.snapshot
+    cmd = command(actor_id="character_001")
+    if case == "actor":
+        cmd = command(actor_id="character_absent")
+        s = replace(s, combat=None)
+    elif case == "combat":
+        s = replace(s, combat=None)
+    elif case == "mismatch":
+        cmd = command(actor_id="character_001", combat_id="combat_absent")
+    elif case == "inactive":
+        other = replace(s.creatures[0], id="monster_002")
+        s = replace(s, creatures=(*s.creatures, other),
+                    combat=replace(s.combat, order=(other.id, "character_001")))
+    elif case == "position":
+        s = replace(s, combat=replace(s.combat, positions=()))
+        cmd = command(0, 0, actor_id="character_001")
+    elif case == "noop":
+        cmd = command(0, 0, actor_id="character_001")
+    elif case == "budget":
+        s = replace(s, combat=replace(s.combat, movement_spent=26))
+    elif case == "spent_above_speed":
+        s = replace(s, combat=replace(s.combat, movement_spent=100))
+    if case in ("actor", "combat", "mismatch", "inactive", "hp", "speed"):
+        s = replace(s, characters=(replace(s.characters[0], walking_speed=None),),
+                    combat=replace(s.combat, positions=()) if s.combat else None)
+    if case in ("actor", "combat", "mismatch", "inactive", "hp"):
+        s = replace(s, creatures=(replace(s.creatures[0], current_hp=0), *s.creatures[1:]))
+    if case in ("noop", "zero_speed"):
+        s = replace(s, characters=(replace(s.characters[0], walking_speed=0),))
+    store.snapshot = s
+    before = deepcopy(s)
+    result = handler.handle(cmd)
+    assert not result.success and result.events == () and result.outcome is None
+    assert len(result.errors) == 1
+    assert (result.errors[0].code, result.errors[0].entity_id, result.errors[0].field) == (code, entity, field)
+    assert definitions.calls == metadata.calls == store.saves == []
+    assert store.snapshot == before
+
+
+@pytest.mark.parametrize("action_spent", [False, True])
+def test_character_split_movement_exact_budget_and_unchanged_projections(action_spent):
+    store, definitions, metadata, handler = setup_character(speed=10)
+    store.snapshot = replace(store.snapshot, combat=replace(store.snapshot.combat, action_spent=action_spent))
+    for x, y, spent in [(3, 4, 5), (0, 0, 10)]:
+        loaded = store.snapshot
+        before = deepcopy(loaded)
+        result = handler.handle(command(x, y, actor_id="character_001"))
+        assert result.success and result.errors == ()
+        assert len(result.events) == 1
+        event = result.events[0]
+        assert (event.type, event.version, event.actor_id, event.caused_by) == ("CombatantMoved", 1, "character_001", None)
+        assert event.payload == {"combatId": "combat_001", "fromX": before.combat.positions[0].x,
+                                 "fromY": before.combat.positions[0].y, "toX": x, "toY": y, "distance": 5}
+        assert result.outcome.movement_spent == spent
+        assert store.snapshot == replace(before, combat=replace(
+            before.combat, positions=(CombatPosition("character_001", x, y),), movement_spent=spent))
+        assert store.snapshot.characters is loaded.characters
+        assert store.snapshot.creatures is loaded.creatures
+        assert loaded == before
+    assert definitions.calls == []
+    assert len(metadata.calls) == len(store.saves) == 2
+    result = handler.handle(command(1, 0, actor_id="character_001"))
+    assert result.errors[0].code is ErrorCode.OUT_OF_RANGE
+    assert len(metadata.calls) == len(store.saves) == 2
+
+
+@pytest.mark.parametrize("boundary", ["load", "metadata", "save"])
+def test_character_failures_propagate_without_mutating_loaded_state(boundary):
+    store, definitions, metadata, handler = setup_character()
+    before = deepcopy(store.snapshot)
+    failure = StateStoreError("unavailable") if boundary != "metadata" else RuntimeError("unavailable")
+    if boundary == "load":
+        def fail_load(campaign_id):
+            raise failure
+        store.load = fail_load
+    else:
+        {"metadata": metadata, "save": store}[boundary].failure = failure
+    with pytest.raises(type(failure)) as exc:
+        handler.handle(command(actor_id="character_001"))
+    assert exc.value is failure
+    assert definitions.calls == []
+    assert store.snapshot == before
+    assert len(metadata.calls) == (0 if boundary == "load" else 1)
+    assert len(store.saves) == (1 if boundary == "save" else 0)
+    if boundary == "save":
+        assert store.saves[0].combat.positions == (CombatPosition("character_001", 3, 4),)
+        assert store.saves[0].combat.movement_spent == 5
+
+
+@pytest.mark.parametrize("failure,code,entity", [
+    (DefinitionNotFoundError("missing"), ErrorCode.DEFINITION_NOT_FOUND, "no_monster_definition"),
+    (DefinitionTypeMismatchError("wrong"), ErrorCode.INVALID_STATE, "character_001"),
+])
+def test_actor_without_character_projection_retains_monster_definition_errors(failure, code, entity):
+    store, definitions, metadata, handler = setup_character()
+    store.snapshot = replace(store.snapshot, characters=(),
+                             creatures=(replace(store.snapshot.creatures[0], current_hp=0),))
+    definitions.failure = failure
+    before = deepcopy(store.snapshot)
+    result = handler.handle(command(actor_id="character_001"))
+    assert not result.success and result.events == () and result.outcome is None
+    assert (result.errors[0].code, result.errors[0].entity_id, result.errors[0].field) == (code, entity, "definition_id")
+    assert definitions.calls == [dict(ruleset_id="dnd_5e", ruleset_version="5.1",
+                                      definition_id="no_monster_definition", expected_type=MonsterDefinition)]
+    assert metadata.calls == store.saves == []
+    assert store.snapshot == before
