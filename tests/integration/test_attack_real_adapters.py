@@ -421,6 +421,10 @@ def test_goblin_scimitar_hit_applies_damage_and_persists_through_real_adapters(
         round=3,
         order=("character_001", "monster_001"),
         active_index=1,
+        positions=(
+            CombatPosition(creature_id="monster_001", x=0, y=0),
+            CombatPosition(creature_id="character_001", x=3, y=4),
+        ),
     )
     assert combat.active_creature_id == "monster_001"
 

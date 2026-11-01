@@ -925,6 +925,98 @@ class AttackHandler:
                 ),
             )
 
+        combat = snapshot.combat
+        if (
+            combat is not None
+            and snapshot.campaign.ruleset_id == "dnd_5e"
+            and snapshot.campaign.ruleset_version == "5.1"
+            and actor_creature.definition_id == monster_definition.id == "goblin"
+            and action.action_id == "scimitar"
+        ):
+            actor_position = next(
+                (
+                    position
+                    for position in combat.positions
+                    if position.creature_id == command.actor_id
+                ),
+                None,
+            )
+            if actor_position is None:
+                return ResolutionResult(
+                    success=False,
+                    command_id=command.command_id,
+                    outcome=None,
+                    events=(),
+                    errors=(
+                        EngineError(
+                            code=ErrorCode.ACTION_NOT_AVAILABLE,
+                            message="Attack actor has no CombatPosition.",
+                            entity_id=command.actor_id,
+                            field="position",
+                        ),
+                    ),
+                )
+
+            target_id = command.payload.target_id
+            if target_id not in combat.order:
+                return ResolutionResult(
+                    success=False,
+                    command_id=command.command_id,
+                    outcome=None,
+                    events=(),
+                    errors=(
+                        EngineError(
+                            code=ErrorCode.INVALID_TARGET,
+                            message="Attack target is not part of the current Combat.",
+                            entity_id=target_id,
+                            field="target_id",
+                        ),
+                    ),
+                )
+
+            target_position = next(
+                (
+                    position
+                    for position in combat.positions
+                    if position.creature_id == target_id
+                ),
+                None,
+            )
+            if target_position is None:
+                return ResolutionResult(
+                    success=False,
+                    command_id=command.command_id,
+                    outcome=None,
+                    events=(),
+                    errors=(
+                        EngineError(
+                            code=ErrorCode.INVALID_TARGET,
+                            message="Attack target has no CombatPosition.",
+                            entity_id=target_id,
+                            field="position",
+                        ),
+                    ),
+                )
+
+            if not is_within_melee_reach(
+                actor_position,
+                target_position,
+                effective_reach=DND_5E_FIRST_CONSUMER_MELEE_REACH_FEET,
+            ):
+                return ResolutionResult(
+                    success=False,
+                    command_id=command.command_id,
+                    outcome=None,
+                    events=(),
+                    errors=(
+                        EngineError(
+                            code=ErrorCode.OUT_OF_RANGE,
+                            message="Attack target is out of melee reach.",
+                            entity_id=target_id,
+                        ),
+                    ),
+                )
+
         target_armor_class = unarmored_character_armor_class(target)
         roll_mode = attack_roll_mode_from_conditions(actor_creature.conditions)
         outcome = resolve_monster_attack(
