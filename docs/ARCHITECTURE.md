@@ -9770,7 +9770,7 @@ No Character creation UI/API, speed-calculation provenance or update Command, ra
 
 ### 3.40. Goblin Scimitar in-Combat melee reach (TSK-0052)
 
-**Implementation status:** contract defined; production implementation and real-adapter encounter regression pending TSK-0052. Depends on the authoritative Character Movement continuation TSK-0051 for the complete scenario; the independent Goblin reach gate itself does not change Movement.
+**Implementation status:** implemented by TSK-0052: the narrow pre-roll Goblin Scimitar reach gate and the seed-10 two-combatant real-adapter encounter regression. The scenario uses TSK-0051 Character Movement and production State schema V11, with fresh filesystem reloads after all 11 accepted Commands; the rejected out-of-reach attack leaves RNG, metadata and persisted bytes unchanged. No additional schema version or broad Movement/Targeting capability is introduced.
 
 #### Exact consumer and spatial source
 

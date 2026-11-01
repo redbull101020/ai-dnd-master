@@ -7931,3 +7931,10 @@ Verification uses documentation-reference tests and `git diff --check`. The poli
 ## 2026-11-01 — PR #145: main integration clarification
 
 PR #144 was already merged into main as `0ba2f5cfc1116afe67dcc5f8849429689401a996` before this local integration of PR #145. Its TSK-0051 delivery/Closure records and terminal row are preserved. The recovery policy may be used only after separate publication on authoritative main; it does not retroactively supply governance approval or Mode C evidence for PR #144's earlier merge.
+
+
+## 2026-11-01 — TSK-0052: Goblin reach and two-combatant encounter
+
+Delivered the concrete dnd_5e/5.1 Goblin Scimitar in-Combat pre-roll 5-ft reach gate and a seed-10 headless encounter through existing handlers and real filesystem/Definition/dice adapters. The scenario proves Character initiative, placement, Move → equipped Dagger Attack → Move, Goblin out-of-reach rejection → Move → Scimitar Attack, HP 17/3, round-2 Action/Movement reset and explicit EndCombat. All 11 accepted Commands save once and are checked through fresh V11 reloads; rejection preserves RNG, metadata count and state.json bytes. Existing Attack/Damage/Action Event causality, out-of-Combat behavior and schema remain unchanged.
+
+Checkpoint verification: 151 focused application/integration tests passed; configured mypy passed for 141 source files. Full pytest was attempted but could not pass in this restricted Windows environment: launcher directory-junction creation returns Access denied, and orchestrator fixtures fail local Git transport with MSYS NtCreateDirectoryObject 0xC0000022; the repeated failing run was interrupted. The fail-fast full run reported 2800 passed and 1 failed at the launcher junction test; isolated orchestrator setup reproduced the Git transport restriction. Packaging tests separately passed (2 tests); git diff --check passed. Broad Targeting, Monster actions and Movement remain open; Reactions/OA (including whether retreat provokes), a dispatcher, durable EventStore and automatic encounter outcomes remain outside scope.
