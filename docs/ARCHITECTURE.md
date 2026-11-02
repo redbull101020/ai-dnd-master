@@ -75,6 +75,7 @@
 | Authoritative Monster walking-speed source (TSK-0039) | §3.37 |
 | Minimal Monster voluntary Movement contract (TSK-0040) | §3.38 |
 | Character walking-speed State and voluntary Movement, current State schema V11 (TSK-0051) | §3.39, §12.13 |
+| First Combat Reaction resource foundation (agreed, implementation pending) | §3.41, §12.13 |
 | Canonical ruleset identity/version (`dnd_5e` = SRD 5.1) | §4.6 |
 | Версионирование схем | §12.13 |
 | Runtime validation policy | §12.25 |
@@ -150,6 +151,7 @@
   * [3.38. Minimal Phase 3 Monster voluntary Movement contract (TSK-0040)](#338-minimal-phase-3-monster-voluntary-movement-contract-tsk-0040)
   * [3.39. Character walking-speed source and voluntary Combat Movement (TSK-0051)](#339-character-walking-speed-source-and-voluntary-combat-movement-tsk-0051)
   * [3.40. Goblin Scimitar in-Combat melee reach (TSK-0052)](#340-goblin-scimitar-in-combat-melee-reach-tsk-0052)
+  * [3.41. First Combat Reaction resource foundation (TSK-0023)](#341-first-combat-reaction-resource-foundation-tsk-0023)
 * [4. ID System](#4-id-system)
   * [4.1. Definition IDs](#41-definition-ids)
   * [4.2. Instance / State IDs](#42-instance--state-ids)
@@ -9805,6 +9807,44 @@ TSK-0052 must prove the deterministic, headless `Character Dagger vs Goblin Scim
 
 No ranged/thrown/reach variants, Monster action classification framework, reactions or attacks of opportunity, full melee targeting for arbitrary Monsters, cover/visibility/line of sight, movement terrain/collision/path checks, new Attack/Result/Event contracts, AI DM, API, or web UI.
 
+### 3.41. First Combat Reaction resource foundation (TSK-0023)
+
+#### Implementation status and scope
+
+New contract **agreed, not implemented**. Current production snapshot writer remains **State schema V11** until TSK-0023 delivery. This section fixes the minimal combat-local, participant-specific Reaction availability resource for an upcoming Opportunity Attack consumer. It does not implement the gameplay trigger, prompt/choice, out-of-turn attack, reaction eligibility beyond resource state, movement interruption, action selection or arbitrary Reaction Command. Phase 3 Reactions and Opportunity attacks stay unchecked.
+
+#### Ownership and representation
+
+`CombatEngine` (§10.7) is the sole owner of a Combat participant's spent Reaction fact. Append to the existing mutable `CombatState` dataclass, after `movement_spent`:
+
+```python
+reactions_spent: frozenset[str] = frozenset()
+```
+
+The type is exactly frozenset of exact str IDs, all members of the unique current `combat.order`. Empty set means no participant has spent their resource; it does **not** prove any particular Reaction is otherwise legal (for example, eligibility and a valid trigger are separate concerns). IDs are not duplicated or inferred from actor categories. The State constructor and the serializer's write-time validation must reject non-members, invalid container types and wrong element types, including after accidental post-construction mutation. Existing `action_spent`, `movement_spent`, positions, turn and HP ownership remain unchanged. No `CreatureState` or `CharacterState` Reaction field, generic resource pool, or new State owner is added.
+
+#### Reaction lifecycle
+
+A newly projected `CombatStarted` V1 produces `reactions_spent=frozenset()`; its Event payload remains unchanged. `TurnAdvanced` V1 clears the spent flag for **only the newly active participant** at start of that participant's turn by removing its ID from the set. Other IDs remain as recorded, including at round transitions; this is not a global round reset. Existing `action_spent=False` and `movement_spent=0` incoming-turn projections remain unchanged. Character Death Save start-of-turn consequence still runs after applying the turn Event. End Combat removes the entire Combat projection. Nothing in this section creates an untriggered gameplay Reaction.
+
+#### Event and application boundary
+
+`ReactionSpent` V1 is an immutable concrete `GameEvent`. It uses the unchanged canonical Event Envelope. Exact payload: `{ "combatId": "combat_001" }` only (illustrative ID); `actorId` is the reacting Creature, even when non-active; `commandId` is the containing authorized gameplay Command; `causedBy` is the actual reaction attack-resolution Event ID and must be a non-empty string. `ReactionSpent.actorId` need not equal the containing Command's `actorId` when a reaction interrupts another actor's activity; all Events in one `ResolutionResult` nevertheless have that Result's `command_id`. No roll, target, Reaction counter, turn or ownership facts are duplicated in payload.
+
+`build_reaction_spent_v1(*, event_id, timestamp, command_id, campaign_id, actor_id, combat_id, caused_by)` accepts the original authoritative IDs and Event metadata as explicit arguments, with the usual exact-string type checks and a non-empty `caused_by`; it never constructs another Command or changes State. The Domain builder does not receive `StateStore`, `DefinitionSource`, `DiceEngine` or `EventMetadataProvider`. `apply_reaction_spent_v1(combat, event) -> CombatState` validates Event type/version/payload, matching Combat ID, non-null/non-empty exact-string causal link, exact-string actor in `combat.order` and no previous spent Reaction, then returns a replacement Combat with the actor's ID added. It never requires actor to equal `combat.active_creature_id`, and never reads or changes `action_spent`/`movement_spent`. Invalid/stale/duplicate Event application raises integrity `TypeError`/`ValueError`, not `EngineError`; the future Application consumer reports a structured gameplay `RESOURCE_NOT_AVAILABLE` on an invalid second use *before* event construction, dice or persistence.
+
+No production handler emits this Event under TSK-0023; the first producer must be a separately approved legal Opportunity Attack consumer. That producer must obtain an actual optional player/DM decision (no forced automatic attack), verify trigger and actor eligibility, and generate its attack-resolution Event and any damage consequences **before** `ReactionSpent` in one coherent Command/Event batch. It must use consistent Command/Event correlation, one replacement `StateSnapshot` and one `StateStore.save()` for that transaction. The future consumer determines which authorized Command encompasses the transaction; this resource foundation does not prescribe an Opportunity Attack Command or movement-interruption protocol. The pure Event builder cannot independently prove causal existence without an EventStore. No new general EventStore, persistence transaction, Event Envelope version, or generic Reaction framework is introduced.
+
+#### Persistence: planned State schema V12
+
+`StateSerializer` current writer is V11 before implementation. The next exact additive version, V12, adds **only** a required `reactionsSpent` JSON array to an active/non-null `state.combat`. Example: `"reactionsSpent": ["monster_001"]`. On write, it must contain unique exact-string participant IDs from `combat.order`, sorted lexicographically. On read, unique entries in any order are accepted and normalized into a `frozenset`; missing/unknown/wrong-type/duplicate/non-member entries are rejected. Serializer write validation also rejects an invalid `CombatState` introduced by later mutation. `state.combat=null` is valid without nested fields. Root, Campaign, Creature, Character, Inventory, Equipment and every other V11 Combat field keep exact existing shapes.
+
+Strict readers for V1–V11 must remain historically unchanged and reject `reactionsSpent` where not defined. Legacy non-null Combat (V5–V11) projects `reactions_spent=frozenset()` as an explicit **compatibility default**, not a claim about past actual use; V1–V4 continue to have `combat=None`. V12 decodes and round-trips Character `walkingSpeed`, Combat `movementSpent`/`actionSpent`/`positions`, Character lifecycle, Conditions, Inventory and Equipment without loss. Writer and historical sentinels must be upgraded atomically with production implementation, not during decision publication.
+
+#### Explicit exclusions
+
+No Opportunity Attack calculation, Movement interception or continuation, reaction selection, hostility/visibility checks, surprise/Incapacitated effects, disengage/teleport/forced-movement classification, Ready or spell reactions, attack rerouting, generic action budget, API/AI DM, dispatcher, EventStore or replay, durable Command idempotency, or new dependencies. The resource foundation is not a completed gameplay Reaction capability.
+
 ---
 
 ## 4. ID System
@@ -13242,6 +13282,25 @@ V11 Character: walking_speed = decoded walkingSpeed
 ```
 
 Reading legacy V2–V10 does not infer speed from race, class, level or other data. A successfully loaded legacy snapshot is saved as exact V11 with `walkingSpeed:null` on every Character unless a supported, explicitly supplied authoritative speed exists. The old Character proficiency, weapon, lifecycle fields and all V10 Combat `positions`, `actionSpent`, `movementSpent`, and other persisted fields must round-trip with no loss. Historical V1–V10 parsers are not reinterpreted by comparing their semantics against a mutable `SCHEMA_VERSION`; historical fixed version sentinels remain fixed. Do not add a migration framework or a parallel source of Character speed.
+
+#### Planned State schema V12 — per-participant Reaction expenditure (TSK-0023)
+
+**Implementation status: agreed contract, not implemented. Current production writer remains exact V11.** V12 becomes the current writer only together with the complete TSK-0023 production implementation and tests. V12 is strictly additive over exact V11. No Envelope/root/state/Creature/Character/Inventory/Equipment/CombatPosition key set changes. For a non-null `state.combat`, exact V12 requires these keys:
+
+```text
+id
+round
+order
+activeIndex
+positions
+actionSpent
+movementSpent
+reactionsSpent
+```
+
+The additional `reactionsSpent` value is a JSON array of distinct exact-string creature IDs, each present in the same Combat `order`. The writer emits IDs in lexicographically sorted order; the reader accepts any unique order and materializes `frozenset[str]`. Empty array is valid; `null`, booleans, numbers, objects, duplicate IDs, nonparticipants, a missing field, or an unknown additional Combat field are invalid. When the required `state.combat` key has value JSON `null`, it remains `null` (not a Combat object with empty fields); omitting that key is invalid.
+
+V1–V11 retain their exact historical field sets and reject a V12-only `reactionsSpent` field wherever a non-null Combat exists. V1–V4 have no Combat projection; V5–V11 non-null Combat project `reactions_spent=frozenset()` as an explicit compatibility default, not a recovered historical fact. V12 must preserve V11 `Character.walkingSpeed`, V10 `Combat.movementSpent`, V8 `Combat.actionSpent`, V9 Character death-save/lifecycle facts, V7 positions, V6 Inventory/Equipment/weapon proficiencies, and Creature Conditions without information loss. All serializer version-branch selectors must explicitly include V12 in the applicable existing semantic families while **not** widening any historical branch. Constructor and serializer validate Reaction membership independently because `CombatState` is mutable. No generic migration registry, additional owner or EventStore is introduced.
 
 ---
 
